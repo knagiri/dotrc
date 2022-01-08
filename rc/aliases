@@ -1,0 +1,3 @@
+alias ls='exa --color=auto'
+alias la='ls -la'
+alias lah='ls -lah'
