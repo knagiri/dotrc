@@ -3,6 +3,15 @@ if [ ! -v BASH_COMPLETION_VERSINFO ]; then
     echo '$BASH_COMPLETION_VERSINFO is not set.' 1>&2
 fi
 
+# Add PATH '~/.local/bin'
+case ":${PATH}:" in
+    *:"${HOME}/.local/bin":*)
+        ;;
+    *)
+        export PATH="${HOME}/.local/bin:${PATH}"
+        ;;
+esac
+
 # set keybind as 'vi'
 set -o vi
 # set vim as default editor
