@@ -1,3 +1,8 @@
+# custom rcfiles dir
+__cwd=$(realpath $(dirname "${BASH_SOURCE}"))
+# set alias from './aliases'
+source "${__cwd}/aliases"
+
 # bash-completion
 if [ ! -v BASH_COMPLETION_VERSINFO ]; then
     echo '$BASH_COMPLETION_VERSINFO is not set.' 1>&2
