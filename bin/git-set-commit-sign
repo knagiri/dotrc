@@ -1,0 +1,32 @@
+#/usr/bin/env bash
+
+declare -a keyids
+
+count=0
+while read __line ; do
+    if [[ $__line =~ ^uid,.*,(.*),$ ]] ; then
+        echo -e "\n${BASH_REMATCH[1]}"
+    fi
+    # =~ ssb [0-9A-F]{16} s
+    if [[ $__line =~ ^ssb,([0-9A-F]*),.*,s$ ]] ; then
+        let count++
+        keyids+=( "${BASH_REMATCH[1]}" )
+        echo "  - (${count}) ${BASH_REMATCH[1]}"
+    fi
+done < <( gpg -K --with-colons | awk -F':' -v OFS=, '{ print $1,$5,$10,$12 }' )
+
+if [ ${count} -eq 0 ]; then
+    echo "The SUBKEY created to sign (shown with [S]) is not found." 1>&2
+    exit 1
+fi
+
+read -ep "Which key do you use? ([1..${count}]): " select
+if [[ ! ${select} =~ ^[0-9]+$ ]] || [ ${select} -lt 1 ] || [ ${select} -gt ${count} ]; then
+    echo "Abort" 1>&2
+    exit 1
+fi
+
+let select--
+keyid="${keyids[${select}]}"
+git config user.signingkey "${keyid}"
+git config commit.gpgsign true
