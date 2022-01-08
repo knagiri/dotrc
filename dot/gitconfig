@@ -1,0 +1,12 @@
+[user]
+	email = 65004703+gili-Katagiri@users.noreply.github.com
+	name = gili-Katagiri
+[tool]
+	editor = vim
+[core]
+	editor = vim -c \"set fenc=utf-8\"
+[alias]
+    g = log --graph --oneline
+    df = diff --name-status
+	dlog = !git --no-pager log --pretty='format:%C(yellow)%h %C(green)%cd %C(reset)%s %C(red)%d %C(cyan)[%an]' --date=iso -n 15
+	dst = status --short --branch
