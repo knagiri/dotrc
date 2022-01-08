@@ -3,7 +3,8 @@
 set -u
 
 commands=( \
-    "git" "docker" "curl"\
+    "git" "docker" \
+    "gpg" "curl"\
     "rustc" "rustup" "cargo" \
     "node" "fnm"\
     "python3" "poetry" \
