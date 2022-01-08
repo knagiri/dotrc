@@ -1,0 +1,4 @@
+# bash-completion
+if [ ! -v BASH_COMPLETION_VERSINFO ]; then
+    echo '$BASH_COMPLETION_VERSINFO is not set.' 1>&2
+fi
