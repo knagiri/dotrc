@@ -10,7 +10,10 @@ endif
 call plug#begin(has('nvim') ? stdpath('data') . '/plugged' : '~/.vim/plugged')
 
 " Declare the list of plugins.
+" Syntax hilighting
 Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}  " We recommend updating the parsers on update
+" Colorscheme `nightfox` (See https://github.com/edeneast/nightfox.nvim)
+Plug 'EdenEast/nightfox.nvim'
 
 " List ends here. Plugins become visible to Vim after this call.
 call plug#end()
@@ -42,3 +45,5 @@ require'nvim-treesitter.configs'.setup {
   },
 }
 EOF
+
+colorscheme nightfox
