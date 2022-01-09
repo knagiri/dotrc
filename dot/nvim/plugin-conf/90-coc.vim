@@ -1,3 +1,7 @@
+let g:coc_global_extensions = [
+            \    'coc-jedi',
+            \]
+
 " Coc Exampl vim comfiguration, see
 "   `https://github.com/neoclide/coc.nvim#example-vim-configuration`
 
