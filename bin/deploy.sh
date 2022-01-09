@@ -24,6 +24,7 @@ declare -A CustomLocationMap
 #  specify as follows:
 #CustomLocationMap["example"]="/path/to/else/.example"
 # The specified value must include the symlink name.
+CustomLocationMap["nvim"]="${HOME}/.config/nvim"
 
 for dotname in $(ls "$__dotfiles_path"); do
     if [ -z "${CustomLocationMap["${dotname}"]}" ]; then
