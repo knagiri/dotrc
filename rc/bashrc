@@ -2,6 +2,7 @@
 __cwd=$(realpath $(dirname "${BASH_SOURCE}"))
 # set alias from './aliases'
 source "${__cwd}/aliases"
+source "${__cwd}/fzfrc"
 
 # bash-completion
 if [ ! -v BASH_COMPLETION_VERSINFO ]; then
