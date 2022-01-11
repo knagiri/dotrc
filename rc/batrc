@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+# replace `cat`
+alias cat='bat'
+
+# colored pager
+export MANPAGER="sh -c 'col -bx | bat -l man -p'"

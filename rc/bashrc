@@ -1,8 +1,10 @@
+#!/usr/bin/env bash
 # custom rcfiles dir
 __cwd=$(realpath $(dirname "${BASH_SOURCE}"))
 # set alias from './aliases'
 source "${__cwd}/aliases"
 source "${__cwd}/fzfrc"
+source "${__cwd}/batrc"
 
 # bash-completion
 if [ ! -v BASH_COMPLETION_VERSINFO ]; then
