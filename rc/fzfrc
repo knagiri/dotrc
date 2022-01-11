@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # source completion and key-bindings
-{
-    confdir='/usr/share/fzf'
+confdir='/usr/share/fzf'
+if [ -d "${confdir}" ] ; then
     source "${confdir}/completion.bash"
     source "${confdir}/key-bindings.bash"
-    unset confdir
-}
+else
+    echo "fzf completion and key-bindings files are not found [search for ${confdir}]." 1>&2
+fi
+unset confdir
 
 # fzf-defult and key-bindings command
 # fzf use fd as default
