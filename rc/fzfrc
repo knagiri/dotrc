@@ -14,10 +14,10 @@ unset confdir
 export FZF_DEFAULT_COMMAND='fd --type f --follow --hidden --exclude .git'
 # Ctrl-T is used to shorten the imput of '$(fzf)'
 export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
-export FZF_ALT_C_COMMAND="fd --type d --follow"
+export FZF_ALT_C_COMMAND="fd --type d --follow --max-depth=4"
 
 # fzf command options
-__auto="--select-1 --exit-0" # auto select or auto exit
+__common="--select-1 --exit-0" # auto select or auto exit
 # file preview using bat, see https://github.com/sharkdp/bat/blob/master/doc/README-ja.md#fzf
 __file_preview="--preview 'bat --color=always --style=numbers --line-range=:500 {}'"
 __dir_preview="--preview 'exa --tree --level 3 --color=always {} | head -100'"
