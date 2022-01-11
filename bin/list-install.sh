@@ -9,10 +9,11 @@ commands=( \
     "node" "fnm"\
     "python3" "poetry" \
     "exa" "bat" "fd" "fzf" \
+    "nvim" "tmux" \
 )
 
 function is_exist_command {
-    if [ -z "$($1 --version 2> /dev/null)" ]; then
+    if [ -z "$(type $1 2>/dev/null)" ]; then
         return 1
     fi
     return 0
