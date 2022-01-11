@@ -1,4 +1,13 @@
-# fzf-defult and key-bindings
+#!/usr/bin/env bash
+# source completion and key-bindings
+{
+    confdir='/usr/share/fzf'
+    source "${confdir}/completion.bash"
+    source "${confdir}/key-bindings.bash"
+    unset confdir
+}
+
+# fzf-defult and key-bindings command
 # fzf use fd as default
 export FZF_DEFAULT_COMMAND='fd --type f --follow --hidden --exclude .git'
 # fzf default options
