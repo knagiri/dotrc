@@ -10,30 +10,27 @@
 # fzf-defult and key-bindings command
 # fzf use fd as default
 export FZF_DEFAULT_COMMAND='fd --type f --follow --hidden --exclude .git'
-# fzf default options
-{
-    previewopt="--preview 'bat --color=always --style=numbers --line-range=:500 {}'"
-    export FZF_DEFAULT_OPTS="--height 40% --reverse --border=rounded ${previewopt}"
-    unset previewopt
-}
-
 # Ctrl-T is used to shorten the imput of '$(fzf)'
 export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
 export FZF_ALT_C_COMMAND="fd --type d --follow"
-# Alt-C options
-{
-  # preview tree
-  opt="--preview 'exa --tree --level 3 --color=always {} | head -100'"
-  # auto select 
-  opt="$opt --select-1 --exit-0"
-  export FZF_ALT_C_OPTS="$opt"
-  unset opt
-}
+
+# fzf command options
+__auto="--select-1 --exit-0" # auto select or auto exit
+# file preview using bat, see https://github.com/sharkdp/bat/blob/master/doc/README-ja.md#fzf
+__file_preview="--preview 'bat --color=always --style=numbers --line-range=:500 {}'"
+__dir_preview="--preview 'exa --tree --level 3 --color=always {} | head -100'"
+
+export FZF_DEFAULT_OPTS="${__auto} --height 40% --reverse --border=rounded"
+# these opts `inherit` FZF_DEFAULT_OPTS
+export FZF_CTRL_T_OPTS="${__file_preview}"
+export FZF_ALT_C_OPTS="${__dir_preview}"
+
+unset __auto __file_preview __dir_preview
 
 # fzf-completions
 # Policy: NOT to target hidden files
 
-# comflict with zprezto '**'
+# WARN: default '**' is comflict with zprezto
 export FZF_COMPLETION_TRIGGER='``'
 # fzf-completion does not look for hidden files
 _fzf_compgen_path() {
