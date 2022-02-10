@@ -3,6 +3,7 @@
 alias ls='exa --color=auto'
 alias la='ls -la'
 alias lah='ls -lah'
+alias tree='ls -T --git-ignore'
 
 alias rm='rm -i'
 
