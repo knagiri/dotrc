@@ -7,3 +7,6 @@ alias lah='ls -lah'
 alias rm='rm -i'
 
 alias vim='nvim'
+
+alias docker='sudo docker'
+alias pacman='sudo pacman'
