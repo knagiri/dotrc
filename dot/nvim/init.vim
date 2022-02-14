@@ -19,6 +19,12 @@ Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}  " We recommend upda
 " Colorscheme `nightfox` (See https://github.com/edeneast/nightfox.nvim)
 Plug 'EdenEast/nightfox.nvim'
 
+" Utilities
+Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
+Plug 'junegunn/fzf.vim'
+
+Plug 'mattn/emmet-vim'
+
 " List ends here. Plugins become visible to Vim after this call.
 call plug#end()
 
