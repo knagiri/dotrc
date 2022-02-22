@@ -1,0 +1,18 @@
+{
+  "coc.preferences.formatOnSaveFiletypes": [
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact",
+    "vue",
+    "json",
+    "graphql",
+    "html",
+    "css"
+  ],
+  "prettier.singleQuote": true,
+  "prettier.trailingComma": "all",
+  "vetur.useWorkspaceDependencies": true,
+  "vetur.validation.templateProps": true,
+  "vetur.experimental.templateInterpolationService": true
+}
