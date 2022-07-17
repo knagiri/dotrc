@@ -6,8 +6,14 @@
 [core]
 	editor = vim -c \"set fenc=utf-8\"
 [alias]
-	s = status --short --branch
-	df = diff --name-status
+    s = status
+    ss = s --short
+    sa = ss -uall
+    sn = ss -uno
+    snn = !"f(){ git sn | awk -F ' ' '{ print $2 }'; };f"
+    snd = !"f(){ git diff $(git snn | fzf); };f"
+    co = checkout
+    cob = co -b
 	g = log --graph --oneline
 	ga = g --all
     mnfd = !"f(){ git merge --no-ff $1 && git branch -d $1; };f"
