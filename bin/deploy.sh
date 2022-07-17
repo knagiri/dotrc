@@ -3,10 +3,29 @@
 # path/to/repo
 REPO_DIR=$(realpath $(dirname $(dirname $0)))
 
+# path/to/repo/bin
+export __bin_path="${REPO_DIR}/bin"
 # path/to/repo/rc/bashrc
-__bashrc_path="${REPO_DIR}/rc/bashrc"
+export __bashrc_path="${REPO_DIR}/rc/bashrc"
+
 # Bashrc
-echo -e "\n# bashrc@dotrc\nsource $__bashrc_path" >> ${HOME}/.bashrc
+cat - << 'EOF' | envsubst '${__bashrc_path} ${__bin_path}' >> ${HOME}/.bashrc
+# DOTRC ==================================
+# bashrc@dotrc
+source "${__bashrc_path}"
+
+# bin-path@dotrc
+case ":${PATH}:" in
+    *:${__bin_path}:*)
+        ;;
+    *)
+        export PATH="${__bin_path}:$PATH"
+        ;;
+esac
+# ========================================
+EOF
+
+#echo -e "\n# bashrc@dotrc\nsource $__bashrc_path" >> ${HOME}/.bashrc
 
 # dotfiles
 # path/to/repo/dot
