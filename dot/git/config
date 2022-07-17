@@ -10,3 +10,5 @@
 	df = diff --name-status
 	g = log --graph --oneline
 	ga = g --all
+[init]
+	defaultBranch = main
