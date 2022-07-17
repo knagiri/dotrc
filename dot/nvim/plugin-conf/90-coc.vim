@@ -1,5 +1,6 @@
 let g:coc_global_extensions = [
             \    'coc-jedi',
+            \    'coc-rust-analyzer',
             \]
 
 " Coc Exampl vim comfiguration, see
