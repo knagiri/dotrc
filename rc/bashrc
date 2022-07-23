@@ -37,3 +37,16 @@ eval "$(fnm env)"
 
 # GnuPG (with Agent) setup
 export GPG_TTY=$(tty)
+
+# aws profile aliases
+function __set_profile_aws_clis () {
+    if [[ ":$(aws configure list-profiles | paste -s -d: -):" =~ ":$1:" ]] ; then
+        alias aws="aws --profile $1"
+        alias cdk="cdk --profile $1"
+        echo -e "Make Aliases:\n- \`aws = aws --profile $1\`\n- \`cdk = cdk --profile $1\`"
+    else
+        echo "Error \"$1\" was not found in \`aws configure --list-profiles\`" 1>&2
+        return 1
+    fi
+}
+alias aws-profiler='__set_profile_aws_clis'
