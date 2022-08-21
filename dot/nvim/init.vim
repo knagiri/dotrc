@@ -17,7 +17,7 @@ Plug 'neoclide/coc.nvim', {'branch': 'release'}
 " Syntax hilighting
 Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}  " We recommend updating the parsers on update
 " Colorscheme `nightfox` (See https://github.com/edeneast/nightfox.nvim)
-Plug 'EdenEast/nightfox.nvim'
+Plug 'EdenEast/nightfox.nvim', { 'tag': 'v1.0.0' }
 
 " Utilities
 Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }

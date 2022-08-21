@@ -1,3 +1,3 @@
 -- Color Scheme: `Nightfox` 
 --   See `https://github.com/EdenEast/nightfox.nvim`
-require('nightfox').load('nightfox')
+vim.api.nvim_command('colorscheme nightfox')
