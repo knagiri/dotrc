@@ -6,10 +6,10 @@
 [core]
 	editor = vim -c \"set fenc=utf-8\"
 [alias]
-    s = status
-    ss = s --short
-    sa = ss -uall
-    sn = ss -uno
+    ss = status
+    s = ss --short
+    sa = s -uall
+    sn = s -uno
     snn = !"f(){ git sn | awk -F ' ' '{ print $2 }'; };f"
     snd = !"f(){ git diff $(git snn | fzf); };f"
     co = checkout
