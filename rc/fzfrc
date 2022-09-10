@@ -18,16 +18,20 @@ export FZF_ALT_C_COMMAND="fd --type d --follow --max-depth=4"
 
 # fzf command options
 __auto="--select-1 --exit-0" # auto select or auto exit
+__preview_window="--preview-window down,80% --color 'preview-bg:#223344,border:#778899'"
 # file preview using bat, see https://github.com/sharkdp/bat/blob/master/doc/README-ja.md#fzf
 __file_preview="--preview 'bat --color=always --style=numbers --line-range=:500 {}'"
 __dir_preview="--preview 'exa --tree --level 3 --color=always {} | head -100'"
 
 export FZF_DEFAULT_OPTS="${__auto} --height 40% --reverse --border=rounded"
-# these opts `inherit` FZF_DEFAULT_OPTS
-export FZF_CTRL_T_OPTS="${__file_preview}"
-export FZF_ALT_C_OPTS="${__dir_preview}"
+# On tmux session, start fzf in a tmux popup window
+export FZF_TMUX_OPTS="-p 80%"
 
-unset __auto __file_preview __dir_preview
+# these opts `inherit` FZF_DEFAULT_OPTS
+export FZF_CTRL_T_OPTS="${__file_preview} ${__preview_window}"
+export FZF_ALT_C_OPTS="${__dir_preview} ${__preview_window}"
+
+unset __auto __preview_window __file_preview __dir_preview
 
 # fzf-completions
 # Policy: NOT to target hidden files
