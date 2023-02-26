@@ -41,12 +41,17 @@ export GPG_TTY=$(tty)
 # aws profile aliases
 function __set_profile_aws_clis () {
     if [[ ":$(aws configure list-profiles | paste -s -d: -):" =~ ":$1:" ]] ; then
-        alias aws="aws --profile $1"
-        alias cdk="cdk --profile $1"
-        echo -e "Make Aliases:\n- \`aws = aws --profile $1\`\n- \`cdk = cdk --profile $1\`"
+        export AWS_PROFILE=$1
+        echo "AWS_PROFILE = $1"
     else
-        echo "Error \"$1\" was not found in \`aws configure --list-profiles\`" 1>&2
-        return 1
+        unset AWS_PROFILE
+        echo "unset AWS_PROFILE"
     fi
 }
 alias aws-profiler='__set_profile_aws_clis'
+
+# aws sso reflesh
+function __reflesh_aws_sso_session () {
+    aws sso logout && aws sso login --no-browser
+}
+alias aws-sso-reflesh='__reflesh_aws_sso_session'

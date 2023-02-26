@@ -12,6 +12,7 @@
     sn = s -uno
     snn = !"f(){ git sn | awk -F ' ' '{ print $2 }'; };f"
     snd = !"f(){ git diff $(git snn | fzf); };f"
+    df = diff --name-only
     co = checkout
     cob = co -b
 	g = log --graph --oneline
