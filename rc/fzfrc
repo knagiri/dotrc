@@ -55,3 +55,11 @@ _fzf_comprun() {
     *)      fzf "$@" ;;
   esac
 }
+
+## Custome fuzzy completions
+_fzf_complete_aws-profiler() {
+  _fzf_complete --reverse -- "$@" < <(
+    aws configure list-profiles
+  )
+}
+[ -n "$BASH" ] && complete -F _fzf_complete_aws-profiler -o default -o bashdefault aws-profiler
