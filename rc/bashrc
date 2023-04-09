@@ -28,8 +28,9 @@ export EDITOR=/usr/bin/vim
 # cargo env
 . "$HOME/.cargo/env"
 
-# fnm(Fast Node Maneger)
-eval "$(fnm env)"
+# Volta management tool for Node.js version
+export VOLTA_HOME="$HOME/.volta"
+export PATH="$VOLTA_HOME/bin:$PATH"
 
 # Use eog with SSH-X11Forwarding
 [ "$DISPLAY" ] && \
