@@ -3,12 +3,13 @@
 set -u
 
 commands=( \
-    "git" "docker" \
+    "git" "docker" "docker-compose" \
     "gpg" "curl"\
+    "aws" \
     "rustc" "rustup" "cargo" \
-    "node" "fnm"\
+    "node" "volta" \
     "python3" "poetry" \
-    "exa" "bat" "fd" "fzf" \
+    "exa" "bat" "fd" "rg" "fzf" \
     "nvim" "tmux" \
 )
 
