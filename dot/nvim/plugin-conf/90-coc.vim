@@ -1,4 +1,7 @@
 let g:coc_global_extensions = [
+            \    'coc-tsserver',
+            \    'coc-eslint',
+            \    'coc-prettier',
             \    'coc-jedi',
             \    'coc-rust-analyzer',
             \]
