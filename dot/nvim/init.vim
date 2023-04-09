@@ -52,6 +52,9 @@ set signcolumn=number
 "set statusline^=%{coc#status()}%{get(b:,'coc_current_function','')}
 " -----
 
+" No mouse control
+set mouse=
+
 " display row number and current cursor line
 set number
 set cursorline
