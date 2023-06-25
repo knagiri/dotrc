@@ -14,6 +14,9 @@ call plug#begin(has('nvim') ? stdpath('data') . '/plugged' : '~/.vim/plugged')
 " Host language servers
 Plug 'neoclide/coc.nvim', {'branch': 'release'}
 
+" GitHub Copilot
+Plug 'github/copilot.vim', { 'branch': 'release' }
+
 " Syntax hilighting
 Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}  " We recommend updating the parsers on update
 " Colorscheme `nightfox` (See https://github.com/edeneast/nightfox.nvim)
