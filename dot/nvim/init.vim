@@ -11,8 +11,10 @@ call plug#begin(has('nvim') ? stdpath('data') . '/plugged' : '~/.vim/plugged')
 
 " Declare the list of plugins.
 
-" Host language servers
-Plug 'neoclide/coc.nvim', {'branch': 'release'}
+" Language Server Protocol
+Plug 'neovim/nvim-lspconfig'
+Plug 'williamboman/mason.nvim'
+Plug 'williamboman/mason-lspconfig.nvim'
 
 " GitHub Copilot
 Plug 'github/copilot.vim', { 'branch': 'release' }
@@ -33,11 +35,6 @@ call plug#end()
 
 runtime! plugin-conf/**/*
 
-" ** These changes conflict with plugin/90-coc.vim and take precedence **
-" -----
-" TextEdit might fail if hidden is not set.
-set hidden
-
 " Some servers have issues with backup files, see #649.
 set nobackup
 set nowritebackup
@@ -51,9 +48,6 @@ set updatetime=300
 
 " sign-column with number-column
 set signcolumn=number
-
-"set statusline^=%{coc#status()}%{get(b:,'coc_current_function','')}
-" -----
 
 " No mouse control
 set mouse=
