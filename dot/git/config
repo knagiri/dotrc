@@ -15,8 +15,15 @@
     df = diff --name-only
     co = checkout
     cob = co -b
-	g = log --graph --oneline
-	ga = g --all
+    com = co main
+    gp = log --graph --oneline
+    gl = gp --all
+	g = gl -32
+    gs = gl -16
+    sw = !"git branch --all --format='%(refname:short)' | fzf | xargs git checkout"
     mnfd = !"f(){ git merge --no-ff $1 && git branch -d $1; };f"
+    fp = fetch -p
 [init]
 	defaultBranch = main
+[advice]
+    detachedHead = false
