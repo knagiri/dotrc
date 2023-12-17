@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+
+# if not file exists
+if [ ! -f ~/.git-prompt.sh ]; then
+    # download git-prompt.sh
+    curl https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh \
+        -o ${HOME}/.git-prompt.sh
+fi
+
+function set_color() {
+    local color=$1 color_code
+    local text=$2
+    local bold=${3:-false}
+
+    case $color in
+        black) color_code=30 ;;
+        red) color_code=31 ;;
+        green) color_code=32 ;;
+        yellow) color_code=33 ;;
+        blue) color_code=34 ;;
+        magenta) color_code=35 ;;
+        cyan) color_code=36 ;;
+        white) color_code=37 ;;
+        *) color_code=0 ;;
+    esac
+    
+    echo "\[\e[$([[ $bold == "true" ]] && echo "1" || echo "0");${color_code}m\]${text}\[\e[0m\]"
+}
+
+source ${HOME}/.git-prompt.sh
+
+GIT_PS1_SHOWCOLORHINTS=1
+GIT_PS1_SHOWUPSTREAM="auto"
+PROMPT_COMMAND='__git_ps1 "\n$(set_color magenta \[\\t\] true) \u@\h:\w" "\n\\\$ "'

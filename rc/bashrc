@@ -5,6 +5,7 @@ __cwd=$(realpath $(dirname "${BASH_SOURCE}"))
 source "${__cwd}/aliases"
 source "${__cwd}/fzfrc"
 source "${__cwd}/batrc"
+source "${__cwd}/promptrc"
 
 # bash-completion
 if [ ! -v BASH_COMPLETION_VERSINFO ]; then
