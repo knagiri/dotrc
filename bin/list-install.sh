@@ -8,7 +8,7 @@ commands=( \
     "aws" \
     "rustc" "rustup" "cargo" \
     "node" "volta" \
-    "python3" "poetry" \
+    "pyenv" "poetry" \
     "exa" "bat" "fd" "rg" "fzf" \
     "nvim" "tmux" \
 )
