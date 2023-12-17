@@ -5,3 +5,4 @@ alias cat='bat -p'
 
 # colored pager: see https://github.com/sharkdp/bat#man
 export MANPAGER="sh -c 'col -bx | bat -l man -p'"
+export MANROFFOPT="-c"
