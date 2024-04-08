@@ -56,4 +56,4 @@ alias aws-profiler='__set_profile_aws_clis'
 function __reflesh_aws_sso_session () {
     aws sso logout && aws sso login --no-browser
 }
-alias aws-sso-reflesh='__reflesh_aws_sso_session'
+alias aws-reflesh='__reflesh_aws_sso_session'
