@@ -6,24 +6,42 @@
 [core]
 	editor = vim -c \"set fenc=utf-8\"
 [alias]
-    ss = status
-    s = ss --short
+    pwd = !"echo ${GIT_PREFIX:-.}"
+    rel = !"f() { for s in \"$@\"; do echo \"${GIT_PREFIX:-./}$s\"; done; }; f"
+    search-branch = !"f() { git branch --all --format='%(refname:short)' | fzf -q ${1:-''}; }; f"
+    sb = search-branch
+    search-changed-file = !"f(){ git sa | fzf -q ${1:-''}; }; f"
+    scf = search-changed-file
+    scfs = !"f(){ git scf $1 | awk -F ' ' '{ print $2 }'; }; f"
+    sl = status
+    s = sl --short
     sa = s -uall
     sn = s -uno
     snn = !"f(){ git sn | awk -F ' ' '{ print $2 }'; };f"
     snd = !"f(){ git diff $(git snn | fzf); };f"
-    df = diff --name-only
+    as = !"f() { git add $(git scfs $1) && git s;}; f"
+    d = diff
+    ds = !"f(){ git diff $(git scfs $1); }; f"
+    dn = diff --name-only
+    dc = diff --cached
+    dcs = !"f(){ git dc $(git scfs $1); }; f"
+    b = branch
+    bm = branch -m
+    bc = branch --show-current
     co = checkout
+    cos = !"f() { git co $(git sb $1); }; f"
     cob = co -b
     com = co main
-    gp = log --graph --oneline
-    gl = gp --all
-	g = gl -32
-    gs = gl -16
-    sw = !"git branch --all --format='%(refname:short)' | fzf | xargs git checkout"
+    graph = log --graph --oneline
+    g = graph -32
+    gl = graph
+    gs = graph -16
+    gg = graph --all
     mnfd = !"f(){ git merge --no-ff $1 && git branch -d $1; };f"
     fp = fetch -p
 [init]
 	defaultBranch = main
 [advice]
     detachedHead = false
+[pull]
+	rebase = false
