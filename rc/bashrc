@@ -57,3 +57,17 @@ function __reflesh_aws_sso_session () {
     aws sso logout && aws sso login --no-browser
 }
 alias aws-reflesh='__reflesh_aws_sso_session'
+
+# encrypt command
+function __encrypt_by_openssl () {
+    local _file=$1 pass=$2 iter=${3:-10000}
+    openssl enc -aes-256-cbc -salt -pbkdf2 -iter ${iter} -in ${_file} -out "${_file}.enc" -pass pass:$pass
+}
+alias encrypt='__encrypt_by_openssl'
+
+# decrypt command
+function __decrypt_by_openssl () {
+    local _file=$1 pass=$2 iter=${3:-10000}
+    openssl enc -aes-256-cbc -d -pbkdf2 -iter ${iter} -in ${_file} -out ${_file%\.enc} -pass pass:$pass
+}
+alias decrypt='__decrypt_by_openssl'
