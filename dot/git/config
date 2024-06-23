@@ -2,9 +2,9 @@
 	email = 65004703+gili-Katagiri@users.noreply.github.com
 	name = gili-Katagiri
 [tool]
-	editor = vim
+	editor = nvim
 [core]
-	editor = vim -c \"set fenc=utf-8\"
+	editor = nvim -c \"set fenc=utf-8\"
 [alias]
     pwd = !"echo ${GIT_PREFIX:-.}"
     rel = !"f() { for s in \"$@\"; do echo \"${GIT_PREFIX:-./}$s\"; done; }; f"
