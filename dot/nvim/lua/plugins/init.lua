@@ -1,4 +1,5 @@
 return {
+    require("plugins.chatgpt"),
     require("plugins.fzf"),
     require("plugins.lsp"),
     require("plugins.neo-tree"),
