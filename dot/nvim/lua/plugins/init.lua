@@ -1,5 +1,4 @@
 return {
-    require("plugins.chatgpt"),
     require("plugins.fzf"),
     require("plugins.github-copilot"),
     require("plugins.lsp"),
