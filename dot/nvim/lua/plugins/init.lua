@@ -5,9 +5,5 @@ return {
     require("plugins.neo-tree"),
     require("plugins.noice"),
     require("plugins.treesitter"),
-    -- Colorscheme
-    {
-        "EdenEast/nightfox.nvim",
-        version = "v1.0.0",
-    },
+    require("plugins.everforest"),
 }
