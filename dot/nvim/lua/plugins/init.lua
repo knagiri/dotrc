@@ -1,7 +1,6 @@
 return {
     require("plugins.fzf"),
-    require("plugins.avante"),
-    require("plugins.github-copilot"),
+    -- require("plugins.github-copilot"),
     require("plugins.neo-tree"),
     require("plugins.lsp"),
     require("plugins.treesitter"),
