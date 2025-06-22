@@ -1,6 +1,7 @@
 [user]
 	email = 65004703+gili-Katagiri@users.noreply.github.com
 	name = gili-Katagiri
+	signingkey = /home/nyagi/.ssh/id_ed25519.pub
 [tool]
 	editor = nvim
 [core]
@@ -45,3 +46,7 @@
     detachedHead = false
 [pull]
 	rebase = false
+[gpg]
+	format = ssh
+[commit]
+	gpgsign = true
