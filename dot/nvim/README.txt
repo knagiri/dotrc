@@ -33,21 +33,6 @@ Gitファイル検索: <leader>fG
 マーク検索: <leader>fm
 
 
-ChatGPT
-
-ChatGPT起動: <leader>cc
-編集指示: <leader>ce
-文法修正: <leader>cg
-翻訳: <leader>ct
-キーワード抽出: <leader>ck
-ドキュメント生成: <leader>cd
-テスト追加: <leader>ca
-コード最適化: <leader>co
-要約: <leader>cs
-バグ修正: <leader>cf
-コード説明: <leader>cx
-
-
 診断情報
 
 診断情報のフロート表示: <leader>e
