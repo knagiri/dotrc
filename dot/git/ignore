@@ -3,3 +3,5 @@ playground-ignored.*
 
 myscripts
 mysecrets
+
+**/.claude/settings.local.json
