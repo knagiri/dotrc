@@ -21,7 +21,7 @@ __auto="--select-1 --exit-0" # auto select or auto exit
 __preview_window="--preview-window down,80% --color 'preview-bg:#223344,border:#778899'"
 # file preview using bat, see https://github.com/sharkdp/bat/blob/master/doc/README-ja.md#fzf
 __file_preview="--preview 'bat --color=always --style=numbers --line-range=:500 {}'"
-__dir_preview="--preview 'exa --tree --level 3 --color=always {} | head -100'"
+__dir_preview="--preview 'eza --tree --level 3 --color=always {} | head -100'"
 
 export FZF_DEFAULT_OPTS="${__auto} --height 40% --reverse --border=rounded"
 # On tmux session, start fzf in a tmux popup window
@@ -51,7 +51,7 @@ _fzf_comprun() {
   shift
 
   case "$command" in
-    cd)     fzf "$@" --preview 'exa --tree --level 3 --color=always {} | head -100' ;;
+    cd)     fzf "$@" --preview 'eza --tree --level 3 --color=always {} | head -100' ;;
     *)      fzf "$@" ;;
   esac
 }
