@@ -58,6 +58,12 @@ function __reflesh_aws_sso_session () {
 }
 alias aws-reflesh='__reflesh_aws_sso_session'
 
+# aws export secrets as env vars
+function __export_aws_credentials () {
+    aws configure export-credentials --format env
+}
+alias aws-export='__export_aws_credentials'
+
 # encrypt command
 function __encrypt_by_openssl () {
     local _file=$1 pass=$2 iter=${3:-10000}
