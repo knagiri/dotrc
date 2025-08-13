@@ -2,7 +2,7 @@
 
 alias g='git'
 
-alias ls='exa --color=auto'
+alias ls='eza --color=auto'
 alias la='ls -la'
 alias lah='ls -lah'
 alias tree='ls -T --git-ignore'
