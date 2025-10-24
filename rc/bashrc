@@ -52,17 +52,26 @@ function __set_profile_aws_clis () {
 }
 alias aws-profiler='__set_profile_aws_clis'
 
-# aws sso reflesh
-function __reflesh_aws_sso_session () {
+# aws sso refresh
+function __refresh_aws_sso_session () {
     aws sso logout && aws sso login --no-browser
 }
-alias aws-reflesh='__reflesh_aws_sso_session'
+alias aws-refresh='__refresh_aws_sso_session'
 
 # aws export secrets as env vars
 function __export_aws_credentials () {
     aws configure export-credentials --format env
 }
 alias aws-export='__export_aws_credentials'
+
+# unset AWS Credentials
+function __unset_aws_credentials () {
+    unset AWS_PROFILE
+    unset AWS_ACCESS_KEY_ID
+    unset AWS_SECRET_ACCESS_KEY
+    unset AWS_SESSION_TOKEN
+}
+alias aws-unset='__unset_aws_credentials'
 
 # encrypt command
 function __encrypt_by_openssl () {
