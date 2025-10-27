@@ -15,6 +15,7 @@ return {
           "html", "css", "json", "yaml", "toml",
           "rust", "go", "c", "cpp",
           "bash", "markdown", "markdown_inline",
+          "regex",
         },
 
         -- 同期インストールを有効化

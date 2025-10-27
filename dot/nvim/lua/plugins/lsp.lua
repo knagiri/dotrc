@@ -10,7 +10,6 @@ return {
             "L3MON4D3/LuaSnip",
         },
         config = function()
-            local lspconfig = require('lspconfig')
             local capabilities = require('cmp_nvim_lsp').default_capabilities()
 
             -- Mason.nvim の設定
@@ -25,34 +24,46 @@ return {
 
             -- 各言語サーバーの設定
             local servers = {
-                "lua_ls", "pyright", "ts_ls", "rust_analyzer", "gopls",
-                "clangd", "jsonls", "yamlls", "dockerls", "bashls"
-            }
-
-            for _, lsp in ipairs(servers) do
-                lspconfig[lsp].setup({
-                    capabilities = capabilities,
-                })
-            end
-
-            -- rust_analyzer の個別設定
-            lspconfig.rust_analyzer.setup({
-                capabilities = capabilities,
-                settings = {
-                    ['rust-analyzer'] = {
-                        checkOnSave = {
-                            command = "clippy",
-                        },
-                        procMacro = {
-                            enable = true,
-                            ignored = {
-                                ['async-trait'] = { "async_trait" },
-                                ['napi-derive'] = { "napi" },
-                                ['async-recursion'] = { "async_recursion" },
+                lua_ls = {},
+                pyright = {},
+                ts_ls = {},
+                gopls = {},
+                clangd = {},
+                jsonls = {},
+                yamlls = {},
+                dockerls = {},
+                bashls = {},
+                rust_analyzer = {
+                    settings = {
+                        ['rust-analyzer'] = {
+                            checkOnSave = {
+                                command = "clippy",
                             },
-                        },
+                            procMacro = {
+                                enable = true,
+                                ignored = {
+                                    ['async-trait'] = { "async_trait" },
+                                    ['napi-derive'] = { "napi" },
+                                    ['async-recursion'] = { "async_recursion" },
+                                },
+                            },
+                        }
                     }
                 }
+            }
+
+            for server_name, config in pairs(servers) do
+                config.capabilities = capabilities
+                vim.lsp.config(server_name, config)
+            end
+
+            -- 自動的に有効化
+            vim.api.nvim_create_autocmd("FileType", {
+                callback = function(args)
+                    for server_name, _ in pairs(servers) do
+                        vim.lsp.enable(server_name)
+                    end
+                end,
             })
 
             -- キーマッピング
