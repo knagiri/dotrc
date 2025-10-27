@@ -1,7 +1,7 @@
 [user]
 	email = 65004703+gili-Katagiri@users.noreply.github.com
 	name = gili-Katagiri
-	signingkey = /home/nyagi/.ssh/id_ed25519.pub
+	signingkey = 
 [tool]
 	editor = nvim
 [core]
@@ -40,6 +40,8 @@
     gg = graph --all
     mnfd = !"f(){ git merge --no-ff $1 && git branch -d $1; };f"
     fp = fetch -p
+    w = worktree
+    wls = w list
 [init]
 	defaultBranch = main
 [advice]
@@ -50,3 +52,8 @@
 	format = ssh
 [commit]
 	gpgsign = true
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
