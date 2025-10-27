@@ -9,6 +9,7 @@ commands=( \
     "rustc" "rustup" "cargo" \
     "node" "volta" \
     "pyenv" "poetry" \
+    "go" \
     "eza" "bat" "fd" "rg" "fzf" \
     "nvim" "tmux" \
 )
