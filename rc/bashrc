@@ -26,9 +26,6 @@ set -o vi
 # set vim as default editor
 export EDITOR=nvim
 
-# cargo env
-. "$HOME/.cargo/env"
-
 # Volta management tool for Node.js version
 export VOLTA_HOME="$HOME/.volta"
 export PATH="$VOLTA_HOME/bin:$PATH"
@@ -54,7 +51,7 @@ alias aws-profiler='__set_profile_aws_clis'
 
 # aws sso refresh
 function __refresh_aws_sso_session () {
-    aws sso logout && aws sso login --no-browser
+    aws sso logout && aws sso login --no-browser --use-device-code
 }
 alias aws-refresh='__refresh_aws_sso_session'
 
