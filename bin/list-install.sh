@@ -1,14 +1,14 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 
 set -u
 
 commands=( \
-    "git" "docker" "docker-compose" \
+    "git" "docker" \
     "gpg" "curl"\
     "aws" \
     "rustc" "rustup" "cargo" \
     "node" "volta" \
-    "pyenv" "poetry" \
+    "pyenv" "uv" \
     "go" \
     "eza" "bat" "fd" "rg" "fzf" \
     "nvim" "tmux" \
