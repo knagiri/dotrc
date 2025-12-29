@@ -9,6 +9,7 @@
 [alias]
     pwd = !"echo ${GIT_PREFIX:-.}"
     rel = !"f() { for s in \"$@\"; do echo \"${GIT_PREFIX:-./}$s\"; done; }; f"
+    rpst = "rev-parse --show-toplevel"
     search-branch = !"f() { git branch --all --format='%(refname:short)' | fzf -q ${1:-''}; }; f"
     sb = search-branch
     search-changed-file = !"f(){ git sa | fzf -q ${1:-''}; }; f"
@@ -43,7 +44,10 @@
     mnfd = !"f(){ git merge --no-ff $1 && git branch -d $1; };f"
     fp = fetch -p
     w = worktree
-    wls = w list
+    wl = w list
+    wls = !"f() { git wl | awk '{ print $1 }' | fzf -1; }; f"
+    wa = !"f(){ : ${1:? Branch name required}; git w add "$(git rpst)@${1}" -b "${2:-$1}"; }; f"
+    wd = !"f(){ git w remove $(git wls); }; f"
 [init]
 	defaultBranch = main
 [advice]

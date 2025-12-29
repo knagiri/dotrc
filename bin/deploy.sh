@@ -11,9 +11,6 @@ export __bashrc_path="${REPO_DIR}/rc/bashrc"
 # Bashrc
 cat - << 'EOF' | envsubst '${__bashrc_path} ${__bin_path}' >> ${HOME}/.bashrc
 # DOTRC ==================================
-# bashrc@dotrc
-source "${__bashrc_path}"
-
 # bin-path@dotrc
 case ":${PATH}:" in
     *:${__bin_path}:*)
@@ -22,6 +19,9 @@ case ":${PATH}:" in
         export PATH="${__bin_path}:$PATH"
         ;;
 esac
+
+# bashrc@dotrc
+source "${__bashrc_path}"
 # ========================================
 EOF
 
@@ -34,7 +34,7 @@ function dotlink {
     local exsist syml
     exist=$1
     syml=$2
-    ln -snv $1 $2
+    ln -snvf $1 $2
 }
 
 declare -A CustomLocationMap
