@@ -26,6 +26,12 @@ set -o vi
 # set vim as default editor
 export EDITOR=nvim
 
+# Disable legacy software flow control (XON/XOFF)
+# Ctrl-S / Ctrl-Q are historically used for terminal flow control,
+# but modern SSH & terminal emulators do not require this.
+# Keeping this enabled causes Ctrl-Q to never reach applications (tmux, editors).
+stty -ixon -ixoff
+
 # Volta management tool for Node.js version
 export VOLTA_HOME="$HOME/.volta"
 export PATH="$VOLTA_HOME/bin:$PATH"

@@ -38,6 +38,8 @@
     gl = graph
     gs = graph -16
     gg = graph --all
+    poh = push origin HEAD
+    moh = merge origin/HEAD
     mnfd = !"f(){ git merge --no-ff $1 && git branch -d $1; };f"
     fp = fetch -p
     w = worktree
