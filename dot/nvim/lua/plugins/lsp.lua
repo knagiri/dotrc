@@ -25,7 +25,17 @@ return {
             -- 各言語サーバーの設定
             local servers = {
                 lua_ls = {},
-                pyright = {},
+                pyright = {
+                    settings = {
+                        python = {
+                            analysis = {
+                                typeCheckingMode = "basic",
+                                autoSearchPaths = true,
+                                useLibraryCodeForTypes = true,
+                            }
+                        }
+                    }
+                },
                 ts_ls = {},
                 gopls = {},
                 clangd = {},

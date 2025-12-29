@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # source completion and key-bindings
-confdir='/usr/share/fzf'
+confdir='/home/linuxbrew/.linuxbrew/opt/fzf/shell'
 if [ -d "${confdir}" ] ; then
     source "${confdir}/completion.bash"
     source "${confdir}/key-bindings.bash"
