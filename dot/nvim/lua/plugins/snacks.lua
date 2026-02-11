@@ -102,5 +102,7 @@ return {
         { "gao",             function() Snacks.picker.lsp_outgoing_calls() end,                      desc = "C[a]lls Outgoing" },
         { "<leader>ss",      function() Snacks.picker.lsp_symbols() end,                             desc = "LSP Symbols" },
         { "<leader>sS",      function() Snacks.picker.lsp_workspace_symbols() end,                   desc = "LSP Workspace Symbols" },
+        -- terminal
+        { "<leader>gq",      function() Snacks.terminal("ghq-tmux-session.sh", { win = { position = "float" } }) end, desc = "ghq-tmux-session" },
     }
 }
