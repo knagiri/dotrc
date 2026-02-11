@@ -7,7 +7,7 @@ commands=( \
     "gpg" "curl"\
     "aws" \
     "rustc" "rustup" "cargo" \
-    "node" "volta" \
+    "node" "mise" \
     "pyenv" "uv" \
     "go" \
     "eza" "bat" "fd" "rg" "fzf" \

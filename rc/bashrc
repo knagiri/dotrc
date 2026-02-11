@@ -32,9 +32,8 @@ export EDITOR=nvim
 # Keeping this enabled causes Ctrl-Q to never reach applications (tmux, editors).
 stty -ixon -ixoff
 
-# Volta management tool for Node.js version
-export VOLTA_HOME="$HOME/.volta"
-export PATH="$VOLTA_HOME/bin:$PATH"
+# mise - dev tool version manager
+eval "$(mise activate bash)"
 
 # Use eog with SSH-X11Forwarding
 [ "$DISPLAY" ] && \
