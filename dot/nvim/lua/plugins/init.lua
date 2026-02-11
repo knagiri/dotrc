@@ -1,6 +1,6 @@
 return {
     require("plugins.diffview"),
-    require("plugins.github-copilot"),
+    require("plugins.sidekick"),
     require("plugins.lsp"),
     require("plugins.toggleterm"),
     require("plugins.treesitter"),
