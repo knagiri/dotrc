@@ -1,7 +1,7 @@
 [user]
 	email = 65004703+gili-Katagiri@users.noreply.github.com
 	name = knagiri
-	signingkey = 
+	signingkey = ~/.ssh/id_ed25519
 [tool]
 	editor = nvim
 [core]
@@ -40,13 +40,14 @@
     gs = graph -16
     gg = graph --all
     poh = push origin HEAD
+    pas = !"f(){ git push origin $(git branch --show-current):${1:? Remote branch name required}; }; f"
     moh = merge origin/HEAD
     mnfd = !"f(){ git merge --no-ff $1 && git branch -d $1; };f"
     fp = fetch -p
     w = worktree
     wl = w list
     wls = !"f() { git wl | awk '{ print $1 }' | fzf -1; }; f"
-    wa = !"f(){ : ${1:? Branch name required}; git w add "$(git rpst)@${1}" -b "${2:-$1}"; }; f"
+    wa = !"f(){ : ${1:? Worktree name required} ${2+"-b ${2}"}; git w add "$(git rpst)@${1}" ${2}; }; f"
     wd = !"f(){ git w remove $(git wls); }; f"
 [init]
 	defaultBranch = main
