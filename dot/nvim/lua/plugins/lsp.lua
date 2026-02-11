@@ -17,7 +17,8 @@ return {
             require("mason-lspconfig").setup({
                 ensure_installed = {
                     "lua_ls", "pyright", "ts_ls", "rust_analyzer", "gopls",
-                    "clangd", "jsonls", "yamlls", "dockerls", "bashls"
+                    "clangd", "jsonls", "yamlls", "dockerls", "bashls",
+                    "copilot",
                 },
                 automatic_installation = true,
             })
@@ -43,6 +44,7 @@ return {
                 yamlls = {},
                 dockerls = {},
                 bashls = {},
+                copilot = {},
                 rust_analyzer = {
                     settings = {
                         ['rust-analyzer'] = {
