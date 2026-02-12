@@ -46,10 +46,21 @@ declare -A CustomLocationMap
 CustomLocationMap["git"]="${HOME}/.config/git"
 CustomLocationMap["nvim"]="${HOME}/.config/nvim"
 
+declare -A MergeLinkMap
+# For directories where individual files should be linked INTO
+# an existing directory (instead of replacing the whole directory).
+MergeLinkMap["claude"]="${HOME}/.claude"
+
 for dotname in $(ls "$__dotfiles_path"); do
-    if [ -z "${CustomLocationMap["${dotname}"]}" ]; then
-        dotlink "${__dotfiles_path}/${dotname}" "${HOME}/.${dotname}"
-    else
+    if [ -n "${MergeLinkMap["${dotname}"]}" ]; then
+        merge_target="${MergeLinkMap["${dotname}"]}"
+        mkdir -p "$merge_target"
+        for file in "${__dotfiles_path}/${dotname}"/*; do
+            dotlink "$file" "${merge_target}/$(basename "$file")"
+        done
+    elif [ -n "${CustomLocationMap["${dotname}"]}" ]; then
         dotlink "${__dotfiles_path}/${dotname}" "${CustomLocationMap["${dotname}"]}"
+    else
+        dotlink "${__dotfiles_path}/${dotname}" "${HOME}/.${dotname}"
     fi
 done
