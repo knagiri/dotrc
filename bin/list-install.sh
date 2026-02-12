@@ -12,6 +12,7 @@ commands=( \
     "go" \
     "eza" "bat" "fd" "rg" "fzf" \
     "nvim" "tmux" \
+    "claude" "coderabbit" \
 )
 
 function is_exist_command {
