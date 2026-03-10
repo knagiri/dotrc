@@ -16,12 +16,13 @@ description: Push the current branch and create a GitHub pull request. Use when 
 3. `git log --oneline <base>..HEAD` でこのブランチの全コミットを確認
 4. `git diff <base>...HEAD` で差分の全体像を把握
 5. designdoc を探索し、PR 分割戦略を決定する（後述）
-6. 分割判定の結果に応じて push & PR 作成:
+6. コードレビュー & 修正ループ（後述）
+7. 分割判定の結果に応じて push & PR 作成:
    - **分割なし**: `git push -u origin HEAD` → `gh pr create`
    - **分割あり**: 分割案をユーザーに提示し、承認後に各 PR を順次作成
      - `git push origin $(git branch --show-current):<remote-branch>` で push（`git pas` 相当）
      - `gh pr create --head <remote-branch>` で PR 作成
-7. 作成された PR の URL を表示
+8. 作成された PR の URL を表示
 
 ## PR 分割戦略
 
@@ -53,6 +54,54 @@ description: Push the current branch and create a GitHub pull request. Use when 
 分割が必要と判断した場合:
 1. 分割案をユーザーに提示する（各 PR のスコープとリモートブランチ名の案）
 2. ユーザーの承認を得てから実行
+
+## コードレビュー & 修正ループ
+
+push 前に CodeRabbit でコードレビューを実行し、指摘事項を修正する。
+
+### 前提チェック
+
+```bash
+coderabbit --version 2>/dev/null && coderabbit auth status 2>&1 | head -3
+```
+
+結果に応じてレビュー手段を決定する:
+
+- **CodeRabbit が利用可能**: CodeRabbit でレビュー（後述）
+- **CLI 未インストールまたは未認証**: ユーザーに CodeRabbit が使えない旨を通知し、**Claude Code の sub-agent（`coderabbit:code-reviewer` タイプ）で代替レビューを実施する**（後述）
+
+### レビュー実行: CodeRabbit
+
+```bash
+coderabbit review --plain --base <base>
+```
+
+### レビュー実行: Claude Code sub-agent（フォールバック）
+
+CodeRabbit が利用できない場合、Task ツールで `coderabbit:code-reviewer` サブエージェントを起動し、`git diff <base>...HEAD` の差分を渡してレビューさせる。
+
+サブエージェントには以下の観点でレビューを依頼する:
+- セキュリティ脆弱性（インジェクション、認証・認可の不備等）
+- バグになりうるパターン（エラーハンドリング漏れ、エッジケース等）
+- コード品質（重複、複雑度、命名等）
+
+結果は CodeRabbit と同じフォーマット（Critical / Suggestions）で報告させる。
+
+### 結果の判定と対応
+
+レビュー結果（CodeRabbit / sub-agent いずれの場合も同様）を **Critical（セキュリティ・バグ）** と **Suggestions（改善提案）** に分類する。
+
+- **Critical な指摘がある場合**:
+  1. 指摘内容と修正方針をユーザーに報告
+  2. ユーザーの承認を得てコードを修正
+  3. 修正を commit
+  4. 再度レビューを実行（同じ手段を使う）
+  5. Critical な指摘がなくなるまで繰り返す（最大3回）
+  6. 3回で解消しない場合、残りの指摘を報告して続行するか確認する
+- **Suggestions のみの場合**: 指摘内容をユーザーに報告し、対応するか確認する
+  - 対応する場合: 修正 → commit → 再レビュー
+  - スキップする場合: 次の手順へ進む
+- **指摘なしの場合**: そのまま次の手順へ進む
 
 ## PR フォーマット
 
