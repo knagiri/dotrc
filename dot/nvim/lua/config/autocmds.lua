@@ -1,0 +1,2 @@
+-- Autocmds are configured in individual plugin files (e.g. lsp.lua)
+-- Add general-purpose autocmds here as needed.
