@@ -73,6 +73,10 @@
       "Bash(uv run --package * pyright)",
       "Bash(uv run pytest)",
       "Bash(uv run --package * pytest)",
+      "Bash(aws logs *)",
+      "Bash(aws cloudwatch *)",
+      "Bash(date *)",
+      "Bash(jq *)",
       "Grep(**)",
       "Glob(**)",
       "LS(**)",
@@ -159,6 +163,8 @@
     "claude-code-setup@claude-plugins-official": true,
     "typescript-lsp@claude-plugins-official": true,
     "pyright-lsp@claude-plugins-official": true,
-    "claude-md-management@claude-plugins-official": true
+    "claude-md-management@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true
   }
 }

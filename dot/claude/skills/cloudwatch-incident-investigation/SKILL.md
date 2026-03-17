@@ -3,98 +3,110 @@ name: cloudwatch-incident-investigation
 description: >
   CloudWatch Alarm 発火や Sentry エラーを起点とした本番障害調査を自律的に進めるスキル。
   AWS CLI を使って CloudWatch Logs Insights クエリの実行・結果解釈・根本原因特定を行う。
-  TRIGGER when: ユーザーが本番障害・アラート・Sentry エラーの調査を依頼したとき、
-  または CloudWatch Logs / Metrics について調査が必要なとき。
-disable-model-invocation: true
-allowed-tools: Bash(aws *), Bash(date *), Bash(jq *), Bash(cat *), Read
+  ユーザーが本番障害・アラート・Sentry エラーの調査を依頼したとき、
+  または CloudWatch Logs / Metrics の調査・ログ取得が必要なときにこのスキルを使う。
+  「ログ調べて」「エラー調査して」「アラーム見て」「障害調査」のような依頼にも反応すること。
+allowed-tools: Bash(aws *), Bash(date *), Bash(jq *), Read, Grep, Glob
 argument-hint: <alarm-name | sentry-error-url | free-text description>
 ---
 
 # CloudWatch Incident Investigation
 
-あなたは本番障害調査の専門エージェントです。
+本番障害調査の専門スキル。
 CloudWatch Alarm 発火または Sentry エラーを起点に、AWS CLI を直接実行しながら
-根本原因の特定まで自律的に調査を進めてください。
+根本原因の特定まで自律的に調査を進める。
 
-## 設定ファイルの読み込み（最初に必ず実行）
+このスキルは対象サービスの git プロジェクト内で呼ばれることを前提としている。
+ログ調査だけでなく、ソースコードを読んでビジネスロジックを理解し、
+より正確な影響範囲の評価と復旧判断を行う。
 
-調査を開始する前に、プロジェクト固有の設定ファイルを探索・読み込む。
+---
 
-### 探索順序
+## 1. 設定ファイル
 
-1. **サービス指定がある場合（モノレポ）**: `<service-dir>/.claude/cloudwatch-config.local.json`
-2. **プロジェクトルート**: `.claude/cloudwatch-config.local.json`
+調査の最初に `.claude/cloudwatch-config.local.json`（プロジェクトルート）を探す。
+設定があれば動的発見をスキップして即座にクエリ実行に入れる。なくても調査は進められる。
 
-サービス名がユーザー入力や `$ARGUMENTS` に含まれている場合は、
-そのサービスのディレクトリ配下の `.claude/` を優先して探索する。
-
-```
-# プロジェクトルートの設定を探す
-cat .claude/cloudwatch-config.local.json 2>/dev/null
-
-# モノレポの場合、サービスディレクトリ配下を探す（サービス名が判明している場合）
-cat <service-dir>/.claude/cloudwatch-config.local.json 2>/dev/null
-```
-
-### 設定ファイルのスキーマ
+### スキーマ
 
 ```jsonc
 {
-  // AWS 接続設定
   "aws": {
-    "profile": "my-profile",       // AWS CLI プロファイル名
-    "region": "ap-northeast-1"     // AWS リージョン
+    "profile": "my-profile",
+    "region": "ap-northeast-1"
   },
-
-  // サービスごとのログ設定（キーはサービス識別子）
   "services": {
     "api": {
       "logGroupName": "/ecs/my-app-api-production",
-      // filterIndex が ACTIVE なフィールド一覧（省略可）
-      "filterIndexFields": ["level", "requestId", "traceInfo.traceId"],
-      // ログのサンプルフィールドパス（省略可、動的発見のヒント）
-      "knownFields": {
-        "errorLevel": "level",
-        "requestId": "requestId",
-        "traceId": "traceInfo.traceId",
-        "apiContext": "requestInfo.apiContext",
-        "statusCode": "responseInfo.statusCode",
-        "processingTime": "responseInfo.processingTimeMs"
-      }
+      "filterIndexFields": ["requestId", "responseInfo.statusCode"]
     },
     "worker": {
       "logGroupName": "/ecs/my-app-worker-production",
-      "filterIndexFields": ["level"]
+      "filterIndexFields": ["requestId"]
     }
   },
-
-  // デフォルトのサービス（省略時は最初のサービスを使用）
   "defaultService": "api"
 }
 ```
 
-### 設定の適用ルール
+### 適用ルール
 
-- **設定ファイルが存在する場合**: `aws.profile` を `--profile` オプションに、`aws.region` を `--region` オプションに付与する。サービス設定からロググループ名・filterIndex 情報を取得する
-- **設定ファイルが存在しない場合**: ユーザーに AWS プロファイル・リージョン・ロググループ名を確認し、動的発見モードで調査を進める（フォールバック）
-- **部分的に設定がある場合**: 設定されている項目はそのまま使い、欠落している項目のみ動的に発見する
-- `filterIndexFields` が設定に含まれている場合は `describe-field-indexes` API 呼び出しをスキップできる
-- `knownFields` が設定に含まれている場合はログサンプリングによるフィールド発見をスキップできる
+- **設定あり**: `aws.profile` → `--profile`、`aws.region` → `--region` に付与。ロググループ名・filterIndex を取得し、**ステップ2・3をスキップ**して即座にクエリ実行へ
+- **設定なし**: ユーザーに AWS プロファイル・リージョンを確認し、動的発見（ステップ2・3）で調査を進める
+- **部分的**: 設定されている項目はそのまま使い、欠落項目のみ動的に発見
+- 設定ファイルは `.gitignore` に追加することをユーザーに推奨する
 
-## 調査の起点
+---
+
+## 2. ソースコードの参照
+
+ログ調査と並行して、対象サービスのソースコードを読んでビジネスロジックを理解する。
+これにより、ログだけでは判断できない影響範囲や復旧状態をより正確に評価できる。
+
+### いつコードを読むか
+
+- **アラーム名やエラーの context からジョブプロセッサ・ハンドラを特定できたとき**
+  - Glob や Grep でクラス名・キューワード名を検索し、該当する実装を読む
+- **復旧判断が必要なとき**（→ セクション5「復旧判断」参照）
+- **エラーハンドリングやリトライの挙動を理解したいとき**
+
+### 何を読むか
+
+- **ジョブプロセッサ / ハンドラの実装**: エラーが発生した処理の全体像を把握する
+- **リトライロジック**: リトライ回数、バックオフ戦略、リトライ条件
+- **セッション / バッチのライフサイクル**: 処理が一時的なセッション内で行われるのか、継続的なのか
+- **アラーム定義**: IaC（Terraform 等）からアラームの閾値・条件を確認
+- **外部サービス呼び出し**: どの外部サービスに依存しているか、エラー時のフォールバック
+
+```
+# エラーログの context 値でソースコードを検索する例
+# context = "LayeredSnapshotCapturingJobProcessor" の場合:
+```
+
+ソースコードを読むことで「このエラーは一時的なセッション中にのみ発生するのか、恒常的に発生しうるのか」
+「アラームが OK に戻っても根本原因は解消されていないのか」といった判断ができるようになる。
+
+---
+
+## 3. 調査の起点
 
 ユーザーからの入力: `$ARGUMENTS`
 
-入力に応じて以下のいずれかのフローで調査を開始してください。
+### 起点A: CloudWatch Alarm
 
-### 起点1: CloudWatch Alarm
-
-1. アラームの詳細を取得する
+1. アラームの詳細を取得
    ```
    aws cloudwatch describe-alarms --alarm-names "<alarm-name>"
    ```
-2. アラームの対象メトリクスと閾値を確認する
-3. メトリクスの推移を確認し、異常の発生時刻を特定する
+2. 対象メトリクスと閾値を確認
+3. **アラーム履歴から実際の発火時刻を特定する**（ユーザー申告の時刻が不正確なことがある）
+   ```
+   aws cloudwatch describe-alarm-history \
+     --alarm-name "<alarm-name>" \
+     --history-item-type StateUpdate \
+     --start-date "<start>" --end-date "<end>"
+   ```
+4. 必要に応じてメトリクスの推移を確認
    ```
    aws cloudwatch get-metric-statistics \
      --namespace <namespace> --metric-name <metric> \
@@ -102,38 +114,37 @@ cat <service-dir>/.claude/cloudwatch-config.local.json 2>/dev/null
      --period 60 --statistics Average Sum Maximum \
      --dimensions <dimensions>
    ```
-4. 特定した時間帯のログ調査に進む（後述の「ログ調査」セクション）
+5. 特定した時間帯のログ調査に進む（→ セクション4）
 
-### 起点2: Sentry エラー
+### 起点B: Sentry エラー
 
-1. ユーザーから提供されたエラー情報（エラーメッセージ、スタックトレース、タグ等）を確認する
-2. Sentry 上の情報から以下を抽出する:
+1. ユーザーから提供されたエラー情報を確認
+2. 以下を抽出:
    - エラーメッセージ / Exception クラス
-   - 発生時刻（UTC）
-   - リクエストURL / HTTP メソッド
-   - `requestId`（タグに含まれる場合）
-   - `traceId`（タグに含まれる場合）
-   - 環境（production / staging）
-3. 抽出した情報をもとにログ調査に進む
+   - 発生時刻
+   - requestId、traceId（タグに含まれる場合）
+   - リクエスト URL / HTTP メソッド
+3. 抽出した情報をもとにログ調査に進む（→ セクション4）
 
-## ログ調査
+---
+
+## 4. ログ調査
 
 ### ステップ1: ロググループの特定
 
-以下の優先順位でロググループ名を決定する:
-
-1. 設定ファイルの `services.<service>.logGroupName` から取得
+優先順位:
+1. 設定ファイルの `services.<service>.logGroupName`
 2. ユーザーの入力から特定
-3. 上記で不明な場合はユーザーに確認、または一覧から探す:
+3. 不明な場合はユーザーに確認、または一覧から探す:
    ```
    aws logs describe-log-groups --log-group-name-prefix "<prefix>" --query 'logGroups[].logGroupName'
    ```
 
-### ステップ2: ログ構造の動的発見
+### ステップ2: ログ構造の動的発見（設定ファイルがない場合）
 
-設定ファイルに `knownFields` が定義されている場合はこのステップをスキップできる。
+設定ファイルに `filterIndexFields` がある場合、このステップと次のステップ3はスキップしてステップ4に進む。
 
-**`knownFields` がない場合**: ログのフィールド構造はサービスごとに異なる可能性があるため、
+ログのフィールド構造はサービスごとに異なる可能性がある。
 まず実際のログを数件サンプリングして構造を把握する。
 
 ```
@@ -146,28 +157,23 @@ aws logs start-query \
 
 サンプルから以下を確認する:
 - JSON 構造化ログかどうか
-- 利用可能なフィールド名（`requestId`, `traceInfo.traceId`, `level`, `requestInfo.apiContext` 等）
-- エラーレベルのフィールド名と値（`level`, `error`, `warn` 等）
+- 利用可能なフィールド名（リクエストID、トレースID、エラーレベル等）
+- エラーレベルのフィールド名と値
 
-### ステップ3: filterIndex の確認
-
-設定ファイルに `filterIndexFields` が定義されている場合はこのステップをスキップできる。
-
-**`filterIndexFields` がない場合**: CloudWatch Logs Insights の `filterIndex` が設定されているフィールドは
-`filter` 句で高速検索できる。設定は以下で確認する:
+### ステップ3: filterIndex の確認（設定ファイルがない場合）
 
 ```
 aws logs describe-field-indexes --log-group-identifiers "<log-group-arn>"
 ```
 
-- `filterIndex` が ACTIVE なフィールド → `filter` 句を使う（高速）
-- それ以外のフィールド → 通常の `parse` + `filter` または `like` を使う
+filterIndex が ACTIVE なフィールドは `filter` 句で高速検索できる。
+それ以外のフィールドは `parse` + `filter` または `like` を使う。
 
 ### ステップ4: Logs Insights クエリの実行
 
-CloudWatch Logs Insights のクエリは非同期実行される。以下のフローを必ず守ること:
+CloudWatch Logs Insights クエリは非同期実行。以下のフローを守ること。
 
-#### 4-1. クエリの開始
+#### クエリの開始
 
 ```
 aws logs start-query \
@@ -177,78 +183,144 @@ aws logs start-query \
   --query-string '<query>'
 ```
 
-**時刻の変換例:**
-```
-date -d '2026-03-12T08:00:00Z' +%s
-```
+時刻の変換: `date -d '2026-03-12T08:00:00+09:00' +%s`
 
-#### 4-2. クエリ完了のポーリング
+#### ポーリング
 
-`start-query` が返す `queryId` を使って結果を取得する。
-ステータスが `Complete` になるまでポーリングする:
+`start-query` が返す `queryId` で結果を取得する。
+`Complete` になるまでポーリング:
 
 ```
 aws logs get-query-results --query-id "<query-id>"
 ```
 
-- ステータスが `Running` または `Scheduled` → 2〜3秒待って再度実行
-- ステータスが `Complete` → 結果を解析
-- ポーリングは最大10回まで。超えた場合はタイムアウトとしてユーザーに報告
+- `Running` / `Scheduled` → 2〜3秒待って再実行
+- `Complete` → 結果を解析
+- 最大10回まで。超えた場合はタイムアウトとして報告
 
-#### 4-3. クエリ例
+#### JSON 出力の加工
 
-**エラーログの検索（filterIndex が level に設定されている場合）:**
+AWS CLI の出力やログの JSON パースには `jq` を使う。Python スクリプトは書かないこと。
+
+```bash
+# クエリ結果から特定フィールドを抽出
+aws logs get-query-results --query-id "<id>" | jq -r '.results[] | [.[0].value, .[1].value] | @tsv'
+
+# @message フィールドの JSON をパース
+aws logs get-query-results --query-id "<id>" | jq -r '.results[] | .[] | select(.field == "@message") | .value' | jq '.requestInfo'
 ```
-filter level = "error"
-| fields @timestamp, requestId, message, requestInfo.apiContext, requestInfo.rawURL
+
+#### 初回クエリの戦略
+
+初回クエリではエラーレベルを決め打ちしない。
+ログのレベル体系はサービスごとに異なり、障害に関連するログが `error` ではなく `warn` や `info` に記録されることがある。
+
+**良い初回クエリ**: アラームやエラーのキーワードで広く検索する
+```
+filter @message like /エラーに関連するキーワード/
+| fields @timestamp, level, context, message, requestId
 | sort @timestamp desc
-| limit 50
+| limit 30
 ```
 
-**requestId による追跡:**
+**避けるべき初回クエリ**: `filter level = "error"` で始めると該当レベルのログがない場合に空振りして時間を無駄にする。
+
+#### クエリ構文の注意点
+
+**Logs Insights クエリ構文**を使う。filter-log-events のフィルターパターン構文 (`{ $.field = "value" }`) とは異なるので注意。
+
 ```
-filter requestId = "<request-id>"
-| fields @timestamp, level, message, requestInfo.apiContext, responseInfo.statusCode, responseInfo.processingTimeMs
-| sort @timestamp asc
+# フィルターパターン構文 → Logs Insights 構文への変換
+{ $.field = "value" && $.other = "x" }  →  filter field = "value" and other = "x"
 ```
 
-**特定APIのエラー検索:**
-```
-fields @timestamp, requestId, level, message, requestInfo.apiContext, responseInfo.statusCode
-| filter requestInfo.apiContext like /PUT \/path/
-| filter level = "error" or responseInfo.statusCode >= 400
-| sort @timestamp desc
-| limit 50
-```
-
-**traceId による分散トレーシング（複数ロググループ対応）:**
-```
-filter traceInfo.traceId = "<trace-id>"
-| fields @timestamp, requestId, level, message, requestInfo.apiContext
-| sort @timestamp asc
-```
+- filterIndex があるフィールドは `filter field = "value"` を使う（高速）
+- ないフィールドは `filter field like /pattern/` や `parse` を使う
+- ドットを含むフィールド名はバッククォートで囲む: `` `es.field_name` ``
+- `stats` クエリでは集計対象イベント数に `limit` が影響しうる。正確な集計には大きい `limit` を指定する
+- `bin(1d)` は UTC 基準。JST で正確な期間比較が必要な場合は期間を分けて個別にクエリを実行する
 
 ### ステップ5: 深掘り調査
 
-初回クエリの結果に基づいて、以下の深掘りを必要に応じて行う:
+初回クエリで障害の輪郭が見えたら、以下のパターンで根本原因まで掘り下げる。
+各パターンは独立して実行でき、`run_in_background` で並行実行すると高速。
 
-1. **requestId 追跡**: エラーログから `requestId` を取得し、同一リクエストの全ログを確認
-2. **時間帯分析**: エラー集中の時間帯を特定し、前後のログパターンを確認
-3. **API パターン分析**: 特定のエンドポイントにエラーが集中していないか確認
-4. **レスポンスタイム分析**: `responseInfo.processingTimeMs` の異常値を確認
-5. **関連メトリクス確認**: 必要に応じて CloudWatch Metrics を追加確認
+#### パターン1: リクエスト単位の追跡
+エラーログから requestId を取得し、そのリクエストの全ログを時系列で確認する。
+1つのリクエスト内で何が起きたか（リトライ、外部サービス呼び出し、例外の詳細）を把握する。
+```
+filter requestId = "<id>"
+| fields @timestamp, level, context, message
+| sort @timestamp asc
+```
+`context` フィールドが異なるログエントリを見ることで、リクエストがどのコンポーネントを通過したかがわかる。
 
-## 調査結果の出力
+#### パターン2: エラーの集約分析と影響範囲の定量化
+エラーの全体像を把握する。時間帯ごとの件数だけでなく、正常処理との比率を算出して影響の深刻度を定量化する。
+```
+filter @message like /エラーキーワード/
+| stats count(*) as cnt by bin(5m)
+```
+```
+filter @message like /エラーキーワード/
+| stats count_distinct(requestId) as affected_requests by <影響範囲のフィールド>
+```
 
-調査が完了したら、以下のフォーマットでサマリを出力してください:
+正常時との比較も行う。同じ時間帯の成功・失敗を集計してエラー率を算出すると、影響の深刻度がより明確になる。
+```
+filter <対象処理の条件>
+| stats count(*) as total,
+        sum(level = "error" or level = "warn") as errors
+        by bin(5m)
+```
+
+#### パターン3: 関連コンポーネントの調査
+`context` フィールド（ログを出力したクラス名やモジュール名）で関連ログを探す。
+エラーログの `context` 値を手がかりに、同じコンポーネントの正常時のログと比較して異常を特定する。
+
+#### パターン4: 分散トレーシング
+traceId で複数サービス・ロググループを横断して追跡する。
+外部サービス呼び出しの失敗や、サービス間の連鎖的な障害を発見できる。
+
+---
+
+## 5. 復旧判断
+
+復旧判断はログ調査の結果だけでなく、ソースコードから得たビジネスロジックの理解に基づいて行う。
+
+### アラーム OK ≠ 復旧
+
+アラームが OK に戻っても、根本原因が解消されたとは限らない。
+例えば、一時的なセッションやバッチ処理の中でのみエラーが可視化される場合、
+セッション終了とともにアラームは OK に戻るが、次のセッションで同じエラーが再発する可能性がある。
+
+### 復旧判断の手順
+
+1. **ソースコードからエラーの発生条件を理解する**
+   - エラーが発生した処理は一時的（セッション・バッチ）か継続的か
+   - アラームのメトリクスはどの条件で加算されるか
+2. **根本原因が解消されたかを確認する**
+   - 直接原因（外部サービスのエラー、リソース枯渇等）が現在も継続しているか
+   - 同じ条件の処理が成功しているログがあるか（同一エンティティ・同一操作）
+3. **復旧ステータスを正確に記述する**
+   - 「アラームが OK に戻った」と「根本原因が解消された」を区別する
+   - 根本原因が解消されたか不明な場合は、その旨を明記する
+
+---
+
+## 6. 調査結果の出力
+
+調査が完了したら、以下のフォーマットでサマリを出力する。
+時刻は JST で記載する。
 
 ```markdown
 ## 障害調査サマリ
 
 ### 概要
 - **調査起点**: (アラーム名 / Sentry エラー)
-- **発生時刻**: (UTC)
-- **影響範囲**: (影響を受けたAPI・ユーザー数の推定)
+- **発生時刻**: (JST)
+- **影響範囲**: (影響を受けた API・エンティティ・ユーザー数の推定)
+- **現在のステータス**: (継続中 / 復旧済み / アラームは OK だが根本原因は未解消の可能性)
 
 ### 根本原因
 (特定した根本原因を簡潔に記述)
@@ -256,10 +328,10 @@ filter traceInfo.traceId = "<trace-id>"
 ### 根拠
 1. (根拠1: ログやメトリクスのエビデンス)
 2. (根拠2: ...)
-3. ...
+3. (根拠3: ソースコードから得た知見がある場合)
 
 ### 時系列
-| 時刻 (UTC) | イベント |
+| 時刻 (JST) | イベント |
 |---|---|
 | HH:MM:SS | ... |
 
@@ -269,12 +341,13 @@ filter traceInfo.traceId = "<trace-id>"
 3. **再発防止**: (監視強化・テスト追加等)
 ```
 
+---
+
 ## 注意事項
 
-- **時刻は常に UTC で扱う**。日本時間 (JST) が提示された場合は UTC に変換してからクエリに使用する
-- **クエリの時間範囲は適切に設定する**。まず狭い範囲（±15分）で始め、必要に応じて広げる
-- **大量のログを一度に取得しない**。`limit` を適切に設定する（初回は20〜50件）
+- **時刻は JST で出力する**。クエリ実行時は epoch に変換して使用
+- **クエリの時間範囲は狭く始める**。まず ±15分、必要に応じて広げる
+- **大量のログを一度に取得しない**。`limit` を適切に設定（初回は 20〜50 件）
 - **filterIndex を活用する**。確認済みの filterIndex フィールドには `filter field = "value"` を使う
-- **フィールド名を仮定しない**。サンプリングで確認した実際のフィールド名を使う
-- **AWS プロファイル・リージョンは設定ファイルを優先する**。設定がない場合はユーザーに確認する
-- **設定ファイル (`cloudwatch-config.local.json`) は `.gitignore` に追加する**ことをユーザーに推奨する
+- **フィールド名を仮定しない**。サンプリングまたは設定ファイルで確認した実際のフィールド名を使う
+- **ソースコードを活用する**。ログだけで判断が難しい場合は、プロジェクト内の実装を読んで理解を深める

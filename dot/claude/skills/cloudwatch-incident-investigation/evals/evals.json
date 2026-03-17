@@ -1,0 +1,11 @@
+{
+  "skill_name": "cloudwatch-incident-investigation",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Backend Job Queue Error Count - snapshot capturing アラームが発火した。時刻は 2026/03/17 16時頃。AWS profile は prod-cloudwatch-logs-reader を使って。",
+      "expected_output": "アラーム詳細の取得 → メトリクス確認 → ロググループ特定 → ログ構造の動的発見 → filterIndex 確認 → エラーログ検索 → 深掘り調査 → サマリ出力",
+      "files": []
+    }
+  ]
+}
