@@ -165,6 +165,8 @@
     "pyright-lsp@claude-plugins-official": true,
     "claude-md-management@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": true
+    "superpowers@claude-plugins-official": true,
+    "slack@claude-plugins-official": true,
+    "github@claude-plugins-official": true
   }
 }
