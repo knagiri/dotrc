@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/knagiri/dotrc/src/claude-queue/internal/hook"
 )
 
 // version is set via -ldflags "-X main.version=..." at build time.
@@ -27,7 +29,7 @@ func main() {
 		if len(os.Args) < 3 {
 			os.Exit(0)
 		}
-		// TODO(Task 6): call hook.Run(os.Args[2])
+		hook.Run(os.Args[2])
 		os.Exit(0)
 	case "status":
 		// TODO(Task 10): call status.Run()
