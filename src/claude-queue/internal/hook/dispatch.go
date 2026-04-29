@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/state"
 )
 
@@ -64,7 +65,14 @@ func Dispatch(d *Deps, event string, in *Input) error {
 		return fmt.Errorf("insert event: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if event == "SessionEnd" {
+		// Best-effort: don't fail the hook on gc errors.
+		_ = db.GC(d.DB, 7*24*3600)
+	}
+	return nil
 }
 
 func upsertSession(tx *sql.Tx, in *Input, pane string) error {

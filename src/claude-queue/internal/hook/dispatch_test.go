@@ -166,3 +166,36 @@ func TestDispatch_UnknownEvent_NoOp(t *testing.T) {
 		t.Errorf("expected no events, got %d", rows)
 	}
 }
+
+func TestDispatch_SessionEnd_TriggersGC(t *testing.T) {
+	d := openTestDB(t)
+
+	// Pre-seed an ancient terminated session that should be gc'd.
+	_, err := d.DB.Exec(`
+		INSERT INTO sessions(session_id, terminated_at) VALUES ('ancient', unixepoch() - 700000);
+	`)
+	if err != nil {
+		t.Fatalf("seed ancient: %v", err)
+	}
+	_, err = d.DB.Exec(`
+		INSERT INTO events(session_id, event_type, state, created_at)
+		VALUES ('ancient', 'SessionEnd', 'ended', unixepoch() - 700000);
+	`)
+	if err != nil {
+		t.Fatalf("seed ancient event: %v", err)
+	}
+
+	// Now run a real lifecycle on a different session.
+	for _, ev := range []string{"SessionStart", "SessionEnd"} {
+		in := &Input{SessionID: "s", HookEventName: ev}
+		if err := Dispatch(d, ev, in); err != nil {
+			t.Fatalf("%s: %v", ev, err)
+		}
+	}
+
+	var n int
+	_ = d.DB.QueryRow("SELECT COUNT(*) FROM sessions WHERE session_id = 'ancient'").Scan(&n)
+	if n != 0 {
+		t.Errorf("ancient should be gc'd; count = %d", n)
+	}
+}
