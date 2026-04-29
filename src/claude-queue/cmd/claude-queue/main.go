@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hook"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/picker"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/status"
 )
 
@@ -35,7 +36,7 @@ func main() {
 	case "status":
 		status.Run()
 	case "picker":
-		// TODO(Task 12): call picker.Run(os.Args[2:])
+		picker.Run(os.Args[2:])
 	case "reset":
 		// TODO(Task 13): call reset.Run(os.Args[2:])
 	default:
