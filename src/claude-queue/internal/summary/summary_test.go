@@ -67,3 +67,28 @@ func TestTruncateWidth_JapanesePreservesWidth(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "あいう")
 	}
 }
+
+func TestExtractHost_StripsUserinfo(t *testing.T) {
+	got := Summarize(Input{
+		EffectiveState: "awaiting_approval",
+		Payload:        `{"tool_name":"WebFetch","tool_input":{"url":"https://user:pass@example.com:8080/path?q=1"}}`,
+	})
+	want := "WebFetch: example.com"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSummarizeApproval_FallbackOnEmptyPayload(t *testing.T) {
+	got := Summarize(Input{EffectiveState: "awaiting_approval", Payload: ""})
+	if got != "awaiting approval" {
+		t.Errorf("got %q, want %q", got, "awaiting approval")
+	}
+}
+
+func TestSummarizeDone_FallbackOnEmptyPayload(t *testing.T) {
+	got := Summarize(Input{EffectiveState: "idle_done", Payload: ""})
+	if got != "done" {
+		t.Errorf("got %q, want %q", got, "done")
+	}
+}

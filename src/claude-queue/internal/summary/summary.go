@@ -2,6 +2,7 @@ package summary
 
 import (
 	"encoding/json"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -58,6 +59,7 @@ func toolInputSummary(tool string, raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return ""
 	}
+	// TODO(v0.2): handle MCP tool names (mcp__server__tool) per plan §6.
 	switch tool {
 	case "Bash":
 		if cmd, ok := obj["command"].(string); ok {
@@ -75,13 +77,9 @@ func toolInputSummary(tool string, raw json.RawMessage) string {
 	return ""
 }
 
-func extractHost(url string) string {
-	s := url
-	if i := strings.Index(s, "://"); i >= 0 {
-		s = s[i+3:]
-	}
-	if i := strings.IndexAny(s, "/?#"); i >= 0 {
-		s = s[:i]
+func extractHost(s string) string {
+	if u, err := url.Parse(s); err == nil && u.Hostname() != "" {
+		return u.Hostname()
 	}
 	return s
 }
