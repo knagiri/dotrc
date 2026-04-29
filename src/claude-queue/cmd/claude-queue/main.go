@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hook"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/status"
 )
 
 // version is set via -ldflags "-X main.version=..." at build time.
@@ -32,7 +33,7 @@ func main() {
 		hook.Run(os.Args[2])
 		os.Exit(0)
 	case "status":
-		// TODO(Task 10): call status.Run()
+		status.Run()
 	case "picker":
 		// TODO(Task 12): call picker.Run(os.Args[2:])
 	case "reset":
