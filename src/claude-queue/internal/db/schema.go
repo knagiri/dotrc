@@ -38,15 +38,15 @@ SELECT
   e.payload,
   e.created_at,
   CASE
-    WHEN e.state = 'working'           AND unixepoch() - e.created_at > 3600 THEN 'stale'
-    WHEN e.state = 'awaiting_approval' AND unixepoch() - e.created_at > 1800 THEN 'stale'
-    WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at >  900 THEN 'stale'
+    WHEN e.state = 'working'           AND unixepoch() - e.created_at > 28800 THEN 'stale'
+    WHEN e.state = 'awaiting_approval' AND unixepoch() - e.created_at >  7200 THEN 'stale'
+    WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at > 14400 THEN 'stale'
     ELSE e.state
   END AS effective_state,
   CASE
-    WHEN e.state = 'awaiting_approval' AND unixepoch() - e.created_at <= 1800 THEN 1
-    WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at <=  900 THEN 2
-    WHEN e.state = 'working'           AND unixepoch() - e.created_at <= 3600 THEN 3
+    WHEN e.state = 'awaiting_approval' AND unixepoch() - e.created_at <=  7200 THEN 1
+    WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at <= 14400 THEN 2
+    WHEN e.state = 'working'           AND unixepoch() - e.created_at <= 28800 THEN 3
     ELSE 5
   END AS priority
 FROM events e

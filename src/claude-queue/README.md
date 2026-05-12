@@ -62,7 +62,7 @@ make install
 | `Stop` / `StopFailure` | idle_done |
 | `SessionEnd` | ended（view から除外） |
 
-Stale 閾値: working > 1h / awaiting_approval > 30m / idle_done > 15m 経過。
+Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
 
 ## L3 自己修復
 
