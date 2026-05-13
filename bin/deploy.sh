@@ -64,3 +64,8 @@ for dotname in $(ls "$__dotfiles_path"); do
         dotlink "${__dotfiles_path}/${dotname}" "${HOME}/.${dotname}"
     fi
 done
+
+# Build claude-queue if Go is available
+if command -v go >/dev/null 2>&1 && [ -d "${REPO_DIR}/src/claude-queue" ]; then
+    (cd "${REPO_DIR}/src/claude-queue" && make install)
+fi
