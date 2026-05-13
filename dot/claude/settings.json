@@ -165,6 +165,17 @@
       "Write(/etc/sudoers)"
     ]
   },
+  "hooks": {
+    "SessionStart":       [{ "hooks": [{ "type": "command", "command": "claude-queue hook SessionStart",       "timeout": 3000 }] }],
+    "UserPromptSubmit":   [{ "hooks": [{ "type": "command", "command": "claude-queue hook UserPromptSubmit",   "timeout": 3000 }] }],
+    "PermissionRequest":  [{ "hooks": [{ "type": "command", "command": "claude-queue hook PermissionRequest",  "timeout": 3000 }] }],
+    "PermissionDenied":   [{ "hooks": [{ "type": "command", "command": "claude-queue hook PermissionDenied",   "timeout": 3000 }] }],
+    "PostToolUse":        [{ "hooks": [{ "type": "command", "command": "claude-queue hook PostToolUse",        "timeout": 3000 }] }],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "claude-queue hook PostToolUseFailure", "timeout": 3000 }] }],
+    "Stop":               [{ "hooks": [{ "type": "command", "command": "claude-queue hook Stop",               "timeout": 3000 }] }],
+    "StopFailure":        [{ "hooks": [{ "type": "command", "command": "claude-queue hook StopFailure",        "timeout": 3000 }] }],
+    "SessionEnd":         [{ "hooks": [{ "type": "command", "command": "claude-queue hook SessionEnd",         "timeout": 3000 }] }]
+  },
   "enabledPlugins": {
     "coderabbit@claude-plugins-official": false,
     "code-review@claude-plugins-official": true,
