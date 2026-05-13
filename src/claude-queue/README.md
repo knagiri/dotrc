@@ -107,3 +107,28 @@ PR 作成時に description に貼って確認：
 - [ ] 同 pane で `/clear` 後、旧 session が view から消える（L3）
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
 - [ ] 2 pane 並行で approve 連打、busy_timeout 超過しない
+
+## v0.2 backlog
+
+v0.1 MVP の後続候補。優先度順に整理（implementation plan の final review より）。
+
+### Feature
+- **Subagent 追跡**: `SubagentStart`/`SubagentStop` + `TaskCreated`/`TaskCompleted` hook を追加し、working state に `working (N subagents)` を表示
+- **Dismiss 機能**: picker 上 `d` キー → `dismissals` テーブルに書き込み、queue view から除外。schema 変更必要
+- **fzf preview pane**: 選択中 session の transcript 末尾 N 行を popup 右側にプレビュー
+
+### Refactor / Polish
+- **MCP tool naming**: `mcp__server__tool` → `server.tool` 整形（`internal/summary/summary.go:toolInputSummary` に TODO あり）
+- **共有 `dbPath()` の抽出**: 現状 hook/run.go, status/, picker/, reset/ で 4 重複。`internal/config` か `internal/paths` に集約
+- **共有 icon maps の抽出**: status/ と picker/ で emoji/ascii マップが重複。`internal/icons` 化
+- **`db.ListRows` filter**: `where[0]` を上書きする現方式を slice-of-states に書き換え。state 追加時の保守性向上
+- **status の debug log**: `db.Open` 失敗を once-per-process で throttle log
+
+### Platform
+- **Zellij multiplexer 実装**: `internal/multiplexer/zellij.go` + `Detect()` 分岐追加。status bar は WASM plugin 必須（別作業）、keybind/popup は `config.kdl` で別途設定
+- **`~/.claude/session-queue.log` rotation**: `CLAUDE_QUEUE_DEBUG=1` 常用時に無限増殖を防ぐ
+
+### Test coverage
+- L3 rule で `$TMUX_PANE` が空のケース（degrade mode）の専用テスト
+- `ensureSession` defensive path (SessionStart 無しで PermissionRequest が来た時) の専用テスト
+- `db.ListRows` の `--show-working` / `--show-stale` フラグ各組み合わせのテスト
