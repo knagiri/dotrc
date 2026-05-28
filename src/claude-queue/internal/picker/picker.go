@@ -123,13 +123,17 @@ func Run(args []string) {
 	if len(fields) < 6 {
 		return
 	}
+	sessionID := strings.TrimSpace(fields[4])
 	pane := strings.TrimSpace(fields[5])
 	if pane == "" {
 		fmt.Fprintln(os.Stderr, "no tmux pane recorded for session")
 		return
 	}
 	if err := multiplexer.Detect().Switch(pane); err != nil {
-		fmt.Fprintln(os.Stderr, "switch:", err)
+		fmt.Fprintf(os.Stderr, "switch failed (pane likely gone): %v\n", err)
+		if termErr := db.TerminateSession(conn, sessionID); termErr != nil {
+			fmt.Fprintln(os.Stderr, "terminate:", termErr)
+		}
 	}
 }
 

@@ -88,6 +88,28 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	return out, rows.Err()
 }
 
+// TerminateSession marks a session ended (terminated_at + ForcedEnd event),
+// matching the cleanup pattern in hook.forcedEndSiblings. Used by the picker
+// when tmux switch-client fails because the recorded pane no longer exists.
+func TerminateSession(conn *sql.DB, sessionID string) error {
+	tx, err := conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		"UPDATE sessions SET terminated_at = unixepoch() WHERE session_id = ?", sessionID,
+	); err != nil {
+		return fmt.Errorf("terminate session: %w", err)
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO events(session_id, event_type, state) VALUES (?, 'ForcedEnd', 'ended')", sessionID,
+	); err != nil {
+		return fmt.Errorf("insert ForcedEnd: %w", err)
+	}
+	return tx.Commit()
+}
+
 // GC deletes ended sessions (and their events) whose terminated_at is
 // older than maxAgeSec seconds ago.
 func GC(conn *sql.DB, maxAgeSec int64) error {

@@ -128,6 +128,46 @@ func TestListRows_SortsByPriorityThenRecency(t *testing.T) {
 	}
 }
 
+func TestTerminateSession(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+
+	insertSession(t, conn, "s", "%1")
+	insertEvent(t, conn, "s", "PermissionRequest", "awaiting_approval", 5)
+
+	if err := TerminateSession(conn, "s"); err != nil {
+		t.Fatalf("TerminateSession: %v", err)
+	}
+
+	var terminated int64
+	_ = conn.QueryRow(
+		"SELECT COALESCE(terminated_at, 0) FROM sessions WHERE session_id = ?", "s",
+	).Scan(&terminated)
+	if terminated == 0 {
+		t.Error("terminated_at should be set")
+	}
+
+	var n int
+	_ = conn.QueryRow(
+		"SELECT COUNT(*) FROM events WHERE session_id = 's' AND event_type = 'ForcedEnd'",
+	).Scan(&n)
+	if n != 1 {
+		t.Errorf("expected 1 ForcedEnd event, got %d", n)
+	}
+
+	// View should no longer surface the terminated session.
+	rows, err := ListRows(conn, ListOpts{ShowWorking: true, ShowStale: true})
+	if err != nil {
+		t.Fatalf("ListRows: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("ListRows after Terminate = %d, want 0", len(rows))
+	}
+}
+
 func TestGC_DeletesOldEndedSessions(t *testing.T) {
 	conn, err := Open(filepath.Join(t.TempDir(), "c.db"))
 	if err != nil {
