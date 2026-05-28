@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -151,6 +152,36 @@ func TestDispatch_SessionEnd_SetsTerminated(t *testing.T) {
 	).Scan(&terminated)
 	if terminated == 0 {
 		t.Error("terminated_at should be set after SessionEnd")
+	}
+}
+
+func TestDispatch_NonSessionStart_BackfillsTmuxPane(t *testing.T) {
+	// Simulates the real bug: SessionStart hook was missed, so the session
+	// row exists with NULL tmux_pane (created defensively by a later event
+	// or pre-existing). A subsequent PostToolUse event should backfill the
+	// pane so picker can switch to it.
+	d := openTestDB(t)
+	d.Pane = "%42"
+
+	// Seed: session row exists with no pane (e.g. created by an earlier
+	// non-SessionStart event under the previous code path).
+	_, err := d.DB.Exec("INSERT INTO sessions(session_id) VALUES ('s')")
+	if err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	in := &Input{SessionID: "s", HookEventName: "PostToolUse", ToolName: "Bash"}
+	if err := Dispatch(d, "PostToolUse", in); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	var pane sql.NullString
+	err = d.DB.QueryRow("SELECT tmux_pane FROM sessions WHERE session_id = 's'").Scan(&pane)
+	if err != nil {
+		t.Fatalf("query pane: %v", err)
+	}
+	if !pane.Valid || pane.String != "%42" {
+		t.Errorf("tmux_pane = %v, want %%42", pane)
 	}
 }
 

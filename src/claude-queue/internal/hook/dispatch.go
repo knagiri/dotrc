@@ -30,20 +30,14 @@ func Dispatch(d *Deps, event string, in *Input) error {
 	}
 	defer tx.Rollback()
 
-	if event == "SessionStart" {
-		if err := upsertSession(tx, in, d.Pane); err != nil {
-			return err
-		}
-		if d.Pane != "" {
-			if err := forcedEndSiblings(tx, in.SessionID, d.Pane); err != nil {
-				return err
-			}
-		}
-	} else {
-		// For non-SessionStart events, ensure the session row exists
-		// so the foreign key constraint holds (defensive against
-		// missing SessionStart, e.g. hook registration mid-session).
-		if err := ensureSession(tx, in); err != nil {
+	// Upsert on every event: when SessionStart hook is dropped (e.g.
+	// /resume, hook registered mid-session) later events still need to
+	// populate tmux_pane so the picker can switch to the live pane.
+	if err := upsertSession(tx, in, d.Pane); err != nil {
+		return err
+	}
+	if event == "SessionStart" && d.Pane != "" {
+		if err := forcedEndSiblings(tx, in.SessionID, d.Pane); err != nil {
 			return err
 		}
 	}
@@ -90,18 +84,6 @@ func upsertSession(tx *sql.Tx, in *Input, pane string) error {
 	`, in.SessionID, paneVal, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath))
 	if err != nil {
 		return fmt.Errorf("upsert session: %w", err)
-	}
-	return nil
-}
-
-func ensureSession(tx *sql.Tx, in *Input) error {
-	_, err := tx.Exec(`
-		INSERT INTO sessions(session_id, cwd, transcript_path)
-		VALUES (?, ?, ?)
-		ON CONFLICT(session_id) DO NOTHING
-	`, in.SessionID, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath))
-	if err != nil {
-		return fmt.Errorf("ensure session: %w", err)
 	}
 	return nil
 }
