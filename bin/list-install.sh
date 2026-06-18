@@ -13,6 +13,7 @@ commands=( \
     "eza" "bat" "fd" "rg" "fzf" \
     "nvim" "tmux" \
     "claude" "coderabbit" \
+    "lazygit" "lazysql" \
 )
 
 function is_exist_command {
