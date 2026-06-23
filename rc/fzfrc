@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 # source completion and key-bindings
-confdir='/home/linuxbrew/.linuxbrew/opt/fzf/shell'
-if [ -d "${confdir}" ] ; then
-    source "${confdir}/completion.bash"
-    source "${confdir}/key-bindings.bash"
+if command -v fzf >/dev/null 2>&1; then
+    eval "$(fzf --bash)"
 else
-    echo "fzf completion and key-bindings files are not found [search for ${confdir}]." 1>&2
+    echo "fzf is not installed." 1>&2
 fi
-unset confdir
 
 # fzf-defult and key-bindings command
 # fzf use fd as default
