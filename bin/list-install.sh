@@ -8,12 +8,12 @@ commands=( \
     "aws" \
     "rustc" "rustup" "cargo" \
     "node" "mise" \
-    "pyenv" "uv" \
+    "uv" \
     "go" \
     "eza" "bat" "fd" "rg" "fzf" \
     "nvim" "tmux" \
-    "claude" "coderabbit" \
     "lazygit" "lazysql" \
+    "claude" \
 )
 
 function is_exist_command {
