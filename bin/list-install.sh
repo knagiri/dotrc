@@ -11,7 +11,7 @@ commands=( \
     "uv" \
     "go" \
     "eza" "bat" "fd" "rg" "fzf" \
-    "nvim" "tmux" \
+    "nvim" "tree-sitter" "tmux" \
     "lazygit" "lazysql" \
     "claude" \
 )
