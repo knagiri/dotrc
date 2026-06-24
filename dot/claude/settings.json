@@ -106,7 +106,9 @@
       "WebFetch(domain:graphql.org)",
       "WebFetch(domain:www.prisma.io)",
       "WebFetch(domain:registry.terraform.io)",
-      "WebFetch(domain:docs.aws.amazon.com)"
+      "WebFetch(domain:docs.aws.amazon.com)",
+      "Skill(my-commit)",
+      "Skill(my-create-pr)"
     ],
     "deny": [
       "Read(.env)",
