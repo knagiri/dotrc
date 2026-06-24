@@ -286,5 +286,6 @@
     "slack@claude-plugins-official": true,
     "github@claude-plugins-official": true,
     "notion@claude-plugins-official": true
-  }
+  },
+  "tui": "fullscreen"
 }
