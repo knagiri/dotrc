@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-review <PR#> -- launch an independent reviewer agent for a pull request.
+#
+# Opens a NEW tmux window (a new pane) in the CURRENT session, anchored to the
+# current directory, running a fresh interactive claude (acceptEdits) that runs
+# the /pr-review-merge skill against the given PR. A new window means a new
+# $TMUX_PANE, so claude-queue tracks the reviewer as its own entry and the
+# author session is untouched -- "1 worktree = 1 tmux session" is preserved.
+# The PR branch is already checked out in this worktree, so no second checkout
+# (and no branch conflict) occurs; the author must hand off (stop editing this
+# branch) once the reviewer is launched.
+#
+# Run from inside the tmux session of the worktree holding the PR branch.
+#
+# Usage: claude-review <PR-number>
+
+usage() { echo "usage: claude-review <PR-number>" >&2; exit "${1:-1}"; }
+
+[ $# -eq 1 ] || usage 1
+case "$1" in -h|--help) usage 0 ;; esac
+pr="$1"
+if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+  echo "claude-review: PR number must be numeric (got: $pr)" >&2
+  exit 1
+fi
+if [ -z "${TMUX:-}" ]; then
+  echo "claude-review: must be run inside a tmux session" >&2
+  exit 1
+fi
+
+tmux new-window -c "$PWD" -n "review-pr${pr}" \
+  claude --permission-mode acceptEdits "/pr-review-merge ${pr}"
