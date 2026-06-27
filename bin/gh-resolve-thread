@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-resolve-thread <thread-node-id> -- mark ONE PR review thread resolved.
+#
+# Runs EXACTLY the resolveReviewThread GraphQL mutation with the given thread
+# node id and nothing else, so the GraphQL grant can be allowlisted narrowly as
+# `Bash(gh-resolve-thread *)` instead of the broad `gh api graphql *` (which
+# would permit arbitrary queries/mutations).
+#
+# Usage: gh-resolve-thread <thread-node-id>
+
+usage() { echo "usage: gh-resolve-thread <thread-node-id>" >&2; exit "${1:-1}"; }
+
+[ $# -eq 1 ] || usage 1
+case "$1" in -h|--help) usage 0 ;; esac
+tid="$1"
+# Sanity guard: GitHub global node IDs are base64-ish (alnum, _ - =). The value
+# is passed as a single -f arg (never interpolated into a shell), so this only
+# guards against obvious misuse.
+if [[ ! "$tid" =~ ^[A-Za-z0-9_=-]+$ ]]; then
+  echo "gh-resolve-thread: invalid thread node id: $tid" >&2
+  exit 1
+fi
+
+exec gh api graphql \
+  -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){ thread{ isResolved } } }' \
+  -f threadId="$tid"

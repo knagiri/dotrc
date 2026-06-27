@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-list-threads <PR#> -- print the PR's review threads as JSON.
+#
+# Read-only reviewThreads GraphQL query (id / isResolved / isOutdated / comments).
+# Wrapped so the reviewer can enumerate threads without a broad `gh api graphql *`
+# grant; allowlist as `Bash(gh-list-threads *)`. owner/repo are derived from the
+# current repo via gh's built-in --jq (no system jq needed).
+#
+# Usage: gh-list-threads <PR-number>
+
+usage() { echo "usage: gh-list-threads <PR-number>" >&2; exit "${1:-1}"; }
+
+[ $# -eq 1 ] || usage 1
+case "$1" in -h|--help) usage 0 ;; esac
+pr="$1"
+if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+  echo "gh-list-threads: PR number must be numeric (got: $pr)" >&2
+  exit 1
+fi
+
+owner_repo="$(gh repo view --json owner,name --jq '.owner.login + " " + .name')"
+owner="${owner_repo%% *}"
+repo="${owner_repo##* }"
+
+exec gh api graphql \
+  -f query='query($owner:String!,$repo:String!,$pr:Int!){
+    repository(owner:$owner,name:$repo){ pullRequest(number:$pr){
+      reviewThreads(first:100){ nodes{ id isResolved isOutdated
+        comments(first:30){ nodes{ author{login} body path line } } } } } } }' \
+  -f owner="$owner" -f repo="$repo" -F pr="$pr"
