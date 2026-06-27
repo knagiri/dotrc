@@ -18,7 +18,7 @@ tid="$1"
 # Sanity guard: GitHub global node IDs are base64-ish (alnum, _ - =). The value
 # is passed as a single -f arg (never interpolated into a shell), so this only
 # guards against obvious misuse.
-if [[ ! "$tid" =~ ^[A-Za-z0-9_=-]+$ ]]; then
+if [[ ! "$tid" =~ ^[-A-Za-z0-9_=]+$ ]]; then
   echo "gh-resolve-thread: invalid thread node id: $tid" >&2
   exit 1
 fi
