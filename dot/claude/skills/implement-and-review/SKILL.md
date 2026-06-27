@@ -10,7 +10,7 @@ HOW の brainstorm → 実装 → merge まで完遂する。`delegate-to-worktr
 プロンプト先頭の明示命令でこの skill に入る。
 
 作業スコープは起動された worktree ディレクトリ内に閉じる
-（`dot/claude/rules/worktree-scope.md` 参照）。
+（`dot/claude/rules/worktree-scope.md` §5 参照）。
 
 ## 入力
 
