@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-automerge <PR#> -- enable auto-merge (merge commit) on a pull request.
+#
+# Runs EXACTLY `gh pr merge --auto --merge <PR>` with no flag passthrough, so a
+# caller (incl. a prompt-injected reviewer agent) cannot append --admin or other
+# protection-bypassing flags. This lets the merge grant be allowlisted narrowly
+# as `Bash(gh-automerge *)` instead of the broad `gh pr merge *`.
+#
+# Usage: gh-automerge <PR-number>
+
+usage() { echo "usage: gh-automerge <PR-number>" >&2; exit "${1:-1}"; }
+
+[ $# -eq 1 ] || usage 1
+case "$1" in -h|--help) usage 0 ;; esac
+pr="$1"
+if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+  echo "gh-automerge: PR number must be numeric (got: $pr)" >&2
+  exit 1
+fi
+
+exec gh pr merge --auto --merge "$pr"

@@ -79,19 +79,23 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ
   - allow に無いので呼び出し時に prompt が出る → ユーザー確認経由で実行可
 - **deny:** 不要（hard-block は明示指示時の運用を阻害する）
-- ※ `gh pr merge --auto` と `gh api graphql` は §5 の自律レビューループ例外として allow 済み（上の「allow しない」の例外）。
 
-### 5. merge と review thread resolve（自律レビューループ用）
+### 5. merge と review thread 操作（自律レビューループ用）
 
-`pr-review-merge` skill による自律的な review→merge ループでの扱い。
+`pr-review-merge` skill による自律的な review→merge ループでは、raw な `gh pr merge` /
+`gh api graphql` を allow せず、操作を最小化した `bin/` ラッパーだけを許可する。reviewer は
+信頼できない PR コメントを読んで自律実行するため、広い grant は prompt injection / 権限バイパス
+の経路になる。
 
-- **merge は `gh pr merge --auto` 形に限り許可**する。`--auto` は required status checks が
-  green になってから GitHub 側が merge する予約であり、skill 側でも事前に `gh pr checks` で
-  required checks の green を確認してから打つ（二重化）。merge method は `--merge`
-  （merge commit）で、logical commits を潰さない。`--auto` 以外の即時 merge 形は allow しない。
-- **review thread の `resolve` は可**（`gh api graphql` の `resolveReviewThread`）。これは
-  reply コメント投稿とは別物で、対応済みの指摘を次のレビューイテレーションが再浮上させない
-  ための操作。高位コマンドに該当機能が無いため `gh api graphql` の使用が正当化される
-  数少ないケース。
-- **reply コメント投稿は従来どおり不可**（§3 のポリシーを維持）。人間の議論待ち thread は
-  resolve せず残し、サマリで報告する。
+| 操作 | ラッパー | 内部コマンド | allowlist |
+|---|---|---|---|
+| 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
+| thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
+| merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>` のみ | `Bash(gh-automerge *)` |
+
+- ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
+  フラグを付けられない。merge 前に skill 自身が `gh pr checks` で required checks の green を
+  確認する（二重化）。merge method は `--merge`（merge commit）で logical commits を潰さない。
+- raw `gh api graphql *` / `gh pr merge *` は **allow しない**（§4 のとおり）。thread resolve は
+  reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
+  残してサマリで報告する。
