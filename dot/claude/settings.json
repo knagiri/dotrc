@@ -78,6 +78,8 @@
       "Bash(gh pr checks *)",
       "Bash(gh run view *)",
       "Bash(gh repo view *)",
+      "Bash(gh pr merge --auto *)",
+      "Bash(gh api graphql *)",
       "Bash(node --version)",
       "Bash(yarn --version)",
       "Bash(uv run ruff format)",

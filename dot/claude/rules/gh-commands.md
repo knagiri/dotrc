@@ -79,3 +79,18 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ
   - allow に無いので呼び出し時に prompt が出る → ユーザー確認経由で実行可
 - **deny:** 不要（hard-block は明示指示時の運用を阻害する）
+
+### 5. merge と review thread resolve（自律レビューループ用）
+
+`pr-review-merge` skill による自律的な review→merge ループでの扱い。
+
+- **merge は `gh pr merge --auto` 形に限り許可**する。`--auto` は required status checks が
+  green になってから GitHub 側が merge する予約であり、skill 側でも事前に `gh pr checks` で
+  required checks の green を確認してから打つ（二重化）。merge method は `--merge`
+  （merge commit）で、logical commits を潰さない。`--auto` 以外の即時 merge 形は allow しない。
+- **review thread の `resolve` は可**（`gh api graphql` の `resolveReviewThread`）。これは
+  reply コメント投稿とは別物で、対応済みの指摘を次のレビューイテレーションが再浮上させない
+  ための操作。high 位サブコマンドに該当機能が無いため `gh api graphql` の使用が正当化される
+  数少ないケース。
+- **reply コメント投稿は従来どおり不可**（§3 のポリシーを維持）。人間の議論待ち thread は
+  resolve せず残し、サマリで報告する。
