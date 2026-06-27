@@ -28,7 +28,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 2. イテレーション `i` を 1..5 で回す:
    a. **fresh subagent を 1 つ dispatch**（Task ツール）。後述の「subagent prompt」を、`<PR>` /
       `<owner>` / `<repo>` を埋めて渡す。subagent は最終メッセージに verdict JSON だけを返す。
-   b. 返ってきた JSON を parse する（後述スキーマ）。
+   b. 返ってきた JSON を parse する（後述スキーマ）。JSON の parse に失敗した場合は当イテレーションを失敗扱いとし、次イテレーションへ進む（5 回上限は維持）。
    c. **継続判定**:
       - `made_changes == true` または `findings_remaining` が非空 または `threads_pending` に
         `blocker: true` が含まれる または `mergeable == false` → 次のイテレーションへ。
@@ -36,8 +36,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
         抜けて手順 3 へ。
    d. 5 回終わっても抜けられない場合は **merge せず**手順 4（停止・報告）へ。
 3. **merge 手前の CI 確認と merge**:
-   a. `gh pr checks <PR>` を実行。required（必須）チェックがまだ pending なら、完了するまで
-      数十秒間隔で再確認する（`gh pr checks <PR> --watch` を使ってよい）。
+   a. `gh pr checks <PR>` を実行。required（必須）チェックがまだ pending なら、完了するまで数十秒間隔で再確認する（`timeout 300 gh pr checks <PR> --watch` を使ってよい）。300 秒（5 分）を超えても required が確定しない場合は merge せず手順 4 へ。
    b. required チェックに **fail があれば merge しない** → 手順 4 へ（次イテレーションで直すべき
       なので、fail を findings として扱い 2 に戻ってもよいが、合計 5 イテレーションの上限は超えない）。
    c. required が全て pass なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`）。
@@ -59,8 +58,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >    `isResolved == false` の thread（`id` / `comments` 等）のみ対象にする。raw な
 >    `gh api graphql` は使わない。
 > 4. **対応**: findings と未解決 thread のうち **コード修正で対応できるもの**を修正する。
->    - 変更は commit して push する（このセッションは PR ブランチの checkout 上にいる）:
->      `git add -A && git commit -m "<conventional message>" && git push`
+>    - 変更は commit して push する（このセッションは PR ブランチの checkout 上にいる）: 変更したファイルだけを名前指定で stage する（`git add -A` / `git add .` は使わない。無関係な untracked を巻き込まないため）。修正した各ファイルを `git add <path>` で個別に stage → `git commit -m "<conventional message>"` → `git push`。
 >    - 意図的にそうしている箇所は、再指摘されないよう **ソースコードにコメントで理由を残す**。
 >    - 対応した thread は **`gh-resolve-thread <THREAD_NODE_ID>`** で resolve する（`<THREAD_NODE_ID>`
 >      は手順 3 の `id`）。raw な `gh api graphql` は使わない。
@@ -84,7 +82,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 > - `threads_pending`: resolve しなかった thread（無ければ空配列）。`blocker` は merge を
 >   止めるべきか。
 > - `ci_status`: 把握できる範囲で `pending` / `pass` / `fail`。不明なら `pending`。
-> - `mergeable`: レビュー観点で merge して良いと判断したか。
+> - `mergeable`: レビュー観点で merge して良いと判断したか。**ただし `ci_status` が `fail` の場合は必ず `false` にする**（orchestrator が再イテレーションするため）。
 
 ## verdict スキーマ（orchestrator 側の判定基準）
 
