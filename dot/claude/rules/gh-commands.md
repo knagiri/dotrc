@@ -79,6 +79,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ
   - allow に無いので呼び出し時に prompt が出る → ユーザー確認経由で実行可
 - **deny:** 不要（hard-block は明示指示時の運用を阻害する）
+- ※ `gh pr merge --auto` と `gh api graphql` は §5 の自律レビューループ例外として allow 済み（上の「allow しない」の例外）。
 
 ### 5. merge と review thread resolve（自律レビューループ用）
 
@@ -90,7 +91,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
   （merge commit）で、logical commits を潰さない。`--auto` 以外の即時 merge 形は allow しない。
 - **review thread の `resolve` は可**（`gh api graphql` の `resolveReviewThread`）。これは
   reply コメント投稿とは別物で、対応済みの指摘を次のレビューイテレーションが再浮上させない
-  ための操作。high 位サブコマンドに該当機能が無いため `gh api graphql` の使用が正当化される
+  ための操作。高位コマンドに該当機能が無いため `gh api graphql` の使用が正当化される
   数少ないケース。
 - **reply コメント投稿は従来どおり不可**（§3 のポリシーを維持）。人間の議論待ち thread は
   resolve せず残し、サマリで報告する。
