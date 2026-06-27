@@ -1,7 +1,7 @@
 ---
 name: delegate-to-worktree
 description: WHAT が固まった作業を別 workspace の自律 agent に委譲する。claude-worktree を session 起動形式（-- 付き）で呼び、detached tmux session 内に acceptEdits の claude を起こして implement-and-review skill に着手させる。「claude-worktree で作業して」「claude-worktree で worktree 作成から」「別 worktree / workspace でやらせて」「これを別 agent に任せて」「delegate して」系の依頼で使う。worktree を作るだけ（初期タスクを伴わない）の要求のときだけ add-only で呼ぶ。
-allowed-tools: Bash(claude-worktree *), Bash(claude-worktree), Bash(git worktree list), Bash(git rev-parse *), Read, Glob, Grep
+allowed-tools: Bash(claude-worktree *), Bash(git worktree list), Bash(git rev-parse *), Read, Glob, Grep
 ---
 
 # delegate-to-worktree
