@@ -1,0 +1,90 @@
+---
+name: pr-review-merge
+description: PR を実行先 repo の規約に沿ってレビューし、修正・対応済み thread の resolve・required CI 通過確認を経て自律的に merge する。各イテレーションで会話履歴を持たない fresh subagent を spawn してコンテキストを reset しながら、merge されるまで反復する。author が作成した PR を別 agent としてレビュー・マージするときに使う。
+allowed-tools: Bash, Read, Grep, Glob, Task
+---
+
+# pr-review-merge
+
+PR を **author とは独立した立場**でレビューし、修正・CI 確認を経て自律的に merge する。
+このセッション（orchestrator）自身は深くレビューせず、**各イテレーションを会話履歴を持たない
+fresh subagent に委譲**する。これが「修正適用後にコンテキストを reset して再レビュー」の実体。
+
+## 入力
+
+`$ARGUMENTS` に PR 番号が入る（例: `/pr-review-merge 42` → `42`）。以降 `<PR>` と表記。
+
+## 不変条件（厳守）
+
+- reply コメントは**一切投稿しない**（`gh pr comment` / thread への reply 禁止）。
+- merge は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。事前に required CI の green を確認する。raw `gh pr merge` は使わない。
+- 未解決 thread の取得は **`gh-list-threads <PR>`**、resolve は **`gh-resolve-thread <id>`** ラッパーのみ。raw `gh api graphql` は使わない。
+- 最大 **5 イテレーション**。未収束・CI 連続 fail なら **merge せず停止・報告**。PR は閉じない。
+- 対応した review thread は resolve、意図的な箇所はソースコメントで理由を残す。
+
+## orchestrator ループ
+
+1. `owner` / `repo` を取得: `gh repo view --json owner,name --jq '.owner.login + " " + .name'`。
+2. イテレーション `i` を 1..5 で回す:
+   a. **fresh subagent を 1 つ dispatch**（Task ツール）。後述の「subagent prompt」を、`<PR>` /
+      `<owner>` / `<repo>` を埋めて渡す。subagent は最終メッセージに verdict JSON だけを返す。
+   b. 返ってきた JSON を parse する（後述スキーマ）。JSON の parse に失敗した場合は当イテレーションを失敗扱いとし、次イテレーションへ進む（5 回上限は維持）。
+   c. **継続判定**:
+      - `made_changes == true` または `findings_remaining` が非空 または `threads_pending` に
+        `blocker: true` が含まれる または `mergeable == false` → 次のイテレーションへ。
+      - 上記いずれにも該当しない（＝変更なし・未対応なし・blocker なし・mergeable）→ ループを
+        抜けて手順 3 へ。
+   d. 5 回終わっても抜けられない場合は **merge せず**手順 4（停止・報告）へ。
+3. **merge 手前の CI 確認と merge**:
+   a. `gh pr checks <PR>` を実行。required（必須）チェックがまだ pending なら、完了するまで数十秒間隔で再確認する（`timeout 300 gh pr checks <PR> --watch` を使ってよい）。300 秒（5 分）を超えても required が確定しない場合は merge せず手順 4 へ。
+   b. required チェックに **fail があれば merge しない** → 手順 4 へ（次イテレーションで直すべき
+      なので、fail を findings として扱い 2 に戻ってもよいが、合計 5 イテレーションの上限は超えない）。
+   c. required が全て pass なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`）。
+   d. `gh pr view <PR> --json state,merged --jq '.state, .merged'` で merge を確認し、完了を報告。
+4. **停止・報告**（merge しなかった場合）: 残った findings / 議論待ち thread / CI 状態を箇条書きで
+   要約して出力する。PR は開いたまま、reply も投稿しない（人間が引き取る）。
+
+## subagent prompt（`<PR>`/`<owner>`/`<repo>` を埋めて Task に渡す）
+
+> あなたは PR #`<PR>`（`<owner>/<repo>`）を独立した立場でレビューする reviewer です。あなたは
+> この PR の作者ではありません。会話履歴はありません。以下を順に実施し、**最後に verdict JSON
+> だけ**を出力してください（説明文は付けない）。
+>
+> 1. **repo 規約の把握**: リポジトリroot とサブディレクトリの `CLAUDE.md`、`.claude/rules/` 等を
+>    読み、この repo の規約・禁止事項を把握する。
+> 2. **diff レビュー**: `gh pr diff <PR>` を読み、repo の規約・一般的な correctness / 可読性 /
+>    重複の観点でレビューする。`/code-review` skill が使えるなら土台に使ってよい。
+> 3. **未解決 thread の取得**: `gh-list-threads <PR>` を実行する（reviewThreads の JSON が返る）。
+>    `isResolved == false` の thread（`id` / `comments` 等）のみ対象にする。raw な
+>    `gh api graphql` は使わない。
+> 4. **対応**: findings と未解決 thread のうち **コード修正で対応できるもの**を修正する。
+>    - 変更は commit して push する（このセッションは PR ブランチの checkout 上にいる）: 変更したファイルだけを名前指定で stage する（`git add -A` / `git add .` は使わない。無関係な untracked を巻き込まないため）。修正した各ファイルを `git add <path>` で個別に stage → `git commit -m "<conventional message>"` → `git push`。
+>    - 意図的にそうしている箇所は、再指摘されないよう **ソースコードにコメントで理由を残す**。
+>    - 対応した thread は **`gh-resolve-thread <THREAD_NODE_ID>`** で resolve する（`<THREAD_NODE_ID>`
+>      は手順 3 の `id`）。raw な `gh api graphql` は使わない。
+>    - **reply コメントは投稿しない。** 人間の「議論が必要 / コード修正で片付かない」thread は
+>      resolve せず残し、verdict の `threads_pending` に `blocker: true` で記録する。
+> 5. **verdict 出力**: 下記スキーマの JSON **だけ**を出力する。
+>
+> ```json
+> {
+>   "made_changes": false,
+>   "findings_remaining": [{"summary": "...", "reason_unaddressed": "..."}],
+>   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true}],
+>   "ci_status": "pending",
+>   "mergeable": false,
+>   "summary": "一言サマリ"
+> }
+> ```
+>
+> - `made_changes`: このイテレーションで commit/push したか。
+> - `findings_remaining`: 未対応の findings（無ければ空配列）。
+> - `threads_pending`: resolve しなかった thread（無ければ空配列）。`blocker` は merge を
+>   止めるべきか。
+> - `ci_status`: 把握できる範囲で `pending` / `pass` / `fail`。不明なら `pending`。
+> - `mergeable`: レビュー観点で merge して良いと判断したか。**ただし `ci_status` が `fail` の場合は必ず `false` にする**（orchestrator が再イテレーションするため）。
+
+## verdict スキーマ（orchestrator 側の判定基準）
+
+上記と同一。orchestrator は `made_changes==false && findings_remaining 空 && threads_pending に
+blocker 無し && mergeable==true` を満たしたときのみ手順 3（CI 確認 → merge）に進む。
