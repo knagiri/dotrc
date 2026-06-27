@@ -11,4 +11,7 @@ alias rm='rm -i'
 
 alias vim='nvim'
 
+# ghq-tmux-session: pick an ghq repo/worktree and create/switch a tmux session
+alias gts='ghq-tmux-session'
+
 alias pacman='sudo pacman'
