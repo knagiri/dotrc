@@ -24,6 +24,7 @@ if [ "$rc" -eq 0 ] \
   && grep -qxF '[new-window]' "$stubdir/args" \
   && grep -qxF '[review-pr42]' "$stubdir/args" \
   && grep -qxF '[claude]' "$stubdir/args" \
+  && grep -qxF '[-p]' "$stubdir/args" \
   && grep -qxF '[--permission-mode]' "$stubdir/args" \
   && grep -qxF '[acceptEdits]' "$stubdir/args" \
   && grep -qxF '[/pr-review-merge 42]' "$stubdir/args"; then

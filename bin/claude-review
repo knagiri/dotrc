@@ -8,6 +8,13 @@ set -euo pipefail
 # the /pr-review-merge skill against the given PR. A new window means a new
 # $TMUX_PANE, so claude-queue tracks the reviewer as its own entry and the
 # author session is untouched -- "1 worktree = 1 tmux session" is preserved.
+#
+# The reviewer runs headless (claude -p): it executes /pr-review-merge to
+# completion and then exits, so tmux closes the window automatically (no
+# remain-on-exit). The review outcome is not kept on screen -- pr-review-merge
+# posts a single standalone report comment to the PR (via gh-pr-report), so the
+# record lives on the PR rather than in a left-open pane.
+#
 # The PR branch is already checked out in this worktree, so no second checkout
 # (and no branch conflict) occurs; the author must hand off (stop editing this
 # branch) once the reviewer is launched.
@@ -31,4 +38,4 @@ if [ -z "${TMUX:-}" ]; then
 fi
 
 tmux new-window -c "$PWD" -n "review-pr${pr}" \
-  claude --permission-mode acceptEdits "/pr-review-merge ${pr}"
+  claude -p --permission-mode acceptEdits "/pr-review-merge ${pr}"
