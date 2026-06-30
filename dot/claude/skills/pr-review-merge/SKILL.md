@@ -16,7 +16,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 
 ## 不変条件（厳守）
 
-- reply コメントは**一切投稿しない**（`gh pr comment` / thread への reply 禁止）。
+- **review thread への reply は投稿しない**（raw `gh pr comment` / thread への reply 禁止）。人間の議論待ち thread は resolve せず残す。
+- ただし**ループ終了後に1回だけ**、reviewer の作業ログ（各イテレーションの 指摘→対応、最終 verdict）を **`gh-pr-report <PR>`** で PR に standalone コメントとして残す（`@mention` は付けない。raw `gh pr comment` は使わない）。本文の先頭行は固定マーカー `pr-review-merge report` を置く（後から grep で識別できるよう）。本文は heredoc 形式 `gh-pr-report <PR> <<'EOF' … EOF` で渡す（`printf | gh-pr-report` は `-p` 実行環境で allowlist 外となりサイレント失敗するため禁止）。
 - merge は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。事前に required CI の green を確認する。raw `gh pr merge` は使わない。
 - 未解決 thread の取得は **`gh-list-threads <PR>`**、resolve は **`gh-resolve-thread <id>`** ラッパーのみ。raw `gh api graphql` は使わない。
 - 最大 **5 イテレーション**。未収束・CI 連続 fail なら **merge せず停止・報告**。PR は閉じない。
@@ -41,8 +42,11 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       なので、fail を findings として扱い 2 に戻ってもよいが、合計 5 イテレーションの上限は超えない）。
    c. required が全て pass なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`）。
    d. `gh pr view <PR> --json state,merged --jq '.state, .merged'` で merge を確認し、完了を報告。
+   e. **最終レポート投稿**: 全イテレーションの「指摘→対応」と最終結果（merge 済み。required checks 未確定なら auto-merge 予約済み）を本文に composing し、heredoc 形式 `gh-pr-report <PR> <<'EOF' … EOF` で PR に1本投稿する（`printf |` 禁止）。`@mention` は付けない。
 4. **停止・報告**（merge しなかった場合）: 残った findings / 議論待ち thread / CI 状態を箇条書きで
-   要約して出力する。PR は開いたまま、reply も投稿しない（人間が引き取る）。
+   要約して出力する。PR は開いたまま、thread への reply は投稿しない（人間が引き取る）。最後に同じ
+   要約（各イテレーションの 指摘→対応 と、停止理由・残課題）を heredoc 形式 `gh-pr-report <PR> <<'EOF' … EOF` で
+   PR に1本投稿する（`printf |` 禁止）。`@mention` は付けない。
 
 ## subagent prompt（`<PR>`/`<owner>`/`<repo>` を埋めて Task に渡す）
 
@@ -62,8 +66,9 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >    - 意図的にそうしている箇所は、再指摘されないよう **ソースコードにコメントで理由を残す**。
 >    - 対応した thread は **`gh-resolve-thread <THREAD_NODE_ID>`** で resolve する（`<THREAD_NODE_ID>`
 >      は手順 3 の `id`）。raw な `gh api graphql` は使わない。
->    - **reply コメントは投稿しない。** 人間の「議論が必要 / コード修正で片付かない」thread は
->      resolve せず残し、verdict の `threads_pending` に `blocker: true` で記録する。
+>    - **PR コメント（reply も含め）は投稿しない。** 人間の「議論が必要 / コード修正で片付かない」
+>      thread は resolve せず残し、verdict の `threads_pending` に `blocker: true` で記録する。
+>      （最終レポートの投稿は orchestrator が行う。subagent は verdict JSON を返すだけ。）
 > 5. **verdict 出力**: 下記スキーマの JSON **だけ**を出力する。
 >
 > ```json
