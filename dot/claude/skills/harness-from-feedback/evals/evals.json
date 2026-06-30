@@ -1,0 +1,17 @@
+{
+  "skill_name": "harness-from-feedback",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "さっき指摘した『rg を使わず grep を使う』のを毎回直すの面倒だからハーネス化して。",
+      "expected_output": "言語化（根本原因） → 強制レベル決定（rules） → 配置先判定 → プロンプト畳み → claude-worktree 直接起動 → 報告",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "この指摘、次から自動で効くように再発防止の仕組みにしておいて。",
+      "expected_output": "harness-from-feedback が発動し、要件確定 → claude-worktree で委譲 → 報告まで進む",
+      "files": []
+    }
+  ]
+}
