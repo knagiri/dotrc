@@ -92,6 +92,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>` のみ | `Bash(gh-automerge *)` |
+| 最終レポート投稿 | `gh-pr-report <PR>` | `gh pr comment <PR> --body-file -`（stdin 本文）のみ | `Bash(gh-pr-report *)` |
 
 - ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
   フラグを付けられない。merge 前に skill 自身が `gh pr checks` で required checks の green を
@@ -101,3 +102,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
   残してサマリで報告する。
 - ラッパーは **repo 単位**で、特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）。`--auto` は branch protection / required checks を尊重するため未通過 PR を強制 merge はできないが、「PR 限定ではない」点は把握しておく。
 - `gh-automerge`（= `gh pr merge --auto`）は **repo で auto-merge が有効**である必要がある。無効な repo では失敗するため、`pr-review-merge` の merge ステップが完了しない（skill は report して停止する）。
+- `gh-pr-report` は **reviewer の最終レポートを1本だけ** standalone コメントとして投稿するための
+  ラッパー。§3 の reply ポリシー（thread への reply 禁止）は維持しつつ、レビュー結果の記録だけを
+  許可する。引数は PR 番号のみで本文は stdin。フラグ素通しが無いため、既存コメントの編集や特定
+  コメントへの reply には使えない。raw `gh pr comment` は引き続き allow しない。
