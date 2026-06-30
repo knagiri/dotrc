@@ -48,8 +48,7 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    - 先頭に `implement-and-review` 起動命令
    - artifact 種別（rule / CLAUDE.md 追記 / lint / test / hook）・配置パス・対象 repo
    - 内容の骨子（理由ベースのソフト指針の本文・由来）
-   - rule を書く場合は「**既存の `.claude/rules/*.md` を1つ Read して形式を踏襲せよ**」と指示する
-     （Read 経由で `rule-authoring` メタルールを確実にトリガーさせるため）
+   - rule を書く場合は「**既存のルールファイル（リポジトリの `.claude/rules/*.md`、dotrc なら `dot/claude/rules/*.md`）を1つ Read して形式を踏襲せよ**」と指示する（Read 経由で `rule-authoring` メタルールを確実にトリガーさせるため）
    - `paths` グロブ（領域限定なら）
    - **受け入れ確認**: test/lint は過去の誤りを実際に捕まえること。ルールのみなら「どの状況で
      ロードされ何を防ぐか（paths と想定シナリオ）」を明記させる
@@ -65,8 +64,7 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    - artifact: <rule / CLAUDE.md / lint / test / hook>
    - 配置: <パス>（対象 repo: <現 repo or dotrc>）
    - 内容の骨子: <理由付きソフト指針の本文 / 由来>
-   - rule の場合: 既存の .claude/rules/*.md を1つ Read して形式（paths/理由併記/
-     ソフト指針/由来）を踏襲すること
+   - rule の場合: 既存のルールファイル（.claude/rules/*.md、dotrc なら dot/claude/rules/*.md）を1つ Read して形式（paths/理由併記/ソフト指針/由来）を踏襲すること
    - 受け入れ確認: <test/lint が過去の誤りを捕まえる / rule のロード条件と防げるシナリオ>
    - commit: 指摘を参照したメッセージで
 
