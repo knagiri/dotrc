@@ -87,4 +87,5 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    - 置いた場所（rules / CLAUDE.md / lint / test / hook）と対象 repo
    - ロードされる条件（paths と想定シナリオ。rule の場合）
    - branch 名とマージ方法（委譲先が pr-review-merge まで自走。マージは保護ゲート依存）
-   - マージ後の後始末（ガイダンス）: `git worktree remove <path>` / `git-prune-branch`
+   - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
+     保守的に reap。詳細は worktree-scope.md §6）
