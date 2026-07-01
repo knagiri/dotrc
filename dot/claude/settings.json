@@ -77,6 +77,8 @@
       "Bash(git worktree list *)",
       "Bash(claude-worktree)",
       "Bash(claude-worktree *)",
+      "Bash(git-reap-gone)",
+      "Bash(git-reap-gone *)",
       "Bash(gh pr view *)",
       "Bash(gh pr diff *)",
       "Bash(gh pr create *)",
