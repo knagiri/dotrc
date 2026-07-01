@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# git-reap-gone [--no-fetch] [<branch>...] -- conservatively reap [gone] branches
+# (and their worktrees) left behind by merged, delegated work.
+#
+# A local branch becomes [gone] when its tracked upstream is deleted on the
+# remote (typically the remote branch is removed on merge, then `git fetch
+# --prune` marks the local copy [gone]). That is the authoritative "this work is
+# done" signal we trigger on -- completion is never inferred, only observed.
+#
+# For each [gone] branch (optionally filtered to the names given as arguments):
+#   * guard: no unintegrated commits. The integration base is origin/HEAD (e.g.
+#     origin/main). If `git rev-list --count <base>..<branch>` is non-zero the
+#     branch carries local-only commits and is SKIPPED (never lost).
+#   * if a worktree is checked out on the branch: it must be clean
+#     (`git status --porcelain` empty), and it must not be the worktree this
+#     script runs in. Then `git worktree remove` (NO --force) + `git branch -d`.
+#   * if no worktree is attached (bare branch): just `git branch -d` after the
+#     guard.
+#
+# Anything that fails a check is SKIPPED and reported with the blocking reason.
+# Deletion is ALWAYS the safe form (`git worktree remove` without --force,
+# `git branch -d` not -D); this script never escalates to a force delete. If git
+# itself refuses a deletion, that branch is reported skipped, not forced.
+#
+# Manual, best-effort: exits 0 even when branches are skipped. It sweeps every
+# [gone] branch by default so it can later be dropped into cron/loop unchanged.
+#
+# Usage:
+#   git-reap-gone [--no-fetch] [<branch>...]
+#
+#   --no-fetch   skip the leading `git fetch --prune` (assume [gone] state is
+#                already current, e.g. the caller fetched)
+#   <branch>...  restrict reaping to these branch names (still fully gated)
+
+usage() {
+  awk '/^#!/ {next} /^#/ {sub(/^# ?/, ""); print; seen=1; next} seen {exit}' "$0"
+  exit "${1:-1}"
+}
+
+do_fetch=1
+declare -a filters=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    --no-fetch) do_fetch=0; shift ;;
+    --) shift; while [ $# -gt 0 ]; do filters+=("$1"); shift; done ;;
+    -*) echo "git-reap-gone: unknown flag: $1" >&2; usage 1 ;;
+    *) filters+=("$1"); shift ;;
+  esac
+done
+
+# Report accumulators. Each entry is "<branch>\t<detail>".
+declare -a reaped=()
+declare -a skipped=()
+
+reap_ok()  { reaped+=("$1"$'\t'"$2"); }
+reap_skip() { skipped+=("$1"$'\t'"$2"); }
+
+if [ "$do_fetch" = 1 ]; then
+  echo "git-reap-gone: fetching (git fetch --prune)..." >&2
+  git fetch --prune
+fi
+
+# Integration base: the branch merged work lands on. Prefer the remote's default
+# (origin/HEAD, e.g. origin/main); fall back to origin/main then main. Empty if
+# none can be resolved -- then every branch is skipped rather than guessed.
+base=""
+if b="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null)" && [ "$b" != "origin/HEAD" ]; then
+  base="$b"
+elif git rev-parse --verify --quiet origin/main >/dev/null; then
+  base="origin/main"
+elif git rev-parse --verify --quiet main >/dev/null; then
+  base="main"
+fi
+
+# Map branch name -> worktree path from `git worktree list --porcelain`. Blocks
+# are separated by blank lines; a "branch refs/heads/<name>" line ties the
+# preceding "worktree <path>" line to a branch (detached worktrees have none).
+declare -A wt_of=()
+cur_wt=""
+while IFS= read -r line; do
+  case "$line" in
+    "worktree "*) cur_wt="${line#worktree }" ;;
+    "branch refs/heads/"*) wt_of["${line#branch refs/heads/}"]="$cur_wt" ;;
+    "") cur_wt="" ;;
+  esac
+done < <(git worktree list --porcelain)
+
+# The worktree this script is invoked from -- never remove it.
+self_wt="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
+# Collect [gone] local branches. `%(upstream:track)` is literally "[gone]" when
+# the tracked upstream was pruned.
+declare -a gone=()
+while IFS=' ' read -r branch track; do
+  [ "$track" = "[gone]" ] || continue
+  [ "$branch" = "main" ] && continue   # never touch main
+  gone+=("$branch")
+done < <(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads/)
+
+# If explicit branches were requested, intersect (skip-report the ones asked for
+# that are not actually [gone], so the caller learns why nothing happened).
+in_list() { local x="$1"; shift; for e in "$@"; do [ "$e" = "$x" ] && return 0; done; return 1; }
+
+if [ "${#filters[@]}" -gt 0 ]; then
+  for f in "${filters[@]}"; do
+    if ! in_list "$f" "${gone[@]}"; then
+      reap_skip "$f" "not a [gone] branch (skipped)"
+    fi
+  done
+fi
+
+for branch in "${gone[@]}"; do
+  if [ "${#filters[@]}" -gt 0 ] && ! in_list "$branch" "${filters[@]}"; then
+    continue
+  fi
+
+  # Guard: no unintegrated (local-only) commits relative to the integration base.
+  if [ -z "$base" ]; then
+    reap_skip "$branch" "cannot resolve integration base (origin/HEAD, origin/main, main)"
+    continue
+  fi
+  ahead="$(git rev-list --count "$base..$branch" 2>/dev/null || echo unknown)"
+  if [ "$ahead" != 0 ]; then
+    reap_skip "$branch" "$ahead unintegrated commit(s) ahead of $base"
+    continue
+  fi
+
+  wt="${wt_of[$branch]:-}"
+  if [ -n "$wt" ]; then
+    if [ "$wt" = "$self_wt" ]; then
+      reap_skip "$branch" "checked out in the current worktree ($wt)"
+      continue
+    fi
+    if [ -n "$(git -C "$wt" status --porcelain)" ]; then
+      reap_skip "$branch" "worktree not clean ($wt)"
+      continue
+    fi
+    if ! git worktree remove "$wt"; then
+      reap_skip "$branch" "git worktree remove refused ($wt)"
+      continue
+    fi
+  fi
+
+  if ! git branch -d "$branch"; then
+    reap_skip "$branch" "git branch -d refused (not fully merged?)"
+    continue
+  fi
+  reap_ok "$branch" "${wt:+worktree removed; }branch deleted"
+done
+
+echo
+if [ "${#reaped[@]}" -gt 0 ]; then
+  echo "reaped (${#reaped[@]}):"
+  for e in "${reaped[@]}"; do printf '  %s\n' "${e/$'\t'/  -- }"; done
+else
+  echo "reaped (0): nothing"
+fi
+if [ "${#skipped[@]}" -gt 0 ]; then
+  echo "skipped (${#skipped[@]}):"
+  for e in "${skipped[@]}"; do printf '  %s\n' "${e/$'\t'/  -- }"; done
+fi

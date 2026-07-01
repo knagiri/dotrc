@@ -77,3 +77,18 @@ claude-worktree <name> [-b <branch>] [-- <prompt...>]
 分岐先は `acceptEdits` で自律的に編集を進める。タスクが自然に独立した複数ラインへ割れるときに、現在 worktree を汚さず並行で進める選択肢として使う。乱用は避け、分岐の必要性が薄いときは現在 worktree 内で進める。
 
 連携の全体像（git worktree → tmux セッション → claude-queue の 3 層と `claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
+
+### 6. 委譲 worktree の後片付け（`git-reap-gone`）
+
+§5 で分岐・委譲した作業が merge され終わったら、その worktree とブランチの後始末を頼まれることがある。「後片付けして」「委譲先を片付けて」等で依頼されたら、手作業で `git worktree remove` / `git branch -d` を撃たず、`git-reap-gone`（`bin/`）を保守的 predicate で回す。
+
+```
+git-reap-gone [--no-fetch] [<branch>...]
+```
+
+- **トリガーは推論せず `[gone]` 状態**。リモートが merge 時にブランチを削除 → `git fetch --prune`（スクリプト冒頭で自動実行）で local が `[gone]` 化する、という権威ある外部イベントだけを完了の合図にする。`--no-fetch` で冒頭 fetch を抑制できる（呼び出し側／cron が fetch を制御する場合）。
+- **reap してよい条件（全通過のみ削除）**: ①統合先（`origin/HEAD` = 通常 `origin/main`）に対し未統合コミットが無い、②worktree が紐づくならそれが clean、③その worktree が今いる worktree でない。裸ブランチ（worktree 無し）は①のみで判定。
+- **削除は安全形だけ**: `git worktree remove`（**`--force` 無し**）＋ `git branch -d`（**`-D` ではない**）。条件を欠くもの・git が拒否したものは **skip し、何が blocking か report** する。決して force にエスカレートしない。これにより dirty／別ブランチへ切替済み（→ `[gone]` ブランチに worktree が紐づかない）等で spawn 中の worktree は自動的に対象外になる。
+- 引数でブランチ名を指定するとその対象だけを（同じゲートを通して）reap する。無指定なら全 `[gone]` を sweep。
+- **manual 運用**。cron/janitor の常駐は当面作らない。ただし全 `[gone]` を sweep できる形なので、将来そのまま cron/loop に挿せる。
+- settings.json で allow 済み（`git-reap-gone` / `git-reap-gone *`）なので承認なしで実行できる。
