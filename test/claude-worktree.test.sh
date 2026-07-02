@@ -50,4 +50,59 @@ else echo "FAIL: --self with -b rc=$rc out=$out want=${scriptrepo}_glob2"; fail=
 (cd "$cwdrepo" && "$wt" --bogus name) >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: unknown flag still rejected" || { echo "FAIL: unknown flag accepted"; fail=1; }
 
+# --- session-launch mode (with a prompt) --------------------------------------
+# We can't reproduce real tmux/claude behavior, so we stub `tmux` on PATH: it
+# fails `has-session` (so the script proceeds) and records `new-session`'s argv
+# (one element per line) to $TMUX_STUB_LOG. This lets us assert exactly how the
+# launch command is built -- including the pane-return chain -- without spawning
+# anything. `git` stays real (stub only shadows tmux).
+stubbin="$tmp/stubbin"
+mkdir -p "$stubbin"
+cat >"$stubbin/tmux" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  has-session) exit 1 ;;                        # pretend no session exists yet
+  new-session) printf '%s\n' "$@" >"$TMUX_STUB_LOG"; exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$stubbin/tmux"
+
+# Prompt carrying a space plus both quote kinds -- must survive as ONE argv
+# element (the whole point of passing it separately, not folded into a string).
+prompt='say "hi" it'\''s here'
+
+# Inside tmux ($TMUX set): launch is wrapped in `bash -c` so claude's exit is
+# chained to `switch-client -t <origin_pane>`, returning the client to the pane
+# we launched from. Assert the chain is wired and quoting is intact.
+log="$tmp/ns-in"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
+  "$wt" insess -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -q 'switch-client' "$log" \
+   && grep -Fxq '%9' "$log" \
+   && grep -Fxq "$prompt" "$log" \
+   && grep -q 'attach   : gts' <<<"$out"; then
+  echo "ok: \$TMUX set wires switch-client back to origin pane, prompt intact"
+else
+  echo "FAIL: in-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
+fi
+
+# Outside tmux ($TMUX unset): no client to return, so claude runs directly (no
+# wrapper, no switch-client) and the attach hint falls back to `tmux attach`.
+log="$tmp/ns-out"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
+  "$wt" nosess -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! grep -q 'switch-client' "$log" \
+   && grep -Fxq 'claude' "$log" \
+   && grep -Fxq "$prompt" "$log" \
+   && grep -q 'attach   : tmux attach -t' <<<"$out"; then
+  echo "ok: no \$TMUX launches claude directly, no pane-return chain"
+else
+  echo "FAIL: out-of-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
+fi
+
 exit "$fail"
