@@ -17,6 +17,11 @@ set -euo pipefail
 # (`gts <session>` / `tmux attach -t <session>`); it is interactive, so it keeps
 # running at the REPL after the initial prompt -- no `claude --resume` needed.
 #
+# When invoked from inside tmux, the launch is wrapped so that when claude exits
+# the attached client is switched back to the pane it was called from (not just
+# the origin session's currently-active pane). Nobody attached / origin pane gone
+# both degrade to a silent no-op.
+#
 # Usage:
 #   claude-worktree [--self] <name> [-b <branch>] [-- <prompt...>]
 #
@@ -102,8 +107,23 @@ fi
 # Start claude INSIDE a fresh detached tmux session in the worktree. Passing the
 # prompt as a separate argv element keeps spaces/quotes intact (tmux preserves
 # argv). Interactive (no -p) so it stays at the REPL after the first prompt.
-tmux new-session -d -s "$session" -c "$wt_path" \
-  claude --permission-mode acceptEdits "$prompt"
+#
+# When launched from inside tmux, wrap the launch in `bash -c` so that when
+# claude exits we chain `switch-client -t <origin_pane>`, returning the attached
+# client to the exact pane we were called from (session-level auto-return only
+# lands on the origin session's active pane, not this one). The prompt and pane
+# id ride in as positional args ($1/$2) -- never folded into the command string
+# -- so quotes in the prompt can't break the chain. If nobody is attached, or
+# the origin pane is already gone, switch-client is a graceful no-op (2>/dev/null)
+# and the single-pane session just dies quietly when the inner bash exits.
+if [ -n "${TMUX:-}" ]; then
+  tmux new-session -d -s "$session" -c "$wt_path" \
+    bash -c 'claude --permission-mode acceptEdits "$1"; tmux switch-client -t "$2" 2>/dev/null' \
+    bash "$prompt" "$TMUX_PANE"
+else
+  tmux new-session -d -s "$session" -c "$wt_path" \
+    claude --permission-mode acceptEdits "$prompt"
+fi
 
 attach="gts $session"
 [ -n "${TMUX:-}" ] || attach="tmux attach -t $session"
