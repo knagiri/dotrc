@@ -13,10 +13,7 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/summary"
-	"github.com/mattn/go-runewidth"
 )
-
-const cwdWidth = 20
 
 var emoji = map[string]string{
 	"awaiting_approval": "⏳",
@@ -33,7 +30,10 @@ var ascii = map[string]string{
 }
 
 // FormatLine renders one queue row as a tab-delimited line for fzf.
-// Visible columns (--with-nth=1,2,3,4): icon, summary, cwd-basename, age.
+// Visible columns (--with-nth=1,2,3,4): icon, cwd-basename, summary, age.
+// cwd-basename (the worktree dir name) comes right after the icon so it
+// starts at a fixed position and stays scannable; the variable-width summary
+// is demoted behind it and left untruncated.
 // Hidden columns: session_id (5), tmux_pane (6).
 func FormatLine(row db.Row, nowSec int64, asciiMode bool) string {
 	icons := emoji
@@ -51,7 +51,6 @@ func FormatLine(row db.Row, nowSec int64, asciiMode bool) string {
 	cwdBase := ""
 	if row.Cwd.Valid {
 		cwdBase = filepath.Base(row.Cwd.String)
-		cwdBase = runewidth.Truncate(cwdBase, cwdWidth, "")
 	}
 
 	age := formatAge(nowSec - row.CreatedAt)
@@ -61,7 +60,7 @@ func FormatLine(row db.Row, nowSec int64, asciiMode bool) string {
 		pane = row.TmuxPane.String
 	}
 
-	return strings.Join([]string{icon, sum, cwdBase, age, row.SessionID, pane}, "\t")
+	return strings.Join([]string{icon, cwdBase, sum, age, row.SessionID, pane}, "\t")
 }
 
 func formatAge(sec int64) string {
