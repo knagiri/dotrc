@@ -28,11 +28,11 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 	if fields[0] != "⏳" {
 		t.Errorf("icon = %q, want ⏳", fields[0])
 	}
-	if !strings.Contains(fields[1], "Bash: pnpm prisma migrate") {
-		t.Errorf("summary = %q", fields[1])
+	if fields[1] != "everysteel-api" {
+		t.Errorf("cwd basename = %q, want everysteel-api", fields[1])
 	}
-	if fields[2] != "everysteel-api" {
-		t.Errorf("cwd basename = %q, want everysteel-api", fields[2])
+	if !strings.Contains(fields[2], "Bash: pnpm prisma migrate") {
+		t.Errorf("summary = %q", fields[2])
 	}
 	if fields[3] != "2m" {
 		t.Errorf("age = %q, want 2m", fields[3])
