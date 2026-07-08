@@ -101,6 +101,20 @@ if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_outsideseed" ]; then
   echo "ok: --seed outside the checkout is rejected"
 else echo "FAIL: out-of-checkout seed accepted rc=$rc"; fail=1; fi
 
+# --seed is repeatable and takes directories. Re-running over the now-existing
+# worktree is what exercises the `rm -rf` before `cp -a`: copying a directory onto
+# an existing directory of the same name nests it (docs/specs/specs) instead of
+# replacing it, which would leave the delegate reading a stale spec one level up.
+echo "note body" >"$cwdrepo/docs/note.md"
+(cd "$cwdrepo" && "$wt" --seed docs/specs --seed docs/note.md multiseed) >/dev/null 2>&1; rc=$?
+(cd "$cwdrepo" && "$wt" --seed docs/specs --seed docs/note.md multiseed) >/dev/null 2>&1; rc2=$?
+if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] \
+   && [ "$(cat "${cwdrepo}_multiseed/docs/specs/plan.md" 2>/dev/null)" = "plan body" ] \
+   && [ "$(cat "${cwdrepo}_multiseed/docs/note.md" 2>/dev/null)" = "note body" ] \
+   && [ ! -e "${cwdrepo}_multiseed/docs/specs/specs" ]; then
+  echo "ok: repeated --seed and directory seeds replace rather than nest on reseed"
+else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
+
 # --- session-launch mode (with a prompt) --------------------------------------
 # We can't reproduce real tmux/claude behavior, so we stub `tmux` on PATH: it
 # fails `has-session` (so the script proceeds) and records `new-session`'s argv
