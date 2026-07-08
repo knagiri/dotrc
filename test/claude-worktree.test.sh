@@ -50,6 +50,71 @@ else echo "FAIL: --self with -b rc=$rc out=$out want=${scriptrepo}_glob2"; fail=
 (cd "$cwdrepo" && "$wt" --bogus name) >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: unknown flag still rejected" || { echo "FAIL: unknown flag accepted"; fail=1; }
 
+# --- --seed -------------------------------------------------------------------
+# A gitignored file in the cwd repo lands at the same relative path inside the new
+# worktree (that's what lets a delegated session read it without a permission
+# prompt). Nested dir exercised so the parent is created.
+#
+# .gitignore must be COMMITTED: `git worktree add` only checks out the branch, so
+# an uncommitted .gitignore never reaches the worktree and the seeded copy would
+# show up as untracked-but-not-ignored. Committing it is what makes the "seeded
+# files never land in the delegate's commit" guarantee real -- and testable below.
+mkdir -p "$cwdrepo/docs/specs"
+echo "plan body" >"$cwdrepo/docs/specs/plan.md"
+echo "docs/" >"$cwdrepo/.gitignore"
+git -C "$cwdrepo" add .gitignore
+git -C "$cwdrepo" -c user.email=t@t -c user.name=t commit -q -m ignore
+
+out="$(cd "$cwdrepo" && "$wt" --seed docs/specs/plan.md seeded 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "${cwdrepo}_seeded/docs/specs/plan.md" 2>/dev/null)" = "plan body" ]; then
+  echo "ok: --seed copies the file to the same relative path in the worktree"
+else echo "FAIL: --seed copy rc=$rc out=$out"; fail=1; fi
+
+# The seeded copy inherits the branch's .gitignore, so it stays ignored -- a
+# delegated session running `git add -A` cannot sweep the spec into a commit.
+# Empty `status --porcelain` is exactly that guarantee.
+# (guard on the file existing too, so this can't pass vacuously when nothing copied)
+st="$(git -C "${cwdrepo}_seeded" status --porcelain 2>/dev/null)"
+if [ -f "${cwdrepo}_seeded/docs/specs/plan.md" ] && [ -z "$st" ]; then
+  echo "ok: seeded gitignored file stays ignored in the worktree"
+else echo "FAIL: seeded file is visible to git: ${st:-<file missing>}"; fail=1; fi
+
+# --self anchors the WORKTREE to the script's repo, but seed sources always
+# resolve against cwd's checkout (that's where the uncommitted files live).
+out="$(cd "$cwdrepo" && "$wt" --self --seed docs/specs/plan.md selfseed 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_selfseed" ] \
+   && [ "$(cat "${scriptrepo}_selfseed/docs/specs/plan.md" 2>/dev/null)" = "plan body" ]; then
+  echo "ok: --self seeds from cwd's checkout into the script repo's worktree"
+else echo "FAIL: --self --seed rc=$rc out=$out"; fail=1; fi
+
+# A missing seed must fail BEFORE `git worktree add` -- otherwise the delegated
+# session stalls on a file that never arrives, and an orphan worktree is left.
+(cd "$cwdrepo" && "$wt" --seed docs/specs/nope.md missingseed) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_missingseed" ]; then
+  echo "ok: missing --seed fails before the worktree is created"
+else echo "FAIL: missing seed rc=$rc, worktree created?=$([ -d "${cwdrepo}_missingseed" ] && echo yes || echo no)"; fail=1; fi
+
+# Seeds outside cwd's checkout have no relative path in the worktree -> reject.
+echo outside >"$tmp/outside.md"
+(cd "$cwdrepo" && "$wt" --seed "$tmp/outside.md" outsideseed) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_outsideseed" ]; then
+  echo "ok: --seed outside the checkout is rejected"
+else echo "FAIL: out-of-checkout seed accepted rc=$rc"; fail=1; fi
+
+# --seed is repeatable and takes directories. Re-running over the now-existing
+# worktree is what exercises the `rm -rf` before `cp -a`: copying a directory onto
+# an existing directory of the same name nests it (docs/specs/specs) instead of
+# replacing it, which would leave the delegate reading a stale spec one level up.
+echo "note body" >"$cwdrepo/docs/note.md"
+(cd "$cwdrepo" && "$wt" --seed docs/specs --seed docs/note.md multiseed) >/dev/null 2>&1; rc=$?
+(cd "$cwdrepo" && "$wt" --seed docs/specs --seed docs/note.md multiseed) >/dev/null 2>&1; rc2=$?
+if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] \
+   && [ "$(cat "${cwdrepo}_multiseed/docs/specs/plan.md" 2>/dev/null)" = "plan body" ] \
+   && [ "$(cat "${cwdrepo}_multiseed/docs/note.md" 2>/dev/null)" = "note body" ] \
+   && [ ! -e "${cwdrepo}_multiseed/docs/specs/specs" ]; then
+  echo "ok: repeated --seed and directory seeds replace rather than nest on reseed"
+else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
+
 # --- session-launch mode (with a prompt) --------------------------------------
 # We can't reproduce real tmux/claude behavior, so we stub `tmux` on PATH: it
 # fails `has-session` (so the script proceeds) and records `new-session`'s argv

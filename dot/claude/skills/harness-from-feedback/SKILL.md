@@ -46,6 +46,9 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
 
 4. **プロンプト畳み**（自己完結。委譲先は会話履歴を持たない）:
    - 先頭に `implement-and-review` 起動命令
+   - 参照ファイルは worktree 内で完結させる。通常は本文へ畳み込む。畳めない未 commit・gitignore
+     済みファイル（spec 等）は `--seed <path>` で worktree へ入れ相対パスで参照させる（worktree 外の
+     絶対パス Read は承認待ちになり、人間不在の委譲先が固まる。`worktree-scope.md` §5）
    - artifact 種別（rule / CLAUDE.md 追記 / lint / test / hook）・配置パス・対象 repo
    - 内容の骨子（理由ベースのソフト指針の本文・由来）
    - rule を書く場合は「**既存のルールファイル（リポジトリの `.claude/rules/*.md`、dotrc なら `dot/claude/rules/*.md`）を1つ Read して形式を踏襲せよ**」と指示する（Read 経由で `rule-authoring` メタルールを確実にトリガーさせるため）
@@ -76,8 +79,8 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
 
 5. **起動**: `claude-worktree` を直接呼ぶ。branch は `harness/<slug>`、name は `harness-<slug>`
    （`[A-Za-z0-9_-]+`、pre-fetch した worktree 一覧と衝突しない名に）。
-   - リポジトリ固有: `claude-worktree harness-<slug> -b harness/<slug> -- "<prompt>"`
-   - グローバル（dotrc）: `claude-worktree --self harness-<slug> -b harness/<slug> -- "<prompt>"`
+   - リポジトリ固有: `claude-worktree [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
+   - グローバル（dotrc）: `claude-worktree --self [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
 
 6. **報告して終了**（fire-and-forget）: `claude-worktree` の出力（worktree / branch / session /
    attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:
