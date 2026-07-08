@@ -50,6 +50,33 @@ else echo "FAIL: --self with -b rc=$rc out=$out want=${scriptrepo}_glob2"; fail=
 (cd "$cwdrepo" && "$wt" --bogus name) >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: unknown flag still rejected" || { echo "FAIL: unknown flag accepted"; fail=1; }
 
+# --- --seed -------------------------------------------------------------------
+# A gitignored file in the cwd repo lands at the same relative path inside the new
+# worktree (that's what lets a delegated session read it without a permission
+# prompt). Nested dir exercised so the parent is created.
+mkdir -p "$cwdrepo/docs/specs"
+echo "plan body" >"$cwdrepo/docs/specs/plan.md"
+echo "docs/" >"$cwdrepo/.gitignore"
+
+out="$(cd "$cwdrepo" && "$wt" --seed docs/specs/plan.md seeded 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "${cwdrepo}_seeded/docs/specs/plan.md" 2>/dev/null)" = "plan body" ]; then
+  echo "ok: --seed copies the file to the same relative path in the worktree"
+else echo "FAIL: --seed copy rc=$rc out=$out"; fail=1; fi
+
+# A missing seed must fail BEFORE `git worktree add` -- otherwise the delegated
+# session stalls on a file that never arrives, and an orphan worktree is left.
+(cd "$cwdrepo" && "$wt" --seed docs/specs/nope.md missingseed) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_missingseed" ]; then
+  echo "ok: missing --seed fails before the worktree is created"
+else echo "FAIL: missing seed rc=$rc, worktree created?=$([ -d "${cwdrepo}_missingseed" ] && echo yes || echo no)"; fail=1; fi
+
+# Seeds outside cwd's checkout have no relative path in the worktree -> reject.
+echo outside >"$tmp/outside.md"
+(cd "$cwdrepo" && "$wt" --seed "$tmp/outside.md" outsideseed) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_outsideseed" ]; then
+  echo "ok: --seed outside the checkout is rejected"
+else echo "FAIL: out-of-checkout seed accepted rc=$rc"; fail=1; fi
+
 # --- session-launch mode (with a prompt) --------------------------------------
 # We can't reproduce real tmux/claude behavior, so we stub `tmux` on PATH: it
 # fails `has-session` (so the script proceeds) and records `new-session`'s argv

@@ -22,11 +22,20 @@ set -euo pipefail
 # the origin session's currently-active pane). Nobody attached / origin pane gone
 # both degrade to a silent no-op.
 #
+# A new worktree only checks out the branch: gitignored / uncommitted files of the
+# invoking checkout do NOT propagate, and a delegated session cannot read outside
+# its worktree without a permission prompt nobody is there to approve. `--seed`
+# copies such files in, so the delegated prompt can reference them relatively.
+#
 # Usage:
-#   claude-worktree [--self] <name> [-b <branch>] [-- <prompt...>]
+#   claude-worktree [--self] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
 #
 #   --self         anchor the worktree to the repo this script lives in (e.g.
 #                  your dotfiles repo), not cwd. Use for repo-independent work.
+#   --seed <path>  copy <path> from cwd's checkout into the same relative path in
+#                  the new worktree (repeatable). For files the delegated session
+#                  needs but which the branch does not carry (gitignored specs,
+#                  uncommitted notes). Must live inside cwd's checkout.
 #   name           worktree label (suffix after the underscore); also the new
 #                  branch name when -b is omitted
 #   -b <branch>    branch to check out / create (default: <name>)
@@ -47,10 +56,12 @@ name=""
 branch=""
 prompt=""
 self=0
+seeds=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
     -b) shift; [ $# -gt 0 ] || usage 1; branch="$1"; shift ;;
+    --seed) shift; [ $# -gt 0 ] || usage 1; seeds+=("$1"); shift ;;
     --self) self=1; shift ;;
     --) shift; prompt="$*"; break ;;
     -*) echo "claude-worktree: unknown flag: $1" >&2; usage 1 ;;
@@ -79,6 +90,27 @@ common_git="$(git -C "$repo_dir" rev-parse --path-format=absolute --git-common-d
 main_top="$(dirname "$common_git")"
 wt_path="${main_top}_${name}"
 
+# Validate the seeds BEFORE creating the worktree: a missing or out-of-checkout
+# seed means the delegated prompt would reference a file that never arrives, and
+# the session stalls on its first read. Fail here rather than leave an orphan
+# worktree behind. Sources are always resolved against cwd's checkout (the one
+# holding the uncommitted files), even under --self.
+seed_rels=()
+if [ "${#seeds[@]}" -gt 0 ]; then
+  seed_top="$(realpath -- "$(git rev-parse --show-toplevel)")"
+  for seed in "${seeds[@]}"; do
+    seed_abs="$(realpath -m -- "$seed")"
+    if [ ! -e "$seed_abs" ]; then
+      echo "claude-worktree: --seed path does not exist: $seed" >&2
+      exit 1
+    fi
+    case "$seed_abs" in
+      "$seed_top"/*) seed_rels+=("${seed_abs#"$seed_top"/}") ;;
+      *) echo "claude-worktree: --seed path is outside $seed_top: $seed" >&2; exit 1 ;;
+    esac
+  done
+fi
+
 # Keep stdout clean (path only) so add-only mode is scriptable; git's checkout
 # chatter goes to stderr.
 if [ -d "$wt_path" ]; then
@@ -88,6 +120,16 @@ elif git -C "$repo_dir" show-ref --verify --quiet "refs/heads/${branch}"; then
 else
   git -C "$repo_dir" worktree add -b "$branch" "$wt_path" >&2 # new branch
 fi
+
+# Seed the worktree. Copies stay untracked when the source is gitignored, so they
+# inform the delegated session without ever landing in a commit.
+for rel in ${seed_rels[@]+"${seed_rels[@]}"}; do
+  dst="$wt_path/$rel"
+  mkdir -p "$(dirname "$dst")"
+  rm -rf -- "$dst"   # so a directory seed replaces rather than nests inside
+  cp -a -- "$seed_top/$rel" "$dst"
+  echo "claude-worktree: seeded $rel" >&2
+done
 
 if [ -z "$prompt" ]; then
   echo "$wt_path"

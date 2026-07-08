@@ -65,16 +65,41 @@ worktree のディレクトリ外（絶対パスで他 worktree や main checkou
 今の worktree の作業を止めずに、独立した別ラインの作業を切り出したいときは `claude-worktree`（`bin/`）を使う。現在 worktree への変更はそのまま残り、分岐先は別ディレクトリ・別ブランチで進む。
 
 ```
-claude-worktree <name> [-b <branch>] [-- <prompt...>]
+claude-worktree [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
 ```
 
 - worktree は `<メインリポジトリ toplevel>_<name>` に作られる（メイン基準なので worktree 内から切ってもパスがネストしない。区切りは tmux 安全な `_`。`.` は `tmux -t` の `window.pane` 構文と衝突するため不可）
 - `-b` 省略時はブランチ名 = `<name>`。既存ブランチ名なら check out、無ければ新規作成
 - `--` の後ろにプロンプトを渡すと、**新規の detached tmux セッション（名前 = worktree basename）を worktree dir に作り、その pane の中で interactive claude（`acceptEdits`）を起動**する。pane が独立するので `$TMUX_PANE` も独立し、claude-queue が起動元 pane と衝突せず正しく追跡する。interactive なので初期プロンプト処理後も REPL に留まり、`gts <session>` / `tmux attach -t <session>` で**いつでも attach して続行できる（`claude --resume` 不要）**
 - プロンプト無しなら worktree 追加のみ（stdout にパスのみ出力。`git wa` の置き換え）
+- `--seed <path>`（繰り返し可）は、現 checkout の `<path>` を新 worktree の同じ相対位置へコピーする。存在しない／checkout 外の seed は worktree 作成前に fail する
 - settings.json で allow 済み（`claude-worktree` / `claude-worktree *`）なので承認なしで実行できる
 
 分岐先は `acceptEdits` で自律的に編集を進める。タスクが自然に独立した複数ラインへ割れるときに、現在 worktree を汚さず並行で進める選択肢として使う。乱用は避け、分岐の必要性が薄いときは現在 worktree 内で進める。
+
+#### 委譲プロンプトはファイルシステム的に自己完結させる
+
+委譲プロンプトが参照するファイルは、原則すべて新 worktree の中に在る状態にしてから起動する。worktree 外の絶対パスを委譲先に読ませない。
+
+理由は 2 つあり、どちらも「委譲先が最初の一歩で固まる」に直結する。
+
+- **伝播しない**: 新 worktree は指定 branch を checkout するだけで、起動元 checkout の gitignore 済み・未 commit ファイルは持ち込まれない。絶対パスで指せば読めるが、それは起動元 checkout の外部ファイルを読ませているに過ぎない
+- **承認で固まる**: worktree 外の絶対パス Read は `acceptEdits` でも permission prompt を出す。委譲先は fire-and-forget（人間不在）なので誰も承認できず、そこで停止する
+
+したがって参照ファイルの扱いは次で分かれる。
+
+| 参照したいファイル | どうするか |
+|---|---|
+| commit 済み（branch に載っている） | 何もしない。worktree に既に在る。相対パスで参照させる |
+| gitignore 済み・未 commit（spec / plan / メモ等） | `claude-worktree --seed <path>` で worktree 内へ入れ、相対パスで参照させる |
+| プロンプト本文へ畳める短い内容 | seed せずプロンプトに畳む（ファイル参照自体を消す） |
+
+seed したファイルは gitignore 済みなら worktree 内でも untracked のままなので、委譲先の commit には載らない。
+
+<!-- 文脈: main checkout の gitignore 済み spec を絶対パスで参照する委譲プロンプトを渡したところ、
+     委譲先が worktree 外 Read の permission prompt で最初の一歩から動けなくなった incident。
+     根本: 委譲先が承認なしに読めるのは新 worktree 内のファイルだけ。 -->
+
 
 連携の全体像（git worktree → tmux セッション → claude-queue の 3 層と `claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
 
