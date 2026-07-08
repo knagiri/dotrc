@@ -11,9 +11,11 @@ set -euo pipefail
 #
 # The reviewer runs headless (claude -p): it executes /pr-review-merge to
 # completion and then exits, so tmux closes the window automatically (no
-# remain-on-exit). The review outcome is not kept on screen -- pr-review-merge
-# posts a single standalone report comment to the PR (via gh-pr-report), so the
-# record lives on the PR rather than in a left-open pane.
+# remain-on-exit). pr-review-merge no longer posts to the PR; it emits its
+# final report to its session (stdout). Since the pane closes, we tee that
+# stdout to a per-run log file under
+# ${XDG_STATE_HOME:-$HOME/.local/state}/claude-review/<repo>/, so the record
+# lives in a local log rather than on the PR or a left-open pane.
 #
 # The PR branch is already checked out in this worktree, so no second checkout
 # (and no branch conflict) occurs; the author must hand off (stop editing this
@@ -37,5 +39,19 @@ if [ -z "${TMUX:-}" ]; then
   exit 1
 fi
 
+# Derive a durable log path so the review record survives the pane closing
+# (the record no longer lives on the PR). Repo name from origin (network-free);
+# branch is the checked-out PR branch, sanitized for use in a filename.
+repo="$(basename -s .git "$(git remote get-url origin 2>/dev/null)" 2>/dev/null)"
+[ -n "$repo" ] || repo="$(basename "$(git rev-parse --show-toplevel)")"
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+[ -n "$branch" ] && [ "$branch" != "HEAD" ] || branch="$(git rev-parse --short HEAD)"
+branch="${branch//[^A-Za-z0-9._-]/-}"
+logdir="${XDG_STATE_HOME:-$HOME/.local/state}/claude-review/${repo}"
+mkdir -p "$logdir"
+logfile="${logdir}/pr${pr}_${branch}_$(date +%Y%m%d-%H%M%S).log"
+
+# tee the headless claude's stdout to the log file; the pane still closes when
+# the pipe finishes (no remain-on-exit).
 tmux new-window -c "$PWD" -n "review-pr${pr}" \
-  claude -p --permission-mode acceptEdits "/pr-review-merge ${pr}"
+  bash -c "claude -p --permission-mode acceptEdits '/pr-review-merge ${pr}' | tee -- '${logfile}'"
