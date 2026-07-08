@@ -17,18 +17,21 @@ printf '[%s]\n' "$@" >>"$TMUX_ARGS_FILE"
 STUB
 chmod +x "$stubdir/tmux"
 
-# Case 1: a numeric PR builds the expected new-window command, and the prompt
-# is passed as ONE argv element (quoting preserved).
-out="$(TMUX_ARGS_FILE="$stubdir/args" TMUX="fake" PATH="$stubdir:$PATH" "$script" 42 2>&1)"; rc=$?
+# Case 1: a numeric PR launches a bash -c that pipes `claude -p ...` into
+# `tee <logfile>`, and creates the log dir under XDG_STATE_HOME/claude-review.
+state="$stubdir/state"
+out="$(TMUX_ARGS_FILE="$stubdir/args" TMUX="fake" XDG_STATE_HOME="$state" \
+  PATH="$stubdir:$PATH" "$script" 42 2>&1)"; rc=$?
+launchcmd="$(sed -n 's/^\[\(.*\)\]$/\1/p' "$stubdir/args" | tail -n1)"
 if [ "$rc" -eq 0 ] \
   && grep -qxF '[new-window]' "$stubdir/args" \
   && grep -qxF '[review-pr42]' "$stubdir/args" \
-  && grep -qxF '[claude]' "$stubdir/args" \
-  && grep -qxF '[-p]' "$stubdir/args" \
-  && grep -qxF '[--permission-mode]' "$stubdir/args" \
-  && grep -qxF '[acceptEdits]' "$stubdir/args" \
-  && grep -qxF '[/pr-review-merge 42]' "$stubdir/args"; then
-  echo "ok: numeric PR builds new-window command with single-arg prompt"
+  && grep -qxF '[bash]' "$stubdir/args" \
+  && grep -qxF '[-c]' "$stubdir/args" \
+  && printf '%s' "$launchcmd" | grep -qF '/pr-review-merge 42' \
+  && printf '%s' "$launchcmd" | grep -qE 'tee -- .*/claude-review/[^/]+/pr42_[^/]*_[0-9]{8}-[0-9]{6}\.log' \
+  && [ -d "$state/claude-review" ]; then
+  echo "ok: numeric PR launches bash -c piping claude into tee <logfile>, log dir created"
 else
   echo "FAIL: case 1; rc=$rc out=$out args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1
 fi
