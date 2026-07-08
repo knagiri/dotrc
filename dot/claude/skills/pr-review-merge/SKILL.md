@@ -67,7 +67,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >      は手順 3 の `id`）。raw な `gh api graphql` は使わない。
 >    - **PR コメント（reply も含め）は投稿しない。** 人間の「議論が必要 / コード修正で片付かない」
 >      thread は resolve せず残し、verdict の `threads_pending` に `blocker: true` で記録する。
->      （最終レポートの投稿は orchestrator が行う。subagent は verdict JSON を返すだけ。）
+>      （最終サマリは orchestrator が session に出力するだけで PR には投稿しない。headless 起動では
+>      その出力を `claude-review` がローカルログに残す。subagent は verdict JSON を返すだけ。）
 > 5. **verdict 出力**: 下記スキーマの JSON **だけ**を出力する。
 >
 > ```json
