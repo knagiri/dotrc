@@ -83,4 +83,23 @@ printf x | PATH="$stubdir:$PATH" "$bindir/gh-pr-report" 9z >/dev/null 2>&1; [ $?
 printf x | PATH="$stubdir:$PATH" "$bindir/gh-pr-report" 42 --edit-last >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-pr-report rejects extra flag arg" || { echo "FAIL: gh-pr-report extra flag"; fail=1; }
 
+# gh-pr-comments: numeric PR issues `gh pr view <PR> --json reviews,comments` with a --jq reshape.
+GH_ARGS_FILE="$stubdir/args" PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 42 >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] \
+  && grep -qxF '[pr]' "$stubdir/args" && grep -qxF '[view]' "$stubdir/args" \
+  && grep -qxF '[42]' "$stubdir/args" \
+  && grep -qxF '[--json]' "$stubdir/args" && grep -qxF '[reviews,comments]' "$stubdir/args" \
+  && grep -qxF '[--jq]' "$stubdir/args" \
+  && grep -q 'submittedAt' "$stubdir/args" && grep -q 'createdAt' "$stubdir/args"; then
+  echo "ok: gh-pr-comments issues gh pr view <PR> --json reviews,comments"
+else echo "FAIL: gh-pr-comments rc=$rc args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# gh-pr-comments: missing / non-numeric / extra-flag arg fail (no flag passthrough).
+PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-comments missing arg fails" || { echo "FAIL: gh-pr-comments missing arg"; fail=1; }
+PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 9z >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-comments non-numeric fails" || { echo "FAIL: gh-pr-comments non-numeric"; fail=1; }
+PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 42 --comments >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-comments rejects extra flag arg" || { echo "FAIL: gh-pr-comments extra flag"; fail=1; }
+
 exit "$fail"

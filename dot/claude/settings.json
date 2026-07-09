@@ -85,6 +85,7 @@
       "Bash(gh pr checks *)",
       "Bash(gh run view *)",
       "Bash(gh repo view *)",
+      "Bash(gh-pr-comments *)",
       "Bash(gh-list-threads *)",
       "Bash(gh-resolve-thread *)",
       "Bash(gh-automerge *)",
