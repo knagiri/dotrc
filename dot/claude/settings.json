@@ -90,7 +90,6 @@
       "Bash(gh-list-threads *)",
       "Bash(gh-resolve-thread *)",
       "Bash(gh-automerge *)",
-      "Bash(gh-pr-report *)",
       "Bash(node --version)",
       "Bash(yarn --version)",
       "Bash(uv run ruff format)",
