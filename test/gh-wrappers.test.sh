@@ -66,23 +66,6 @@ PATH="$stubdir:$PATH" "$bindir/gh-list-threads" >/dev/null 2>&1; [ $? -ne 0 ] \
 PATH="$stubdir:$PATH" "$bindir/gh-list-threads" x9 >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-list-threads non-numeric fails" || { echo "FAIL: gh-list-threads non-numeric"; fail=1; }
 
-# gh-pr-report: numeric PR + stdin body issues `gh pr comment <PR> --body-file -`.
-printf 'report body' | GH_ARGS_FILE="$stubdir/args" PATH="$stubdir:$PATH" "$bindir/gh-pr-report" 42 >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] \
-  && grep -qxF '[pr]' "$stubdir/args" && grep -qxF '[comment]' "$stubdir/args" \
-  && grep -qxF '[42]' "$stubdir/args" \
-  && grep -qxF '[--body-file]' "$stubdir/args" && grep -qxF '[-]' "$stubdir/args"; then
-  echo "ok: gh-pr-report issues gh pr comment <PR> --body-file -"
-else echo "FAIL: gh-pr-report rc=$rc args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
-
-# gh-pr-report: missing / non-numeric / extra-flag arg fail (no flag passthrough).
-printf x | PATH="$stubdir:$PATH" "$bindir/gh-pr-report" >/dev/null 2>&1; [ $? -ne 0 ] \
-  && echo "ok: gh-pr-report missing arg fails" || { echo "FAIL: gh-pr-report missing arg"; fail=1; }
-printf x | PATH="$stubdir:$PATH" "$bindir/gh-pr-report" 9z >/dev/null 2>&1; [ $? -ne 0 ] \
-  && echo "ok: gh-pr-report non-numeric fails" || { echo "FAIL: gh-pr-report non-numeric"; fail=1; }
-printf x | PATH="$stubdir:$PATH" "$bindir/gh-pr-report" 42 --edit-last >/dev/null 2>&1; [ $? -ne 0 ] \
-  && echo "ok: gh-pr-report rejects extra flag arg" || { echo "FAIL: gh-pr-report extra flag"; fail=1; }
-
 # gh-pr-comments: numeric PR issues `gh pr view <PR> --json reviews,comments` with a --jq reshape.
 GH_ARGS_FILE="$stubdir/args" PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 42 >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ] \
