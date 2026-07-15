@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-await-reviews <PR#> -- block until the PR's automated reviews have settled,
+# then print a detection report as JSON. Prints the report and exits 0 even on
+# timeout: a missing reviewer is information, not an error.
+#
+# Waiting and tracking are different problems. We can only *wait* for a reviewer
+# detectable BEFORE it posts. In this repo Copilot's pending review does NOT
+# surface in reviewRequests (measured: empty across the whole pre-arrival window)
+# nor as a check, so today nothing is predictable and `expected` stays empty --
+# the REQ machinery below is kept as a forward-compatible hook. Everyone --
+# Copilot, CodeRabbit, claude, humans -- is knowable only after the fact, so they
+# are *tracked*: any participant other than the PR author who appears in
+# reviews/comments is recorded and resets the quiet timer. No bot/human
+# classification is attempted; gh does not expose is_bot here, and login
+# heuristics are brittle.
+#
+# Quiet is measured from real submittedAt/createdAt timestamps rather than from
+# when this script started, so an already-reviewed PR returns immediately.
+#
+# Wrapped so the reviewer agent needs no `sleep` grant. Allowlist as
+# `Bash(gh-await-reviews *)`. Requires jq (see bin/list-install.sh).
+#
+# Usage: gh-await-reviews <PR-number>
+
+usage() { echo "usage: gh-await-reviews <PR-number>" >&2; exit "${1:-1}"; }
+
+[ $# -eq 1 ] || usage 1
+case "$1" in -h|--help) usage 0 ;; esac
+pr="$1"
+if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+  echo "gh-await-reviews: PR number must be numeric (got: $pr)" >&2
+  exit 1
+fi
+
+timeout_s=${GH_AWAIT_REVIEWS_TIMEOUT:-600}   # overall ceiling
+quiet_s=${GH_AWAIT_REVIEWS_QUIET:-30}        # silence after the last activity
+grace_s=${GH_AWAIT_REVIEWS_GRACE:-60}        # floor when nothing is expected and nothing posted
+poll_s=${GH_AWAIT_REVIEWS_POLL:-15}
+
+# One gh call per poll. Emits, per line:
+#   REQ<TAB><login>              a pending review request (pre-arrival signal)
+#   ACT<TAB><login><TAB><iso8601> a review or comment by someone other than the author
+snapshot() {
+  gh pr view "$pr" --json author,reviewRequests,reviews,comments --jq '
+    .author.login as $a
+    | ([.reviewRequests[]?.login // empty] | .[] | "REQ\t" + .),
+      (([.reviews[]?  | {l: .author.login, t: .submittedAt}]
+      + [.comments[]? | {l: .author.login, t: .createdAt}])
+       | .[] | select(.l != $a) | "ACT\t" + .l + "\t" + (.t // ""))
+  '
+}
+
+started=$(date -u +%s)
+expect_copilot=0
+copilot_at=""
+last_ts=""
+observed=""   # "<login><TAB><ts>" per line, may repeat a login
+
+# jq builds the report so logins and timestamps get escaped properly and the
+# observed list is deduplicated (latest timestamp wins per login).
+emit() {  # $1 = settled|timed_out
+  printf '%s' "$observed" | jq -Rsc \
+    --argjson pr "$pr" \
+    --arg status "$1" \
+    --argjson waited "$(( $(date -u +%s) - started ))" \
+    --argjson expect_copilot "$expect_copilot" \
+    --arg copilot_at "$copilot_at" '
+    (split("\n") | map(select(. != "") | split("\t") | {login: .[0], at: .[1]})
+      | group_by(.login) | map(max_by(.at))) as $observed
+    | (if $expect_copilot == 1
+       then [{name: "copilot", signal: "review_request",
+              arrived: ($copilot_at != ""),
+              at: (if $copilot_at == "" then null else $copilot_at end)}]
+       else [] end) as $expected
+    | {pr: $pr,
+       settled: ($status == "settled"),
+       timed_out: ($status == "timed_out"),
+       waited_seconds: $waited,
+       expected: $expected,
+       observed: $observed,
+       missing: [$expected[] | select(.arrived | not) | .name],
+       last_activity_at: (($observed | map(.at) | max) // null)}
+  '
+}
+
+while :; do
+  observed=""
+  while IFS=$'\t' read -r kind login ts; do
+    case "$kind" in
+      REQ) case "$login" in *[Cc]opilot*) expect_copilot=1 ;; esac ;;
+      ACT) observed+="$login"$'\t'"$ts"$'\n' ;;
+    esac
+  done < <(snapshot)
+
+  # A copilot review that already landed proves copilot was expected, even
+  # though the review request has since disappeared from reviewRequests.
+  copilot_at=$(printf '%s' "$observed" | awk -F'\t' 'tolower($1) ~ /copilot/ {print $2}' | sort | tail -n1)
+  if [ -n "$copilot_at" ]; then expect_copilot=1; fi
+
+  # ISO-8601 UTC sorts lexicographically, so plain sort finds the newest.
+  last_ts=$(printf '%s' "$observed" | cut -f2 | grep -v '^$' | sort | tail -n1 || true)
+
+  now=$(date -u +%s)
+  waited=$(( now - started ))
+
+  if [ "$expect_copilot" -eq 0 ] && [ -z "$last_ts" ]; then
+    # Nothing predicted and nobody has spoken. Don't conclude "no automated
+    # review" instantly -- an unpredictable reviewer may still be booting.
+    if [ "$waited" -ge "$grace_s" ]; then emit settled; exit 0; fi
+  elif [ "$expect_copilot" -eq 0 ] || [ -n "$copilot_at" ]; then
+    # Everything we can wait for has arrived; wait out the quiet window so a
+    # reviewer that posts a summary first and inline comments second is caught.
+    if [ $(( now - $(date -u -d "$last_ts" +%s) )) -ge "$quiet_s" ]; then emit settled; exit 0; fi
+  fi
+
+  if [ "$waited" -ge "$timeout_s" ]; then emit timed_out; exit 0; fi
+  sleep "$poll_s"
+done

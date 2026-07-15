@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-pr-comments <PR#> -- print the PR's review bodies and standalone comments as JSON.
+#
+# `gh-list-threads` only returns inline reviewThreads, so a reviewer never sees a
+# Copilot review summary, a CodeRabbit walkthrough, or a standalone bot comment.
+# This wrapper fills that gap. It is read-only and it does NOT wait.
+#
+# The argument is a PR number and nothing else: no flag passthrough, so the shape
+# of the output is fixed and an agent cannot silently narrow --json and lose data.
+# Allowlist as `Bash(gh-pr-comments *)`. Uses gh's built-in --jq (no system jq).
+#
+# Resolvable inline threads stay with `gh-list-threads`; this prints the bodies
+# that cannot be resolved.
+#
+# Usage: gh-pr-comments <PR-number>
+
+usage() { echo "usage: gh-pr-comments <PR-number>" >&2; exit "${1:-1}"; }
+
+[ $# -eq 1 ] || usage 1
+case "$1" in -h|--help) usage 0 ;; esac
+pr="$1"
+if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+  echo "gh-pr-comments: PR number must be numeric (got: $pr)" >&2
+  exit 1
+fi
+
+exec gh pr view "$pr" --json reviews,comments --jq '{
+  reviews:  [.reviews[]?  | {author: .author.login, state: .state, body: .body, submittedAt: .submittedAt}],
+  comments: [.comments[]? | {author: .author.login, body: .body, createdAt: .createdAt}]
+}'
