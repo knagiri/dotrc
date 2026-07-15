@@ -89,13 +89,16 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 
 | 操作 | ラッパー | 内部コマンド | allowlist |
 |---|---|---|---|
+| 自動レビューの待機・検出 | `gh-await-reviews <PR>` | read-only `gh pr view`（polling） | `Bash(gh-await-reviews *)` |
+| review body / standalone コメントの取得 | `gh-pr-comments <PR>` | read-only `gh pr view --json reviews,comments` | `Bash(gh-pr-comments *)` |
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>` のみ | `Bash(gh-automerge *)` |
 
 - ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
-  フラグを付けられない。merge 前に skill 自身が `gh pr checks` で required checks の green を
-  確認する（二重化）。merge method は `--merge`（merge commit）で logical commits を潰さない。
+  フラグを付けられない。auto-merge 有効化前に skill 自身が `gh pr checks` で required checks に
+  **fail が無いこと**を確認する（二重化）。pending は待たずに auto-merge へ委ねる。merge method は
+  `--merge`（merge commit）で logical commits を潰さない。
 - raw `gh api graphql *` / `gh pr merge *` は **allow しない**（§4 のとおり）。thread resolve は
   reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。
