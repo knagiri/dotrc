@@ -3,6 +3,9 @@
 許可設定（allowlist）にマッチせず **毎回ユーザーの手動承認が必要になる** ケースを避ける。
 詳細仕様: <https://code.claude.com/docs/en/permissions>
 
+作業対象の dir が cwd とズレていて `cd <dir> && …` や `git -C <dir>` を繰り返している場合は、
+allowlist の工夫ではなく cwd 自体を直す。[working-directory.md](./working-directory.md) を参照。
+
 ### 承認が必要になるパターン
 
 | パターン | 例 | 代替 |
