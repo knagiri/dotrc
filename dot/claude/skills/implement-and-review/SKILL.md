@@ -1,6 +1,6 @@
 ---
 name: implement-and-review
-description: worktree に委譲されたタスクを brainstorm→実装→merge で完遂する。HOW をユーザーと brainstorm し（detached session のため最初の質問を出して attach を待つ）、実装し、pr-review-merge で自律 merge する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
+description: worktree に委譲されたタスクを brainstorm→実装→merge で完遂する。HOW をユーザーと brainstorm し（detached session のため最初の質問を出して attach を待つ）、実装し、pr-review-automerge で自律 merge する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
 ---
 
 # implement-and-review
@@ -25,7 +25,7 @@ HOW の brainstorm → 実装 → merge まで完遂する。`delegate-to-worktr
    `gts <session>` / `tmux attach -t <session>` で attach して HOW を詰める。
 2. **実装**: 設計が固まったら実装する。`superpowers:test-driven-development` 等、
    repo の規約に従う。コミットは論理単位で小さく。
-3. **review→merge**: 実装が一段落し PR を出したら `pr-review-merge` を呼び、
+3. **review→merge**: 実装が一段落し PR を出したら `pr-review-automerge` を呼び、
    author とは独立した立場でのレビュー・required CI 確認を経て自律 merge する。
 
 ## 不変条件

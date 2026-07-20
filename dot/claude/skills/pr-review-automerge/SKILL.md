@@ -1,18 +1,18 @@
 ---
-name: pr-review-merge
+name: pr-review-automerge
 description: PR の自動レビュー（Copilot 等）が出揃うのを待ってから、実行先 repo の規約に沿ってレビューし、修正・対応済み thread の resolve・required CI に fail が無いことの確認を経て auto-merge を有効化する。各イテレーションで会話履歴を持たない fresh subagent を spawn してコンテキストを reset しながら反復する。実際に merge されるかは repo の branch protection が決める。author が作成した PR を別 agent としてレビューするときに使う。
 allowed-tools: Bash, Read, Grep, Glob, Task
 ---
 
-# pr-review-merge
+# pr-review-automerge
 
-PR を **author とは独立した立場**でレビューし、修正・CI 確認を経て自律的に merge する。
+PR を **author とは独立した立場**でレビューし、修正・CI 確認を経て auto-merge を有効化する。
 このセッション（orchestrator）自身は深くレビューせず、**各イテレーションを会話履歴を持たない
 fresh subagent に委譲**する。これが「修正適用後にコンテキストを reset して再レビュー」の実体。
 
 ## 入力
 
-`$ARGUMENTS` に PR 番号が入る（例: `/pr-review-merge 42` → `42`）。以降 `<PR>` と表記。
+`$ARGUMENTS` に PR 番号が入る（例: `/pr-review-automerge 42` → `42`）。以降 `<PR>` と表記。
 
 ## 不変条件（厳守）
 

@@ -82,7 +82,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 
 ### 5. merge と review thread 操作（自律レビューループ用）
 
-`pr-review-merge` skill による自律的な review→merge ループでは、raw な `gh pr merge` /
+`pr-review-automerge` skill による自律的な review→merge ループでは、raw な `gh pr merge` /
 `gh api graphql` を allow せず、操作を最小化した `bin/` ラッパーだけを許可する。reviewer は
 信頼できない PR コメントを読んで自律実行するため、広い grant は prompt injection / 権限バイパス
 の経路になる。
@@ -103,4 +103,4 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
   reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。
 - ラッパーは **repo 単位**で、特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）。`--auto` は branch protection / required checks を尊重するため未通過 PR を強制 merge はできないが、「PR 限定ではない」点は把握しておく。
-- `gh-automerge`（= `gh pr merge --auto`）は **repo で auto-merge が有効**である必要がある。無効な repo では失敗するため、`pr-review-merge` の merge ステップが完了しない（skill は report して停止する）。
+- `gh-automerge`（= `gh pr merge --auto`）は **repo で auto-merge が有効**である必要がある。無効な repo では失敗するため、`pr-review-automerge` の merge ステップが完了しない（skill は report して停止する）。

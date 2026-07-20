@@ -8,7 +8,7 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
 
 作業中のユーザーの指摘を、恒久的なハーネス（rules / CLAUDE.md / lint / test / hook）へ変換する。
 この skill 自身は **薄い**。実装・検証・コミット・マージはしない。要件を固め、自己完結プロンプトに
-畳み、`claude-worktree` を直接起動して委譲する。委譲先は実装 → `pr-review-merge` で自律マージする。
+畳み、`claude-worktree` を直接起動して委譲する。委譲先は実装 → `pr-review-automerge` で自律マージする。
 
 設計の全体像は `docs/superpowers/specs/2026-06-30-harness-from-feedback-design.md`、worktree 運用は
 `dot/claude/rules/worktree-scope.md`、rules の書き方は `dot/claude/rules/rule-authoring.md` を参照。
@@ -23,7 +23,7 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
 - 実装・検証・コミット・マージは**委譲先が担う**。この skill は要件確定とプロンプト畳み・起動まで。
 - `delegate-to-worktree` は経由しない（グローバル＝dotrc への切替を持たないため）。`claude-worktree` を
   直接呼び、プロンプト先頭に `implement-and-review` の起動命令を置く（同じ起動規約）。
-- マージは委譲先の `pr-review-merge` が repo の保護ゲート（approve / required CI）に従って行う。
+- マージは委譲先の `pr-review-automerge` が repo の保護ゲート（approve / required CI）に従って行う。
   ゲートの無い repo（dotrc に branch protection が無い場合を含む）では即マージし得る点に注意。
 
 ## 手順
@@ -74,7 +74,7 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    ## 進め方
    1. 要件は上で確定済み。開く論点が無ければ brainstorm はスキップして実装へ
    2. 実装し、受け入れ確認を満たす
-   3. PR を出し、pr-review-merge で merge
+   3. PR を出し、pr-review-automerge で merge
    ```
 
 5. **起動**: `claude-worktree` を直接呼ぶ。branch は `harness/<slug>`、name は `harness-<slug>`
@@ -87,6 +87,6 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    - 捕捉した指摘（言語化）
    - 置いた場所（rules / CLAUDE.md / lint / test / hook）と対象 repo
    - ロードされる条件（paths と想定シナリオ。rule の場合）
-   - branch 名とマージ方法（委譲先が pr-review-merge まで自走。マージは保護ゲート依存）
+   - branch 名とマージ方法（委譲先が pr-review-automerge まで自走。マージは保護ゲート依存）
    - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
      保守的に reap。詳細は worktree-scope.md §6）
