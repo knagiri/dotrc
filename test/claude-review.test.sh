@@ -28,7 +28,7 @@ if [ "$rc" -eq 0 ] \
   && grep -qxF '[review-pr42]' "$stubdir/args" \
   && grep -qxF '[bash]' "$stubdir/args" \
   && grep -qxF '[-c]' "$stubdir/args" \
-  && printf '%s' "$launchcmd" | grep -qF '/pr-review-merge 42' \
+  && printf '%s' "$launchcmd" | grep -qF '/pr-review-automerge 42' \
   && printf '%s' "$launchcmd" | grep -qE 'tee -- .*/claude-review/[^/]+/pr42_[^/]*_[0-9]{8}-[0-9]{6}\.log' \
   && [ -d "$state/claude-review" ]; then
   echo "ok: numeric PR launches bash -c piping claude into tee <logfile>, log dir created"
