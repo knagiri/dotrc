@@ -5,13 +5,13 @@ set -euo pipefail
 #
 # Opens a NEW tmux window (a new pane) in the CURRENT session, anchored to the
 # current directory, running a fresh interactive claude (acceptEdits) that runs
-# the /pr-review-merge skill against the given PR. A new window means a new
+# the /pr-review-automerge skill against the given PR. A new window means a new
 # $TMUX_PANE, so claude-queue tracks the reviewer as its own entry and the
 # author session is untouched -- "1 worktree = 1 tmux session" is preserved.
 #
-# The reviewer runs headless (claude -p): it executes /pr-review-merge to
+# The reviewer runs headless (claude -p): it executes /pr-review-automerge to
 # completion and then exits, so tmux closes the window automatically (no
-# remain-on-exit). pr-review-merge no longer posts to the PR; it emits its
+# remain-on-exit). pr-review-automerge no longer posts to the PR; it emits its
 # final report to its session (stdout). Since the pane closes, we tee that
 # stdout to a per-run log file under
 # ${XDG_STATE_HOME:-$HOME/.local/state}/claude-review/<repo>/, so the record
@@ -54,4 +54,4 @@ logfile="${logdir}/pr${pr}_${branch}_$(date +%Y%m%d-%H%M%S).log"
 # tee the headless claude's stdout to the log file; the pane still closes when
 # the pipe finishes (no remain-on-exit).
 tmux new-window -c "$PWD" -n "review-pr${pr}" \
-  bash -c "claude -p --permission-mode acceptEdits '/pr-review-merge ${pr}' | tee -- '${logfile}'"
+  bash -c "claude -p --permission-mode acceptEdits '/pr-review-automerge ${pr}' | tee -- '${logfile}'"
