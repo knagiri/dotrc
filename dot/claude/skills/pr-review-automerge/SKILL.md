@@ -51,14 +51,18 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       勝手に直させないため）。修正役は修正 verdict JSON だけを返す。`findings_to_fix` が空なら
       この手順はスキップし、`made_changes` は `false` として扱う。
 
-   b. 返ってきた JSON を parse する（後述スキーマ）。JSON の parse に失敗した場合は当イテレーションを失敗扱いとし、次イテレーションへ進む（5 回上限は維持）。
+   b. 返ってきた JSON を parse する（判定 verdict と、修正役を走らせたならその修正 verdict の両方。
+      後述スキーマ）。JSON の parse に失敗した場合は当イテレーションを失敗扱いとし、次イテレーションへ進む（5 回上限は維持）。
 
    c. **継続判定**:
       - `findings_to_fix` が非空だった（＝修正役を走らせた）または `made_changes == true`
-        または `findings_gated` が非空 または `threads_pending` に `blocker: true` が含まれる
+        または `findings_gated` / `threads_pending` に `blocker: true` が含まれる
         または `mergeable == false` → 次のイテレーションへ（fresh な判定役が修正結果を再判定する）。
-      - 上記いずれにも該当しない（＝直すもの無し・gate 無し・blocker 無し・mergeable）→ ループを
-        抜けて手順 3 へ。
+      - 上記いずれにも該当しない（＝直すもの無し・blocker 無し・mergeable）→ ループを
+        抜けて手順 3 へ。`blocker: false` の gate（＝判定役が「そもそも妥当でない」と却下した指摘）は
+        ループを止めない。非空なだけで再イテレーションすると、fresh な判定役が毎回同じ却下を
+        再生産して 5 回を使い切り、実際には何も merge を妨げていない PR が auto-merge に永久に
+        到達しないため。却下した指摘は手順 3.e の最終サマリに残して報告する。
    d. 5 回終わっても抜けられない場合は **auto-merge を有効化せず**手順 4（停止・報告）へ。
 3. **遅着 review の再確認 → CI 確認 → auto-merge 有効化**:
    a. もう一度 `gh-await-reviews <PR>` を実行する。既に静穏なら即 return する。返った `last_activity_at` が
@@ -104,8 +108,9 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >    - **直す** → `findings_to_fix`。コード修正で対応できるもの。修正役が実装できるだけの具体性
 >      （対象ファイル・何をどう直すか）を書く。thread 由来なら `thread_id` を添える。
 >    - **gate に残す** → `findings_gated` / `threads_pending`。人間の議論が必要・コード修正で
->      片付かない・そもそも妥当でない（＝直さない理由がある）もの。merge を止めるべき thread は
->      `blocker: true` にする。
+>      片付かない・そもそも妥当でない（＝直さない理由がある）もの。merge を止めるべきものは
+>      `blocker: true` にする（人間の判断を待つべきもの）。妥当でないと判断して却下しただけの
+>      ものは `blocker: false` — 理由は残るが merge は止めない。
 >    - **あなたは commit / push / `gh-resolve-thread` を実行しない。** これらは修正役の担当。
 >    - **PR コメント（reply も含め）は投稿しない。**
 >    - standalone コメント（`gh-pr-comments` が返すもの）は **resolve できない**。コード修正で対応させるなら
@@ -115,7 +120,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 > ```json
 > {
 >   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self"}],
->   "findings_gated": [{"summary": "...", "reason_gated": "...", "source": "self"}],
+>   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "source": "self"}],
 >   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "source": "copilot"}],
 >   "ci_status": "pending",
 >   "mergeable": false,
@@ -126,6 +131,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 > - `findings_to_fix`: 修正役に渡す findings（無ければ空配列）。`detail` は修正に足る具体性で。
 >   `thread_id` は由来 thread の node id（無ければ `null`）。
 > - `findings_gated`: 直さないと判断した findings（無ければ空配列）。`reason_gated` に理由を書く。
+>   `blocker` は merge を止めるべきか（人間の判断待ち = `true`、妥当でないと却下しただけ = `false`）。
 > - `threads_pending`: resolve せず残す thread（無ければ空配列）。`blocker` は merge を止めるべきか。
 > - `source`: その指摘の出所。`"self"`（あなた自身のレビュー）または指摘した bot / 人間の login
 >   （例: `"copilot-pull-request-reviewer"`）。orchestrator が AI の指摘を握り潰していないか判定するために使う。
@@ -171,6 +177,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 ## verdict スキーマ（orchestrator 側の判定基準）
 
 上記 2 つと同一。orchestrator は 1 イテレーションを判定 verdict と修正 verdict の組で評価し、
-**`findings_to_fix` 空（＝修正役を走らせていない） && `made_changes==false` && `findings_gated` 空 &&
-`threads_pending` に blocker 無し && `mergeable==true`** を満たしたときのみ手順 3（遅着 review の
-再確認 → CI 確認 → auto-merge 有効化）に進む。
+**`findings_to_fix` 空（＝修正役を走らせていない） && `made_changes==false` &&
+`findings_gated` / `threads_pending` に `blocker: true` 無し && `mergeable==true`** を満たしたときのみ
+手順 3（遅着 review の再確認 → CI 確認 → auto-merge 有効化）に進む。gate の**非空**そのものは
+終端条件にしない（理由は手順 2.c）。

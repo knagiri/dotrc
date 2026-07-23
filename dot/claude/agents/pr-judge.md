@@ -20,7 +20,9 @@ model: opus
 4. **未解決 thread の取得**: `gh-list-threads <PR>` を実行し、`isResolved == false` の thread のみを
    対象にする。raw な `gh api graphql` は使わない。
 5. **仕分け**: findings と未解決 thread を「直す（fix 役へ渡す）」と「gate に残す（人間の議論待ち・
-   コード修正で片付かないもの）」に分ける。**resolve も push も commit もしない。**
+   コード修正で片付かないもの・そもそも妥当でないもの）」に分ける。gate は merge を止めるべきものだけ
+   `blocker: true` にし、妥当でないと却下しただけのものは `blocker: false` にする（orchestrator が
+   `blocker` でループ継続を決めるため）。**resolve も push も commit もしない。**
    **PR コメント（reply も含め）は投稿しない。**
 6. **verdict 出力**: verdict JSON だけを出力する（説明文は付けない）。スキーマは
-   `pr-review-automerge` skill の「判定 verdict スキーマ」に従う。
+   `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。
