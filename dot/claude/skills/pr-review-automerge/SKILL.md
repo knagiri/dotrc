@@ -63,6 +63,11 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
         ループを止めない。非空なだけで再イテレーションすると、fresh な判定役が毎回同じ却下を
         再生産して 5 回を使い切り、実際には何も merge を妨げていない PR が auto-merge に永久に
         到達しないため。却下した指摘は手順 3.e の最終サマリに残して報告する。
+      - **デッドロック時は打ち切る**: 修正 verdict が `made_changes == false` かつ `unfixed` が非空
+        （＝判定役が「直す」と渡したものを修正役が全部「直さない」と返した）なら、そのイテレーションは
+        何も進んでいない。次イテレーションの入力（コード・PR コメント）は同一なので、fresh な判定役が
+        同じ findings を再生産し、修正役が同じ理由で拒み続けるだけになる。残りイテレーションを
+        回さず手順 4（停止・報告）へ抜け、判定役と修正役の食い違いを人間に引き渡す。
    d. 5 回終わっても抜けられない場合は **auto-merge を有効化せず**手順 4（停止・報告）へ。
 3. **遅着 review の再確認 → CI 確認 → auto-merge 有効化**:
    a. もう一度 `gh-await-reviews <PR>` を実行する。既に静穏なら即 return する。返った `last_activity_at` が
@@ -79,7 +84,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       自動レビュー（読んだもの／`missing` だったもの）、最終結果（auto-merge 有効化済み）を
       **session の最終メッセージとして出力**する。PR には投稿しない。
 4. **停止・報告**（auto-merge を有効化しなかった場合）: 各イテレーションの 指摘→対応、gate に残した findings /
-   議論待ち thread / CI の fail / step 0 で `missing` だった reviewer / 停止理由・残課題を箇条書きで要約し、
+   修正役が直さなかった findings（`unfixed`）/ 議論待ち thread / CI の fail /
+   step 0 で `missing` だった reviewer / 停止理由・残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿・thread への reply はしない（人間が引き取る）。
 
 ## 判定 subagent prompt（`<PR>`/`<owner>`/`<repo>` を埋めて `pr-judge` に渡す）
