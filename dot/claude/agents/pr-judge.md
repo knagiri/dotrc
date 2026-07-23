@@ -26,3 +26,17 @@ model: opus
    **PR コメント（reply も含め）は投稿しない。**
 6. **verdict 出力**: verdict JSON だけを出力する（説明文は付けない）。スキーマは
    `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。
+
+<!-- 決定済み（再指摘防止のため理由を残す）: 「コードを変更しない」を frontmatter の `tools:`
+     allowlist で機械的に縛るかを検討し、**入れない**と決めた。理由:
+     - 判定役は `gh-pr-comments` / `gh-list-threads` / `gh pr diff` を叩くので Bash が要る。
+       Bash が残る限り `git commit` / `git push` / `gh-resolve-thread` には到達できるので、
+       allowlist は Edit/Write を落とすだけの部分的な縛りにしかならない。不変条件を機械的に
+       担保したと誤解させるほうが害が大きい。
+     - `tools:` の列挙漏れは silent failure になる。判定役は Read/Grep/Glob/Bash に加え
+       手順 3 の `/code-review` skill 等も使ってよい設計なので、列挙を固定すると将来の手順追加が
+       黙って効かなくなる。
+     - `rule-authoring.md` の「縛り切りたい必須事項は lint/test/hook へ昇格する」に沿わせるなら、
+       昇格先は `tools:` ではなく PreToolUse hook（この agent からの commit/push/resolve を deny）
+       になる。そこまで要るほどの誤動作は未観測なので、実測が出るまでは散文の不変条件と役割分離
+       （push / resolve できるのは `pr-fix` だけ）で運用する。 -->
