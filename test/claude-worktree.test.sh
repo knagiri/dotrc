@@ -170,8 +170,8 @@ else
   echo "FAIL: out-of-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
 
-# Omitting --model must leave the launch byte-identical to before the flag
-# existed: no `--model` in argv at all, so claude inherits its default model.
+# Omitting --model must leave the out-of-tmux launch byte-identical to before the
+# flag existed: no `--model` in argv at all, so claude inherits its default model.
 # (reuses the out-of-tmux log captured just above)
 if ! grep -q -- '--model' "$tmp/ns-out" && ! grep -q 'model    :' <<<"$out"; then
   echo "ok: no --model in argv when the flag is omitted"
@@ -179,17 +179,30 @@ else
   echo "FAIL: --model leaked into a launch that did not ask for it"; fail=1
 fi
 
+# In-tmux the same check cannot grep for `--model`: the `bash -c` wrapper string
+# carries that literal in BOTH branches, so a substring match there is vacuous
+# (it passes even when the flag was never given). What actually decides is the
+# model slot -- the trailing positional ($3) -- which must arrive EMPTY so the
+# wrapper takes its else branch instead of running `claude --model ""`.
+if [ -z "$(tail -n1 "$tmp/ns-in")" ]; then
+  echo "ok: in-tmux model slot is empty when --model is omitted"
+else
+  echo "FAIL: in-tmux model slot is '$(tail -n1 "$tmp/ns-in")' without --model"; fail=1
+fi
+
 # --- --model ------------------------------------------------------------------
 # Inside tmux the model rides in as a positional arg ($3) of the `bash -c` wrapper
 # rather than being folded into the command string, so it cannot break the
-# pane-return chain. Assert both the flag and the alias reach argv, the chain
-# survives, and the launch report names the model.
+# pane-return chain. The alias reaching argv as its own element is what proves the
+# flag was honored -- grepping the log for `--model` would be vacuous here (see
+# the omitted-flag check above). Assert instead that the wrapper still guards on
+# an empty $3, that the alias arrives, the chain survives, and the report names it.
 log="$tmp/ns-model-in"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
   "$wt" --model opus modelin -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -q -- '--model' "$log" \
+   && grep -Fq 'if [ -n "$3" ]; then' "$log" \
    && grep -Fxq 'opus' "$log" \
    && grep -q 'switch-client' "$log" \
    && grep -Fxq "$prompt" "$log" \
@@ -206,8 +219,7 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
   "$wt" --model sonnet modelout -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Fxq -- '--model' "$log" \
-   && grep -Fxq 'sonnet' "$log" \
+   && grep -A1 -Fx -- '--model' "$log" | grep -Fxq 'sonnet' \
    && grep -Fxq "$prompt" "$log" \
    && grep -q 'model    : sonnet' <<<"$out"; then
   echo "ok: --model reaches the out-of-tmux launch and is reported"
