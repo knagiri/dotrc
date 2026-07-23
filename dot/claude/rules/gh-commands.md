@@ -83,9 +83,9 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 ### 5. merge と review thread 操作（自律レビューループ用）
 
 `pr-review-automerge` skill による自律的な review→merge ループでは、raw な `gh pr merge` /
-`gh api graphql` を allow せず、操作を最小化した `bin/` ラッパーだけを許可する。reviewer は
-信頼できない PR コメントを読んで自律実行するため、広い grant は prompt injection / 権限バイパス
-の経路になる。
+`gh api graphql` を allow せず、操作を最小化した `bin/` ラッパーだけを許可する。ループを回す
+判定役・修正役は信頼できない PR コメントを読んで自律実行するため、広い grant は
+prompt injection / 権限バイパスの経路になる。
 
 | 操作 | ラッパー | 内部コマンド | allowlist |
 |---|---|---|---|
