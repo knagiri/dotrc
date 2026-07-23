@@ -170,4 +170,54 @@ else
   echo "FAIL: out-of-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
 
+# Omitting --model must leave the launch byte-identical to before the flag
+# existed: no `--model` in argv at all, so claude inherits its default model.
+# (reuses the out-of-tmux log captured just above)
+if ! grep -q -- '--model' "$tmp/ns-out" && ! grep -q 'model    :' <<<"$out"; then
+  echo "ok: no --model in argv when the flag is omitted"
+else
+  echo "FAIL: --model leaked into a launch that did not ask for it"; fail=1
+fi
+
+# --- --model ------------------------------------------------------------------
+# Inside tmux the model rides in as a positional arg ($3) of the `bash -c` wrapper
+# rather than being folded into the command string, so it cannot break the
+# pane-return chain. Assert both the flag and the alias reach argv, the chain
+# survives, and the launch report names the model.
+log="$tmp/ns-model-in"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
+  "$wt" --model opus modelin -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -q -- '--model' "$log" \
+   && grep -Fxq 'opus' "$log" \
+   && grep -q 'switch-client' "$log" \
+   && grep -Fxq "$prompt" "$log" \
+   && grep -q 'model    : opus' <<<"$out"; then
+  echo "ok: --model reaches the in-tmux launch and is reported"
+else
+  echo "FAIL: in-tmux --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
+fi
+
+# Outside tmux claude is exec'd directly, so `--model <alias>` must sit in argv
+# as two adjacent elements ahead of the prompt.
+log="$tmp/ns-model-out"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
+  "$wt" --model sonnet modelout -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fxq -- '--model' "$log" \
+   && grep -Fxq 'sonnet' "$log" \
+   && grep -Fxq "$prompt" "$log" \
+   && grep -q 'model    : sonnet' <<<"$out"; then
+  echo "ok: --model reaches the out-of-tmux launch and is reported"
+else
+  echo "FAIL: out-of-tmux --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
+fi
+
+# A dangling --model would otherwise swallow the worktree name as its value.
+(cd "$cwdrepo" && "$wt" --model) >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: --model without a value is rejected" \
+  || { echo "FAIL: dangling --model accepted"; fail=1; }
+
 exit "$fail"
