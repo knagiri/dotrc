@@ -35,7 +35,8 @@ set -euo pipefail
 #   --model <alias>
 #                  pass --model <alias> to the launched claude (e.g. opus), so the
 #                  caller picks the model for the role it is delegating. Omitted
-#                  means claude keeps its inherited default model.
+#                  means claude keeps its inherited default model; an empty value
+#                  is rejected rather than silently falling back to it.
 #   --seed <path>  copy <path> from cwd's checkout into the same relative path in
 #                  the new worktree (repeatable). For files the delegated session
 #                  needs but which the branch does not carry (gitignored specs,
@@ -66,7 +67,15 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
     -b) shift; [ $# -gt 0 ] || usage 1; branch="$1"; shift ;;
-    --model) shift; [ $# -gt 0 ] || usage 1; model="$1"; shift ;;
+    # Reject an EMPTY value instead of falling back to the inherited default: an
+    # empty `--model` is almost always an unset variable at the call site
+    # (`--model "$MODEL"`), and a fire-and-forget delegation nobody watches would
+    # then quietly run on the wrong model. Rejecting it also makes the `model=""`
+    # sentinel unambiguous -- empty can only mean "flag not given".
+    --model)
+      shift; [ $# -gt 0 ] || usage 1
+      [ -n "$1" ] || { echo "claude-worktree: --model needs a non-empty alias" >&2; exit 1; }
+      model="$1"; shift ;;
     --seed) shift; [ $# -gt 0 ] || usage 1; seeds+=("$1"); shift ;;
     --self) self=1; shift ;;
     --) shift; prompt="$*"; break ;;

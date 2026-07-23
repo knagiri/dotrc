@@ -232,4 +232,12 @@ fi
   && echo "ok: --model without a value is rejected" \
   || { echo "FAIL: dangling --model accepted"; fail=1; }
 
+# `--model ""` -- the common unset-variable expansion at a call site. Falling back
+# to the inherited default here would run an unwatched delegation on a model the
+# caller did not ask for, so it must fail loudly (and before the worktree exists).
+(cd "$cwdrepo" && "$wt" --model "" emptymodel) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_emptymodel" ]; then
+  echo "ok: empty --model value is rejected before the worktree is created"
+else echo "FAIL: empty --model accepted rc=$rc"; fail=1; fi
+
 exit "$fail"
