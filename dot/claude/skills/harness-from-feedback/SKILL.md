@@ -48,7 +48,7 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    - 先頭に `implement-and-review` 起動命令
    - 参照ファイルは worktree 内で完結させる。通常は本文へ畳み込む。畳めない未 commit・gitignore
      済みファイル（spec 等）は `--seed <path>` で worktree へ入れ相対パスで参照させる（worktree 外の
-     絶対パス Read は承認待ちになり、人間不在の委譲先が固まる。`worktree-scope.md` §5）
+     絶対パス Read は承認待ちになり、人間不在の委譲先が固まる。`worktree-scope.md` §6）
    - artifact 種別（rule / CLAUDE.md 追記 / lint / test / hook）・配置パス・対象 repo
    - 内容の骨子（理由ベースのソフト指針の本文・由来）
    - rule を書く場合は「**既存のルールファイル（リポジトリの `.claude/rules/*.md`、dotrc なら `dot/claude/rules/*.md`）を1つ Read して形式を踏襲せよ**」と指示する（Read 経由で `rule-authoring` メタルールを確実にトリガーさせるため）
@@ -89,4 +89,4 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    - ロードされる条件（paths と想定シナリオ。rule の場合）
    - branch 名とマージ方法（委譲先が pr-review-automerge まで自走。マージは保護ゲート依存）
    - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
-     保守的に reap。詳細は worktree-scope.md §6）
+     保守的に reap。詳細は worktree-scope.md §7）
