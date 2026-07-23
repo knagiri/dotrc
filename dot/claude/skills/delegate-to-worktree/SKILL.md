@@ -10,8 +10,9 @@ allowed-tools: Bash(claude-worktree *), Bash(git worktree list), Bash(git rev-pa
 **session 起動形式**（`--` 付き）で呼び、detached tmux session の中に acceptEdits の
 claude を起こす。起動先は `implement-and-review` skill で HOW を詰め、実装し、merge する。
 
-運用ポリシー（いつ分岐するか・スコープを worktree に閉じるか）は
-`dot/claude/rules/worktree-scope.md` §5・§6 を参照。この skill はその「明示指示パス」の手順を担う。
+運用ポリシーは `dot/claude/rules/worktree-scope.md` を参照。作業スコープを worktree に閉じる
+原則は §2、main working tree にいるときの既定＝委譲は §5、分岐そのものの手順は §6。
+この skill はその「明示指示パス」の手順を担う。
 
 ## Pre-fetched context
 
