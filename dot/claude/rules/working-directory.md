@@ -62,7 +62,7 @@ git -C /abs/path/to/other-repo log         # 一度きりの read-only 参照
 ### 補完 — 上流で正しい dir から起動する
 
 そもそも作業対象の dir から session を起動すれば、この状況自体が減る（`claude-worktree` は
-worktree dir で claude を起動するので原則ズレない。[worktree-scope.md](./worktree-scope.md) §5）。
+worktree dir で claude を起動するので原則ズレない。[worktree-scope.md](./worktree-scope.md) §6）。
 例外ではなく、発生頻度を下げる補完として。
 
 ### なぜ `cd`/`git -C` 回避が詰まるのか
