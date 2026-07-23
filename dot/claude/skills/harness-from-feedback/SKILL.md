@@ -44,7 +44,9 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
 3. **配置先判定**: 現プロジェクト固有なら現 repo の `.claude/`。横断的・個人の癖ならグローバル
    （dotrc）。**グローバル化のときだけユーザーに確認する**。
 
-4. **プロンプト畳み**（自己完結。委譲先は会話履歴を持たない）:
+4. **プロンプト畳み**（自己完結。委譲先は会話履歴を持たない。委譲先の `implement-and-review` は
+   設計確定済みを前提に動き brainstorm しないので、下の雛形どおり WHAT と `## 設計（HOW）` を
+   分けて畳む）:
    - 先頭に `implement-and-review` 起動命令
    - 参照ファイルは worktree 内で完結させる。通常は本文へ畳み込む。畳めない未 commit・gitignore
      済みファイル（spec 等）は `--seed <path>` で worktree へ入れ相対パスで参照させる（worktree 外の
@@ -65,14 +67,16 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    ## やること（WHAT）
    - 指摘: <1〜3行の言語化（根本原因含む）>
    - artifact: <rule / CLAUDE.md / lint / test / hook>
+   - 受け入れ確認: <test/lint が過去の誤りを捕まえる / rule のロード条件と防げるシナリオ>
+
+   ## 設計（HOW）
    - 配置: <パス>（対象 repo: <現 repo or dotrc>）
    - 内容の骨子: <理由付きソフト指針の本文 / 由来>
    - rule の場合: 既存のルールファイル（.claude/rules/*.md、dotrc なら dot/claude/rules/*.md）を1つ Read して形式（paths/理由併記/ソフト指針/由来）を踏襲すること
-   - 受け入れ確認: <test/lint が過去の誤りを捕まえる / rule のロード条件と防げるシナリオ>
    - commit: 指摘を参照したメッセージで
 
    ## 進め方
-   1. 要件は上で確定済み。開く論点が無ければ brainstorm はスキップして実装へ
+   1. 設計は確定済み。brainstorm せず実行に入る
    2. 実装し、受け入れ確認を満たす
    3. PR を出し、pr-review-automerge で merge
    ```
