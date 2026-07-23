@@ -79,11 +79,12 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
 
 5. **起動**: `claude-worktree` を直接呼ぶ。branch は `harness/<slug>`、name は `harness-<slug>`
    （`[A-Za-z0-9_-]+`、pre-fetch した worktree 一覧と衝突しない名に）。
-   - リポジトリ固有: `claude-worktree [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
-   - グローバル（dotrc）: `claude-worktree --self [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
+   委譲先は `delegate-to-worktree` と同じ B の役なので、`--model opus` でモデルを固定する。
+   - リポジトリ固有: `claude-worktree --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
+   - グローバル（dotrc）: `claude-worktree --self --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
 
 6. **報告して終了**（fire-and-forget）: `claude-worktree` の出力（worktree / branch / session /
-   attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:
+   model / attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:
    - 捕捉した指摘（言語化）
    - 置いた場所（rules / CLAUDE.md / lint / test / hook）と対象 repo
    - ロードされる条件（paths と想定シナリオ。rule の場合）
