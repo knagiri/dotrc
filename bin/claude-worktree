@@ -28,10 +28,15 @@ set -euo pipefail
 # copies such files in, so the delegated prompt can reference them relatively.
 #
 # Usage:
-#   claude-worktree [--self] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
+#   claude-worktree [--self] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
 #
 #   --self         anchor the worktree to the repo this script lives in (e.g.
 #                  your dotfiles repo), not cwd. Use for repo-independent work.
+#   --model <alias>
+#                  pass --model <alias> to the launched claude (e.g. opus), so the
+#                  caller picks the model for the role it is delegating. Omitted
+#                  means claude keeps its inherited default model; an empty value
+#                  is rejected rather than silently falling back to it.
 #   --seed <path>  copy <path> from cwd's checkout into the same relative path in
 #                  the new worktree (repeatable). For files the delegated session
 #                  needs but which the branch does not carry (gitignored specs,
@@ -56,11 +61,21 @@ name=""
 branch=""
 prompt=""
 self=0
+model=""
 seeds=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
     -b) shift; [ $# -gt 0 ] || usage 1; branch="$1"; shift ;;
+    # Reject an EMPTY value instead of falling back to the inherited default: an
+    # empty `--model` is almost always an unset variable at the call site
+    # (`--model "$MODEL"`), and a fire-and-forget delegation nobody watches would
+    # then quietly run on the wrong model. Rejecting it also makes the `model=""`
+    # sentinel unambiguous -- empty can only mean "flag not given".
+    --model)
+      shift; [ $# -gt 0 ] || usage 1
+      [ -n "$1" ] || { echo "claude-worktree: --model needs a non-empty alias" >&2; exit 1; }
+      model="$1"; shift ;;
     --seed) shift; [ $# -gt 0 ] || usage 1; seeds+=("$1"); shift ;;
     --self) self=1; shift ;;
     --) shift; prompt="$*"; break ;;
@@ -158,10 +173,18 @@ fi
 # -- so quotes in the prompt can't break the chain. If nobody is attached, or
 # the origin pane is already gone, switch-client is a graceful no-op (2>/dev/null)
 # and the single-pane session just dies quietly when the inner bash exits.
+#
+# --model rides in as a positional arg too ($3, empty when unset) rather than
+# being interpolated into the command string, for the same quoting reason. An
+# empty model must not degrade to `--model ""` (claude would reject it), so each
+# launch shape branches on it and omits the flag entirely when it is unset.
 if [ -n "${TMUX:-}" ]; then
   tmux new-session -d -s "$session" -c "$wt_path" \
-    bash -c 'claude --permission-mode acceptEdits "$1"; tmux switch-client -t "$2" 2>/dev/null' \
-    bash "$prompt" "$TMUX_PANE"
+    bash -c 'if [ -n "$3" ]; then claude --permission-mode acceptEdits --model "$3" "$1"; else claude --permission-mode acceptEdits "$1"; fi; tmux switch-client -t "$2" 2>/dev/null' \
+    bash "$prompt" "$TMUX_PANE" "$model"
+elif [ -n "$model" ]; then
+  tmux new-session -d -s "$session" -c "$wt_path" \
+    claude --permission-mode acceptEdits --model "$model" "$prompt"
 else
   tmux new-session -d -s "$session" -c "$wt_path" \
     claude --permission-mode acceptEdits "$prompt"
@@ -173,4 +196,5 @@ attach="gts $session"
 echo "worktree : $wt_path"
 echo "branch   : $branch"
 echo "session  : $session (detached; claude running with acceptEdits)"
+[ -z "$model" ] || echo "model    : $model"
 echo "attach   : $attach"

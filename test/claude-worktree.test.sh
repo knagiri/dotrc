@@ -170,4 +170,74 @@ else
   echo "FAIL: out-of-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
 
+# Omitting --model must leave the out-of-tmux launch byte-identical to before the
+# flag existed: no `--model` in argv at all, so claude inherits its default model.
+# (reuses the out-of-tmux log captured just above)
+if ! grep -q -- '--model' "$tmp/ns-out" && ! grep -q 'model    :' <<<"$out"; then
+  echo "ok: no --model in argv when the flag is omitted"
+else
+  echo "FAIL: --model leaked into a launch that did not ask for it"; fail=1
+fi
+
+# In-tmux the same check cannot grep for `--model`: the `bash -c` wrapper string
+# carries that literal in BOTH branches, so a substring match there is vacuous
+# (it passes even when the flag was never given). What actually decides is the
+# model slot -- the trailing positional ($3) -- which must arrive EMPTY so the
+# wrapper takes its else branch instead of running `claude --model ""`.
+if [ -z "$(tail -n1 "$tmp/ns-in")" ]; then
+  echo "ok: in-tmux model slot is empty when --model is omitted"
+else
+  echo "FAIL: in-tmux model slot is '$(tail -n1 "$tmp/ns-in")' without --model"; fail=1
+fi
+
+# --- --model ------------------------------------------------------------------
+# Inside tmux the model rides in as a positional arg ($3) of the `bash -c` wrapper
+# rather than being folded into the command string, so it cannot break the
+# pane-return chain. The alias reaching argv as its own element is what proves the
+# flag was honored -- grepping the log for `--model` would be vacuous here (see
+# the omitted-flag check above). Assert instead that the wrapper still guards on
+# an empty $3, that the alias arrives, the chain survives, and the report names it.
+log="$tmp/ns-model-in"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
+  "$wt" --model opus modelin -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq 'if [ -n "$3" ]; then' "$log" \
+   && grep -Fxq 'opus' "$log" \
+   && grep -q 'switch-client' "$log" \
+   && grep -Fxq "$prompt" "$log" \
+   && grep -q 'model    : opus' <<<"$out"; then
+  echo "ok: --model reaches the in-tmux launch and is reported"
+else
+  echo "FAIL: in-tmux --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
+fi
+
+# Outside tmux claude is exec'd directly, so `--model <alias>` must sit in argv
+# as two adjacent elements ahead of the prompt.
+log="$tmp/ns-model-out"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
+  "$wt" --model sonnet modelout -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -A1 -Fx -- '--model' "$log" | grep -Fxq 'sonnet' \
+   && grep -Fxq "$prompt" "$log" \
+   && grep -q 'model    : sonnet' <<<"$out"; then
+  echo "ok: --model reaches the out-of-tmux launch and is reported"
+else
+  echo "FAIL: out-of-tmux --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
+fi
+
+# A dangling --model would otherwise swallow the worktree name as its value.
+(cd "$cwdrepo" && "$wt" --model) >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: --model without a value is rejected" \
+  || { echo "FAIL: dangling --model accepted"; fail=1; }
+
+# `--model ""` -- the common unset-variable expansion at a call site. Falling back
+# to the inherited default here would run an unwatched delegation on a model the
+# caller did not ask for, so it must fail loudly (and before the worktree exists).
+(cd "$cwdrepo" && "$wt" --model "" emptymodel) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_emptymodel" ]; then
+  echo "ok: empty --model value is rejected before the worktree is created"
+else echo "FAIL: empty --model accepted rc=$rc"; fail=1; fi
+
 exit "$fail"
