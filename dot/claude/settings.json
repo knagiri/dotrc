@@ -100,8 +100,6 @@
       "Bash(uv run --package * pyright)",
       "Bash(uv run pytest)",
       "Bash(uv run --package * pytest)",
-      "Bash(aws logs *)",
-      "Bash(aws cloudwatch *)",
       "Bash(date *)",
       "Bash(jq *)",
       "Grep(**)",
