@@ -1,7 +1,7 @@
 ---
 name: second-opinion
 description: 同一機能・同一不具合への fix が 2 回連続で効かなかったとき（evidence-over-guesswork §3 で立ち止まったとき）、またはユーザーが「セカンドオピニオン聞いて」等と依頼したときに使う。fresh context の最賢モデル sub-agent に根本原因の診断と親セッションの劣化診断を仰ぎ、「継続」か「仕切り直し」かを判定する。修正の実施はしない（診断のみ）。
-allowed-tools: Bash, Read, Grep, Glob, Task, Write
+allowed-tools: Bash, Read, Grep, Glob, Task, Write(~/.claude/handoffs/**)
 ---
 
 # second-opinion
