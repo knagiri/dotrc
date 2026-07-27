@@ -19,6 +19,12 @@ set -euo pipefail
 # Quiet is measured from real submittedAt/createdAt timestamps rather than from
 # when this script started, so an already-reviewed PR returns immediately.
 #
+# An empty `expected` is ambiguous: it can mean "no review bot on this repo" or
+# "the review request has not been registered yet". Settling on it right after
+# PR creation is therefore unsound (see $expected_floor_s), and the report
+# carries `expected_unknown` so callers do not read `expected: []` as proof that
+# no bot will review.
+#
 # Wrapped so the reviewer agent needs no `sleep` grant. Allowlist as
 # `Bash(gh-await-reviews *)`. Requires jq (see bin/list-install.sh).
 #
@@ -38,14 +44,23 @@ timeout_s=${GH_AWAIT_REVIEWS_TIMEOUT:-600}   # overall ceiling
 quiet_s=${GH_AWAIT_REVIEWS_QUIET:-30}        # silence after the last activity
 grace_s=${GH_AWAIT_REVIEWS_GRACE:-60}        # floor when nothing is expected and nothing posted
 poll_s=${GH_AWAIT_REVIEWS_POLL:-15}
+# Floor, measured from PR creation, below which an empty `expected` may not be
+# settled on. GitHub registers review requests asynchronously after the PR is
+# created, so right after creation "no reviewer requested" is indistinguishable
+# from "not registered yet". Measured on PR #537: settled at 63s with an empty
+# expected/observed, yet a Copilot review landed shortly after and a re-run of
+# this script then reported copilot in both expected and observed.
+expected_floor_s=${GH_AWAIT_REVIEWS_EXPECTED_FLOOR:-90}
 
 # One gh call per poll. Emits, per line:
+#   CRT<TAB><iso8601>            when the PR was created
 #   REQ<TAB><login>              a pending review request (pre-arrival signal)
 #   ACT<TAB><login><TAB><iso8601> a review or comment by someone other than the author
 snapshot() {
-  gh pr view "$pr" --json author,reviewRequests,reviews,comments --jq '
+  gh pr view "$pr" --json author,createdAt,reviewRequests,reviews,comments --jq '
     .author.login as $a
-    | ([.reviewRequests[]?.login // empty] | .[] | "REQ\t" + .),
+    | "CRT\t" + (.createdAt // ""),
+      ([.reviewRequests[]?.login // empty] | .[] | "REQ\t" + .),
       (([.reviews[]?  | {l: .author.login, t: .submittedAt}]
       + [.comments[]? | {l: .author.login, t: .createdAt}])
        | .[] | select(.l != $a) | "ACT\t" + .l + "\t" + (.t // ""))
@@ -55,6 +70,7 @@ snapshot() {
 started=$(date -u +%s)
 expect_copilot=0
 copilot_at=""
+created_at=""
 last_ts=""
 observed=""   # "<login><TAB><ts>" per line, may repeat a login
 
@@ -79,16 +95,27 @@ emit() {  # $1 = settled|timed_out
        timed_out: ($status == "timed_out"),
        waited_seconds: $waited,
        expected: $expected,
+       expected_unknown: (($expected | length) == 0),
        observed: $observed,
        missing: [$expected[] | select(.arrived | not) | .name],
        last_activity_at: (($observed | map(.at) | max) // null)}
   '
 }
 
+# False while an empty `expected` is still too fresh to be believed. Fails open
+# (settle allowed) when the PR age is unknown, so a parse failure cannot hang
+# the caller.
+expected_settled() {
+  [ "$expect_copilot" -eq 0 ] || return 0
+  [ -n "$created_at" ] || return 0
+  [ $(( now - $(date -u -d "$created_at" +%s) )) -ge "$expected_floor_s" ]
+}
+
 while :; do
   observed=""
   while IFS=$'\t' read -r kind login ts; do
     case "$kind" in
+      CRT) created_at="$login" ;;
       REQ) case "$login" in *[Cc]opilot*) expect_copilot=1 ;; esac ;;
       ACT) observed+="$login"$'\t'"$ts"$'\n' ;;
     esac
@@ -108,11 +135,13 @@ while :; do
   if [ "$expect_copilot" -eq 0 ] && [ -z "$last_ts" ]; then
     # Nothing predicted and nobody has spoken. Don't conclude "no automated
     # review" instantly -- an unpredictable reviewer may still be booting.
-    if [ "$waited" -ge "$grace_s" ]; then emit settled; exit 0; fi
+    if [ "$waited" -ge "$grace_s" ] && expected_settled; then emit settled; exit 0; fi
   elif [ "$expect_copilot" -eq 0 ] || [ -n "$copilot_at" ]; then
     # Everything we can wait for has arrived; wait out the quiet window so a
     # reviewer that posts a summary first and inline comments second is caught.
-    if [ $(( now - $(date -u -d "$last_ts" +%s) )) -ge "$quiet_s" ]; then emit settled; exit 0; fi
+    if [ $(( now - $(date -u -d "$last_ts" +%s) )) -ge "$quiet_s" ] && expected_settled; then
+      emit settled; exit 0
+    fi
   fi
 
   if [ "$waited" -ge "$timeout_s" ]; then emit timed_out; exit 0; fi
