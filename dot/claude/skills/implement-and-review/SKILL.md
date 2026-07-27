@@ -42,8 +42,9 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    レビューしても、実装時の思い込みごと追認するだけになるため。
 4. **review→merge**: PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
    レビュー・required CI 確認を経て自律 merge する。
-5. **自己内省（末尾ハーネス）**: merge まで済んだら、委譲プロンプトに自己内省をスキップする
-   明示（例: 「harness-from-retrospective はスキップ」）が**無い限り**、
+5. **自己内省（末尾ハーネス）**: `pr-review-automerge` から戻ったら（auto-merge 有効化に至らず
+   5 イテレーション未収束や CI fail で停止・報告して終わった場合も含む）、委譲プロンプトに
+   自己内省をスキップする明示（例: 「harness-from-retrospective はスキップ」）が**無い限り**、
    `harness-from-retrospective` を呼ぶ。自分の作業を振り返り、恒久ハーネスに値する改善点を
    方針として提示する（**提案のみ・無ければ no-op**）。承認・実装はしない — 人間が承認した
    項目だけ後で `harness-from-feedback` が実装する。
