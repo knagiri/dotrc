@@ -25,6 +25,9 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
   直接呼び、プロンプト先頭に `implement-and-review` の起動命令を置く（同じ起動規約）。
 - マージは委譲先の `pr-review-automerge` が repo の保護ゲート（approve / required CI）に従って行う。
   ゲートの無い repo（dotrc に branch protection が無い場合を含む）では即マージし得る点に注意。
+- 委譲プロンプトで**末尾の自己内省（harness-from-retrospective）をスキップ**させる。ハーネスタスク
+  自身が内省で更なるハーネスを提案する再帰ノイズを避けるため（実装は人間承認ゲート越しなので
+  ループにはならないが、低価値な提案が積もるのを防ぐ）。
 
 ## 手順
 
@@ -79,6 +82,7 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    1. 設計は確定済み。brainstorm せず実行に入る
    2. 実装し、受け入れ確認を満たす
    3. PR を出し、pr-review-automerge で merge
+   4. これはハーネスタスクなので、末尾の自己内省（harness-from-retrospective）はスキップする
    ```
 
 5. **起動**: `claude-worktree` を直接呼ぶ。branch は `harness/<slug>`、name は `harness-<slug>`
