@@ -51,14 +51,14 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 ## 承認後（この skill の外）
 
 ユーザーが方針を review し、承認した項目だけ `harness-from-feedback` を起動する。以降は
-harness-from-feedback の既存フロー（要件確定 → 委譲 → 実装 → PR、grant を広げる変更は人間レビュー）。
+harness-from-feedback の既存フロー（要件確定 → 委譲 → 実装 → PR）。
 
 ただし allowlist（grant）候補は harness-from-feedback へは渡さない。harness-from-feedback は
 委譲先 agent に実装させ pr-review-automerge で自律マージするフローで、grant はコマンド実行権限を
 広げる変更なので agent 自身に書かせず人間が settings.json を直接編集して適用する（理由:
-gh-commands.md §5 は grant を人間レビュー必須としており、claude-settings.md も settings.json
-編集の勘所を人間向けに置いている）。bin ラッパーの新規作成など grant を伴わない artifact は
-従来どおり harness-from-feedback に渡してよい。
+委譲先は自律マージまで進むため、権限を広げる変更を agent に書かせない。広い grant を自律 agent に
+渡さない方針は gh-commands.md §5 の自律レビューループでも同様に取られている）。bin ラッパーの
+新規作成など grant を伴わない artifact は従来どおり harness-from-feedback に渡してよい。
 
 ## 不変条件
 
