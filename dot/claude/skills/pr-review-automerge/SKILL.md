@@ -38,6 +38,9 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
    返る JSON の `expected` / `observed` / `missing` / `last_activity_at` を保持する。`last_activity_at` を
    `LAST_SEEN` として記録する。`missing` が非空でも **merge をブロックしない**（bot が無効化されている repo で
    永久に止まるため）。報告に使うだけ。
+   `expected` が空（= `expected_unknown: true`）でも **「レビュー bot 無し」と断定しない**。review 要求の登録は
+   PR 作成に対して遅延しうるため、bot が無効化されているのか登録が遅れているのかを区別できないという意味しか
+   持たない。実際に届いた review は判定役が `gh-pr-comments` で読む（判定 subagent prompt の手順 2）前提を維持する。
 1. `owner` / `repo` を取得: `gh repo view --json owner,name --jq '.owner.login + " " + .name'`。
 2. イテレーション `i` を 1..5 で回す:
 
