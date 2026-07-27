@@ -33,15 +33,15 @@
 
 ### ファイル系 permission は Read/Edit の 2 ファミリでしか照合されない
 
-ファイル系 permission rule はツール名単位ではなく「読み系」「書き系」の 2 ファミリで判定される。`Read(path)` が Read/Glob/Grep 等の読み取り系ツールを、`Edit(path)` が Edit/Write/MultiEdit/NotebookEdit 等の書き込み系ツールをまとめてカバーする。
+ファイル系 permission rule はツール名単位ではなく「読み系」「書き系」の 2 ファミリで判定される。`Read(path)` は Grep/Glob 等の読み取り系ツールにも best-effort で適用され、`Edit(path)` は Edit/Write/MultiEdit/NotebookEdit 等の書き込み系ツールをまとめてカバーする（公式 docs "Read and Edit" セクション）。
 
 | ツール名で書いた rule | 照合されるか |
 |---|---|
-| `Read(path)` | される（読み取り系をまとめてカバー） |
+| `Read(path)` | される（読み取り系に best-effort で適用） |
 | `Edit(path)` | される（書き込み系をまとめてカバー） |
-| `Write(path)` / `Glob(path)` / `NotebookEdit(path)` / `MultiEdit(path)` | **されない**。allow/deny/ask いずれで書いても起動時に警告が出る dead rule |
+| `Write(path)` / `NotebookEdit(path)` / `Glob(path)` | **されない**。allow/deny/ask いずれで書いても起動時に警告が出る dead rule。この警告は Claude Code v2.1.210 以降でのみ出る（それ以前は無警告で dead rule のまま） |
 
-このため書き込み系の rule は `Edit(path)` に、読み取り系の rule は `Read(path)` に寄せる。`Write(...)` / `Glob(...)` 等の個別ツール名でパス付き rule を書いても永久にマッチしない。
+このため書き込み系の rule は `Edit(path)` に、読み取り系の rule は `Read(path)` に寄せる。`Write(...)` / `Glob(...)` / `NotebookEdit(...)` 等の個別ツール名でパス付き rule を書いても永久にマッチしない。
 
 なおパスを伴わない裸のツール名 deny（例: `Write`）はツール全体にマッチする一括 deny であり、この 2 ファミリ判定の対象外なので警告は出ない。
 
