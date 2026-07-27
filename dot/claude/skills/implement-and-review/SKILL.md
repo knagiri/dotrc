@@ -1,6 +1,6 @@
 ---
 name: implement-and-review
-description: worktree に委譲されたタスクを実装→merge で完遂する。HOW は委譲元で確定済みなので brainstorm せず、難度別の実装 subagent へ dispatch しながら実装し、verification を経て pr-review-automerge で自律 merge する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
+description: worktree に委譲されたタスクを実装→merge で完遂する。HOW は委譲元で確定済みなので brainstorm せず、難度別の実装 subagent へ dispatch しながら実装し、verification を経て pr-review-automerge で自律 merge する。最後に（委譲プロンプトが内省スキップを明示しない限り）harness-from-retrospective で自己内省し、恒久ハーネスの候補を方針として提示する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
 ---
 
 # implement-and-review
@@ -42,9 +42,15 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    レビューしても、実装時の思い込みごと追認するだけになるため。
 4. **review→merge**: PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
    レビュー・required CI 確認を経て自律 merge する。
+5. **自己内省（末尾ハーネス）**: merge まで済んだら、委譲プロンプトに自己内省をスキップする
+   明示（例: 「harness-from-retrospective はスキップ」）が**無い限り**、
+   `harness-from-retrospective` を呼ぶ。自分の作業を振り返り、恒久ハーネスに値する改善点を
+   方針として提示する（**提案のみ・無ければ no-op**）。承認・実装はしない — 人間が承認した
+   項目だけ後で `harness-from-feedback` が実装する。
 
 ## 不変条件
 
 - WHAT を勝手に広げない。委譲されたタスクの範囲で完遂する。
 - HOW を勝手に作り直さない。確定済みの設計に従う。
 - worktree ディレクトリ外への書き込みはしない（read-only 参照は可）。
+- 末尾の自己内省は**提案まで**。承認・実装・grant 記述はしない（実装は人間承認後の harness-from-feedback）。
