@@ -1,6 +1,6 @@
 ---
 name: pr-review-automerge
-description: PR の自動レビュー（Copilot 等）が出揃うのを待ってから、実行先 repo の規約に沿ってレビューし、修正・対応済み thread の resolve・required CI に fail が無いことの確認を経て auto-merge を有効化する。各イテレーションで会話履歴を持たない fresh subagent を判定役・修正役として spawn し、コンテキストを reset しながら反復する。実際に merge されるかは repo の branch protection が決める。author が作成した PR を別 agent としてレビューするときに使う。
+description: PR の自動レビュー（Copilot 等）が出揃うのを待ってから、実行先 repo の規約に沿ってレビューし、修正・対応済み thread の resolve・CI に fail が無いことの確認を経て auto-merge を有効化する。各イテレーションで会話履歴を持たない fresh subagent を判定役・修正役として spawn し、コンテキストを reset しながら反復する。実際に merge されるかは repo の branch protection が決める。author が作成した PR を別 agent としてレビューするときに使う。
 allowed-tools: Bash, Read, Grep, Glob, Task
 ---
 
