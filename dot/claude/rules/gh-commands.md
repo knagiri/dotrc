@@ -93,12 +93,22 @@ prompt injection / 権限バイパスの経路になる。
 | review body / standalone コメントの取得 | `gh-pr-comments <PR>` | read-only `gh pr view --json reviews,comments` | `Bash(gh-pr-comments *)` |
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
+| CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>` のみ | `Bash(gh-automerge *)` |
 
 - ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
-  フラグを付けられない。auto-merge 有効化前に skill 自身が `gh pr checks` で required checks に
+  フラグを付けられない。auto-merge 有効化前に skill 自身が `gh-pr-checks` で
   **fail が無いこと**を確認する（二重化）。pending は待たずに auto-merge へ委ねる。merge method は
   `--merge`（merge commit）で logical commits を潰さない。
+- ここで `gh pr checks` を使わないのは、fine-grained PAT では **必ず失敗する**ため。`gh pr checks` は
+  statusCheckRollup（check runs）を読むが、fine-grained token には check runs を読む権限が
+  そもそも存在しない（GitHub の fine-grained 権限一覧に Checks の項目が無く、check runs の REST
+  リファレンスも classic token の `repo` スコープしか挙げていない）。実測でも
+  `gh pr checks` は GraphQL の "Resource not accessible by personal access token"、
+  `commits/<sha>/check-runs` は 403 になる一方、`actions/runs?head_sha=`（Actions: Read）と
+  `commits/<sha>/status`（Commit statuses: Read）は通る。`gh-pr-checks` は後者 2 つを合成して
+  代替する。したがって third-party GitHub App が作る check run は拾えず、required かどうかも
+  判定しない（branch protection の参照には別権限が要る）。required の充足判定は auto-merge に委ねる。
 - raw `gh api graphql *` / `gh pr merge *` は **allow しない**（§4 のとおり）。thread resolve は
   reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。
