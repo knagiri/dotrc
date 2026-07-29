@@ -52,12 +52,26 @@ commit されたかではない。
 
 ```
 bin/deploy.sh
-ls -la ~/.claude/agents      # symlink が張れたか確認
+ls -ld ~/.claude/agents      # symlink が張れたか確認（エントリ自身を見る。中身の列挙は不可）
 ```
+
+検証を `ls -ld`（または `readlink`）にするのは、`ls -la` だと落とし穴があるため。`ln -snvf`
+の宛先が**既に実体ディレクトリとして存在する**場合、`ln` はエラーにせずそのディレクトリの
+中へ symlink を作る（例: `~/.claude/agents` が実ディレクトリなら `~/.claude/agents/agents`
+が作られ、`~/.claude/agents` 自体は未展開のまま黙って残る。Claude Code 自身が `agents` を
+実ディレクトリとして先に作ることは現実的にありうる）。`ls -la ~/.claude/agents` はこの入れ子
+symlink の行を列挙してしまい、「張れた」と誤読しうる。エントリ自身の種別を見る `ls -ld` /
+`readlink` ならこの誤読を避けられる。
 
 merge して終わりにすると、repo 上は正しいのにホーム側は未展開という乖離が残り、しかも
 その乖離は「機能が黙って無いだけ」として現れるので気づきにくい。既存ディレクトリ内への
 ファイル追加ではこの手当ては不要（§3 のとおり自動反映される）。
+
+再実行には副作用もある点は把握しておく。symlink 張り自体は冪等（`ln -f` で毎回上書き）だが、
+`~/.bashrc` への DOTRC ブロック追記には冪等ガードが無く、再実行のたびに同じブロックが
+重複追記される（PATH 追加は case ガードで実害が薄く、`source` 行の重複も概ね無害だが、
+`~/.bashrc` に cruft が積む）。Go が入っている環境では claude-queue の `make install` も
+再実行のたびに走る。気になる場合は再実行後に `~/.bashrc` の重複ブロックを手で整理する。
 
 ---
 
