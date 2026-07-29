@@ -11,7 +11,7 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 | PR の概要・本文を読む | `gh pr view <N>` | 高位コマンドの方が安全・読みやすい |
 | PR のコメント一覧を読む | `gh pr view <N> --comments` | 同上 |
 | PR の diff を読む | `gh pr diff <N>` | 同上 |
-| PR の CI 状態を見る | `gh pr checks <N>` | 同上 |
+| PR の CI 状態を見る | `gh-pr-checks <N>`（§5 参照） | `gh pr checks` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks` は読み取り専用の `gh api`（`actions/runs` と `commits/<sha>/status`）2 本を合成する薄いラッパーで、高位コマンドが使えない代替であって「`gh api` を避けている」わけではない |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
 | PR に review を提出する | `gh pr review <N> [--approve\|--request-changes\|--comment] -b "..."` | 高位コマンドが review object を正しく扱う |
 | Issue 操作 | `gh issue *` | 同上 |
@@ -93,12 +93,22 @@ prompt injection / 権限バイパスの経路になる。
 | review body / standalone コメントの取得 | `gh-pr-comments <PR>` | read-only `gh pr view --json reviews,comments` | `Bash(gh-pr-comments *)` |
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
+| CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>` のみ | `Bash(gh-automerge *)` |
 
 - ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
-  フラグを付けられない。auto-merge 有効化前に skill 自身が `gh pr checks` で required checks に
+  フラグを付けられない。auto-merge 有効化前に skill 自身が `gh-pr-checks` で
   **fail が無いこと**を確認する（二重化）。pending は待たずに auto-merge へ委ねる。merge method は
   `--merge`（merge commit）で logical commits を潰さない。
+- ここで `gh pr checks` を使わないのは、fine-grained PAT では **必ず失敗する**ため。`gh pr checks` は
+  statusCheckRollup（check runs）を読むが、fine-grained token には check runs を読む権限が
+  そもそも存在しない（GitHub の fine-grained 権限一覧に Checks の項目が無く、check runs の REST
+  リファレンスも classic token の `repo` スコープしか挙げていない）。実測でも
+  `gh pr checks` は GraphQL の "Resource not accessible by personal access token"、
+  `commits/<sha>/check-runs` は 403 になる一方、`actions/runs?head_sha=`（Actions: Read）と
+  `commits/<sha>/status`（Commit statuses: Read）は通る。`gh-pr-checks` は後者 2 つを合成して
+  代替する。したがって third-party GitHub App が作る check run は拾えず、required かどうかも
+  判定しない（branch protection の参照には別権限が要る）。required の充足判定は auto-merge に委ねる。
 - raw `gh api graphql *` / `gh pr merge *` は **allow しない**（§4 のとおり）。thread resolve は
   reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-pr-checks <PR#> -- print the CI state of a PR's head commit as JSON,
+# composed from GitHub Actions runs and commit statuses.
+#
+# `gh pr checks` is structurally unusable under a fine-grained PAT: it reads
+# statusCheckRollup, which needs the check runs permission -- and fine-grained
+# tokens have no such permission at all. GitHub's fine-grained permission list
+# has no Checks entry, and the check-runs REST reference documents only the
+# classic `repo` scope. Measured: `gh pr checks <PR>` fails with GraphQL
+# "Resource not accessible by personal access token (node.statusCheckRollup...)"
+# and `repos/{owner}/{repo}/commits/{sha}/check-runs` returns 403, while
+# `repos/{owner}/{repo}/actions/runs?head_sha=` (Actions: Read) and
+# `repos/{owner}/{repo}/commits/{sha}/status` (Commit statuses: Read) both
+# succeed. So this composes the two readable APIs rather than forcing a switch
+# to a classic PAT, which would give up least-privilege operation.
+#
+# Known limits, accepted on purpose:
+# - Check runs created by third-party GitHub Apps are invisible here; the
+#   check runs API is exactly what a fine-grained PAT cannot read. Only GitHub
+#   Actions runs, plus whatever external CI reports as a commit status, are
+#   seen.
+# - "required" is not evaluated -- reading branch protection needs yet another
+#   permission. Callers use this only to confirm that *nothing has failed*;
+#   whether the required checks are satisfied is left to auto-merge, which
+#   branch protection enforces. This matches pr-review-automerge's existing
+#   stance that pending checks are not waited on (auto-merge waits instead).
+# - At most 100 Actions runs for the head SHA are read (no pagination).
+#
+# The argument is a PR number and nothing else: no flag passthrough, so the
+# shape of the output is fixed. Read-only. Allowlist as `Bash(gh-pr-checks *)`.
+# Requires jq (see bin/list-install.sh).
+#
+# Usage: gh-pr-checks <PR-number>
+
+usage() { echo "usage: gh-pr-checks <PR-number>" >&2; exit "${1:-1}"; }
+
+[ $# -eq 1 ] || usage 1
+case "$1" in -h|--help) usage 0 ;; esac
+pr="$1"
+if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+  echo "gh-pr-checks: PR number must be numeric (got: $pr)" >&2
+  exit 1
+fi
+
+repo=$(gh repo view --json owner,name --jq '.owner.login + "/" + .name')
+if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+  echo "gh-pr-checks: could not resolve the current repository (got: $repo)" >&2
+  exit 1
+fi
+
+sha=$(gh pr view "$pr" --json headRefOid --jq '.headRefOid')
+if [[ ! "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+  echo "gh-pr-checks: could not resolve the head SHA of PR $pr (got: $sha)" >&2
+  exit 1
+fi
+
+# head_sha filters server-side, so nothing is lost to a client-side cutoff the
+# way `gh run list --limit N` can lose it.
+runs=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100")
+# Commit statuses catch external CI that never creates an Actions run.
+statuses=$(gh api "repos/$repo/commits/$sha/status")
+
+# skipped / neutral are not failures: a skipped job is the normal outcome of a
+# paths-filter, so treating it as a failure would block merges on unrelated PRs.
+jq -n --argjson pr "$pr" --arg sha "$sha" \
+      --argjson runs "$runs" --argjson statuses "$statuses" '
+  def is_failure:
+    if .source == "actions"
+    then (.conclusion // "") | IN("failure", "timed_out", "cancelled", "startup_failure")
+    else (.conclusion // "") | IN("failure", "error")
+    end;
+  def is_pending:
+    # Actions run status is not a closed enum ("queued"/"in_progress" are the
+    # common ones, but "waiting"/"pending"/"requested" also occur) -- treat
+    # anything other than "completed" as pending rather than enumerating, so a
+    # not-yet-completed run is never silently counted as success and future
+    # status values are picked up automatically.
+    if .source == "actions"
+    then (.status // "") != "completed"
+    else .status == "pending"
+    end;
+
+  [ ($runs.workflow_runs // [])[]
+    | {name: .name, source: "actions", status: .status, conclusion: .conclusion} ]
+  + [ ($statuses.statuses // [])[]
+    | {name: .context, source: "status",
+       status: (if .state == "pending" then "pending" else "completed" end),
+       conclusion: (if .state == "pending" then null else .state end)} ]
+  | . as $checks
+  | ($checks | length) as $total
+  | ($checks | map(select(is_failure)) | length) as $failure
+  | ($checks | map(select(is_pending)) | length) as $pending
+  | {pr: $pr,
+     sha: $sha,
+     checks: $checks,
+     has_failure: ($failure > 0),
+     pending_count: $pending,
+     summary: "\($total) checks: \($total - $pending - $failure) success, \($pending) pending, \($failure) failure"}
+'
