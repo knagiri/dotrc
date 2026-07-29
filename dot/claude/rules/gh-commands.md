@@ -11,7 +11,7 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 | PR の概要・本文を読む | `gh pr view <N>` | 高位コマンドの方が安全・読みやすい |
 | PR のコメント一覧を読む | `gh pr view <N> --comments` | 同上 |
 | PR の diff を読む | `gh pr diff <N>` | 同上 |
-| PR の CI 状態を見る | `gh pr checks <N>` | 同上 |
+| PR の CI 状態を見る | `gh pr checks <N>` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks <N>` を使う（§5 参照） | 同上 |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
 | PR に review を提出する | `gh pr review <N> [--approve\|--request-changes\|--comment] -b "..."` | 高位コマンドが review object を正しく扱う |
 | Issue 操作 | `gh issue *` | 同上 |
