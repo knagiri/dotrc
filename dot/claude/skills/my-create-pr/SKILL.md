@@ -1,7 +1,7 @@
 ---
 name: my-create-pr
 description: コンテキストに基づいた説明付きで GitHub Pull Request を作成する
-allowed-tools: Bash(git status *), Bash(git diff *), Bash(git log *), Bash(git rev-parse *), Bash(git fetch *), Bash(git push *), Bash(git ls-files *), Bash(gh repo view *), Bash(gh pr create *), Bash(echo *), Read, Glob, Grep, AskUserQuestion
+allowed-tools: Bash(git status *), Bash(git diff *), Bash(git log *), Bash(git rev-parse *), Bash(git fetch origin *), Bash(git push *), Bash(git ls-files *), Bash(gh repo view *), Bash(gh pr create *), Bash(echo *), Read, Glob, Grep, AskUserQuestion
 ---
 
 ## Pre-fetched context
@@ -51,5 +51,5 @@ Pull Request を作成する。以下のフローに従うこと。本文確認�
 6. **表示 → Push → 作成**:
    - 完成した本文を画面に表示する（情報提供。block しない）。
    - 未プッシュのコミットがある場合（`git log @{upstream}..HEAD`）のみ `git push -u origin HEAD` を実行する。
-   - `gh pr create --title ... --body ...` で PR を作成し、URL を返す。手順 1 でユーザー指定の base を採用した場合は必ず `--base <手順 1 の base>` を付ける（省略すると GitHub 側の既定ブランチ宛になり、手順 1 で集めた diff と PR の base がズレるため）。手順 1 で base 未指定のまま既定ブランチを採った場合は、既定ブランチと一致するので `--base` を省略してよい。
+   - `gh pr create --title ... --body ... --base <手順 1 で決めた base>` で PR を作成し、URL を返す。手順 1 で決めた base は既定ブランチを採った場合も含め常に明示する（省略すると `gh pr create` 側の既定解決に委ねることになり、特に fork では手順 1 の `gh repo view --json defaultBranchRef` が fork 自身の既定ブランチを返す一方、`--base` 省略時は親 repo の既定ブランチ宛になるなど、手順 1 で集めた diff の基準と PR の base がズレうるため。既定ブランチと一致するケースでも明示は無害）。
    - push 失敗・PR 作成失敗時は素直に止めてエラーを表示する。skill 側でリトライしない。
