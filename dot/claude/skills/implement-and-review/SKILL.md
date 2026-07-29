@@ -36,6 +36,18 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    自分で直接書くのは、軽微・逐次的で dispatch のオーバーヘッドが見合わないものに留める
    （ハイブリッド）。`superpowers:test-driven-development` 等、repo の規約に従う。
    コミットは論理単位で小さく。
+
+   **plan 内の事実主張は書き写す前に裏を取る**: どの artifact を選ぶか・どこに置くか等の
+   設計判断には従う。一方 plan 本文が repo 内の実装・ツール挙動に言及していたら（「`bin/X`
+   はこう動く」「既存 skill Y はこう書いてある」等）、書き写す前に該当ファイルを Read して
+   確かめる。事実の誤りを黙って commit するほうが、確認してから書くより後戻りが大きいため。
+   設計をやり直すのとは別物なので、不変条件「HOW を勝手に作り直さない」と矛盾しない。
+   常時ロードの `dot/claude/rules/evidence-over-guesswork.md` §1（一次情報を確認しきる前に
+   着手しない）と同根で、plan 経由でそれが迂回されるのを塞ぐ位置づけ。
+   由来: plan に埋め込まれた SKILL.md 全文の「headless 起動では claude-review が出力を
+   ログ化する」を無検証で書き写し、レビューで差し戻された実例（実際の `bin/claude-review` は
+   自身が起こす headless pane の stdout を tee するだけで、委譲先の interactive セッションから
+   呼ばれた skill の出力は載らない）。
 3. **verification**: PR を出す前に、テスト・ビルド・lint が通ることだけを確認する
    （`superpowers:verification-before-completion`）。**重い self-review はしない** —
    レビュー本体は独立した文脈を持つ次の手順に委ねる。自分が書いたコードを同じ文脈で
