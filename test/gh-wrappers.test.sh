@@ -85,13 +85,96 @@ PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 9z >/dev/null 2>&1; [ $? -ne 0 ] 
 PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 42 --comments >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-pr-comments rejects extra flag arg" || { echo "FAIL: gh-pr-comments extra flag"; fail=1; }
 
+# --- gh-pr-checks -----------------------------------------------------------
+# gh-pr-checks consumes gh's *output*, so it needs a stub that answers each call
+# with a fixture. The repo/sha fixtures hold the scalars gh would print after
+# --jq (the stub does not implement --jq); the api fixtures hold raw JSON.
+checksstub="$(mktemp -d)"
+trap 'rm -rf "$stubdir" "$checksstub"' EXIT
+cat >"$checksstub/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
+case "$*" in
+  "repo view"*)     cat "$GH_STUB_DIR/repo" ;;
+  "pr view"*)       cat "$GH_STUB_DIR/sha" ;;
+  *actions/runs*)   cat "$GH_STUB_DIR/runs" ;;
+  *"/status")       cat "$GH_STUB_DIR/statuses" ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$checksstub/gh"
+
+sha40='9ae7061c0c4b7b4f2b3b1f7a4d6e8c9f0a1b2c3d'
+checksenv() { env GH_STUB_DIR="$1" GH_ARGS_FILE="$1/args" PATH="$checksstub:$PATH" \
+  "$bindir/gh-pr-checks" "${@:2}"; }
+checksfx() {  # $1 = dir, $2 = runs JSON, $3 = statuses JSON
+  mkdir -p "$1"; : >"$1/args"
+  echo 'knagiri/dotrc' >"$1/repo"; echo "$sha40" >"$1/sha"
+  printf '%s' "$2" >"$1/runs"; printf '%s' "$3" >"$1/statuses"
+}
+
+# Case A: everything green -> has_failure false, and the Actions query filters by
+# head_sha server-side while nothing touches the (403-under-fine-grained-PAT)
+# check-runs endpoint.
+fx="$checksstub/a"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":"Lint","status":"completed","conclusion":"success"},
+                     {"name":"Test","status":"completed","conclusion":"skipped"}]}' \
+  '{"statuses":[{"context":"ci/external","state":"success"}]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.pr == 537' >/dev/null \
+  && printf '%s' "$out" | jq -e --arg s "$sha40" '.sha == $s' >/dev/null \
+  && printf '%s' "$out" | jq -e '.has_failure == false and .pending_count == 0' >/dev/null \
+  && printf '%s' "$out" | jq -e '.checks | length == 3' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "3 checks: 3 success, 0 pending, 0 failure"' >/dev/null \
+  && grep -qF "head_sha=$sha40" "$fx/args" \
+  && ! grep -qF 'check-runs' "$fx/args"; then
+  echo "ok: gh-pr-checks reports a green PR (skipped is not a failure) via actions+statuses"
+else echo "FAIL: gh-pr-checks green rc=$rc out=$out"; fail=1; fi
+
+# Case B: a failed run, a queued run, a non-enumerated-status run ("waiting",
+# which is a real Actions run status but not one of the literal enum values
+# is_pending used to check) and a failed commit status are all counted.
+fx="$checksstub/b"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":"Lint","status":"completed","conclusion":"failure"},
+                     {"name":"Test","status":"queued","conclusion":null},
+                     {"name":"Deploy","status":"waiting","conclusion":null}]}' \
+  '{"statuses":[{"context":"ci/external","state":"error"},
+                {"context":"ci/slow","state":"pending"}]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.has_failure == true' >/dev/null \
+  && printf '%s' "$out" | jq -e '.pending_count == 3' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "5 checks: 0 success, 3 pending, 2 failure"' >/dev/null; then
+  echo "ok: gh-pr-checks flags failures and counts pending (incl. non-enumerated 'waiting' status) across both sources"
+else echo "FAIL: gh-pr-checks failure rc=$rc out=$out"; fail=1; fi
+
+# Case C: no CI at all -> valid, empty, non-failing report.
+fx="$checksstub/c"
+checksfx "$fx" '{"workflow_runs":[]}' '{"statuses":[]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.checks == [] and .has_failure == false and .pending_count == 0' >/dev/null; then
+  echo "ok: gh-pr-checks reports an empty, non-failing state when no CI ran"
+else echo "FAIL: gh-pr-checks empty rc=$rc out=$out"; fail=1; fi
+
+# gh-pr-checks: missing / non-numeric / extra-flag arg fail (no flag passthrough).
+PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-checks missing arg fails" || { echo "FAIL: gh-pr-checks missing arg"; fail=1; }
+PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" 9z >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-checks non-numeric fails" || { echo "FAIL: gh-pr-checks non-numeric"; fail=1; }
+PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" 42 --watch >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-checks rejects extra flag arg" || { echo "FAIL: gh-pr-checks extra flag"; fail=1; }
+
 # --- gh-await-reviews -------------------------------------------------------
 # A second stub: ignores argv and prints the Nth fixture on the Nth call (the
 # last fixture repeats). gh-await-reviews consumes gh's *output*, so the argv
 # recorder above is not enough. The stub emits the REQ/ACT tab-separated lines
 # that the wrapper's --jq expression produces against real gh.
 awaitstub="$(mktemp -d)"
-trap 'rm -rf "$stubdir" "$awaitstub"' EXIT
+trap 'rm -rf "$stubdir" "$checksstub" "$awaitstub"' EXIT
 cat >"$awaitstub/gh" <<'STUB'
 #!/usr/bin/env bash
 n=$(( $(cat "$GH_STUB_COUNT" 2>/dev/null || echo 0) + 1 ))
