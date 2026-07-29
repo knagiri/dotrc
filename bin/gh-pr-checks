@@ -72,8 +72,13 @@ jq -n --argjson pr "$pr" --arg sha "$sha" \
     else (.conclusion // "") | IN("failure", "error")
     end;
   def is_pending:
+    # Actions run status is not a closed enum ("queued"/"in_progress" are the
+    # common ones, but "waiting"/"pending"/"requested" also occur) -- treat
+    # anything other than "completed" as pending rather than enumerating, so a
+    # not-yet-completed run is never silently counted as success and future
+    # status values are picked up automatically.
     if .source == "actions"
-    then (.status // "") | IN("queued", "in_progress", "waiting")
+    then (.status // "") != "completed"
     else .status == "pending"
     end;
 

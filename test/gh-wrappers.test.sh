@@ -87,8 +87,8 @@ PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 42 --comments >/dev/null 2>&1; [ 
 
 # --- gh-pr-checks -----------------------------------------------------------
 # gh-pr-checks consumes gh's *output*, so it needs a stub that answers each call
-# with a fixture. The repo/sha fixtures hold the post---jq scalars (the stub does
-# not implement --jq); the api fixtures hold raw JSON.
+# with a fixture. The repo/sha fixtures hold the scalars gh would print after
+# --jq (the stub does not implement --jq); the api fixtures hold raw JSON.
 checksstub="$(mktemp -d)"
 trap 'rm -rf "$stubdir" "$checksstub"' EXIT
 cat >"$checksstub/gh" <<'STUB'
@@ -133,19 +133,22 @@ if [ "$rc" -eq 0 ] \
   echo "ok: gh-pr-checks reports a green PR (skipped is not a failure) via actions+statuses"
 else echo "FAIL: gh-pr-checks green rc=$rc out=$out"; fail=1; fi
 
-# Case B: a failed run, a queued run and a failed commit status are all counted.
+# Case B: a failed run, a queued run, a non-enumerated-status run ("waiting",
+# which is a real Actions run status but not one of the literal enum values
+# is_pending used to check) and a failed commit status are all counted.
 fx="$checksstub/b"
 checksfx "$fx" \
   '{"workflow_runs":[{"name":"Lint","status":"completed","conclusion":"failure"},
-                     {"name":"Test","status":"queued","conclusion":null}]}' \
+                     {"name":"Test","status":"queued","conclusion":null},
+                     {"name":"Deploy","status":"waiting","conclusion":null}]}' \
   '{"statuses":[{"context":"ci/external","state":"error"},
                 {"context":"ci/slow","state":"pending"}]}'
 out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | jq -e '.has_failure == true' >/dev/null \
-  && printf '%s' "$out" | jq -e '.pending_count == 2' >/dev/null \
-  && printf '%s' "$out" | jq -e '.summary == "4 checks: 0 success, 2 pending, 2 failure"' >/dev/null; then
-  echo "ok: gh-pr-checks flags failures and counts pending across both sources"
+  && printf '%s' "$out" | jq -e '.pending_count == 3' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "5 checks: 0 success, 3 pending, 2 failure"' >/dev/null; then
+  echo "ok: gh-pr-checks flags failures and counts pending (incl. non-enumerated 'waiting' status) across both sources"
 else echo "FAIL: gh-pr-checks failure rc=$rc out=$out"; fail=1; fi
 
 # Case C: no CI at all -> valid, empty, non-failing report.
