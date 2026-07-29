@@ -27,15 +27,27 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    ユーザーが `gts <session>` / `tmux attach -t <session>` で attach して答える）。
    解釈の幅が結果を大きく変えないなら、前提を明示して進める。
 2. **実装**: 実装計画があれば `superpowers:executing-plans` に従い、タスク単位で進める。
-   実装作業は**難度に応じて subagent へ dispatch する**（モデルは各 agent 定義の
-   `model:` frontmatter で固定されている）。
+   実装作業を subagent へ dispatch するときは、難度に応じて agent を選ぶ（モデルは各 agent
+   定義の `model:` frontmatter で固定されている）。
    - `impl-light` — 機械的・低リスク（定型編集、リネーム、単純な追記）
    - `impl-standard` — 既定。一定のロジック・複数ファイルにまたがる変更
    - `impl-heavy` — 最難。複雑ロジック・非自明な設計判断を含む変更
 
-   自分で直接書くのは、軽微・逐次的で dispatch のオーバーヘッドが見合わないものに留める
-   （ハイブリッド）。`superpowers:test-driven-development` 等、repo の規約に従う。
-   コミットは論理単位で小さく。
+   `superpowers:test-driven-development` 等、repo の規約に従う。コミットは論理単位で小さく。
+
+   **委譲の上限**: Opus 5 は放っておくと過剰に委譲する（Anthropic 公式の Opus 5 移行ガイドが
+   明記している。促進する指示が要ったのは 4.8 までで、5 では逆に上限が要る）。委譲には毎回
+   コンテキスト再構築・報告作成・報告の読み直しのコストが乗るので、次を目安に上限を置く。
+
+   - 数回の tool call で自分が終えられる仕事は dispatch せず自分で書く（ハイブリッド）。
+     上記のコストが仕事本体を上回るため。
+   - **検証・ダブルチェック目的では dispatch しない。** verification は手順 3 で自分のループ内に
+     置き、独立文脈でのレビューは手順 4 のパイプラインが担う。この 2 つで足りている。
+   - 1 つのタスクを細切れにして並列 dispatch しない。分割と統合のコストが本体を上回るため。
+     並列は独立した大きめのトラック（無関係なモジュール、広い多ファイル調査）に使う。1 つで
+     済むなら 1 つにする。
+   - 一度委譲したら委譲を通す。返ってきた結果をやり直したり、同じ調査を自分で再導出したり
+     しない。委譲コストを二重払いするため。
 3. **verification**: PR を出す前に、テスト・ビルド・lint が通ることだけを確認する
    （`superpowers:verification-before-completion`）。**重い self-review はしない** —
    レビュー本体は独立した文脈を持つ次の手順に委ねる。自分が書いたコードを同じ文脈で
