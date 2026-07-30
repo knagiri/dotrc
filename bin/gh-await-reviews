@@ -20,10 +20,10 @@ set -euo pipefail
 # when this script started, so an already-reviewed PR returns immediately.
 #
 # An empty `expected` is ambiguous: it can mean "no review bot on this repo" or
-# "the review request has not been registered yet". Settling on it right after
-# PR creation is therefore unsound (see $expected_floor_s), and the report
-# carries `expected_unknown` so callers do not read `expected: []` as proof that
-# no bot will review.
+# "a bot is present but hasn't posted anything yet (an unpredictable reviewer
+# may still be booting)". Settling on it right after PR creation is therefore
+# unsound (see $expected_floor_s), and the report carries `expected_unknown` so
+# callers do not read `expected: []` as proof that no bot will review.
 #
 # Wrapped so the reviewer agent needs no `sleep` grant. Allowlist as
 # `Bash(gh-await-reviews *)`. Requires jq (see bin/list-install.sh).
@@ -125,11 +125,8 @@ emit() {  # $1 = settled|timed_out
 # top of this file). Resolving to a variable first lets us `return 0` (fail
 # open) on a bad parse instead of crashing.
 #
-# The same inline-date trap applies to the quiet-window check in the main
-# loop below (the `$(( now - $(date ... "$last_ts") ))` comparison): it
-# resolves last_ts to last_epoch first for the identical reason, fails open
-# (quiet window treated as elapsed) on a bad parse so the JSON report still
-# gets emitted.
+# (The same inline-date trap applies to the quiet-window check in the main
+# loop below -- see the comment there instead of duplicating it here.)
 expected_settled() {
   [ "$expect_copilot" -eq 0 ] || return 0
   [ -n "$created_at" ] || return 0
