@@ -47,7 +47,8 @@ poll_s=${GH_AWAIT_REVIEWS_POLL:-15}
 # Floor, measured from PR creation, below which an empty `expected` may not be
 # settled on. GitHub registers review requests asynchronously after the PR is
 # created, so right after creation "no reviewer requested" is indistinguishable
-# from "not registered yet". Measured on PR #537: settled at 63s with an empty
+# from "not registered yet". Measured on a PR in another repo (not this one --
+# dotrc's own PR numbers don't reach this yet): settled at 63s with an empty
 # expected/observed, yet a Copilot review landed shortly after and a re-run of
 # this script then reported copilot in both expected and observed.
 expected_floor_s=${GH_AWAIT_REVIEWS_EXPECTED_FLOOR:-90}
@@ -115,6 +116,12 @@ emit() {  # $1 = settled|timed_out
 # (violates the "prints and exits 0 even on timeout/error" contract at the
 # top of this file). Resolving to a variable first lets us `return 0` (fail
 # open) on a bad parse instead of crashing.
+#
+# The same inline-date trap applies to the quiet-window check in the main
+# loop below (the `$(( now - $(date ... "$last_ts") ))` comparison): it
+# resolves last_ts to last_epoch first for the identical reason, fails open
+# (quiet window treated as elapsed) on a bad parse so the JSON report still
+# gets emitted.
 expected_settled() {
   [ "$expect_copilot" -eq 0 ] || return 0
   [ -n "$created_at" ] || return 0
@@ -152,7 +159,14 @@ while :; do
   elif [ "$expect_copilot" -eq 0 ] || [ -n "$copilot_at" ]; then
     # Everything we can wait for has arrived; wait out the quiet window so a
     # reviewer that posts a summary first and inline comments second is caught.
-    if [ $(( now - $(date -u -d "$last_ts" +%s) )) -ge "$quiet_s" ] && expected_settled; then
+    #
+    # last_ts is resolved to last_epoch first, not inlined in `$(( ))` -- see
+    # the comment above expected_settled() for why inlining `date` here would
+    # be fatal under `set -euo pipefail` on a bad parse. Fails open (quiet
+    # window treated as elapsed) so an unparseable timestamp still reaches
+    # `emit` instead of crashing before any JSON is printed.
+    last_epoch=$(date -u -d "$last_ts" +%s 2>/dev/null) || last_epoch=""
+    if { [ -z "$last_epoch" ] || [ $(( now - last_epoch )) -ge "$quiet_s" ]; } && expected_settled; then
       emit settled; exit 0
     fi
   fi
