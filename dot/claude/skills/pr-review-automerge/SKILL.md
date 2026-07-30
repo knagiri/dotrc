@@ -162,6 +162,10 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >   （例: `"copilot-pull-request-reviewer"`）。orchestrator が AI の指摘を握り潰していないか判定するために使う。
 > - `ci_status`: 把握できる範囲で `pending` / `pass` / `fail`。不明なら `pending`。
 > - `mergeable`: レビュー観点で merge して良いと判断したか。**ただし `ci_status` が `fail` の場合は必ず `false` にする**（orchestrator が再イテレーションするため）。
+>   `blocker: false` の gate（却下した指摘・低 severity / 低 confidence で `findings_gated` に寄せたもの）が
+>   残っているだけの状態は `mergeable: true` にしてよい。gate の非空は merge を止める理由にしない
+>   （手順 2.c と同じ理由）。ここを厳しく取ると、coverage-first で `findings_gated` が常時非空になった
+>   場合に `mergeable` 経由で手順 2.c が潰したはずの無限ループが復活する。
 
 ## 修正 subagent prompt（`<PR>` と `findings_to_fix` を埋めて `pr-fix` に渡す）
 
