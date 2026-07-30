@@ -105,10 +105,23 @@ emit() {  # $1 = settled|timed_out
 # False while an empty `expected` is still too fresh to be believed. Fails open
 # (settle allowed) when the PR age is unknown, so a parse failure cannot hang
 # the caller.
+#
+# created_epoch is resolved into a plain variable *before* the arithmetic
+# comparison below. Inlining `$(date ... "$created_at" +%s)` directly inside
+# `$(( ))` is a trap: under `set -euo pipefail`, an unparseable created_at
+# makes `date` fail and print nothing, so the arithmetic expression becomes
+# `now - ` -- a bash *expansion* error, which is fatal even in a subshell-free
+# context and kills the whole script before it ever prints the JSON report
+# (violates the "prints and exits 0 even on timeout/error" contract at the
+# top of this file). Resolving to a variable first lets us `return 0` (fail
+# open) on a bad parse instead of crashing.
 expected_settled() {
   [ "$expect_copilot" -eq 0 ] || return 0
   [ -n "$created_at" ] || return 0
-  [ $(( now - $(date -u -d "$created_at" +%s) )) -ge "$expected_floor_s" ]
+  local created_epoch
+  created_epoch=$(date -u -d "$created_at" +%s 2>/dev/null) || return 0
+  [ -n "$created_epoch" ] || return 0
+  [ $(( now - created_epoch )) -ge "$expected_floor_s" ]
 }
 
 while :; do
