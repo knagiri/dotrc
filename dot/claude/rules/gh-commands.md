@@ -76,7 +76,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 上記方針により、`settings.json` では以下の最小ポリシーで足りる：
 
 - **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`）
-  - CI 状態の確認は `gh pr checks *` を allow しない。fine-grained PAT では必ず失敗する（§1 / §5 の理由）ので allow しても dead rule になる。代わりに §5 の `gh-pr-checks *` を allow する
+  - CI 状態の確認は `gh pr checks *` を allow しない。pattern 自体は正しくマッチするが、fine-grained PAT では実行すれば必ず失敗する（§1 / §5 の理由）ので、allow しておいても許可する意味が無い（`claude-settings.md` が定義する「pattern がマッチしない dead rule」とは別物）。代わりに §5 の `gh-pr-checks *` を allow する
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ
   - allow に無いので呼び出し時に prompt が出る → ユーザー確認経由で実行可
 - **deny:** 不要（hard-block は明示指示時の運用を阻害する）
