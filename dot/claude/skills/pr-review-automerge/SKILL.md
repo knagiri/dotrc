@@ -110,13 +110,23 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 > 4. **未解決 thread の取得**: `gh-list-threads <PR>` を実行する（reviewThreads の JSON が返る）。
 >    `isResolved == false` の thread（`id` / `comments` 等）のみ対象にする。raw な
 >    `gh api graphql` は使わない。
-> 5. **仕分け**: findings と未解決 thread を 2 つに分ける。
+> 5. **仕分け**: **まず見つけたものを全部いずれかのバケットに載せる。** 軽微だから・確信が持てない
+>    からという理由で、バケットに載せずに落とすことはしない。妥当でないと判断したものは
+>    `findings_gated` に `blocker: false` で載せ、`reason_gated` に却下理由を書く。仕分けは
+>    「載せた後」に行う。理由: 報告の取捨選択をこの工程でやると、実際には妥当だった指摘が記録に
+>    残らないまま消える。取捨選択は orchestrator と人間が gate を見て行える。
+>
+>    そのうえで findings と未解決 thread を 2 つに分ける。
 >    - **直す** → `findings_to_fix`。コード修正で対応できるもの。修正役が実装できるだけの具体性
 >      （対象ファイル・何をどう直すか）を書く。thread 由来なら `thread_id` を添える。
 >    - **gate に残す** → `findings_gated` / `threads_pending`。人間の議論が必要・コード修正で
 >      片付かない・そもそも妥当でない（＝直さない理由がある）もの。merge を止めるべきものは
 >      `blocker: true` にする（人間の判断を待つべきもの）。妥当でないと判断して却下しただけの
 >      ものは `blocker: false` — 理由は残るが merge は止めない。
+>    - `findings_to_fix` / `findings_gated` の各要素には `severity`（`high` / `medium` / `low`）と
+>      `confidence`（`high` / `medium` / `low`）を添え、下流（orchestrator / 人間）がランク付け
+>      できるようにする。`threads_pending` には添えない（thread は人間の議論待ちが主で
+>      severity / confidence の意味が薄いため）。
 >    - **あなたは commit / push / `gh-resolve-thread` を実行しない。** これらは修正役の担当。
 >    - **PR コメント（reply も含め）は投稿しない。**
 >    - standalone コメント（`gh-pr-comments` が返すもの）は **resolve できない**。コード修正で対応させるなら
@@ -125,8 +135,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >
 > ```json
 > {
->   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self"}],
->   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "source": "self"}],
+>   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self", "severity": "medium", "confidence": "high"}],
+>   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "source": "self", "severity": "low", "confidence": "low"}],
 >   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "source": "copilot"}],
 >   "ci_status": "pending",
 >   "mergeable": false,
@@ -139,6 +149,11 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 > - `findings_gated`: 直さないと判断した findings（無ければ空配列）。`reason_gated` に理由を書く。
 >   `blocker` は merge を止めるべきか（人間の判断待ち = `true`、妥当でないと却下しただけ = `false`）。
 > - `threads_pending`: resolve せず残す thread（無ければ空配列）。`blocker` は merge を止めるべきか。
+>   `severity` / `confidence` は付けない（thread は人間の議論待ちが主で意味が薄いため）。
+> - `severity` / `confidence`: `findings_to_fix` / `findings_gated` の各要素に付ける。ともに
+>   `high` / `medium` / `low`。`severity` は指摘の重大度、`confidence` はその指摘が妥当だと
+>   どれだけ確信しているか。手順 5 のとおり**この 2 つを理由に findings を落とさない** — 低い値を
+>   添えて載せる。下流（orchestrator / 人間）がランク付けに使う。
 > - `source`: その指摘の出所。`"self"`（あなた自身のレビュー）または指摘した bot / 人間の login
 >   （例: `"copilot-pull-request-reviewer"`）。orchestrator が AI の指摘を握り潰していないか判定するために使う。
 > - `ci_status`: 把握できる範囲で `pending` / `pass` / `fail`。不明なら `pending`。
