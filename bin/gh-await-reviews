@@ -45,12 +45,20 @@ quiet_s=${GH_AWAIT_REVIEWS_QUIET:-30}        # silence after the last activity
 grace_s=${GH_AWAIT_REVIEWS_GRACE:-60}        # floor when nothing is expected and nothing posted
 poll_s=${GH_AWAIT_REVIEWS_POLL:-15}
 # Floor, measured from PR creation, below which an empty `expected` may not be
-# settled on. GitHub registers review requests asynchronously after the PR is
-# created, so right after creation "no reviewer requested" is indistinguishable
-# from "not registered yet". Measured on a PR in another repo (not this one --
-# dotrc's own PR numbers don't reach this yet): settled at 63s with an empty
-# expected/observed, yet a Copilot review landed shortly after and a re-run of
-# this script then reported copilot in both expected and observed.
+# settled on. As the header comment says, Copilot's pending review never
+# surfaces in reviewRequests in this repo, so an empty `expected` never means
+# "registration hasn't finished" -- it means nothing has been observed *yet*.
+# The floor exists so the script doesn't conclude "no automated review" before
+# an unpredictable reviewer has had a realistic chance to actually post; it
+# does not guarantee `expected` fills in by the time it elapses (Copilot may
+# still stay silent), and once it elapses an empty `expected` is accepted as
+# the best available signal, not proof the ambiguity was resolved.
+#
+# Measured on a PR in another repo (dotrc's own PR history hasn't yet produced
+# one slow enough to exercise this floor): settled at 63s with an empty
+# expected/observed, yet a Copilot review landed shortly after -- i.e. 63s was
+# too short for Copilot to have posted, not evidence reviewRequests was still
+# registering.
 expected_floor_s=${GH_AWAIT_REVIEWS_EXPECTED_FLOOR:-90}
 
 # One gh call per poll. Emits, per line:
