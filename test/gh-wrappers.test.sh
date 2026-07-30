@@ -218,6 +218,19 @@ if [ "$rc" -eq 0 ] \
   echo "ok: gh-await-reviews settles once a short floor has elapsed"
 else echo "FAIL: gh-await-reviews short-floor rc=$rc out=$out"; fail=1; fi
 
+# Case H: an ACT timestamp that fails to parse (`date -u -d` rejects it) must
+# not crash the script before it emits JSON -- regression test for the inline
+# `$(( now - $(date ...) ))` trap described above expected_settled(). CRT is
+# old so only the quiet-window `date` call (not the floor) is exercised.
+fx="$awaitstub/h"; mkdir -p "$fx"
+printf 'CRT\t%s\nACT\tcoderabbitai\tgarbage\n' "$old" >"$fx/1"
+out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"pr":42' \
+  && printf '%s' "$out" | grep -q '"login":"coderabbitai"'; then
+  echo "ok: gh-await-reviews emits JSON instead of crashing on an unparseable ACT timestamp"
+else echo "FAIL: gh-await-reviews unparseable timestamp rc=$rc out=$out"; fail=1; fi
+
 # gh-await-reviews: missing / non-numeric / extra-flag arg fail (no flag passthrough).
 PATH="$awaitstub:$PATH" "$bindir/gh-await-reviews" >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-await-reviews missing arg fails" || { echo "FAIL: gh-await-reviews missing arg"; fail=1; }
