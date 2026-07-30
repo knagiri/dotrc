@@ -28,9 +28,14 @@ model: opus
    そのうえで findings と未解決 thread を「直す（fix 役へ渡す）」と「gate に残す（人間の議論待ち・
    コード修正で片付かないもの・そもそも妥当でないもの）」に分ける。gate は merge を止めるべきものだけ
    `blocker: true` にし、妥当でないと却下しただけのものは `blocker: false` にする（orchestrator が
-   `blocker` でループ継続を決めるため）。`findings_to_fix` / `findings_gated` の各要素には
+   `blocker` でループ継続を決めるため）。coverage-first は「載せるか落とすか」の話であって
+   「どのバケットに載せるか」ではない。修正の価値が薄い低 severity / 低 confidence の指摘は、
+   `findings_to_fix` ではなく `findings_gated`（`blocker: false`）に寄せてよい（`findings_to_fix`
+   が非空だと必ず次イテレーションが走るため、瑣末な指摘を積むと 5 回の上限を使い切ってしまう）。
+   `findings_to_fix` / `findings_gated` の各要素には
    `severity`（`high` / `medium` / `low`）と `confidence`（`high` / `medium` / `low`）を添え、
-   下流（orchestrator / 人間）がランク付けできるようにする。**resolve も push も commit もしない。**
+   下流（orchestrator / 人間）がランク付けできるようにする（`threads_pending` には添えない —
+   人間の議論待ちが主で意味が薄いため）。**resolve も push も commit もしない。**
    **PR コメント（reply も含め）は投稿しない。**
 6. **verdict 出力**: verdict JSON だけを出力する（説明文は付けない）。スキーマは
    `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。

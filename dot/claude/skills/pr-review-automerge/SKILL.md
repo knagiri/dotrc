@@ -123,6 +123,10 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >      片付かない・そもそも妥当でない（＝直さない理由がある）もの。merge を止めるべきものは
 >      `blocker: true` にする（人間の判断を待つべきもの）。妥当でないと判断して却下しただけの
 >      ものは `blocker: false` — 理由は残るが merge は止めない。
+>    - coverage-first は「載せるか落とすか」の話であって「どのバケットに載せるか」ではない。
+>      修正の価値が薄い低 severity / 低 confidence の指摘は、`findings_to_fix` ではなく
+>      `findings_gated`（`blocker: false`）に寄せてよい（`findings_to_fix` が非空だと必ず次
+>      イテレーションが走るため、瑣末な指摘を積むと 5 回の上限を使い切ってしまう）。
 >    - `findings_to_fix` / `findings_gated` の各要素には `severity`（`high` / `medium` / `low`）と
 >      `confidence`（`high` / `medium` / `low`）を添え、下流（orchestrator / 人間）がランク付け
 >      できるようにする。`threads_pending` には添えない（thread は人間の議論待ちが主で
@@ -202,3 +206,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 `findings_gated` / `threads_pending` に `blocker: true` 無し && `mergeable==true`** を満たしたときのみ
 手順 3（遅着 review の再確認 → CI 確認 → auto-merge 有効化）に進む。gate の**非空**そのものは
 終端条件にしない（理由は手順 2.c）。
+
+`severity` / `confidence` は**継続判定（手順 2.c）には使わない**。終端条件は上記のとおり
+`blocker` の有無と `findings_to_fix` / `made_changes` / `mergeable` だけで決まり、この 2 フィールドは
+関与しない。用途は**報告専用**で、手順 3.e / 4 の最終サマリで findings を `severity` 降順
+（`high` → `medium` → `low`）に並べて出力し、orchestrator と人間が優先度を把握できるようにする。
