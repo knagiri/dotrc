@@ -194,9 +194,11 @@ awaitenv() { env GH_AWAIT_REVIEWS_TIMEOUT=3 GH_AWAIT_REVIEWS_QUIET=1 \
 old='2020-01-01T00:00:00Z'
 
 # Case A: an already-reviewed, quiet PR settles immediately (quiet is measured
-# from the real timestamp, not from when we started polling).
+# from the real timestamp, not from when we started polling). CRT is old so
+# the $expected_floor_s gate (default 90s, irrelevant here since copilot
+# already arrived) can never be the reason this settles.
 fx="$awaitstub/a"; mkdir -p "$fx"
-printf 'ACT\tcopilot-pull-request-reviewer\t%s\n' "$old" >"$fx/1"
+printf 'CRT\t%s\nACT\tcopilot-pull-request-reviewer\t%s\n' "$old" "$old" >"$fx/1"
 out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"settled":true' \
@@ -214,7 +216,8 @@ if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"timed_out":true' \
   && printf '%s' "$out" | grep -q '"settled":false' \
   && printf '%s' "$out" | grep -q '"missing":\["copilot"\]' \
-  && printf '%s' "$out" | grep -q '"arrived":false'; then
+  && printf '%s' "$out" | grep -q '"arrived":false' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":false'; then
   echo "ok: gh-await-reviews times out with missing=[copilot] when copilot never posts"
 else echo "FAIL: gh-await-reviews missing copilot rc=$rc out=$out"; fail=1; fi
 
@@ -227,35 +230,89 @@ if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"settled":true' \
   && printf '%s' "$out" | grep -q '"name":"copilot"' \
   && printf '%s' "$out" | grep -q '"arrived":true' \
-  && printf '%s' "$out" | grep -q '"missing":\[\]'; then
+  && printf '%s' "$out" | grep -q '"missing":\[\]' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":false'; then
   echo "ok: gh-await-reviews settles once the requested copilot review arrives"
 else echo "FAIL: gh-await-reviews copilot arrival rc=$rc out=$out"; fail=1; fi
 
-# Case D: no expected reviewer and nobody posted -> settle after GRACE, empty report.
+# Case D: no expected reviewer and nobody posted -> settle after GRACE, empty
+# report. CRT is old so the $expected_floor_s gate is already satisfied and
+# GRACE (not the floor) is what this case is exercising.
 fx="$awaitstub/d"; mkdir -p "$fx"
-: >"$fx/1"
+printf 'CRT\t%s\n' "$old" >"$fx/1"
 out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"settled":true' \
   && printf '%s' "$out" | grep -q '"timed_out":false' \
   && printf '%s' "$out" | grep -q '"expected":\[\]' \
   && printf '%s' "$out" | grep -q '"observed":\[\]' \
-  && printf '%s' "$out" | grep -q '"last_activity_at":null'; then
+  && printf '%s' "$out" | grep -q '"last_activity_at":null' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true'; then
   echo "ok: gh-await-reviews settles after GRACE when no automated review runs"
 else echo "FAIL: gh-await-reviews grace rc=$rc out=$out"; fail=1; fi
 
 # Case E: a non-copilot participant (e.g. coderabbit) is tracked without any
 # pre-arrival signal, and the PR author's own comment is not tracked. The
 # wrapper's --jq already drops the author, so the fixture only carries others.
+# CRT is old for the same reason as case D.
 fx="$awaitstub/e"; mkdir -p "$fx"
-printf 'ACT\tcoderabbitai\t%s\n' "$old" >"$fx/1"
+printf 'CRT\t%s\nACT\tcoderabbitai\t%s\n' "$old" "$old" >"$fx/1"
 out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"login":"coderabbitai"' \
   && printf '%s' "$out" | grep -q '"expected":\[\]' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true' \
   && printf '%s' "$out" | grep -q '"settled":true'; then
   echo "ok: gh-await-reviews tracks a non-copilot participant with no pre-arrival signal"
 else echo "FAIL: gh-await-reviews tracks coderabbit rc=$rc out=$out"; fail=1; fi
+
+# Case F: PR just created (CRT ~= now), nothing posted, no reviewer requested.
+# The floor (EXPECTED_FLOOR=90) outlives TIMEOUT=3, so an empty `expected`
+# must not be believed within either the GRACE or the timeout window -- the
+# floor keeps this timed_out rather than settling early, and does not itself
+# stretch the overall timeout past TIMEOUT.
+fx="$awaitstub/f"; mkdir -p "$fx"
+printf 'CRT\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$fx/1"
+out=$(env GH_AWAIT_REVIEWS_TIMEOUT=3 GH_AWAIT_REVIEWS_QUIET=1 GH_AWAIT_REVIEWS_GRACE=1 \
+  GH_AWAIT_REVIEWS_POLL=1 GH_AWAIT_REVIEWS_EXPECTED_FLOOR=90 \
+  GH_STUB_DIR="$fx" GH_STUB_COUNT="$fx/.count" PATH="$awaitstub:$PATH" \
+  "$bindir/gh-await-reviews" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"settled":false' \
+  && printf '%s' "$out" | grep -q '"timed_out":true' \
+  && printf '%s' "$out" | grep -Eq '"waited_seconds":[34]' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true'; then
+  echo "ok: gh-await-reviews floor outlasting TIMEOUT times out instead of settling early, without stretching TIMEOUT"
+else echo "FAIL: gh-await-reviews floor-outlives-timeout rc=$rc out=$out"; fail=1; fi
+
+# Case G: same fresh-PR fixture as F, but with a floor (1s) shorter than
+# TIMEOUT (3s) -- once the floor age is reached, an empty `expected` may be
+# believed and the PR settles instead of timing out.
+fx="$awaitstub/g"; mkdir -p "$fx"
+printf 'CRT\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$fx/1"
+out=$(env GH_AWAIT_REVIEWS_TIMEOUT=3 GH_AWAIT_REVIEWS_QUIET=1 GH_AWAIT_REVIEWS_GRACE=1 \
+  GH_AWAIT_REVIEWS_POLL=1 GH_AWAIT_REVIEWS_EXPECTED_FLOOR=1 \
+  GH_STUB_DIR="$fx" GH_STUB_COUNT="$fx/.count" PATH="$awaitstub:$PATH" \
+  "$bindir/gh-await-reviews" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"settled":true' \
+  && printf '%s' "$out" | grep -q '"timed_out":false' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true'; then
+  echo "ok: gh-await-reviews settles once a short floor has elapsed"
+else echo "FAIL: gh-await-reviews short-floor rc=$rc out=$out"; fail=1; fi
+
+# Case H: an ACT timestamp that fails to parse (`date -u -d` rejects it) must
+# not crash the script before it emits JSON -- regression test for the inline
+# `$(( now - $(date ...) ))` trap described above expected_settled(). CRT is
+# old so only the quiet-window `date` call (not the floor) is exercised.
+fx="$awaitstub/h"; mkdir -p "$fx"
+printf 'CRT\t%s\nACT\tcoderabbitai\tgarbage\n' "$old" >"$fx/1"
+out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"pr":42' \
+  && printf '%s' "$out" | grep -q '"login":"coderabbitai"'; then
+  echo "ok: gh-await-reviews emits JSON instead of crashing on an unparseable ACT timestamp"
+else echo "FAIL: gh-await-reviews unparseable timestamp rc=$rc out=$out"; fail=1; fi
 
 # gh-await-reviews: missing / non-numeric / extra-flag arg fail (no flag passthrough).
 PATH="$awaitstub:$PATH" "$bindir/gh-await-reviews" >/dev/null 2>&1; [ $? -ne 0 ] \
