@@ -250,6 +250,10 @@ remotesrc="$tmp/remotesrc"
 mkdir -p "$remotesrc"
 git -C "$remotesrc" init -q
 git -C "$remotesrc" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+# `git init`'s initial branch follows init.defaultBranch, which varies by
+# environment (e.g. "master" instead of "main") -- pin it explicitly so the
+# `checkout -q main` calls below don't fail on non-"main"-default setups.
+git -C "$remotesrc" branch -q -M main
 
 originbare="$tmp/origin.git"
 git init -q --bare "$originbare"
