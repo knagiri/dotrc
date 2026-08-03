@@ -162,6 +162,30 @@ if [ "$rc" -eq 0 ] \
   echo "ok: gh-pr-checks reports an empty, non-failing state when no CI ran"
 else echo "FAIL: gh-pr-checks empty rc=$rc out=$out"; fail=1; fi
 
+# Case D: a runs payload past MAX_ARG_STRLEN (128 KiB / 131072 B) -- the
+# regression this PR fixes. The old `--argjson runs "$runs"` implementation puts
+# $runs on argv as a single element; Linux caps any *single* argv element at
+# MAX_ARG_STRLEN regardless of the larger ARG_MAX total, so execve fails with
+# E2BIG (the shell reports "Argument list too long") once $runs alone crosses
+# that line. Piping to jq's stdin (this PR's fix) never goes through execve for
+# the payload, so it has no such ceiling. The fixture is built here rather than
+# committed so no ~370 KB JSON blob lives in the repo; the size assertion below
+# guards against the generator silently drifting under the threshold and the
+# case going quiet.
+fx="$checksstub/d"
+mkdir -p "$fx"; : >"$fx/args"
+echo 'knagiri/dotrc' >"$fx/repo"; echo "$sha40" >"$fx/sha"
+jq -nc '{workflow_runs: [range(4000) | {name: "Workflow-\(.)-with-a-fairly-long-name", status: "completed", conclusion: "success"}]}' >"$fx/runs"
+printf '%s' '{"statuses":[]}' >"$fx/statuses"
+[ "$(wc -c <"$fx/runs")" -gt 131072 ] \
+  || { echo "FAIL: gh-pr-checks Case D fixture is not past MAX_ARG_STRLEN, test would be a no-op"; fail=1; }
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.checks | length == 4000' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "4000 checks: 4000 success, 0 pending, 0 failure"' >/dev/null; then
+  echo "ok: gh-pr-checks handles a runs payload past MAX_ARG_STRLEN (128 KiB argv element cap)"
+else echo "FAIL: gh-pr-checks Case D rc=$rc out=${out:0:200}"; fail=1; fi
+
 # gh-pr-checks: missing / non-numeric / extra-flag arg fail (no flag passthrough).
 PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-pr-checks missing arg fails" || { echo "FAIL: gh-pr-checks missing arg"; fail=1; }
