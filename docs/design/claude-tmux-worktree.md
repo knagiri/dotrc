@@ -81,7 +81,8 @@ claude-worktree <name> [-b <branch>] [-- <prompt...>]
 
 - worktree を `<メインリポジトリ toplevel>_<name>` に作成
 - `name` は `[A-Za-z0-9_-]+` のみ許可（`.`/`:` は tmux ターゲット構文と衝突するため拒否）
-- `-b` 省略時はブランチ名 = `<name>`（既存なら check out、無ければ新規）
+- `-b` 省略時はブランチ名 = `<name>`。解決順はローカルブランチ → `origin/<branch>` を追跡 checkout →
+  どちらにも無ければ新規作成（fetch はしない）
 - プロンプト無し: worktree 追加のみ。stdout にパスのみ出力（`git wa` の置き換え）
 - プロンプト有り: **detached tmux session（名前 = worktree basename）を作り、その pane の中で
   interactive claude（`acceptEdits`）を起動**
