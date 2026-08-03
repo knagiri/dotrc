@@ -87,8 +87,10 @@ PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 42 --comments >/dev/null 2>&1; [ 
 
 # --- gh-pr-checks -----------------------------------------------------------
 # gh-pr-checks consumes gh's *output*, so it needs a stub that answers each call
-# with a fixture. The repo/sha fixtures hold the scalars gh would print after
-# --jq (the stub does not implement --jq); the api fixtures hold raw JSON.
+# with a fixture. The stub does not implement --jq, so every fixture holds what
+# gh would print *after* its --jq ran: scalars for repo/sha, and for the api
+# calls the projected {workflow_runs: [...]} / {statuses: [...]} objects.
+# Endpoints are matched with a trailing * because the wrapper appends --jq.
 checksstub="$(mktemp -d)"
 trap 'rm -rf "$stubdir" "$checksstub"' EXIT
 cat >"$checksstub/gh" <<'STUB'
@@ -98,7 +100,7 @@ case "$*" in
   "repo view"*)     cat "$GH_STUB_DIR/repo" ;;
   "pr view"*)       cat "$GH_STUB_DIR/sha" ;;
   *actions/runs*)   cat "$GH_STUB_DIR/runs" ;;
-  *"/status")       cat "$GH_STUB_DIR/statuses" ;;
+  *"/status"*)      cat "$GH_STUB_DIR/statuses" ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 STUB
