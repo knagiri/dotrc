@@ -8,8 +8,8 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 
 | やりたいこと | 使うべきコマンド | `gh api` を避ける理由 |
 |---|---|---|
-| PR の概要・本文を読む | `gh pr view <N>` | 高位コマンドの方が安全・読みやすい。ただし `gh pr view <N>` も内部クエリに statusCheckRollup を含むため、check runs が付いた PR では fine-grained PAT で失敗しうる（次行と同根）。その場合は `--json title,body` のように必要フィールドだけ指定すると rollup を引かない |
-| PR のコメント一覧を読む | `gh-pr-comments <N>`（§5 参照） | `gh pr view <N> --comments` は内部クエリに statusCheckRollup を含むため、check runs が付いた PR では fine-grained PAT で失敗し、コメント本文が一切返らない（§5 と同根の権限不足。commit status のみの PR は §5 のとおり通るのでここでは失敗要因に含めない）。`gh-pr-comments` は read-only な `gh pr view --json reviews,comments` の薄いラッパーで、`gh api` は使わない。この行は `gh api` 回避の話ではなく、高位コマンドの表示形が fine-grained PAT の権限不足で使えないための代替である。`--json comments` は standalone comments のみで review body（Copilot の review サマリ等）を落とすため代替にならない（`gh-pr-comments` を使う） |
+| PR の概要・本文を読む | `gh pr view <N>` | 高位コマンドの方が安全・読みやすい。ただし `gh pr view <N>` も内部クエリに statusCheckRollup を含むため、token に check runs の読み取り権限が無い場合は fine-grained PAT で失敗しうる（次行と同根）。その場合は `--json title,body` のように必要フィールドだけ指定すると rollup を引かない |
+| PR のコメント一覧を読む | `gh-pr-comments <N>`（§5 参照） | `gh pr view <N> --comments` は内部クエリに statusCheckRollup を含むため、token に check runs の読み取り権限が無い場合は fine-grained PAT で失敗し、コメント本文が一切返らないことがある（実測は別 repo・別 token での事例）。`gh-pr-comments` は read-only な `gh pr view --json reviews,comments` の薄いラッパーで、`gh api` は使わない。`--json comments` は standalone comments のみで review body（Copilot の review サマリ等）を落とすため代替にならない（`gh-pr-comments` を使う） |
 | PR の diff を読む | `gh pr diff <N>` | 同上 |
 | PR の CI 状態を見る | `gh-pr-checks <N>`（§5 参照） | `gh pr checks` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks` は読み取り専用の `gh api`（`actions/runs` と `commits/<sha>/status`）2 本を合成する薄いラッパーで、高位コマンドが使えない代替であって「`gh api` を避けている」わけではない |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
