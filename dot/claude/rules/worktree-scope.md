@@ -103,7 +103,7 @@ claude-worktree [--self] [--model <alias>] [--seed <path>]... <name> [-b <branch
 ```
 
 - worktree は `<メインリポジトリ toplevel>_<name>` に作られる（メイン基準なので worktree 内から切ってもパスがネストしない。区切りは tmux 安全な `_`。`.` は `tmux -t` の `window.pane` 構文と衝突するため不可）
-- `-b` 省略時はブランチ名 = `<name>`。既存ブランチ名なら check out、無ければ新規作成
+- `-b` 省略時はブランチ名 = `<name>`。解決順はローカルブランチ優先 → 無ければ `origin/<branch>` を追跡 checkout → どちらにも無ければ新規作成。fetch はしない（未 fetch なら新規作成に落ちる）
 - `--` の後ろにプロンプトを渡すと、**新規の detached tmux セッション（名前 = worktree basename）を worktree dir に作り、その pane の中で interactive claude（`acceptEdits`）を起動**する。pane が独立するので `$TMUX_PANE` も独立し、claude-queue が起動元 pane と衝突せず正しく追跡する。interactive なので初期プロンプト処理後も REPL に留まり、`gts <session>` / `tmux attach -t <session>` で**いつでも attach して続行できる（`claude --resume` 不要）**
 - プロンプト無しなら worktree 追加のみ（stdout にパスのみ出力。`git wa` の置き換え）
 - `--self` は worktree の基準 repo を、cwd の repo ではなく **`claude-worktree` 自身が置かれている repo**（symlink 解決後。= dotrc）にする。無関係な project で作業中に dotrc のグローバル harness（rules / skills / bin）を切りたいときに使う。`--seed` のコピー元は `--self` の有無に関わらず cwd の checkout のまま
