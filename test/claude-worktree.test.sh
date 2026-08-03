@@ -240,4 +240,98 @@ if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_emptymodel" ]; then
   echo "ok: empty --model value is rejected before the worktree is created"
 else echo "FAIL: empty --model accepted rc=$rc"; fail=1; fi
 
+# --- remote-only branch resolution --------------------------------------------
+# `-b <branch>` must resolve against LOCAL branches, then origin's remote-tracking
+# branches, before falling back to "create new from current HEAD". A dedicated
+# bare origin + clone (not cwdrepo/scriptrepo, to avoid interfering with the
+# tests above) lets us push branches that never get a local tracking branch.
+
+remotesrc="$tmp/remotesrc"
+mkdir -p "$remotesrc"
+git -C "$remotesrc" init -q
+git -C "$remotesrc" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+
+originbare="$tmp/origin.git"
+git init -q --bare "$originbare"
+# Push the initial commit to an explicit "main" ref, then point the bare repo's
+# HEAD at it directly -- `git init --bare`'s HEAD follows init.defaultBranch,
+# which varies by environment, so this is what makes `git clone` below check out
+# the branch we actually intend ("main") rather than whatever the default was.
+git -C "$remotesrc" push -q "$originbare" HEAD:refs/heads/main
+git -C "$originbare" symbolic-ref HEAD refs/heads/main
+
+# origin-only branch: pushed to origin, then deleted locally, so nothing but the
+# remote-tracking ref (refs/remotes/origin/remoteonly) will exist in the clone.
+git -C "$remotesrc" checkout -q -b remoteonly
+echo "remote content" >"$remotesrc/remote.txt"
+git -C "$remotesrc" add remote.txt
+git -C "$remotesrc" -c user.email=t@t -c user.name=t commit -q -m "remote-only commit"
+git -C "$remotesrc" push -q "$originbare" remoteonly
+remote_only_sha="$(git -C "$remotesrc" rev-parse remoteonly)"
+git -C "$remotesrc" checkout -q main
+git -C "$remotesrc" branch -q -D remoteonly
+
+# a branch that will exist BOTH locally (in the clone, below) and on origin, at
+# DIFFERENT commits -- proves local takes precedence over same-named remote.
+git -C "$remotesrc" checkout -q -b localdiff
+echo "origin's localdiff content" >"$remotesrc/localdiff.txt"
+git -C "$remotesrc" add localdiff.txt
+git -C "$remotesrc" -c user.email=t@t -c user.name=t commit -q -m "origin's localdiff commit"
+git -C "$remotesrc" push -q "$originbare" localdiff
+git -C "$remotesrc" checkout -q main
+git -C "$remotesrc" branch -q -D localdiff
+
+clone2="$tmp/clone2"
+git clone -q "$originbare" "$clone2"
+clone_head_sha="$(git -C "$clone2" rev-parse HEAD)"
+
+# Give the clone its OWN local "localdiff" branch, at a commit that differs from
+# origin/localdiff (sanity-checked below so this can't pass vacuously).
+git -C "$clone2" checkout -q -b localdiff main
+echo "local's localdiff content" >"$clone2/localdiff.txt"
+git -C "$clone2" add localdiff.txt
+git -C "$clone2" -c user.email=t@t -c user.name=t commit -q -m "local's localdiff commit"
+local_localdiff_sha="$(git -C "$clone2" rev-parse localdiff)"
+origin_localdiff_sha="$(git -C "$clone2" rev-parse origin/localdiff)"
+git -C "$clone2" checkout -q main
+
+if [ "$local_localdiff_sha" = "$origin_localdiff_sha" ] || [ "$remote_only_sha" = "$clone_head_sha" ]; then
+  echo "FAIL: test setup produced colliding shas, the assertions below would be vacuous"; fail=1
+fi
+
+# Case 1: branch absent locally but present on origin -> checked out at origin's
+# commit (NOT built fresh from the clone's current HEAD, which is the bug) and
+# tracking origin/<branch>.
+out="$(cd "$clone2" && "$wt" remoteonlytest -b remoteonly 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+wt_upstream="$(git -C "$out" rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$remote_only_sha" ] && [ "$wt_upstream" = "origin/remoteonly" ]; then
+  echo "ok: remote-only branch checks out origin's commit and tracks origin/<branch>"
+else
+  echo "FAIL: remote-only branch rc=$rc sha=$wt_sha want=$remote_only_sha upstream=$wt_upstream want=origin/remoteonly"
+  fail=1
+fi
+
+# Case 2: branch exists both locally and on origin, at different commits -> the
+# LOCAL branch wins (must not be pulled from origin just because origin also
+# has it).
+out="$(cd "$clone2" && "$wt" localdifftest -b localdiff 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$local_localdiff_sha" ]; then
+  echo "ok: local branch takes precedence over a same-named branch on origin"
+else
+  echo "FAIL: local-branch precedence rc=$rc sha=$wt_sha want=$local_localdiff_sha (origin has $origin_localdiff_sha)"
+  fail=1
+fi
+
+# Case 3: branch absent from both local and origin -> unchanged behavior, a new
+# branch created from the clone's current HEAD.
+out="$(cd "$clone2" && "$wt" newbranchtest -b brandnew 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$clone_head_sha" ]; then
+  echo "ok: branch absent from both local and origin is created fresh from current HEAD"
+else
+  echo "FAIL: new-branch fallback rc=$rc sha=$wt_sha want=$clone_head_sha"; fail=1
+fi
+
 exit "$fail"
