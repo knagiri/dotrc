@@ -8,8 +8,8 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 
 | やりたいこと | 使うべきコマンド | `gh api` を避ける理由 |
 |---|---|---|
-| PR の概要・本文を読む | `gh pr view <N>` | 高位コマンドの方が安全・読みやすい |
-| PR のコメント一覧を読む | `gh pr view <N> --comments` | 同上 |
+| PR の概要・本文を読む | `gh pr view <N>` | 高位コマンドの方が安全・読みやすい。ただし `gh pr view <N>` も内部クエリに statusCheckRollup を含むため、token に check runs の読み取り権限が無い場合は fine-grained PAT で失敗しうる（次行と同根）。その場合は `--json title,body` のように必要フィールドだけ指定すると rollup を引かない |
+| PR のコメント一覧を読む | `gh-pr-comments <N>`（§5 参照） | `gh pr view <N> --comments` は内部クエリに statusCheckRollup を含むため、token に check runs の読み取り権限が無い場合は fine-grained PAT で失敗し、コメント本文が一切返らないことがある（実測は別 repo・別 token での事例）。`gh-pr-comments` は read-only な `gh pr view --json reviews,comments` の薄いラッパーで、`gh api` は使わない。`--json comments` は standalone comments のみで review body（Copilot の review サマリ等）を落とすため代替にならない（`gh-pr-comments` を使う） |
 | PR の diff を読む | `gh pr diff <N>` | 同上 |
 | PR の CI 状態を見る | `gh-pr-checks <N>`（§5 参照） | `gh pr checks` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks` は読み取り専用の `gh api`（`actions/runs` と `commits/<sha>/status`）2 本を合成する薄いラッパーで、高位コマンドが使えない代替であって「`gh api` を避けている」わけではない |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
@@ -77,6 +77,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 
 - **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`）
   - CI 状態の確認は `gh pr checks *` を allow しない。pattern 自体は正しくマッチするが、fine-grained PAT では実行すれば必ず失敗する（§1 / §5 の理由）ので、allow しておいても許可する意味が無い（`claude-settings.md` が定義する「pattern がマッチしない dead rule」とは別物）。代わりに §5 の `gh-pr-checks *` を allow する
+  - コメント取得の `gh pr view <N> --comments` も `gh pr view *` の pattern にはマッチするが、fine-grained PAT では失敗しうる（§1）。ただし `gh pr view *` は他の read 用途で必要なので allow は維持し、コメント取得には §5 の `gh-pr-comments *` を使う
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ
   - allow に無いので呼び出し時に prompt が出る → ユーザー確認経由で実行可
 - **deny:** 不要（hard-block は明示指示時の運用を阻害する）
