@@ -8,10 +8,10 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 
 | やりたいこと | 使うべきコマンド | `gh api` を避ける理由 |
 |---|---|---|
-| PR の概要・本文を読む | `gh pr view <N>` | 高位コマンドの方が安全・読みやすい |
-| PR のコメント一覧を読む | `gh pr view <N> --comments` | 同上 |
+| PR の概要・本文を読む | `gh pr view <N>` | 高位コマンドの方が安全・読みやすい。ただし `gh pr view <N>` も内部クエリに statusCheckRollup を含むため、token に check runs の読み取り権限が無い場合は fine-grained PAT で失敗しうる（次行と同根）。その場合は `--json title,body` のように必要フィールドだけ指定すると rollup を引かない |
+| PR のコメント一覧を読む | `gh-pr-comments <N>`（§5 参照） | `gh pr view <N> --comments` は内部クエリに statusCheckRollup を含むため、token に check runs の読み取り権限が無い場合は fine-grained PAT で失敗し、コメント本文が一切返らないことがある（実測は別 repo・別 token での事例）。`gh-pr-comments` は read-only な `gh pr view --json reviews,comments` の薄いラッパーで、`gh api` は使わない。`--json comments` は standalone comments のみで review body（Copilot の review サマリ等）を落とすため代替にならない（`gh-pr-comments` を使う） |
 | PR の diff を読む | `gh pr diff <N>` | 同上 |
-| PR の CI 状態を見る | `gh pr checks <N>` | 同上 |
+| PR の CI 状態を見る | `gh-pr-checks <N>`（§5 参照） | `gh pr checks` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks` は読み取り専用の `gh api`（`actions/runs` と `commits/<sha>/status`）2 本を合成する薄いラッパーで、高位コマンドが使えない代替であって「`gh api` を避けている」わけではない |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
 | PR に review を提出する | `gh pr review <N> [--approve\|--request-changes\|--comment] -b "..."` | 高位コマンドが review object を正しく扱う |
 | Issue 操作 | `gh issue *` | 同上 |
@@ -75,7 +75,9 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 
 上記方針により、`settings.json` では以下の最小ポリシーで足りる：
 
-- **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh pr checks *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`）
+- **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`）
+  - CI 状態の確認は `gh pr checks *` を allow しない。pattern 自体は正しくマッチするが、fine-grained PAT では実行すれば必ず失敗する（§1 / §5 の理由）ので、allow しておいても許可する意味が無い（`claude-settings.md` が定義する「pattern がマッチしない dead rule」とは別物）。代わりに §5 の `gh-pr-checks *` を allow する
+  - コメント取得の `gh pr view <N> --comments` も `gh pr view *` の pattern にはマッチするが、fine-grained PAT では失敗しうる（§1）。ただし `gh pr view *` は他の read 用途で必要なので allow は維持し、コメント取得には §5 の `gh-pr-comments *` を使う
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ
   - allow に無いので呼び出し時に prompt が出る → ユーザー確認経由で実行可
 - **deny:** 不要（hard-block は明示指示時の運用を阻害する）
@@ -93,12 +95,22 @@ prompt injection / 権限バイパスの経路になる。
 | review body / standalone コメントの取得 | `gh-pr-comments <PR>` | read-only `gh pr view --json reviews,comments` | `Bash(gh-pr-comments *)` |
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
+| CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>` のみ | `Bash(gh-automerge *)` |
 
 - ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
-  フラグを付けられない。auto-merge 有効化前に skill 自身が `gh pr checks` で required checks に
+  フラグを付けられない。auto-merge 有効化前に skill 自身が `gh-pr-checks` で
   **fail が無いこと**を確認する（二重化）。pending は待たずに auto-merge へ委ねる。merge method は
   `--merge`（merge commit）で logical commits を潰さない。
+- ここで `gh pr checks` を使わないのは、fine-grained PAT では **必ず失敗する**ため。`gh pr checks` は
+  statusCheckRollup（check runs）を読むが、fine-grained token には check runs を読む権限が
+  そもそも存在しない（GitHub の fine-grained 権限一覧に Checks の項目が無く、check runs の REST
+  リファレンスも classic token の `repo` スコープしか挙げていない）。実測でも
+  `gh pr checks` は GraphQL の "Resource not accessible by personal access token"、
+  `commits/<sha>/check-runs` は 403 になる一方、`actions/runs?head_sha=`（Actions: Read）と
+  `commits/<sha>/status`（Commit statuses: Read）は通る。`gh-pr-checks` は後者 2 つを合成して
+  代替する。したがって third-party GitHub App が作る check run は拾えず、required かどうかも
+  判定しない（branch protection の参照には別権限が要る）。required の充足判定は auto-merge に委ねる。
 - raw `gh api graphql *` / `gh pr merge *` は **allow しない**（§4 のとおり）。thread resolve は
   reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。

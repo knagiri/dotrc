@@ -85,13 +85,122 @@ PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 9z >/dev/null 2>&1; [ $? -ne 0 ] 
 PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 42 --comments >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-pr-comments rejects extra flag arg" || { echo "FAIL: gh-pr-comments extra flag"; fail=1; }
 
+# --- gh-pr-checks -----------------------------------------------------------
+# gh-pr-checks consumes gh's *output*, so it needs a stub that answers each call
+# with a fixture. The stub does not implement --jq, so every fixture holds what
+# gh would print *after* its --jq ran: scalars for repo/sha, and for the api
+# calls the projected {workflow_runs: [...]} / {statuses: [...]} objects.
+# Endpoints are matched with a trailing * because the wrapper appends --jq.
+checksstub="$(mktemp -d)"
+trap 'rm -rf "$stubdir" "$checksstub"' EXIT
+cat >"$checksstub/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
+case "$*" in
+  "repo view"*)     cat "$GH_STUB_DIR/repo" ;;
+  "pr view"*)       cat "$GH_STUB_DIR/sha" ;;
+  *actions/runs*)   cat "$GH_STUB_DIR/runs" ;;
+  *"/status"*)      cat "$GH_STUB_DIR/statuses" ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$checksstub/gh"
+
+sha40='9ae7061c0c4b7b4f2b3b1f7a4d6e8c9f0a1b2c3d'
+checksenv() { env GH_STUB_DIR="$1" GH_ARGS_FILE="$1/args" PATH="$checksstub:$PATH" \
+  "$bindir/gh-pr-checks" "${@:2}"; }
+checksfx() {  # $1 = dir, $2 = runs JSON, $3 = statuses JSON
+  mkdir -p "$1"; : >"$1/args"
+  echo 'knagiri/dotrc' >"$1/repo"; echo "$sha40" >"$1/sha"
+  printf '%s' "$2" >"$1/runs"; printf '%s' "$3" >"$1/statuses"
+}
+
+# Case A: everything green -> has_failure false, and the Actions query filters by
+# head_sha server-side while nothing touches the (403-under-fine-grained-PAT)
+# check-runs endpoint.
+fx="$checksstub/a"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":"Lint","status":"completed","conclusion":"success"},
+                     {"name":"Test","status":"completed","conclusion":"skipped"}]}' \
+  '{"statuses":[{"context":"ci/external","state":"success"}]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.pr == 537' >/dev/null \
+  && printf '%s' "$out" | jq -e --arg s "$sha40" '.sha == $s' >/dev/null \
+  && printf '%s' "$out" | jq -e '.has_failure == false and .pending_count == 0' >/dev/null \
+  && printf '%s' "$out" | jq -e '.checks | length == 3' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "3 checks: 3 success, 0 pending, 0 failure"' >/dev/null \
+  && grep -qF "head_sha=$sha40" "$fx/args" \
+  && ! grep -qF 'check-runs' "$fx/args"; then
+  echo "ok: gh-pr-checks reports a green PR (skipped is not a failure) via actions+statuses"
+else echo "FAIL: gh-pr-checks green rc=$rc out=$out"; fail=1; fi
+
+# Case B: a failed run, a queued run, a non-enumerated-status run ("waiting",
+# which is a real Actions run status but not one of the literal enum values
+# is_pending used to check) and a failed commit status are all counted.
+fx="$checksstub/b"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":"Lint","status":"completed","conclusion":"failure"},
+                     {"name":"Test","status":"queued","conclusion":null},
+                     {"name":"Deploy","status":"waiting","conclusion":null}]}' \
+  '{"statuses":[{"context":"ci/external","state":"error"},
+                {"context":"ci/slow","state":"pending"}]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.has_failure == true' >/dev/null \
+  && printf '%s' "$out" | jq -e '.pending_count == 3' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "5 checks: 0 success, 3 pending, 2 failure"' >/dev/null; then
+  echo "ok: gh-pr-checks flags failures and counts pending (incl. non-enumerated 'waiting' status) across both sources"
+else echo "FAIL: gh-pr-checks failure rc=$rc out=$out"; fail=1; fi
+
+# Case C: no CI at all -> valid, empty, non-failing report.
+fx="$checksstub/c"
+checksfx "$fx" '{"workflow_runs":[]}' '{"statuses":[]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.checks == [] and .has_failure == false and .pending_count == 0' >/dev/null; then
+  echo "ok: gh-pr-checks reports an empty, non-failing state when no CI ran"
+else echo "FAIL: gh-pr-checks empty rc=$rc out=$out"; fail=1; fi
+
+# Case D: a runs payload past MAX_ARG_STRLEN (128 KiB / 131072 B) -- the
+# regression this PR fixes. The old `--argjson runs "$runs"` implementation puts
+# $runs on argv as a single element; Linux caps any *single* argv element at
+# MAX_ARG_STRLEN regardless of the larger ARG_MAX total, so execve fails with
+# E2BIG (the shell reports "Argument list too long") once $runs alone crosses
+# that line. Piping to jq's stdin (this PR's fix) never goes through execve for
+# the payload, so it has no such ceiling. The fixture is built here rather than
+# committed so no ~370 KB JSON blob lives in the repo; the size assertion below
+# guards against the generator silently drifting under the threshold and the
+# case going quiet.
+fx="$checksstub/d"
+mkdir -p "$fx"; : >"$fx/args"
+echo 'knagiri/dotrc' >"$fx/repo"; echo "$sha40" >"$fx/sha"
+jq -nc '{workflow_runs: [range(4000) | {name: "Workflow-\(.)-with-a-fairly-long-name", status: "completed", conclusion: "success"}]}' >"$fx/runs"
+printf '%s' '{"statuses":[]}' >"$fx/statuses"
+[ "$(wc -c <"$fx/runs")" -gt 131072 ] \
+  || { echo "FAIL: gh-pr-checks Case D fixture is not past MAX_ARG_STRLEN, test would be a no-op"; fail=1; }
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.checks | length == 4000' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "4000 checks: 4000 success, 0 pending, 0 failure"' >/dev/null; then
+  echo "ok: gh-pr-checks handles a runs payload past MAX_ARG_STRLEN (128 KiB argv element cap)"
+else echo "FAIL: gh-pr-checks Case D rc=$rc out=${out:0:200}"; fail=1; fi
+
+# gh-pr-checks: missing / non-numeric / extra-flag arg fail (no flag passthrough).
+PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-checks missing arg fails" || { echo "FAIL: gh-pr-checks missing arg"; fail=1; }
+PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" 9z >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-checks non-numeric fails" || { echo "FAIL: gh-pr-checks non-numeric"; fail=1; }
+PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" 42 --watch >/dev/null 2>&1; [ $? -ne 0 ] \
+  && echo "ok: gh-pr-checks rejects extra flag arg" || { echo "FAIL: gh-pr-checks extra flag"; fail=1; }
+
 # --- gh-await-reviews -------------------------------------------------------
 # A second stub: ignores argv and prints the Nth fixture on the Nth call (the
 # last fixture repeats). gh-await-reviews consumes gh's *output*, so the argv
 # recorder above is not enough. The stub emits the REQ/ACT tab-separated lines
 # that the wrapper's --jq expression produces against real gh.
 awaitstub="$(mktemp -d)"
-trap 'rm -rf "$stubdir" "$awaitstub"' EXIT
+trap 'rm -rf "$stubdir" "$checksstub" "$awaitstub"' EXIT
 cat >"$awaitstub/gh" <<'STUB'
 #!/usr/bin/env bash
 n=$(( $(cat "$GH_STUB_COUNT" 2>/dev/null || echo 0) + 1 ))
@@ -111,9 +220,11 @@ awaitenv() { env GH_AWAIT_REVIEWS_TIMEOUT=3 GH_AWAIT_REVIEWS_QUIET=1 \
 old='2020-01-01T00:00:00Z'
 
 # Case A: an already-reviewed, quiet PR settles immediately (quiet is measured
-# from the real timestamp, not from when we started polling).
+# from the real timestamp, not from when we started polling). CRT is old so
+# the $expected_floor_s gate (default 90s, irrelevant here since copilot
+# already arrived) can never be the reason this settles.
 fx="$awaitstub/a"; mkdir -p "$fx"
-printf 'ACT\tcopilot-pull-request-reviewer\t%s\n' "$old" >"$fx/1"
+printf 'CRT\t%s\nACT\tcopilot-pull-request-reviewer\t%s\n' "$old" "$old" >"$fx/1"
 out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"settled":true' \
@@ -131,7 +242,8 @@ if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"timed_out":true' \
   && printf '%s' "$out" | grep -q '"settled":false' \
   && printf '%s' "$out" | grep -q '"missing":\["copilot"\]' \
-  && printf '%s' "$out" | grep -q '"arrived":false'; then
+  && printf '%s' "$out" | grep -q '"arrived":false' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":false'; then
   echo "ok: gh-await-reviews times out with missing=[copilot] when copilot never posts"
 else echo "FAIL: gh-await-reviews missing copilot rc=$rc out=$out"; fail=1; fi
 
@@ -144,35 +256,89 @@ if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"settled":true' \
   && printf '%s' "$out" | grep -q '"name":"copilot"' \
   && printf '%s' "$out" | grep -q '"arrived":true' \
-  && printf '%s' "$out" | grep -q '"missing":\[\]'; then
+  && printf '%s' "$out" | grep -q '"missing":\[\]' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":false'; then
   echo "ok: gh-await-reviews settles once the requested copilot review arrives"
 else echo "FAIL: gh-await-reviews copilot arrival rc=$rc out=$out"; fail=1; fi
 
-# Case D: no expected reviewer and nobody posted -> settle after GRACE, empty report.
+# Case D: no expected reviewer and nobody posted -> settle after GRACE, empty
+# report. CRT is old so the $expected_floor_s gate is already satisfied and
+# GRACE (not the floor) is what this case is exercising.
 fx="$awaitstub/d"; mkdir -p "$fx"
-: >"$fx/1"
+printf 'CRT\t%s\n' "$old" >"$fx/1"
 out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"settled":true' \
   && printf '%s' "$out" | grep -q '"timed_out":false' \
   && printf '%s' "$out" | grep -q '"expected":\[\]' \
   && printf '%s' "$out" | grep -q '"observed":\[\]' \
-  && printf '%s' "$out" | grep -q '"last_activity_at":null'; then
+  && printf '%s' "$out" | grep -q '"last_activity_at":null' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true'; then
   echo "ok: gh-await-reviews settles after GRACE when no automated review runs"
 else echo "FAIL: gh-await-reviews grace rc=$rc out=$out"; fail=1; fi
 
 # Case E: a non-copilot participant (e.g. coderabbit) is tracked without any
 # pre-arrival signal, and the PR author's own comment is not tracked. The
 # wrapper's --jq already drops the author, so the fixture only carries others.
+# CRT is old for the same reason as case D.
 fx="$awaitstub/e"; mkdir -p "$fx"
-printf 'ACT\tcoderabbitai\t%s\n' "$old" >"$fx/1"
+printf 'CRT\t%s\nACT\tcoderabbitai\t%s\n' "$old" "$old" >"$fx/1"
 out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"login":"coderabbitai"' \
   && printf '%s' "$out" | grep -q '"expected":\[\]' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true' \
   && printf '%s' "$out" | grep -q '"settled":true'; then
   echo "ok: gh-await-reviews tracks a non-copilot participant with no pre-arrival signal"
 else echo "FAIL: gh-await-reviews tracks coderabbit rc=$rc out=$out"; fail=1; fi
+
+# Case F: PR just created (CRT ~= now), nothing posted, no reviewer requested.
+# The floor (EXPECTED_FLOOR=90) outlives TIMEOUT=3, so an empty `expected`
+# must not be believed within either the GRACE or the timeout window -- the
+# floor keeps this timed_out rather than settling early, and does not itself
+# stretch the overall timeout past TIMEOUT.
+fx="$awaitstub/f"; mkdir -p "$fx"
+printf 'CRT\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$fx/1"
+out=$(env GH_AWAIT_REVIEWS_TIMEOUT=3 GH_AWAIT_REVIEWS_QUIET=1 GH_AWAIT_REVIEWS_GRACE=1 \
+  GH_AWAIT_REVIEWS_POLL=1 GH_AWAIT_REVIEWS_EXPECTED_FLOOR=90 \
+  GH_STUB_DIR="$fx" GH_STUB_COUNT="$fx/.count" PATH="$awaitstub:$PATH" \
+  "$bindir/gh-await-reviews" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"settled":false' \
+  && printf '%s' "$out" | grep -q '"timed_out":true' \
+  && printf '%s' "$out" | grep -Eq '"waited_seconds":[34]' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true'; then
+  echo "ok: gh-await-reviews floor outlasting TIMEOUT times out instead of settling early, without stretching TIMEOUT"
+else echo "FAIL: gh-await-reviews floor-outlives-timeout rc=$rc out=$out"; fail=1; fi
+
+# Case G: same fresh-PR fixture as F, but with a floor (1s) shorter than
+# TIMEOUT (3s) -- once the floor age is reached, an empty `expected` may be
+# believed and the PR settles instead of timing out.
+fx="$awaitstub/g"; mkdir -p "$fx"
+printf 'CRT\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$fx/1"
+out=$(env GH_AWAIT_REVIEWS_TIMEOUT=3 GH_AWAIT_REVIEWS_QUIET=1 GH_AWAIT_REVIEWS_GRACE=1 \
+  GH_AWAIT_REVIEWS_POLL=1 GH_AWAIT_REVIEWS_EXPECTED_FLOOR=1 \
+  GH_STUB_DIR="$fx" GH_STUB_COUNT="$fx/.count" PATH="$awaitstub:$PATH" \
+  "$bindir/gh-await-reviews" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"settled":true' \
+  && printf '%s' "$out" | grep -q '"timed_out":false' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true'; then
+  echo "ok: gh-await-reviews settles once a short floor has elapsed"
+else echo "FAIL: gh-await-reviews short-floor rc=$rc out=$out"; fail=1; fi
+
+# Case H: an ACT timestamp that fails to parse (`date -u -d` rejects it) must
+# not crash the script before it emits JSON -- regression test for the inline
+# `$(( now - $(date ...) ))` trap described above expected_settled(). CRT is
+# old so only the quiet-window `date` call (not the floor) is exercised.
+fx="$awaitstub/h"; mkdir -p "$fx"
+printf 'CRT\t%s\nACT\tcoderabbitai\tgarbage\n' "$old" >"$fx/1"
+out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"pr":42' \
+  && printf '%s' "$out" | grep -q '"login":"coderabbitai"'; then
+  echo "ok: gh-await-reviews emits JSON instead of crashing on an unparseable ACT timestamp"
+else echo "FAIL: gh-await-reviews unparseable timestamp rc=$rc out=$out"; fail=1; fi
 
 # gh-await-reviews: missing / non-numeric / extra-flag arg fail (no flag passthrough).
 PATH="$awaitstub:$PATH" "$bindir/gh-await-reviews" >/dev/null 2>&1; [ $? -ne 0 ] \
