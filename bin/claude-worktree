@@ -43,7 +43,9 @@ set -euo pipefail
 #                  uncommitted notes). Must live inside cwd's checkout.
 #   name           worktree label (suffix after the underscore); also the new
 #                  branch name when -b is omitted
-#   -b <branch>    branch to check out / create (default: <name>)
+#   -b <branch>    branch to check out / create (default: <name>). Resolved as:
+#                  local branch, else origin/<branch> (tracked, no fetch), else
+#                  created fresh from the current HEAD.
 #   -- <prompt>    everything after `--` is the initial prompt; when given, an
 #                  interactive claude (acceptEdits) is started in a detached tmux
 #                  session in the worktree. Attach with the printed command.
@@ -131,7 +133,19 @@ fi
 if [ -d "$wt_path" ]; then
   echo "claude-worktree: worktree dir already exists, reusing: $wt_path" >&2
 elif git -C "$repo_dir" show-ref --verify --quiet "refs/heads/${branch}"; then
-  git -C "$repo_dir" worktree add "$wt_path" "$branch" >&2    # existing branch
+  git -C "$repo_dir" worktree add "$wt_path" "$branch" >&2               # existing local branch
+elif git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+  # Branch has no local tracking branch but exists on origin: check it out
+  # explicitly from origin/<branch> rather than relying on `git worktree add`'s
+  # DWIM resolution. git-worktree(1) says a bare <branch> with no local match
+  # behaves like `--track -b` only when it "uniquely" identifies a remote-tracking
+  # branch across ALL remotes; with more than one remote (or none) the outcome
+  # depends on checkout.defaultRemote. Naming `origin` explicitly makes this
+  # deterministic regardless of remote configuration -- and matches this repo's
+  # other origin-assuming script, git-reap-gone. No fetch happens here: if the
+  # branch was never fetched, this check simply misses and falls through to the
+  # "new branch" case below, same as before this case existed.
+  git -C "$repo_dir" worktree add --track -b "$branch" "$wt_path" "origin/${branch}" >&2 # remote-only branch
 else
   git -C "$repo_dir" worktree add -b "$branch" "$wt_path" >&2 # new branch
 fi

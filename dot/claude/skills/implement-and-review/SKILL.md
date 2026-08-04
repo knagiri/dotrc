@@ -1,6 +1,6 @@
 ---
 name: implement-and-review
-description: worktree に委譲されたタスクを実装→merge で完遂する。HOW は委譲元で確定済みなので brainstorm せず、難度別の実装 subagent へ dispatch しながら実装し、verification を経て pr-review-automerge で自律 merge する。最後に（委譲プロンプトが内省スキップを明示しない限り）harness-from-retrospective で自己内省し、恒久ハーネスの候補を方針として提示する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
+description: worktree に委譲されたタスクを実装→merge で完遂する。HOW は委譲元で確定済みなので brainstorm せず、必要に応じて難度別の実装 subagent へ dispatch しつつ実装し、verification を経て pr-review-automerge で自律 merge する。最後に（委譲プロンプトが内省スキップを明示しない限り）harness-from-retrospective で自己内省し、恒久ハーネスの候補を方針として提示する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
 ---
 
 # implement-and-review
@@ -35,9 +35,23 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 
    `superpowers:test-driven-development` 等、repo の規約に従う。コミットは論理単位で小さく。
 
-   **委譲の上限**: Opus 5 は放っておくと過剰に委譲する（Anthropic 公式の Opus 5 移行ガイドが
-   明記している。促進する指示が要ったのは 4.8 までで、5 では逆に上限が要る）。委譲には毎回
-   コンテキスト再構築・報告作成・報告の読み直しのコストが乗るので、次を目安に上限を置く。
+   **plan 内の事実主張は書き写す前に裏を取る**: どの artifact を選ぶか・どこに置くか等の
+   設計判断には従う。一方 plan 本文が repo 内の実装・ツール挙動に言及していたら（「`bin/X`
+   はこう動く」「既存 skill Y はこう書いてある」等）、書き写す前に該当ファイルを Read して
+   確かめる。事実の誤りを黙って commit するほうが、確認してから書くより後戻りが大きいため。
+   設計をやり直すのとは別物なので、不変条件「HOW を勝手に作り直さない」と矛盾しない。
+   常時ロードの `dot/claude/rules/evidence-over-guesswork.md` §1（一次情報を確認しきる前に
+   着手しない）と同根で、plan 経由でそれが迂回されるのを塞ぐ位置づけ。
+   由来: plan に埋め込まれた SKILL.md 全文の「headless 起動では claude-review が出力を
+   ログ化する」を無検証で書き写し、レビューで差し戻された実例（実際の `bin/claude-review` は
+   自身が起こす headless pane の stdout を tee するだけで、委譲先の interactive セッションから
+   呼ばれた skill の出力は載らない）。
+
+   **委譲の上限**: Opus 5 は放っておくと過剰に委譲する（促進する指示が要ったのは 4.8 までで、
+   5 では逆に上限が要る。出典: Anthropic 公式 Prompting Claude Opus 5「Controlling subagent
+   spawning」節 <https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5#controlling-subagent-spawning>）。
+   委譲には毎回コンテキスト再構築・報告作成・報告の読み直しのコストが乗るので、次を目安に
+   上限を置く。
 
    - 数回の tool call で自分が終えられる仕事は dispatch せず自分で書く（ハイブリッド）。
      上記のコストが仕事本体を上回るため。
