@@ -19,13 +19,36 @@ model: opus
    重複の観点でレビューする。`/code-review` skill が使えるなら土台に使ってよい。
 4. **未解決 thread の取得**: `gh-list-threads <PR>` を実行し、`isResolved == false` の thread のみを
    対象にする。raw な `gh api graphql` は使わない。
-5. **仕分け**: findings と未解決 thread を「直す（fix 役へ渡す）」と「gate に残す（人間の議論待ち・
+5. **仕分け**: **まず見つけたものを全部いずれかのバケットに載せる。** 軽微だから・確信が持てない
+   からという理由で、バケットに載せずに落とすことはしない。妥当でないと判断したものは
+   `findings_gated` に `blocker: false` で載せ、`reason_gated` に却下理由を書く。仕分けは
+   「載せた後」に行う。理由: 報告の取捨選択をこの工程でやると、実際には妥当だった指摘が記録に
+   残らないまま消える。取捨選択は orchestrator と人間が gate を見て行える。
+
+   そのうえで findings と未解決 thread を「直す（fix 役へ渡す）」と「gate に残す（人間の議論待ち・
    コード修正で片付かないもの・そもそも妥当でないもの）」に分ける。gate は merge を止めるべきものだけ
    `blocker: true` にし、妥当でないと却下しただけのものは `blocker: false` にする（orchestrator が
-   `blocker` でループ継続を決めるため）。**resolve も push も commit もしない。**
+   `blocker` でループ継続を決めるため）。coverage-first は「載せるか落とすか」の話であって
+   「どのバケットに載せるか」ではない。修正の価値が薄い低 severity / 低 confidence の指摘は、
+   `findings_to_fix` ではなく `findings_gated`（`blocker: false`）に寄せてよい（`findings_to_fix`
+   が非空だと必ず次イテレーションが走るため、瑣末な指摘を積むと 5 回の上限を使い切ってしまう）。
+   `findings_to_fix` / `findings_gated` の各要素には
+   `severity`（`high` / `medium` / `low`）と `confidence`（`high` / `medium` / `low`）を添え、
+   下流（orchestrator / 人間）がランク付けできるようにする（`threads_pending` には添えない —
+   人間の議論待ちが主で意味が薄いため）。**resolve も push も commit もしない。**
    **PR コメント（reply も含め）は投稿しない。**
 6. **verdict 出力**: verdict JSON だけを出力する（説明文は付けない）。スキーマは
    `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。
+
+<!-- 由来: 手順 5 の coverage-first（まず全件バケットに載せる）と `severity` / `confidence` は、
+     Claude Opus 5 が「保守的に報告せよ」「重大なものだけ報告せよ」といった severity フィルタ指示を
+     前世代より literal に守り、バグ発見能力は向上しているのに報告件数が減って recall が落ちたように
+     見える、という Anthropic 公式の Opus 5 移行ガイドの指摘に合わせたもの。公式の推奨パターンは
+     「見つけたものは確信度・重大度を添えて全部挙げさせ、フィルタは別工程でやる」。この repo では
+     orchestrator（`pr-review-automerge`）と人間が別工程として既に存在するので、判定役側は
+     coverage-first に寄せ、取捨選択を下流へ渡す。
+     同じ手順が `pr-review-automerge` skill の「判定 subagent prompt」にもあるので、片方だけ
+     変えない。 -->
 
 <!-- 決定済み（再指摘防止のため理由を残す）: 「コードを変更しない」を frontmatter の `tools:`
      allowlist で機械的に縛るかを検討し、**入れない**と決めた。理由:
