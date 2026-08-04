@@ -27,6 +27,37 @@ git worktree list                          # worktree ↔ ブランチ対応
 
 いずれも settings.json の allow（`git rev-parse *` / `git worktree list`）に含まれ、承認なしで実行できる。
 
+#### 状態の確認は `.git/` のパスを直接見ず、git plumbing で行う
+
+linked worktree の `.git` は**ディレクトリではなくファイル**である（`gitdir: <path>` を書いた
+1 行のテキストファイルで、実体は main repo 側の `.git/worktrees/<name>/` にある）。したがって
+`ls .git/MERGE_HEAD` / `cat .git/HEAD` / `ls .git/rebase-merge` のようにパスを直接叩く確認は、
+一般にしない。
+
+理由は、状態が実在していても「無い」と読めてしまう（false negative）ため。`.git` がファイル
+なので配下のパスは解決自体が成立せず、`ls` は "No such file" ではなく "Not a directory" で
+落ちる。だが存在チェックの文脈ではどちらも「無い」と同義に読まれ、しかもコマンドとしては
+ただの非ゼロ終了なので、誤りに気づかないまま結論へ直結する。
+
+代わりに git plumbing で問う。git は worktree のレイアウトを知っているので、main working tree
+でも linked worktree でも同じ答えを返す。
+
+```
+git rev-parse -q --verify MERGE_HEAD   # 中断中の merge があるか（exit 0 なら在る）
+git status                             # rebase / cherry-pick を含む中断状態の全般
+```
+
+main working tree にいると確定している場面など、上の理由が当てはまらないなら縛られなくてよい。
+ただし linked worktree かどうかは §1 冒頭の `git rev-parse` で確かめられるので、確かめずに
+main working tree だと決めてかからない。
+
+<!-- 文脈: tetsunavi-monorepo PR #5982（ncs-player の ARM64 対応）で main を merge して衝突解消中、
+     git commit が hook のタイムアウトで中断した際、`ls .git/MERGE_HEAD` で状態を確認して
+     「マージが失われた」と誤認しかけた incident。`.git` がファイルであるためパス probe が
+     成立していなかっただけで、`git rev-parse -q --verify MERGE_HEAD` では MERGE_HEAD は実在し、
+     そのまま復帰できた。根本: worktree のレイアウトを確認せず main working tree と同じ前提で
+     ファイルパスを直接叩いたこと。 -->
+
 ### 2. 原則：起動した worktree ディレクトリに閉じる
 
 linked worktree で起動された場合、デフォルトは以下に従う。「permission」列は settings.json 上の扱い。
