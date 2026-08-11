@@ -66,7 +66,36 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    （`superpowers:verification-before-completion`）。**重い self-review はしない** —
    レビュー本体は独立した文脈を持つ次の手順に委ねる。自分が書いたコードを同じ文脈で
    レビューしても、実装時の思い込みごと追認するだけになるため。
-4. **review→merge**: PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
+
+   **base の進行も確認する**: テストが通ることは、走行中に base 側が進んでいないことを
+   意味しない。PR を出す前に base の現在地を見る。
+
+   ```
+   git fetch origin
+   git log --oneline HEAD..origin/<base>      # base がどれだけ進んだか
+   git diff --name-only HEAD...origin/<base>  # base 側で変わったファイル
+   ```
+
+   自分が触ったファイルが base 側でも変更されていれば、PR を出す前に取り込む（merge
+   / rebase）。base が進んでいなければ追加コストはこの 2〜3 コマンドだけで済むので、
+   毎回確認して構わない。
+
+   複数の委譲が並行して merge される運用では、base が走行中に進むのは例外ではなく常態。
+   conflict したまま PR を出すと GitHub 側は `mergeStateStatus: DIRTY` になり、手順 4 の
+   レビュー段で判定役が発見 → 修正役が直す、で 1 イテレーションをまるごと消費する。
+   さらに修正役は他人の変更を conflict 解決越しに扱うことになり、内容欠落のリスクが乗る。
+   自分の文脈が生きているここで取り込むほうが安く確実。
+   由来: knagiri/dotrc#26（Opus 5 の委譲上限を追記した PR）で、実装中に base が 40 コミット
+   以上進み、そのうち 1 つが自分と同一ファイルの同一段落を変更していたのに気づかず conflict
+   したまま PR を出し、レビュー段の判定役が発見して 1 イテレーションを消費した実例。
+4. **review→merge**: **PR は `my-create-pr` skill で作る**（生の `gh pr create` を直接叩かない）。
+   base の決定（`gh repo view` で既定ブランチを取得し、ブランチ名を決め打ちにしない）・
+   diff の基準（ローカル追跡ブランチでなく remote ref を 3 点表記で使う）・`--base` の常時明示
+   といった非自明な作法が `my-create-pr` 側に集約されており、生の `gh pr create` はそれを
+   丸ごと迂回するため。由来: 上と同じ委譲ランで、repo に `my-create-pr` があり settings.json で
+   allow までされているのに素通りし、生の `gh pr create` を使っていた。
+
+   PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
    レビュー・required CI 確認を経て自律 merge する。
 5. **自己内省（末尾ハーネス）**: `pr-review-automerge` から戻ったら（auto-merge 有効化に至らず
    5 イテレーション未収束や CI fail で停止・報告して終わった場合も含む）、委譲プロンプトに
