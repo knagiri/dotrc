@@ -27,7 +27,7 @@ git worktree list                          # worktree ↔ ブランチ対応
 
 いずれも settings.json の allow（`git rev-parse *` / `git worktree list`）に含まれ、承認なしで実行できる。
 
-#### 状態の確認は `.git/` のパスを直接見ず、git plumbing で行う
+#### 状態の確認は `.git/` のパスを直接見ず、git コマンドに問う
 
 linked worktree の `.git` は**ディレクトリではなくファイル**である（`gitdir: <path>` を書いた
 1 行のテキストファイルで、実体は main repo 側の `.git/worktrees/<name>/` にある）。したがって
@@ -39,8 +39,10 @@ linked worktree の `.git` は**ディレクトリではなくファイル**で�
 落ちる。だが存在チェックの文脈ではどちらも「無い」と同義に読まれ、しかもコマンドとしては
 ただの非ゼロ終了なので、誤りに気づかないまま結論へ直結する。
 
-代わりに git plumbing で問う。git は worktree のレイアウトを知っているので、main working tree
-でも linked worktree でも同じ答えを返す。
+代わりに git 自身に問う。git は worktree のレイアウトを知っているので、main working tree でも
+linked worktree でも同じ答えを返す（下記コマンドは `git status` のような porcelain と
+`git rev-parse` のような plumbing が混在するが、この区別はここでは関係ない。共通するのは
+`.git/` 配下へ直接パスを通さず git のコマンド層を経由する点）。
 
 ```
 git rev-parse -q --verify MERGE_HEAD   # 中断中の merge があるか（exit 0 なら在る）
@@ -50,12 +52,14 @@ git rev-parse --git-path <name>        # 内部ファイルの実体パスが要
 
 `.git` が**ディレクトリだと確認できている**場面は、上の false negative の理由が当てはまらない
 ので縛られなくてよい。ただし判定基準は「linked worktree でないこと」ではない。§1 の
-`--git-common-dir` / `--git-dir` 一致判定は submodule の working tree でも「一致」を返す
-（submodule の `.git` も `gitdir: ...` を書いたファイルで、両方とも
-`<super>/.git/modules/<name>` を指すため）。つまり §1 の判定だけでは submodule を誤って
-「main working tree（= `.git` がディレクトリ）」と分類してしまい、この例外がまさに防ごうと
-している false negative を許すことになる。`.git` の種別は `test -d .git` 等で別途確かめてから
-縛りを外す。
+`--git-common-dir` / `--git-dir` 一致判定は submodule の working tree でも「一致」を返し、
+これは分類として誤りではない（submodule はそれ自体が別 repo の main working tree であり、
+`--git-common-dir` と `--git-dir` は両方とも `<super>/.git/modules/<name>` を指すため）。破綻
+するのは「main working tree なら `.git` はディレクトリ」という**含意**のほうで、submodule の
+`.git` は `gitdir: <super>/.git/modules/<name>` を書いた 1 行のファイルである。つまり §1 の
+「main working tree」という結果だけで `.git` がディレクトリだと決め打つと、submodule で
+この例外がまさに防ごうとしている false negative を許すことになる。`.git` の種別は
+`test -d .git` 等で別途確かめてから縛りを外す。
 
 <!-- 文脈: 別 repo での monorepo 作業中、main を merge して衝突解消の途中で
      git commit が hook のタイムアウトで中断した際、`ls .git/MERGE_HEAD` で状態を
