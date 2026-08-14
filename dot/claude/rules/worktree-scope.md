@@ -45,18 +45,24 @@ linked worktree の `.git` は**ディレクトリではなくファイル**で�
 ```
 git rev-parse -q --verify MERGE_HEAD   # 中断中の merge があるか（exit 0 なら在る）
 git status                             # rebase / cherry-pick を含む中断状態の全般
+git rev-parse --git-path <name>        # 内部ファイルの実体パスが要るとき（例: MERGE_MSG）。worktree/submodule でも正しい実パスを返す
 ```
 
-main working tree にいると確定している場面など、上の理由が当てはまらないなら縛られなくてよい。
-ただし linked worktree かどうかは §1 冒頭の `git rev-parse` で確かめられるので、確かめずに
-main working tree だと決めてかからない。
+`.git` が**ディレクトリだと確認できている**場面は、上の false negative の理由が当てはまらない
+ので縛られなくてよい。ただし判定基準は「linked worktree でないこと」ではない。§1 の
+`--git-common-dir` / `--git-dir` 一致判定は submodule の working tree でも「一致」を返す
+（submodule の `.git` も `gitdir: ...` を書いたファイルで、両方とも
+`<super>/.git/modules/<name>` を指すため）。つまり §1 の判定だけでは submodule を誤って
+「main working tree（= `.git` がディレクトリ）」と分類してしまい、この例外がまさに防ごうと
+している false negative を許すことになる。`.git` の種別は `test -d .git` 等で別途確かめてから
+縛りを外す。
 
-<!-- 文脈: tetsunavi-monorepo PR #5982（ncs-player の ARM64 対応）で main を merge して衝突解消中、
-     git commit が hook のタイムアウトで中断した際、`ls .git/MERGE_HEAD` で状態を確認して
-     「マージが失われた」と誤認しかけた incident。`.git` がファイルであるためパス probe が
-     成立していなかっただけで、`git rev-parse -q --verify MERGE_HEAD` では MERGE_HEAD は実在し、
-     そのまま復帰できた。根本: worktree のレイアウトを確認せず main working tree と同じ前提で
-     ファイルパスを直接叩いたこと。 -->
+<!-- 文脈: 別 repo での monorepo 作業中、main を merge して衝突解消の途中で
+     git commit が hook のタイムアウトで中断した際、`ls .git/MERGE_HEAD` で状態を
+     確認して「マージが失われた」と誤認しかけた incident。`.git` がファイルである
+     ためパス probe が成立していなかっただけで、`git rev-parse -q --verify
+     MERGE_HEAD` では MERGE_HEAD は実在し、そのまま復帰できた。根本: worktree の
+     レイアウトを確認せず main working tree と同じ前提でファイルパスを直接叩いたこと。 -->
 
 ### 2. 原則：起動した worktree ディレクトリに閉じる
 
