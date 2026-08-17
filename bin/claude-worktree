@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# claude-worktree -- create a git worktree and (optionally) start an interactive
-# claude inside a detached tmux session living in that worktree.
+# claude-worktree -- create a git worktree and (optionally) start a claude
+# session living in that worktree.
 #
 # Worktree path is a sibling of the repository named <toplevel>_<name> so the
 # tmux window is easy to search. The underscore separator is tmux-safe (a dot
@@ -10,17 +10,24 @@ set -euo pipefail
 # to the MAIN repository toplevel so names stay flat even when invoked from
 # inside another worktree.
 #
-# When a prompt is given, claude is launched INSIDE a fresh detached tmux session
-# (session name = worktree basename, matching the `gts` convention). Running it
-# in its own pane means its $TMUX_PANE is that new pane -- so claude-queue tracks
-# it correctly instead of colliding with the launching pane. Attach any time
-# (`gts <session>` / `tmux attach -t <session>`); it is interactive, so it keeps
-# running at the REPL after the initial prompt -- no `claude --resume` needed.
+# When a prompt is given, the default is a BACKGROUND agent (`claude --bg`,
+# acceptEdits) started with the worktree as its cwd. It exits by itself once the
+# task completes, so neither sessions nor worktrees pile up, and tool calls that
+# need approval block and wait rather than degrading silently. Reach it with
+# `claude attach <short-id>` (the id is printed at launch).
 #
-# When invoked from inside tmux, the launch is wrapped so that when claude exits
-# the attached client is switched back to the pane it was called from (not just
-# the origin session's currently-active pane). Nobody attached / origin pane gone
-# both degrade to a silent no-op.
+# `--tmux` selects the other mode: claude is launched INSIDE a fresh detached
+# tmux session (session name = worktree basename, matching the `gts` convention).
+# Running it in its own pane means its $TMUX_PANE is that new pane -- so
+# claude-queue tracks it correctly instead of colliding with the launching pane.
+# Attach any time (`gts <session>` / `tmux attach -t <session>`); it is
+# interactive, so it keeps running at the REPL after the initial prompt -- no
+# `claude --resume` needed. Use it when a human is meant to sit with the session.
+#
+# In `--tmux` mode, when invoked from inside tmux, the launch is wrapped so that
+# when claude exits the attached client is switched back to the pane it was
+# called from (not just the origin session's currently-active pane). Nobody
+# attached / origin pane gone both degrade to a silent no-op.
 #
 # A new worktree only checks out the branch: gitignored / uncommitted files of the
 # invoking checkout do NOT propagate, and a delegated session cannot read outside
@@ -28,10 +35,14 @@ set -euo pipefail
 # copies such files in, so the delegated prompt can reference them relatively.
 #
 # Usage:
-#   claude-worktree [--self] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
+#   claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
 #
 #   --self         anchor the worktree to the repo this script lives in (e.g.
 #                  your dotfiles repo), not cwd. Use for repo-independent work.
+#   --tmux         launch the delegate in a detached tmux session running an
+#                  INTERACTIVE claude instead of a background agent. Use when a
+#                  human is meant to sit with it (working a design out together);
+#                  the session stays at the REPL and is reached with `gts`.
 #   --model <alias>
 #                  pass --model <alias> to the launched claude (e.g. opus), so the
 #                  caller picks the model for the role it is delegating. Omitted
@@ -46,9 +57,10 @@ set -euo pipefail
 #   -b <branch>    branch to check out / create (default: <name>). Resolved as:
 #                  local branch, else origin/<branch> (tracked, no fetch), else
 #                  created fresh from the current HEAD.
-#   -- <prompt>    everything after `--` is the initial prompt; when given, an
-#                  interactive claude (acceptEdits) is started in a detached tmux
-#                  session in the worktree. Attach with the printed command.
+#   -- <prompt>    everything after `--` is the initial prompt. By default the
+#                  delegate is started with `claude --bg` (acceptEdits): it exits
+#                  by itself when the task completes, and is reached with
+#                  `claude attach <short-id>`. With --tmux, see above.
 
 usage() {
   # Print the first contiguous "# " comment block (the description), skipping the
@@ -63,6 +75,7 @@ name=""
 branch=""
 prompt=""
 self=0
+use_tmux=0
 model=""
 seeds=()
 while [ $# -gt 0 ]; do
@@ -80,6 +93,7 @@ while [ $# -gt 0 ]; do
       model="$1"; shift ;;
     --seed) shift; [ $# -gt 0 ] || usage 1; seeds+=("$1"); shift ;;
     --self) self=1; shift ;;
+    --tmux) use_tmux=1; shift ;;
     --) shift; prompt="$*"; break ;;
     -*) echo "claude-worktree: unknown flag: $1" >&2; usage 1 ;;
     *)
@@ -128,6 +142,20 @@ if [ "${#seeds[@]}" -gt 0 ]; then
   done
 fi
 
+# A background session already living in this worktree means a second delegation
+# would race the first on the same files. Refuse before creating anything, and
+# name the existing session so the caller can reach it. Skipped when jq is
+# absent: the guard is a convenience, not a correctness boundary.
+if [ -n "$prompt" ] && [ "$use_tmux" = 0 ] && command -v jq >/dev/null 2>&1; then
+  existing="$(claude agents --json 2>/dev/null | jq -r --arg d "$wt_path" \
+    'first(.[] | select(.kind == "background" and .cwd == $d) | .sessionId[0:8]) // empty')"
+  if [ -n "$existing" ]; then
+    echo "claude-worktree: a background session is already running in $wt_path" >&2
+    echo "  attach with: claude attach $existing" >&2
+    exit 1
+  fi
+fi
+
 # Keep stdout clean (path only) so add-only mode is scriptable; git's checkout
 # chatter goes to stderr.
 if [ -d "$wt_path" ]; then
@@ -165,6 +193,41 @@ if [ -z "$prompt" ]; then
   exit 0
 fi
 
+if [ "$use_tmux" = 0 ]; then
+  # Background agent (default). It exits on its own when the task completes,
+  # which is the whole point of preferring it over an interactive session. The
+  # id is assigned by --bg (it ignores --session-id), so the only way to learn
+  # it is to read the launch banner back.
+  #
+  # cwd matters: the delegate reads the checkout it is started in, so the launch
+  # runs inside the worktree. A subshell keeps this script's own cwd untouched.
+  if [ -n "$model" ]; then
+    launch_out="$(cd "$wt_path" && claude --bg --permission-mode acceptEdits --model "$model" "$prompt" 2>&1)"
+  else
+    launch_out="$(cd "$wt_path" && claude --bg --permission-mode acceptEdits "$prompt" 2>&1)"
+  fi
+
+  # `backgrounded · <id>`. Pull the first 8-hex-char field off that line rather
+  # than matching the separator, which is a multibyte middle dot.
+  short="$(printf '%s\n' "$launch_out" \
+    | awk '/backgrounded/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9a-f]{8}$/) { print $i; exit } }')"
+
+  echo "worktree : $wt_path"
+  echo "branch   : $branch"
+  if [ -n "$short" ]; then
+    echo "session  : $short (background; acceptEdits)"
+  else
+    # The session IS running -- only the id is unknown. Surfacing the raw banner
+    # beats printing a report with a silently empty field.
+    echo "claude-worktree: could not read the session id from the launch output:" >&2
+    printf '%s\n' "$launch_out" >&2
+  fi
+  [ -z "$model" ] || echo "model    : $model"
+  [ -z "$short" ] || echo "attach   : claude attach $short"
+  exit 0
+fi
+
+# --tmux: detached tmux session running an interactive claude.
 # Session name = worktree basename, matching the `gts` convention (it derives the
 # session name from the dir basename), so gts won't create a duplicate.
 session="$(basename "$wt_path")"
