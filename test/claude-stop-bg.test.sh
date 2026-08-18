@@ -64,10 +64,30 @@ if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ]; then
   echo "ok: full UUID is rejected as not a short id"
 else echo "FAIL: full UUID accepted rc=$rc"; fail=1; fi
 
-# No argument / too many arguments -> usage error.
+# No argument -> usage error.
 run >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: missing argument is rejected" \
   || { echo "FAIL: missing argument accepted"; fail=1; }
+
+# Too many arguments -> usage error. [ $# -eq 1 ] is what stops a caller from
+# smuggling extra flags (e.g. --force) past this wrapper into `claude stop`.
+: >"$stoplog"
+run aaaaaaaa --force >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ]; then
+  echo "ok: extra arguments are rejected"
+else echo "FAIL: extra arguments accepted rc=$rc stoplog=$(cat "$stoplog")"; fail=1; fi
+
+# Missing `claude` CLI -> refused with a diagnostic message, not a silent
+# non-zero exit. PATH here has jq but no claude (real or stub), so the
+# roster-fetch step must fail loudly.
+noclaude="$tmp/noclaude"
+mkdir -p "$noclaude"
+ln -s "$(command -v bash)" "$noclaude/bash"
+ln -s "$(command -v jq)" "$noclaude/jq"
+out="$(PATH="$noclaude" "$src" aaaaaaaa 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ -n "$out" ] && grep -qi 'claude' <<<"$out"; then
+  echo "ok: missing claude CLI is refused with a diagnostic message"
+else echo "FAIL: missing claude CLI rc=$rc out=$out"; fail=1; fi
 
 # Two roster entries sharing the prefix are ambiguous -> refuse rather than
 # guess, since stopping the wrong session is unrecoverable.
