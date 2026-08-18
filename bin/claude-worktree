@@ -193,6 +193,46 @@ if [ -z "$prompt" ]; then
   exit 0
 fi
 
+# Resolve the delegating session's name so the delegate can report back to it.
+#
+# A delegate has no conversation history and no way to guess who launched it.
+# `claude agents --json` lists every live session with its pid, so walking this
+# process's ancestors until one of them IS a listed session identifies the
+# caller exactly -- no cwd heuristics, no ambiguity when several sessions share
+# a directory. Returns empty (never fails the launch) when there is no claude
+# ancestor, when the entry carries no name, or when jq is unavailable: a human
+# running this from a plain shell has no delegator, and that is not an error.
+resolve_delegator() {
+  command -v jq >/dev/null 2>&1 || return 0
+  local agents p name
+  agents="$(claude agents --json 2>/dev/null)" || return 0
+  [ -n "$agents" ] || return 0
+  p=$$
+  while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+    name="$(printf '%s' "$agents" | jq -r --arg pid "$p" \
+      'first(.[] | select(.pid == ($pid | tonumber)) | .name // empty) // empty')"
+    if [ -n "$name" ]; then
+      printf '%s' "$name"
+      return 0
+    fi
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+  done
+}
+
+delegator="$(resolve_delegator)"
+
+# Inject the name as a bare datum. What to report, and when, is doctrine and
+# lives in the implement-and-review skill -- this script only supplies the fact
+# the skill cannot derive. Appending to the prompt (rather than exporting an env
+# var) is deliberate: `claude --bg` starts via a background service, so env
+# inheritance is not guaranteed, whereas the prompt is the one channel that is.
+if [ -n "$delegator" ]; then
+  prompt="${prompt}
+
+## 委譲元
+報告先 name: ${delegator}"
+fi
+
 if [ "$use_tmux" = 0 ]; then
   # Background agent (default). It exits on its own when the task completes,
   # which is the whole point of preferring it over an interactive session. The
@@ -223,6 +263,7 @@ if [ "$use_tmux" = 0 ]; then
     printf '%s\n' "$launch_out" >&2
   fi
   [ -z "$model" ] || echo "model    : $model"
+  [ -z "$delegator" ] || echo "report-to: $delegator"
   [ -z "$short" ] || echo "attach   : claude attach $short"
   exit 0
 fi
@@ -274,4 +315,5 @@ echo "worktree : $wt_path"
 echo "branch   : $branch"
 echo "session  : $session (detached; claude running with acceptEdits)"
 [ -z "$model" ] || echo "model    : $model"
+[ -z "$delegator" ] || echo "report-to: $delegator"
 echo "attach   : $attach"
