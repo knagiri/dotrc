@@ -180,7 +180,7 @@ seed したファイルは gitignore 済みなら worktree 内でも untracked �
      委譲先が worktree 外 Read の permission prompt で最初の一歩から動けなくなった incident。
      根本: 委譲先が承認なしに読めるのは新 worktree 内のファイルだけ。 -->
 
-連携の全体像（git worktree → tmux セッション → claude-queue の 3 層と `claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
+連携の全体像（git worktree を土台に、既定の background 起動（`claude --bg`）と `--tmux` の tmux セッションへ分岐し、どちらも claude-queue が追跡するという層構成と、`claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
 
 ### 7. 委譲 worktree の後片付け（`git-reap-gone`）
 

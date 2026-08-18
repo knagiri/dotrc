@@ -39,9 +39,12 @@
 | ④ 分岐起動 | `claude-worktree` | ①の worktree 追加を常に行い、既定は⑤の起動、`--tmux` 指定時のみ②③のセットアップ | worktree dir / short session id（`--tmux` 時は tmux session） |
 | ⑤ background 起動 | `claude --bg` | 人間不在の委譲先を起こし、完遂で自ら終了する | short session id（8 桁） |
 
-**鍵となる連結:** worktree dir の basename = tmux session 名。区切り文字を `_` に統一して
-あるため、`①の dir 名 dotrc_foo` → `②の session 名 dotrc_foo` が自動的に一致し、`gts` も
-`claude-worktree` も同じ session を指す（二重作成が起きない）。
+**鍵となる連結（②を作る経路に限る）:** worktree dir の basename = tmux session 名。区切り文字を
+`_` に統一してあるため、`①の dir 名 dotrc_foo` → `②の session 名 dotrc_foo` が自動的に一致し、
+`gts` も `claude-worktree --tmux` も同じ session を指す（二重作成が起きない）。既定経路
+（`claude --bg`）は②を作らないのでこの連結は働かず、到達は `claude attach <short-id>` になる。
+既定経路で作った worktree dir に人間が後から `gts` を叩く場合も、同じ命名規約により basename
+と同名の session が立つ（先行 session が無いので、やはり二重作成にはならない）。
 
 ## 各層の詳細
 
