@@ -12,28 +12,40 @@
 | tmux セッション | `bin/ghq-tmux-session`（alias `gts` = `rc/aliases`） |
 | Claude セッション可視化 | `src/claude-queue/`（→ `bin/claude-queue`）。詳細は同梱 README |
 | worktree 分岐起動 | `bin/claude-worktree` |
+| 委譲先の停止 | `bin/claude-stop-bg` |
 | エージェント運用ルール | `dot/claude/rules/worktree-scope.md` |
 
 ## レイヤ構成
 
 ```
-④ claude-worktree  … worktree 追加 + ②③を一括セットアップする入口
+④ claude-worktree  … ① の worktree 追加 + 既定は ⑤ の起動、--tmux なら ② のセットアップ
         │
         ▼
-① git worktree ──→ ② tmux session ──→ ③ claude-queue
-  (dir / branch)    (session=basename)   ($TMUX_PANE)
+① git worktree ──┬─(既定)────→ ⑤ claude --bg ──→ ③ claude-queue
+  (dir / branch)  │             (short session id)  (tmux_pane = NULL)
+                  │
+                  └─(--tmux)──→ ② tmux session ──→ ③ claude-queue
+                                (session=basename)  ($TMUX_PANE)
 ```
+
+①の worktree 作成はどちらの経路でも必ず走る。分岐するのは「その worktree で何を起こすか」
+だけで、②の tmux session は `--tmux` 指定時にしか作られない。③はどちらの経路でも追跡する
+（②を経ない既定経路では `tmux_pane` が NULL になるだけ）。
 
 | 層 | ツール | 担当 | 識別キー |
 |---|---|---|---|
 | ① ファイル/ブランチ | `git w*` alias | worktree の作成・一覧・削除 | ディレクトリパス / ブランチ |
 | ② tmux セッション | `gts`(`ghq-tmux-session`) | worktree dir ごとに tmux session を作って attach/switch | session 名 = dir basename |
-| ③ Claude 可視化 | `claude-queue` | 全 pane の Claude 状態を SQLite 化、status-right 表示 + fzf popup で pane へジャンプ | `$TMUX_PANE` |
-| ④ 分岐起動 | `claude-worktree` | ①の worktree 追加と②③のセットアップを 1 コマンド化 | worktree dir / tmux session |
+| ③ Claude 可視化 | `claude-queue` | 全 pane の Claude 状態を SQLite 化、status-right 表示 + fzf popup で pane へジャンプ | `$TMUX_PANE`（②を経ない既定経路では NULL。short session id で識別） |
+| ④ 分岐起動 | `claude-worktree` | ①の worktree 追加を常に行い、既定は⑤の起動、`--tmux` 指定時のみ②のセットアップ（③はどちらの経路でも追跡する） | worktree dir / short session id（`--tmux` 時は tmux session） |
+| ⑤ background 起動 | `claude --bg` | 人間不在の委譲先を起こし、完遂で自ら終了する | short session id（8 桁） |
 
-**鍵となる連結:** worktree dir の basename = tmux session 名。区切り文字を `_` に統一して
-あるため、`①の dir 名 dotrc_foo` → `②の session 名 dotrc_foo` が自動的に一致し、`gts` も
-`claude-worktree` も同じ session を指す（二重作成が起きない）。
+**鍵となる連結（②を作る経路に限る）:** worktree dir の basename = tmux session 名。区切り文字を
+`_` に統一してあるため、`①の dir 名 dotrc_foo` → `②の session 名 dotrc_foo` が自動的に一致し、
+`gts` も `claude-worktree --tmux` も同じ session を指す（二重作成が起きない）。既定経路
+（`claude --bg`）は②を作らないのでこの連結は働かず、到達は `claude attach <short-id>` になる。
+既定経路で作った worktree dir に人間が後から `gts` を叩く場合も、同じ命名規約により basename
+と同名の session が立つ（先行 session が無いので、やはり二重作成にはならない）。
 
 ## 各層の詳細
 
@@ -76,7 +88,7 @@ worktree dir は ghq 配下の兄弟ディレクトリとして `ghq list` に�
 ### ④ claude-worktree（`bin/claude-worktree`）
 
 ```
-claude-worktree <name> [-b <branch>] [-- <prompt...>]
+claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 ```
 
 - worktree を `<メインリポジトリ toplevel>_<name>` に作成
@@ -84,18 +96,22 @@ claude-worktree <name> [-b <branch>] [-- <prompt...>]
 - `-b` 省略時はブランチ名 = `<name>`。解決順はローカルブランチ → `origin/<branch>` を追跡 checkout →
   どちらにも無ければ新規作成（fetch はしない）
 - プロンプト無し: worktree 追加のみ。stdout にパスのみ出力（`git wa` の置き換え）
-- プロンプト有り: **detached tmux session（名前 = worktree basename）を作り、その pane の中で
-  interactive claude（`acceptEdits`）を起動**
+- プロンプト有り（既定）: **worktree dir で `claude --bg`（background agent, `acceptEdits`）を起動**。
+  tmux session は作らない。捕捉した short session id を `attach: claude attach <short-id>` として
+  stdout に出す
+- プロンプト有り + `--tmux`: **detached tmux session（名前 = worktree basename）を作り、その pane の
+  中で interactive claude（`acceptEdits`）を起動**。人間が同席する委譲に使う
 - `settings.json` で `claude-worktree` / `claude-worktree *` を allow 済み（承認不要）
 
 ## エンドツーエンドの流れ（作業を分岐する）
 
 1. worktree A の tmux pane で claude 作業中（③が pane 単位で追跡、status-right に状態表示）
 2. 独立した別ラインを切り出したい → `claude-worktree B -- "<prompt>"`
-3. ④が worktree B を作り、`dotrc_B` という detached session の pane で interactive claude を起動
-4. ユーザーは `gts dotrc_B`（または `tmux attach -t dotrc_B`）で attach
-   - interactive なので初期プロンプト処理後も REPL に留まる → `claude --resume` 不要
-5. `C-q q`（③picker）で A / B の pane を行き来
+3. ④が worktree B を作り、その中で `claude --bg` を起動する（tmux session は作らない）
+4. ユーザーは `claude attach <short-id>` で様子を見る。`C-q q`（③picker）からも同じ場所へ飛べる
+   - 承認待ちで止まっていれば、attach した画面にその prompt がそのまま出る
+5. 委譲先は完遂すると自分で終了する。質問に返信した場合だけ `idle` で残るので
+   `claude-stop-bg <short-id>` で閉じる
 
 ## 設計判断と根拠
 
@@ -110,18 +126,34 @@ worktree dir の basename はそのまま tmux session 名になる。tmux の�
 `_` は tmux ターゲット・session 名どちらでも安全。`git wa` と `claude-worktree` の双方を
 `_` に統一した。
 
-### ④は「先に tmux session を作り、その pane の中で claude を起動」
+### ④の既定は `claude --bg`（tmux session を作らない）
 
 素朴に `claude -p` をバックグラウンド（`setsid`）で起動すると、環境変数を継承するため
-ヘッドレス session の `$TMUX_PANE` が **起動元 pane のまま** になる。③は pane を ID とするので:
+ヘッドレス session の `$TMUX_PANE` が **起動元 pane のまま** になる。③は pane を ID とするので、
+起動元 pane を指す重複エントリが載り、L3 自己修復が起動元の追跡を誤終了し得た。この懸念が
+「先に tmux session を作り、その pane で起動する」という初期設計の根拠だった。
 
-- 起動元 pane を指す重複エントリが DB に載る
-- L3 自己修復が「同一 `$TMUX_PANE` の他 session を ForcedEnd」→ **起動元 A の追跡を誤終了** し得る
+`claude --bg`（background agent）ではこれが起きない。**`$TMUX_PANE` を継承しない**（実測: pane
+の中から起動しても③の `tmux_pane` は NULL）ため、起動元を指す重複エントリが作られない。
+`internal/hook/dispatch.go` の `forcedEndSiblings` は `Pane != ""` でガードされているので、
+空 pane の session が L3 自己修復を発火させることも原理的に無い。
 
-これを避けるため、先に `tmux new-session -d` で **新しい pane** を作り、その中で claude を
-起動する。claude は自分の pane の `$TMUX_PANE` を見るので③が正しく追跡し、起動元との衝突が
-無い。あわせて `-p` ではなく interactive 起動（初期プロンプト渡し）にすることで、処理後も
-REPL に残り attach するだけで続行でき、`--resume` の二段が消える。
+`-p` と違い、承認が要る tool call は**ブロックして待つ**（`claude agents --json` が
+`status: waiting`, `waitingFor: permission prompt` を返す）。人間不在の委譲先が「静かに劣化した
+まま完了扱い」になることがないので、`-p` の棄却理由も解消している。
+
+そのうえで background は**タスクを完遂するとプロセスが終わる**。interactive 起動の唯一の不満
+（完遂しても REPL に残り、session が溜まる）がこれで消えるため、④の既定を
+background に置いた。**worktree の滞留は background でも変わらない** — ①はどちらの経路でも
+走り、誰も消さないので、後片付けは `worktree-scope.md` §7 の `git-reap-gone`（manual 運用）が
+担う。tmux session を作る経路は `--tmux` として残してある — 人間が同席して
+設計を詰めるような、interactivity を要求する委譲のためで、退避路ではない。
+
+③との噛み合わせは「pane 無し = 追跡は完全、ジャンプだけ不能」になる。status-right のカウントは
+`terminated_at IS NULL` と state だけで絞るので background も普通に乗る。ジャンプは picker が
+`tmux_pane` の有無で分岐し、NULL なら `tmux new-window -d -c <cwd> claude attach <short-id>` で
+開く（`claude attach` は short id しか受けない）。承認待ちで止まった background 委譲先へ入る
+経路はこれだけなので、picker から隠さず出す。
 
 ### ④は **メイン** toplevel 基準でパスを作る
 
@@ -134,5 +166,3 @@ worktree の中から `claude-worktree` を実行しても `dotrc_a_b` のよう
   toplevel 基準。worktree 内から `git wa` するとパスがネストし得る。揃えるなら `git wa` も
   `--git-common-dir` 基準にする。
 - **alias のスコープ**: `gts` は対話シェル限定（非対話/スクリプトでは実名 `ghq-tmux-session`）。
-- **claude-queue 連携の検証**: ④で起動した session が③の picker / status に正しく載るかは、
-  実 claude 起動での通し確認が望ましい（pane 独立はスタンドインで実証済み）。
