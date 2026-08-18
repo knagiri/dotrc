@@ -5,7 +5,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 
 # implement-and-review
 
-別 workspace（detached tmux session, acceptEdits）に委譲されたタスクを、
+別 workspace（background agent, acceptEdits）に委譲されたタスクを、
 実装 → verification → merge まで完遂する。`delegate-to-worktree` が渡した
 プロンプト先頭の明示命令でこの skill に入る。
 
@@ -23,9 +23,10 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 
 1. **設計は確定済み**: 渡された HOW（本文 or seed 済み spec / 実装計画）を読み、そのまま
    実行に入る。**brainstorm はしない。** 仕様に本質的な欠落・矛盾があり、どう解釈しても
-   進めないときに限り、質問を出して REPL で待機する（この session は detached なので
-   ユーザーが `gts <session>` / `tmux attach -t <session>` で attach して答える）。
-   解釈の幅が結果を大きく変えないなら、前提を明示して進める。
+   進めないときに限り、プロンプト末尾の `## 委譲元` が示す name 宛に SendMessage で質問を送り、
+   そのまま待機する（この session は background なので、返信で起きて続きを実行する）。
+   `## 委譲元` が無ければ人間に届ける相手がいないので、前提を明示して進める。
+   解釈の幅が結果を大きく変えないなら、同じく前提を明示して進める。
 2. **実装**: 実装計画があれば `superpowers:executing-plans` に従い、タスク単位で進める。
    実装作業を subagent へ dispatch するときは、難度に応じて agent を選ぶ（モデルは各 agent
    定義の `model:` frontmatter で固定されている）。
@@ -103,6 +104,17 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    `harness-from-retrospective` を呼ぶ。自分の作業を振り返り、恒久ハーネスに値する改善点を
    方針として提示する（**提案のみ・無ければ no-op**）。承認・実装はしない — 人間が承認した
    項目だけ後で `harness-from-feedback` が実装する。
+6. **委譲元への報告**: プロンプト末尾に `## 委譲元` 節（`報告先 name: <name>`）があるときは、
+   次の 3 つの事象で SendMessage を送る。**送信に失敗しても無視して自分の終了処理を続ける**
+   （委譲元の session が既に消えていることがある）。
+
+   - **完了**: PR URL と auto-merge を有効化できたかを 1〜3 行で。
+   - **不足**: 手順 1 のとおり。質問を送って待機する。
+   - **中断**: `pr-review-automerge` が 5 イテレーション未収束・CI fail で停止したとき、その理由。
+
+   **permission 承認はこの経路に乗らない。** 承認が要る tool call はブロックしたまま待てばよく、
+   人間が `claude attach` で入って承認する。委譲元に承認を代行させようとしない
+   （cross-session permission laundering）。
 
 ## 不変条件
 
@@ -110,3 +122,4 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 - HOW を勝手に作り直さない。確定済みの設計に従う。
 - worktree ディレクトリ外への書き込みはしない（read-only 参照は可）。
 - 末尾の自己内省は**提案まで**。承認・実装・grant 記述はしない（実装は人間承認後の harness-from-feedback）。
+- 承認の代行を委譲元に求めない。ブロックしたまま待つのが正しい振る舞い。
