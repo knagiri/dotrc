@@ -140,17 +140,20 @@ linked worktree にいる場合はこの節のトリガーに当たらない。�
 今の worktree の作業を止めずに、独立した別ラインの作業を切り出したいときは `claude-worktree`（`bin/`）を使う。現在 worktree への変更はそのまま残り、分岐先は別ディレクトリ・別ブランチで進む。
 
 ```
-claude-worktree [--self] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
+claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
 ```
 
 - worktree は `<メインリポジトリ toplevel>_<name>` に作られる（メイン基準なので worktree 内から切ってもパスがネストしない。区切りは tmux 安全な `_`。`.` は `tmux -t` の `window.pane` 構文と衝突するため不可）
 - `-b` 省略時はブランチ名 = `<name>`。解決順はローカルブランチ優先 → 無ければ `origin/<branch>` を追跡 checkout → どちらにも無ければ新規作成。fetch はしない（未 fetch なら新規作成に落ちる）
-- `--` の後ろにプロンプトを渡すと、**新規の detached tmux セッション（名前 = worktree basename）を worktree dir に作り、その pane の中で interactive claude（`acceptEdits`）を起動**する。pane が独立するので `$TMUX_PANE` も独立し、claude-queue が起動元 pane と衝突せず正しく追跡する。interactive なので初期プロンプト処理後も REPL に留まり、`gts <session>` / `tmux attach -t <session>` で**いつでも attach して続行できる（`claude --resume` 不要）**
+- `--` の後ろにプロンプトを渡すと、**既定では `claude --bg`（background agent, `acceptEdits`）が worktree dir で起動する**。tmux session も pane も作らない。委譲先はタスクを完遂すると**自分で終了する**ので session は溜まらない（**worktree は残る**ので、後片付けは §7 の `git-reap-gone`）。到達は `claude attach <short-id>`（`claude-worktree` が stdout に出す）か、claude-queue の picker（`C-q q`）から。承認待ちで止まった委譲先へ入る経路もこれ
+- `--tmux` を付けると従来どおり **detached tmux セッション（名前 = worktree basename）を作り、その pane で interactive claude を起動**する。人間が同席して協同する委譲（HOW をその場で詰める等）に使う。`gts <session>` でいつでも attach でき、REPL に留まる
+- `claude-worktree` が委譲元 session の name を解決し、プロンプト末尾へ `## 委譲元` 節（`報告先 name: <name>`）を自動付加する（`--tmux` 経路でも同じ。解決できないときは何も付かない）。委譲先はこれを受け取り、完了・不足・中断を SendMessage で委譲元へ報告する。**permission 承認だけはこの経路に乗らない**（tool call の途中で凍結するため委譲先自身が動けない）。承認は人間が attach して行う
+- 質問に返信した委譲先は完遂後も `idle` で残るので、`claude-stop-bg <short-id>` で閉じる（§7 の後片付けと同じく、保守的なラッパー経由で行う）
 - プロンプト無しなら worktree 追加のみ（stdout にパスのみ出力。`git wa` の置き換え）
 - `--self` は worktree の基準 repo を、cwd の repo ではなく **`claude-worktree` 自身が置かれている repo**（symlink 解決後。= dotrc）にする。無関係な project で作業中に dotrc のグローバル harness（rules / skills / bin）を切りたいときに使う。`--seed` のコピー元は `--self` の有無に関わらず cwd の checkout のまま
 - `--seed <path>`（繰り返し可）は、現 checkout の `<path>` を新 worktree の同じ相対位置へコピーする。存在しない／checkout 外の seed は worktree 作成前に fail する
 - `--model <alias>` は起動する claude のモデルを固定する（friendly alias。`opus` / `sonnet` / `haiku`）。省略すると継承した既定モデルのまま。委譲先は長時間の agentic 実行を担うので、`delegate-to-worktree` / `harness-from-feedback` は `--model opus` を付けて呼ぶ
-- settings.json で allow 済み（`claude-worktree` / `claude-worktree *`）なので承認なしで実行できる
+- settings.json で allow 済み（`claude-worktree` / `claude-worktree *`、`claude-stop-bg` / `claude-stop-bg *`）なので承認なしで実行できる
 
 分岐先は `acceptEdits` で自律的に編集を進める。タスクが自然に独立した複数ラインへ割れるときに、現在 worktree を汚さず並行で進める選択肢として使う。**既に linked worktree にいるなら**乱用は避け、分岐の必要性が薄いときはその worktree 内で進める（隔離済みなので分岐で得るものが小さい）。この抑制は main working tree にいる場合には適用しない。そこでの既定は §5 のとおり委譲する。
 
@@ -177,7 +180,7 @@ seed したファイルは gitignore 済みなら worktree 内でも untracked �
      委譲先が worktree 外 Read の permission prompt で最初の一歩から動けなくなった incident。
      根本: 委譲先が承認なしに読めるのは新 worktree 内のファイルだけ。 -->
 
-連携の全体像（git worktree → tmux セッション → claude-queue の 3 層と `claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
+連携の全体像（git worktree を土台に、既定の background 起動（`claude --bg`）と `--tmux` の tmux セッションへ分岐し、どちらも claude-queue が追跡するという層構成と、`claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
 
 ### 7. 委譲 worktree の後片付け（`git-reap-gone`）
 
