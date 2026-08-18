@@ -64,10 +64,14 @@ if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ]; then
   echo "ok: full UUID is rejected as not a short id"
 else echo "FAIL: full UUID accepted rc=$rc"; fail=1; fi
 
-# No argument -> usage error.
-run >/dev/null 2>&1; [ $? -ne 0 ] \
-  && echo "ok: missing argument is rejected" \
-  || { echo "FAIL: missing argument accepted"; fail=1; }
+# No argument -> usage error. Same shape as the other refusal cases (reset the
+# stoplog, assert it stays empty) so this case proves `claude stop` was never
+# reached, not just that the exit code is nonzero.
+: >"$stoplog"
+run >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ]; then
+  echo "ok: missing argument is rejected"
+else echo "FAIL: missing argument accepted rc=$rc"; fail=1; fi
 
 # Too many arguments -> usage error. [ $# -eq 1 ] is what stops a caller from
 # smuggling extra flags (e.g. --force) past this wrapper into `claude stop`.
@@ -91,6 +95,27 @@ out="$(PATH="$noclaude" "$src" aaaaaaaa 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && [ -n "$out" ] && grep -qF 'the claude CLI is required' <<<"$out"; then
   echo "ok: missing claude CLI is refused with a diagnostic message"
 else echo "FAIL: missing claude CLI rc=$rc out=$out"; fail=1; fi
+
+# Missing `jq` -> refused with a diagnostic message. PATH here has claude (the
+# stub, so the claude-CLI guard passes) but no jq, so the jq guard must be the
+# one that fires. The stub claude script itself uses `cat` to print the
+# fixture roster, so `cat` is symlinked in too even though this guard fires
+# before `claude agents` is ever invoked -- keeping the stub runnable if that
+# ordering ever changes is cheap insurance.
+nojq="$tmp/nojq"
+mkdir -p "$nojq"
+ln -s "$(command -v bash)" "$nojq/bash"
+ln -s "$(command -v cat)" "$nojq/cat"
+cp "$stubbin/claude" "$nojq/claude"
+chmod +x "$nojq/claude"
+: >"$stoplog"
+out="$(PATH="$nojq" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" "$src" aaaaaaaa 2>&1)"; rc=$?
+# Pinned to the exact guard message (not a loose 'jq' substring) for the same
+# reason as the missing-claude case: a loose match would also pass if a
+# *different* guard fired instead, losing the discriminating power.
+if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && grep -qF 'jq is required to verify the session kind' <<<"$out"; then
+  echo "ok: missing jq is refused with a diagnostic message"
+else echo "FAIL: missing jq rc=$rc out=$out"; fail=1; fi
 
 # Two roster entries sharing the prefix are ambiguous -> refuse rather than
 # guess, since stopping the wrong session is unrecoverable.
