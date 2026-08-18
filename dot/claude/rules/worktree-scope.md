@@ -27,6 +27,47 @@ git worktree list                          # worktree ↔ ブランチ対応
 
 いずれも settings.json の allow（`git rev-parse *` / `git worktree list`）に含まれ、承認なしで実行できる。
 
+#### 状態の確認は `.git/` のパスを直接見ず、git コマンドに問う
+
+linked worktree の `.git` は**ディレクトリではなくファイル**である（`gitdir: <path>` を書いた
+1 行のテキストファイルで、実体は main repo 側の `.git/worktrees/<name>/` にある）。したがって
+`ls .git/MERGE_HEAD` / `cat .git/HEAD` / `ls .git/rebase-merge` のようにパスを直接叩く確認は、
+一般にしない。
+
+理由は、状態が実在していても「無い」と読めてしまう（false negative）ため。`.git` がファイル
+なので配下のパスは解決自体が成立せず、`ls` は "No such file" ではなく "Not a directory" で
+落ちる。だが存在チェックの文脈ではどちらも「無い」と同義に読まれ、しかもコマンドとしては
+ただの非ゼロ終了なので、誤りに気づかないまま結論へ直結する。
+
+代わりに git 自身に問う。git は worktree のレイアウトを知っているので、main working tree でも
+linked worktree でも同じ答えを返す（下記コマンドは `git status` のような porcelain と
+`git rev-parse` のような plumbing が混在するが、この区別はここでは関係ない。共通するのは
+`.git/` 配下へ直接パスを通さず git のコマンド層を経由する点）。
+
+```
+git rev-parse -q --verify MERGE_HEAD   # 中断中の merge があるか（exit 0 なら在る）
+git status                             # rebase / cherry-pick を含む中断状態の全般
+git rev-parse --git-path <name>        # 内部ファイルの実体パスが要るとき（例: MERGE_MSG）。worktree/submodule でも正しい実パスを返す
+```
+
+`.git` が**ディレクトリだと確認できている**場面は、上の false negative の理由が当てはまらない
+ので縛られなくてよい。ただし判定基準は「linked worktree でないこと」ではない。§1 の
+`--git-common-dir` / `--git-dir` 一致判定は submodule の working tree でも「一致」を返し、
+これは分類として誤りではない（submodule はそれ自体が別 repo の main working tree であり、
+`--git-common-dir` と `--git-dir` は両方とも `<super>/.git/modules/<name>` を指すため）。破綻
+するのは「main working tree なら `.git` はディレクトリ」という**含意**のほうで、submodule の
+`.git` は `gitdir: <super>/.git/modules/<name>` を書いた 1 行のファイルである。つまり §1 の
+「main working tree」という結果だけで `.git` がディレクトリだと決め打つと、submodule で
+この例外がまさに防ごうとしている false negative を許すことになる。`.git` の種別は
+`test -d .git` 等で別途確かめてから縛りを外す。
+
+<!-- 文脈: 別 repo での monorepo 作業中、main を merge して衝突解消の途中で
+     git commit が hook のタイムアウトで中断した際、`ls .git/MERGE_HEAD` で状態を
+     確認して「マージが失われた」と誤認しかけた incident。`.git` がファイルである
+     ためパス probe が成立していなかっただけで、`git rev-parse -q --verify
+     MERGE_HEAD` では MERGE_HEAD は実在し、そのまま復帰できた。根本: worktree の
+     レイアウトを確認せず main working tree と同じ前提でファイルパスを直接叩いたこと。 -->
+
 ### 2. 原則：起動した worktree ディレクトリに閉じる
 
 linked worktree で起動された場合、デフォルトは以下に従う。「permission」列は settings.json 上の扱い。
