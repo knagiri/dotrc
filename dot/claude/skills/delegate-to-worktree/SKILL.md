@@ -1,14 +1,14 @@
 ---
 name: delegate-to-worktree
-description: WHAT と HOW（設計）が固まった作業を別 workspace の自律 agent に委譲する。claude-worktree を session 起動形式（-- 付き）で呼び、detached tmux session 内に acceptEdits の claude を起こして implement-and-review skill に着手させる。「claude-worktree で作業して」「claude-worktree で worktree 作成から」「別 worktree / workspace でやらせて」「これを別 agent に任せて」「delegate して」系の依頼で使う。worktree を作るだけ（初期タスクを伴わない）の要求のときだけ add-only で呼ぶ。
-allowed-tools: Bash(claude-worktree *), Bash(git worktree list), Bash(git rev-parse *), Read, Glob, Grep
+description: WHAT と HOW（設計）が固まった作業を別 workspace の自律 agent に委譲する。claude-worktree を session 起動形式（-- 付き）で呼び、background agent（claude --bg, acceptEdits）を起こして implement-and-review skill に着手させる。「claude-worktree で作業して」「claude-worktree で worktree 作成から」「別 worktree / workspace でやらせて」「これを別 agent に任せて」「delegate して」系の依頼で使う。worktree を作るだけ（初期タスクを伴わない）の要求のときだけ add-only で呼ぶ。
+allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktree list), Bash(git rev-parse *), Read, Glob, Grep, SendMessage
 ---
 
 # delegate-to-worktree
 
 固まった作業（WHAT + HOW）を、別 workspace の自律 claude に委譲する。`bin/claude-worktree` を
-**session 起動形式**（`--` 付き）で呼び、detached tmux session の中に acceptEdits の
-claude を起こす。起動先は `implement-and-review` skill で**確定済みの設計を実行し**、merge する。
+**session 起動形式**（`--` 付き）で呼び、background agent（`claude --bg`, acceptEdits）を
+起こす。起動先は `implement-and-review` skill で**確定済みの設計を実行し**、merge する。
 
 運用ポリシーは `dot/claude/rules/worktree-scope.md` を参照。作業スコープを worktree に閉じる
 原則は §2、main working tree にいるときの既定＝委譲は §5、分岐そのものの手順は §6。
@@ -22,11 +22,17 @@ claude を起こす。起動先は `implement-and-review` skill で**確定済�
 ## 不変条件（厳守）
 
 - **委譲プロンプトは WHAT だけでなく HOW（設計）まで運ぶ。** HOW はこちら側（委譲元）で確定
-  させてから渡す。委譲先で brainstorm させない。理由は 2 つ: 委譲先は detached で人間が不在
-  なので設計対話が成立しない／長時間 agentic 実行は「最初の 1 ターンでフル仕様」を渡したときに
+  させてから渡す。委譲先で brainstorm させない。理由は 2 つ: 既定の委譲先は人間が同席しない
+  ので設計対話が成立しない／長時間 agentic 実行は「最初の 1 ターンでフル仕様」を渡したときに
   最も精度が出る。
 - **既定は session 起動形式**。必ず `claude-worktree --model opus <name> -b <branch> -- "<prompt>"`
   の `--` 付きで呼ぶ。`--` 無しの add-only モード（path を stdout に出すだけ）は使わない。
+- **既定は background 起動**。`claude-worktree --model opus <name> -b <branch> -- "<prompt>"` は
+  `claude --bg` で委譲先を起こす。完遂すれば委譲先は自分で終了するので、tmux session も
+  worktree も溜まらない。
+- **`--tmux` は人間が同席する委譲にだけ使う**。HOW をその場で詰める、設計対話が要る等、
+  interactivity を前提とする委譲は今後も一級のユースケースであり、退避路ではない。
+  fire-and-forget の委譲に付けてはいけない（付けると閉じない session が残る）。
 - **委譲先（B）のモデルは `--model opus` で固定する。** 長時間の agentic 実行を担う役なので、
   呼び出し元セッションのモデルを継承させない。
 - **add-only 例外**: 「worktree だけ作って」など、明示的に初期タスクを伴わない要求の
@@ -77,6 +83,15 @@ claude を起こす。起動先は `implement-and-review` skill で**確定済�
      ユーザーが名を明示していたら最優先。pre-fetch した worktree 一覧と衝突しない名にする。
    - `-b <branch>`: repo の branch 命名規約に合わせる（例: `feat/<name>`）。
 4. **起動する**: `claude-worktree --model opus [--seed <path>]... <name> -b <branch> -- "<prompt>"`.
-5. **報告して終了**: スクリプト出力（worktree / branch / session / model / attach コマンド）を
-   そのままユーザーに伝える。委譲先は設計確定済みなので attach 待ちにはならない。ユーザーは
-   `gts <session>` でいつでも様子を見られる。
+5. **報告して終了**: スクリプト出力（worktree / branch / session / model / report-to / attach）を
+   そのままユーザーに伝える。`attach` は `claude attach <short-id>` の形で、承認待ちで止まった
+   委譲先へ入る唯一の経路でもある（`C-q q` の picker からも同じ場所へ飛べる）。
+
+6. **報告を受け取ったら**: 委譲先は完了・不足・中断を SendMessage で送ってくる。
+   - **完了 / 中断**: 内容をユーザーに伝える。それ以上の後片付けは不要（委譲先は自分で終了する）。
+   - **不足（質問）**: 答えられるなら SendMessage で返信する。**返信した委譲先は完遂後も
+     `idle` で残る**ので、完了報告を受けた時点で `claude-stop-bg <short-id>` で閉じる。
+     判断がユーザーに属する質問は、代わりにユーザーへ取り次ぐ。
+   - **permission 承認の代理はしない。** 承認は harness レベルの UI イベントで、委譲元が
+     肩代わりすると cross-session permission laundering になる。ユーザーに
+     `claude attach <short-id>`（または `C-q q`）を案内する。
