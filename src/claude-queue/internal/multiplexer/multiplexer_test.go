@@ -28,4 +28,9 @@ func TestDetect_NoMultiplexer(t *testing.T) {
 	if err := m.Switch("anything"); err != nil {
 		t.Errorf("noop Switch err = %v, want nil", err)
 	}
+	// Unlike Switch, NewWindow must return an error: the picker's attach path
+	// relies on this to decide whether to print a manual-fallback hint.
+	if err := m.NewWindow("/w/a", []string{"claude", "attach", "abc"}); err == nil {
+		t.Errorf("noop NewWindow err = nil, want non-nil")
+	}
 }

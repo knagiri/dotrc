@@ -39,7 +39,7 @@ make install
 |---|---|
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
-| `claude-queue picker` | fzf を popup で起動し、選択 session の pane に `tmux switch-client` |
+| `claude-queue picker` | fzf を popup で起動し、選択 session の pane に `tmux switch-client`。pane が無い（background session）行は `tmux new-window` で `claude attach <short-id>` を起動 |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue --version` | バージョン表示 |
 
@@ -104,6 +104,7 @@ PR 作成時に description に貼って確認：
 - [ ] 承認後 `⚙️1`（working）、応答完了で `✅1`（idle_done）
 - [ ] 拒否時は `PermissionDenied` で `⚙️1` に戻る
 - [ ] `C-q q` で popup、Enter で目的 pane にジャンプ、popup 自動閉
+- [ ] `claude --bg` で起動した background session（tmux_pane が NULL）を picker から選択、新規 window で `claude attach` される
 - [ ] 同 pane で `/clear` 後、旧 session が view から消える（L3）
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
 - [ ] 2 pane 並行で approve 連打、busy_timeout 超過しない

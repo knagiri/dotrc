@@ -177,7 +177,7 @@ func Run(args []string) {
 		// a failed window open says nothing about whether the session is alive,
 		// and the manual command still works.
 		if err := mux.NewWindow(act.Cwd, []string{"claude", "attach", act.Short}); err != nil {
-			fmt.Fprintf(os.Stderr, "run: claude attach %s\n", act.Short)
+			fmt.Fprintf(os.Stderr, "new window failed: %v\nrun: claude attach %s\n", err, act.Short)
 		}
 	default:
 		fmt.Fprintln(os.Stderr, act.Reason)
