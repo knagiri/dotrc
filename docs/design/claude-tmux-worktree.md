@@ -18,22 +18,25 @@
 ## レイヤ構成
 
 ```
-④ claude-worktree  … worktree 追加 + ②③のセットアップ、または ⑤ の起動
+④ claude-worktree  … ① の worktree 追加 + 既定は ⑤ の起動、--tmux なら ②③のセットアップ
         │
-        ├─(既定)──→ ⑤ claude --bg ──→ ③ claude-queue
-        │            (short session id)   (tmux_pane = NULL)
         ▼
-① git worktree ──→ ② tmux session ──→ ③ claude-queue
-  (dir / branch)    (session=basename)   ($TMUX_PANE)
-     (--tmux 指定時)
+① git worktree ──┬─(既定)────→ ⑤ claude --bg ──→ ③ claude-queue
+  (dir / branch)  │             (short session id)  (tmux_pane = NULL)
+                  │
+                  └─(--tmux)──→ ② tmux session ──→ ③ claude-queue
+                                (session=basename)  ($TMUX_PANE)
 ```
+
+①の worktree 作成はどちらの経路でも必ず走る。分岐するのは「その worktree で何を起こすか」
+だけで、②の tmux session は `--tmux` 指定時にしか作られない。
 
 | 層 | ツール | 担当 | 識別キー |
 |---|---|---|---|
 | ① ファイル/ブランチ | `git w*` alias | worktree の作成・一覧・削除 | ディレクトリパス / ブランチ |
 | ② tmux セッション | `gts`(`ghq-tmux-session`) | worktree dir ごとに tmux session を作って attach/switch | session 名 = dir basename |
 | ③ Claude 可視化 | `claude-queue` | 全 pane の Claude 状態を SQLite 化、status-right 表示 + fzf popup で pane へジャンプ | `$TMUX_PANE` |
-| ④ 分岐起動 | `claude-worktree` | ①の worktree 追加と②③のセットアップを 1 コマンド化 | worktree dir / tmux session |
+| ④ 分岐起動 | `claude-worktree` | ①の worktree 追加を常に行い、既定は⑤の起動、`--tmux` 指定時のみ②③のセットアップ | worktree dir / short session id（`--tmux` 時は tmux session） |
 | ⑤ background 起動 | `claude --bg` | 人間不在の委譲先を起こし、完遂で自ら終了する | short session id（8 桁） |
 
 **鍵となる連結:** worktree dir の basename = tmux session 名。区切り文字を `_` に統一して
@@ -136,8 +139,10 @@ worktree dir の basename はそのまま tmux session 名になる。tmux の�
 まま完了扱い」になることがないので、`-p` の棄却理由も解消している。
 
 そのうえで background は**タスクを完遂するとプロセスが終わる**。interactive 起動の唯一の不満
-（完遂しても REPL に残り、session と worktree が溜まる）がこれで消えるため、④の既定を
-background に置いた。tmux session を作る経路は `--tmux` として残してある — 人間が同席して
+（完遂しても REPL に残り、session が溜まる）がこれで消えるため、④の既定を
+background に置いた。**worktree の滞留は background でも変わらない** — ①はどちらの経路でも
+走り、誰も消さないので、後片付けは `worktree-scope.md` §7 の `git-reap-gone`（manual 運用）が
+担う。tmux session を作る経路は `--tmux` として残してある — 人間が同席して
 設計を詰めるような、interactivity を要求する委譲のためで、退避路ではない。
 
 ③との噛み合わせは「pane 無し = 追跡は完全、ジャンプだけ不能」になる。status-right のカウントは
