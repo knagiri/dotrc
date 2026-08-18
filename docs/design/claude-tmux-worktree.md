@@ -18,7 +18,7 @@
 ## レイヤ構成
 
 ```
-④ claude-worktree  … ① の worktree 追加 + 既定は ⑤ の起動、--tmux なら ②③のセットアップ
+④ claude-worktree  … ① の worktree 追加 + 既定は ⑤ の起動、--tmux なら ② のセットアップ
         │
         ▼
 ① git worktree ──┬─(既定)────→ ⑤ claude --bg ──→ ③ claude-queue
@@ -29,14 +29,15 @@
 ```
 
 ①の worktree 作成はどちらの経路でも必ず走る。分岐するのは「その worktree で何を起こすか」
-だけで、②の tmux session は `--tmux` 指定時にしか作られない。
+だけで、②の tmux session は `--tmux` 指定時にしか作られない。③はどちらの経路でも追跡する
+（②を経ない既定経路では `tmux_pane` が NULL になるだけ）。
 
 | 層 | ツール | 担当 | 識別キー |
 |---|---|---|---|
 | ① ファイル/ブランチ | `git w*` alias | worktree の作成・一覧・削除 | ディレクトリパス / ブランチ |
 | ② tmux セッション | `gts`(`ghq-tmux-session`) | worktree dir ごとに tmux session を作って attach/switch | session 名 = dir basename |
-| ③ Claude 可視化 | `claude-queue` | 全 pane の Claude 状態を SQLite 化、status-right 表示 + fzf popup で pane へジャンプ | `$TMUX_PANE` |
-| ④ 分岐起動 | `claude-worktree` | ①の worktree 追加を常に行い、既定は⑤の起動、`--tmux` 指定時のみ②③のセットアップ | worktree dir / short session id（`--tmux` 時は tmux session） |
+| ③ Claude 可視化 | `claude-queue` | 全 pane の Claude 状態を SQLite 化、status-right 表示 + fzf popup で pane へジャンプ | `$TMUX_PANE`（②を経ない既定経路では NULL。short session id で識別） |
+| ④ 分岐起動 | `claude-worktree` | ①の worktree 追加を常に行い、既定は⑤の起動、`--tmux` 指定時のみ②のセットアップ（③はどちらの経路でも追跡する） | worktree dir / short session id（`--tmux` 時は tmux session） |
 | ⑤ background 起動 | `claude --bg` | 人間不在の委譲先を起こし、完遂で自ら終了する | short session id（8 桁） |
 
 **鍵となる連結（②を作る経路に限る）:** worktree dir の basename = tmux session 名。区切り文字を
