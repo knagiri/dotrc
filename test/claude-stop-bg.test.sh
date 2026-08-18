@@ -85,7 +85,10 @@ mkdir -p "$noclaude"
 ln -s "$(command -v bash)" "$noclaude/bash"
 ln -s "$(command -v jq)" "$noclaude/jq"
 out="$(PATH="$noclaude" "$src" aaaaaaaa 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && [ -n "$out" ] && grep -qi 'claude' <<<"$out"; then
+# Pinned to the exact guard message rather than a loose 'claude' substring: every
+# diagnostic this script prints is prefixed "claude-stop-bg:", so a loose match
+# would also pass if a *different* guard (e.g. the jq one) fired instead.
+if [ "$rc" -ne 0 ] && [ -n "$out" ] && grep -qF 'the claude CLI is required' <<<"$out"; then
   echo "ok: missing claude CLI is refused with a diagnostic message"
 else echo "FAIL: missing claude CLI rc=$rc out=$out"; fail=1; fi
 
