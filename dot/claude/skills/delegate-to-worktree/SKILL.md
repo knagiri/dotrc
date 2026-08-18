@@ -78,6 +78,10 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    3. pr-review-automerge で merge
    ```
 
+   末尾の `## 委譲元` 節（`報告先 name: <name>`）は書かない。`claude-worktree` が委譲元 session の
+   name を解決してプロンプト末尾へ自動付加する（`--tmux` 経路でも同じ）。解決できないとき
+   （人間が素の shell から叩いた等）は何も付かない。
+
 3. **name / branch を決める**。
    - `<name>`: 依頼内容から簡潔な kebab-case で推論（`[A-Za-z0-9_-]+` のみ）。
      ユーザーが名を明示していたら最優先。pre-fetch した worktree 一覧と衝突しない名にする。
