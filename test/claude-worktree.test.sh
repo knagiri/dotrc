@@ -133,6 +133,25 @@ esac
 EOF
 chmod +x "$stubbin/tmux"
 
+# claude-worktree unconditionally calls `claude agents --json` to resolve the
+# delegator name (and, in bg mode, to check for a colliding session) whenever a
+# prompt is given -- including in the --tmux-mode tests below, which predate
+# the more elaborate claude stub further down this file. Without a stub here,
+# those tests would fall through to the AMBIENT claude on $PATH, making them
+# depend on the host's live session roster (and call an external process from
+# what should be a self-contained test). Default to an empty roster; tests that
+# care about a specific roster override it via $CLAUDE_STUB_ROSTER.
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then
+  if [ -n "${CLAUDE_STUB_ROSTER:-}" ]; then cat "$CLAUDE_STUB_ROSTER"; else printf '[]\n'; fi
+  exit 0
+fi
+printf '%s\n' "$@" >"${CLAUDE_STUB_LOG:-/dev/null}"
+printf 'backgrounded · %s\n' "${CLAUDE_STUB_ID:-abcd1234}"
+EOF
+chmod +x "$stubbin/claude"
+
 # Prompt carrying a space plus both quote kinds -- must survive as ONE argv
 # element (the whole point of passing it separately, not folded into a string).
 prompt='say "hi" it'\''s here'
@@ -426,6 +445,25 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
 if [ "$rc" -eq 0 ] && grep -q 'some unexpected banner shape' <<<"$out"; then
   echo "ok: unparseable banner is surfaced rather than dropped"
 else echo "FAIL: unparseable banner rc=$rc out=$out"; fail=1; fi
+
+# When claude itself FAILS (nonzero exit), the failure must be diagnosable: rc
+# is nonzero AND the captured stderr reaches the caller. Under `set -e`, a bare
+# `launch_out="$(... claude ...)"` assignment aborts the script the instant
+# claude exits nonzero -- before the captured output is ever printed -- so this
+# guards against that regression (rc=1 with empty output).
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+echo "claude: fatal: something went wrong" >&2
+exit 1
+EOF
+chmod +x "$stubbin/claude"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" bgfail -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q 'claude: fatal: something went wrong' <<<"$out"; then
+  echo "ok: a failing bg launch reports its captured stderr instead of dying silently"
+else echo "FAIL: bg launch failure rc=$rc out=$out"; fail=1; fi
 
 # A background session already running in the same worktree means a second
 # delegation would race the first -- refuse, and say how to reach the existing
