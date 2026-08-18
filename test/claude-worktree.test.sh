@@ -449,4 +449,88 @@ if [ "$rc" -ne 0 ] && [ ! -s "$log" ] && grep -q 'feedface' <<<"$out"; then
   echo "ok: an existing bg session in the same worktree blocks a second launch"
 else echo "FAIL: bg collision rc=$rc out=$out"; fail=1; fi
 
+# --- delegator name injection -------------------------------------------------
+# The delegate has no conversation history, so it can only report back if it is
+# told who to report to. The name is resolved by walking this process's
+# ancestors until one is a live claude session -- the test shell stands in for
+# that session by putting its own pid in the roster.
+# This stub additionally records the LAST argv element on its own. The injected
+# block must ride inside the prompt argument; splitting it into a second
+# argument would make claude treat it as a separate positional. Since the log
+# writes one element per LINE and the prompt itself is multi-line, a line-based
+# grep cannot tell the two apart -- capturing the last element does.
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+printf '%s\n' "$@" >"$CLAUDE_STUB_LOG"
+printf '%s' "${!#}" >"${CLAUDE_STUB_LASTARG:-/dev/null}"
+printf 'backgrounded · abcd1234\n'
+EOF
+chmod +x "$stubbin/claude"
+
+namedroster="$tmp/roster-named.json"
+cat >"$namedroster" <<EOF
+[{"pid":$$,"cwd":"$cwdrepo","kind":"interactive","sessionId":"eeeeeeee-1111-2222-3333-444444444444","name":"test-delegator","status":"busy"}]
+EOF
+
+log="$tmp/bg-name"; lastarg="$tmp/bg-name-last"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_LASTARG="$lastarg" \
+         CLAUDE_STUB_ROSTER="$namedroster"
+  "$wt" bgname -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '## 委譲元' "$log" \
+   && grep -Fq '報告先 name: test-delegator' "$log" \
+   && grep -q 'report-to: test-delegator' <<<"$out"; then
+  echo "ok: delegator name is resolved, injected, and reported"
+else
+  echo "FAIL: name injection rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
+fi
+
+# Same argv element: the last argument must contain BOTH the original prompt and
+# the injected block. Two separate arguments would make claude read the block as
+# a stray positional instead of part of the delegated instructions.
+if grep -Fq "$prompt" "$lastarg" && grep -Fq '報告先 name: test-delegator' "$lastarg"; then
+  echo "ok: the injected block rides inside the prompt argument"
+else
+  echo "FAIL: injected block is not in the prompt argv element"; fail=1
+fi
+
+# No claude ancestor (a human running the script from a plain shell) -> nothing
+# is injected and no report-to line is printed. Silence is correct here: there
+# is no delegator to report to.
+log="$tmp/bg-noname"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" bgnoname -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! grep -Fq '委譲元' "$log" \
+   && ! grep -q 'report-to' <<<"$out"; then
+  echo "ok: no delegator resolvable -> nothing injected, nothing reported"
+else echo "FAIL: unexpected injection rc=$rc"; fail=1; fi
+
+# A roster entry without a `name` field (older sessions have none) must be
+# treated as unresolvable rather than injecting an empty name.
+nonameroster="$tmp/roster-noname.json"
+cat >"$nonameroster" <<EOF
+[{"pid":$$,"cwd":"$cwdrepo","kind":"interactive","sessionId":"ffffffff-1111-2222-3333-444444444444","status":"busy"}]
+EOF
+log="$tmp/bg-nullname"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$nonameroster"
+  "$wt" bgnullname -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -Fq '委譲元' "$log" && ! grep -q 'report-to' <<<"$out"; then
+  echo "ok: a roster entry without a name is treated as unresolvable"
+else echo "FAIL: nameless entry injected rc=$rc"; fail=1; fi
+
+# --tmux gets the same injection: a human may be sitting with that session, but
+# the delegate still benefits from knowing who asked.
+log="$tmp/tmux-name"
+(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$namedroster"
+  "$wt" --tmux tmuxname -- "$prompt"; }) >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && grep -Fq '報告先 name: test-delegator' "$log"; then
+  echo "ok: --tmux receives the same delegator injection"
+else echo "FAIL: --tmux missing injection rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1; fi
+
 exit "$fail"
