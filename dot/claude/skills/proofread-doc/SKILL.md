@@ -14,9 +14,11 @@ doc の校正を 4 パスに分けて順に回す。パスごとに検出対象�
 
 ## 手順 0: 基準を読む
 
-`~/.claude/rules/doc-authoring.md` を Read する（dotrc の checkout 内で作業しているなら
-`dot/claude/rules/doc-authoring.md` でもよい）。以下の各パスは、この rule の同番号の観点を
-指す。
+`doc-authoring` rule は `paths`（`**/*.md` / `**/*.mdx`）でスコープされており、対象 doc を
+Read / Edit した時点で自動的にコンテキストへロードされる。**既にロード済みならそれを使い、
+無いときだけ Read する。** 未ロードで Read するパスは、dotrc の checkout 内で作業している
+なら `dot/claude/rules/doc-authoring.md`、それ以外は `~/.claude/rules/doc-authoring.md`。
+以下の各パスは、この rule の同番号の観点を指す。
 
 対象 doc を通読し、doc の種類（designdoc / ADR / spec / README …）と読者を把握する。パス 2 と
 パス 4 の判断は読者が誰かに依存する。
