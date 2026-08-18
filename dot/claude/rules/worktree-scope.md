@@ -145,7 +145,7 @@ claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-
 
 - worktree は `<メインリポジトリ toplevel>_<name>` に作られる（メイン基準なので worktree 内から切ってもパスがネストしない。区切りは tmux 安全な `_`。`.` は `tmux -t` の `window.pane` 構文と衝突するため不可）
 - `-b` 省略時はブランチ名 = `<name>`。解決順はローカルブランチ優先 → 無ければ `origin/<branch>` を追跡 checkout → どちらにも無ければ新規作成。fetch はしない（未 fetch なら新規作成に落ちる）
-- `--` の後ろにプロンプトを渡すと、**既定では `claude --bg`（background agent, `acceptEdits`）が worktree dir で起動する**。tmux session も pane も作らない。委譲先はタスクを完遂すると**自分で終了する**ので、session も worktree も溜まらない。到達は `claude attach <short-id>`（`claude-worktree` が stdout に出す）か、claude-queue の picker（`C-q q`）から。承認待ちで止まった委譲先へ入る経路もこれ
+- `--` の後ろにプロンプトを渡すと、**既定では `claude --bg`（background agent, `acceptEdits`）が worktree dir で起動する**。tmux session も pane も作らない。委譲先はタスクを完遂すると**自分で終了する**ので session は溜まらない（**worktree は残る**ので、後片付けは §7 の `git-reap-gone`）。到達は `claude attach <short-id>`（`claude-worktree` が stdout に出す）か、claude-queue の picker（`C-q q`）から。承認待ちで止まった委譲先へ入る経路もこれ
 - `--tmux` を付けると従来どおり **detached tmux セッション（名前 = worktree basename）を作り、その pane で interactive claude を起動**する。人間が同席して協同する委譲（HOW をその場で詰める等）に使う。`gts <session>` でいつでも attach でき、REPL に留まる
 - 委譲先はプロンプト末尾の `## 委譲元` 節（`報告先 name: <name>`）を受け取り、完了・不足・中断を SendMessage で委譲元へ報告する。**permission 承認だけはこの経路に乗らない**（tool call の途中で凍結するため委譲先自身が動けない）。承認は人間が attach して行う
 - 質問に返信した委譲先は完遂後も `idle` で残るので、`claude-stop-bg <short-id>` で閉じる（§7 の後片付けと同じく、保守的なラッパー経由で行う）
