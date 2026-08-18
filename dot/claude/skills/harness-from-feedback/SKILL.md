@@ -1,7 +1,7 @@
 ---
 name: harness-from-feedback
 description: 作業中のユーザーの指摘・訂正を、その場の修正で終わらせず再発防止の恒久的な仕組み（.claude/rules / CLAUDE.md / lint / test / hook）へ変換したいとき。次セッション以降に自動で効かせる。「ハーネス化して」「再発防止して」「ルール化して」等の明示依頼でも発動する。
-allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree list), Read, Glob, Grep
+allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-parse *), Bash(git worktree list), Read, Glob, Grep, SendMessage
 ---
 
 # harness-from-feedback
@@ -95,10 +95,16 @@ allowed-tools: Bash(claude-worktree *), Bash(git rev-parse *), Bash(git worktree
    - グローバル（dotrc）: `claude-worktree --self --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
 
 6. **報告して終了**（fire-and-forget）: `claude-worktree` の出力（worktree / branch / session /
-   model / attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:
+   model / report-to / attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:
    - 捕捉した指摘（言語化）
    - 置いた場所（rules / CLAUDE.md / lint / test / hook）と対象 repo
    - ロードされる条件（paths と想定シナリオ。rule の場合）
    - branch 名とマージ方法（委譲先が pr-review-automerge まで自走。マージは保護ゲート依存）
    - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
      保守的に reap。詳細は worktree-scope.md §7）
+
+7. **報告を受け取ったら**: 委譲先は `implement-and-review` 手順 6 に従い、完了・不足・中断を
+   SendMessage で送ってくる。扱いは `delegate-to-worktree` 手順 6 と同じ（返信・返信した委譲先の
+   `claude-stop-bg` での後片付け・permission 承認を代行しないところまで）。ここへ再掲せず参照に
+   留めるのは、規約の出所を 1 つに保つため（二重管理でズレると、委譲先が返信を待ったまま
+   行き止まりになる）。

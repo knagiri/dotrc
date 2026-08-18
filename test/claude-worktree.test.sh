@@ -133,6 +133,25 @@ esac
 EOF
 chmod +x "$stubbin/tmux"
 
+# claude-worktree unconditionally calls `claude agents --json` to resolve the
+# delegator name (and, in bg mode, to check for a colliding session) whenever a
+# prompt is given -- including in the --tmux-mode tests below, which predate
+# the more elaborate claude stub further down this file. Without a stub here,
+# those tests would fall through to the AMBIENT claude on $PATH, making them
+# depend on the host's live session roster (and call an external process from
+# what should be a self-contained test). Default to an empty roster; tests that
+# care about a specific roster override it via $CLAUDE_STUB_ROSTER.
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then
+  if [ -n "${CLAUDE_STUB_ROSTER:-}" ]; then cat "$CLAUDE_STUB_ROSTER"; else printf '[]\n'; fi
+  exit 0
+fi
+printf '%s\n' "$@" >"${CLAUDE_STUB_LOG:-/dev/null}"
+printf 'backgrounded · %s\n' "${CLAUDE_STUB_ID:-abcd1234}"
+EOF
+chmod +x "$stubbin/claude"
+
 # Prompt carrying a space plus both quote kinds -- must survive as ONE argv
 # element (the whole point of passing it separately, not folded into a string).
 prompt='say "hi" it'\''s here'
@@ -143,7 +162,7 @@ prompt='say "hi" it'\''s here'
 log="$tmp/ns-in"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
-  "$wt" insess -- "$prompt"; } 2>/dev/null)"; rc=$?
+  "$wt" --tmux insess -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -q 'switch-client' "$log" \
    && grep -Fxq '%9' "$log" \
@@ -159,7 +178,7 @@ fi
 log="$tmp/ns-out"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
-  "$wt" nosess -- "$prompt"; } 2>/dev/null)"; rc=$?
+  "$wt" --tmux nosess -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && ! grep -q 'switch-client' "$log" \
    && grep -Fxq 'claude' "$log" \
@@ -200,7 +219,7 @@ fi
 log="$tmp/ns-model-in"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
-  "$wt" --model opus modelin -- "$prompt"; } 2>/dev/null)"; rc=$?
+  "$wt" --tmux --model opus modelin -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -Fq 'if [ -n "$3" ]; then' "$log" \
    && grep -Fxq 'opus' "$log" \
@@ -217,7 +236,7 @@ fi
 log="$tmp/ns-model-out"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
-  "$wt" --model sonnet modelout -- "$prompt"; } 2>/dev/null)"; rc=$?
+  "$wt" --tmux --model sonnet modelout -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -A1 -Fx -- '--model' "$log" | grep -Fxq 'sonnet' \
    && grep -Fxq "$prompt" "$log" \
@@ -337,5 +356,219 @@ if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$clone_head_sha" ]; then
 else
   echo "FAIL: new-branch fallback rc=$rc sha=$wt_sha want=$clone_head_sha"; fail=1
 fi
+
+# --- background launch mode (default when a prompt is given) ------------------
+# `claude` is stubbed on PATH: `--bg` records its argv and prints the real
+# banner shape, `agents --json` prints a roster fixture. Nothing is spawned.
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+printf '%s\n' "$@" >"$CLAUDE_STUB_LOG"
+printf 'Starting background service…\n'
+printf 'backgrounded · %s\n' "${CLAUDE_STUB_ID:-abcd1234}"
+printf '  claude attach %s    open in this terminal\n' "${CLAUDE_STUB_ID:-abcd1234}"
+EOF
+chmod +x "$stubbin/claude"
+
+emptyroster="$tmp/roster-empty.json"
+echo '[]' >"$emptyroster"
+
+# Default (no --tmux): claude --bg is launched with acceptEdits, the short id is
+# lifted out of the banner, and the report tells the user how to attach.
+log="$tmp/bg-default"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" bgdefault -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fxq -- '--bg' "$log" \
+   && grep -Fxq -- 'acceptEdits' "$log" \
+   && grep -Fxq "$prompt" "$log" \
+   && grep -q 'session  : abcd1234 (background' <<<"$out" \
+   && grep -q 'attach   : claude attach abcd1234' <<<"$out"; then
+  echo "ok: default launch uses claude --bg and reports the short id"
+else
+  echo "FAIL: bg default rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; echo "$out"; fail=1
+fi
+
+# The worktree dir must be the launched session's cwd -- otherwise the delegate
+# reads the wrong checkout. The stub records it via PWD.
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+printf '%s\n' "$PWD" >"$CLAUDE_STUB_CWDLOG"
+printf '%s\n' "$@" >"$CLAUDE_STUB_LOG"
+printf 'backgrounded · %s\n' "${CLAUDE_STUB_ID:-abcd1234}"
+EOF
+chmod +x "$stubbin/claude"
+log="$tmp/bg-cwd"; cwdlog="$tmp/bg-cwd-pwd"
+(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_CWDLOG="$cwdlog" \
+         CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" bgcwd -- "$prompt"; }) >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$cwdlog" 2>/dev/null)" = "${cwdrepo}_bgcwd" ]; then
+  echo "ok: bg launch runs with the worktree as cwd"
+else echo "FAIL: bg cwd rc=$rc got=$(cat "$cwdlog" 2>/dev/null) want=${cwdrepo}_bgcwd"; fail=1; fi
+
+# --model rides through to the bg launch as two adjacent argv elements.
+log="$tmp/bg-model"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_CWDLOG="$tmp/x" \
+         CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" --model opus bgmodel -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -A1 -Fx -- '--model' "$log" | grep -Fxq 'opus' \
+   && grep -q 'model    : opus' <<<"$out"; then
+  echo "ok: --model reaches the bg launch and is reported"
+else echo "FAIL: bg --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1; fi
+
+# Omitting --model must not synthesise `--model ""` (claude rejects it).
+log="$tmp/bg-nomodel"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_CWDLOG="$tmp/x" \
+         CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" bgnomodel -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q -- '--model' "$log" && ! grep -q 'model    :' <<<"$out"; then
+  echo "ok: no --model in the bg launch when the flag is omitted"
+else echo "FAIL: bg model leak rc=$rc"; fail=1; fi
+
+# A banner the parser does not recognise must not be swallowed: the session IS
+# running, so the raw output is surfaced instead of a silently missing id.
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+printf 'some unexpected banner shape\n'
+EOF
+chmod +x "$stubbin/claude"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" bgweird -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'some unexpected banner shape' <<<"$out"; then
+  echo "ok: unparseable banner is surfaced rather than dropped"
+else echo "FAIL: unparseable banner rc=$rc out=$out"; fail=1; fi
+
+# When claude itself FAILS (nonzero exit), the failure must be diagnosable: rc
+# is nonzero AND the captured stderr reaches the caller. Under `set -e`, a bare
+# `launch_out="$(... claude ...)"` assignment aborts the script the instant
+# claude exits nonzero -- before the captured output is ever printed -- so this
+# guards against that regression (rc=1 with empty output).
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+echo "claude: fatal: something went wrong" >&2
+exit 1
+EOF
+chmod +x "$stubbin/claude"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" bgfail -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q 'claude: fatal: something went wrong' <<<"$out"; then
+  echo "ok: a failing bg launch reports its captured stderr instead of dying silently"
+else echo "FAIL: bg launch failure rc=$rc out=$out"; fail=1; fi
+
+# A background session already running in the same worktree means a second
+# delegation would race the first -- refuse, and say how to reach the existing
+# one. Must fail BEFORE launching (stub log stays empty).
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+printf '%s\n' "$@" >"$CLAUDE_STUB_LOG"
+printf 'backgrounded · abcd1234\n'
+EOF
+chmod +x "$stubbin/claude"
+busyroster="$tmp/roster-busy.json"
+cat >"$busyroster" <<EOF
+[{"pid":1,"cwd":"${cwdrepo}_bgbusy","kind":"background","sessionId":"feedface-1111-2222-3333-444444444444","status":"working"}]
+EOF
+log="$tmp/bg-busy"; : >"$log"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$busyroster"
+  "$wt" bgbusy -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$log" ] && grep -q 'feedface' <<<"$out"; then
+  echo "ok: an existing bg session in the same worktree blocks a second launch"
+else echo "FAIL: bg collision rc=$rc out=$out"; fail=1; fi
+
+# --- delegator name injection -------------------------------------------------
+# The delegate has no conversation history, so it can only report back if it is
+# told who to report to. The name is resolved by walking this process's
+# ancestors until one is a live claude session -- the test shell stands in for
+# that session by putting its own pid in the roster.
+# This stub additionally records the LAST argv element on its own. The injected
+# block must ride inside the prompt argument; splitting it into a second
+# argument would make claude treat it as a separate positional. Since the log
+# writes one element per LINE and the prompt itself is multi-line, a line-based
+# grep cannot tell the two apart -- capturing the last element does.
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+printf '%s\n' "$@" >"$CLAUDE_STUB_LOG"
+printf '%s' "${!#}" >"${CLAUDE_STUB_LASTARG:-/dev/null}"
+printf 'backgrounded · abcd1234\n'
+EOF
+chmod +x "$stubbin/claude"
+
+namedroster="$tmp/roster-named.json"
+cat >"$namedroster" <<EOF
+[{"pid":$$,"cwd":"$cwdrepo","kind":"interactive","sessionId":"eeeeeeee-1111-2222-3333-444444444444","name":"test-delegator","status":"busy"}]
+EOF
+
+log="$tmp/bg-name"; lastarg="$tmp/bg-name-last"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_LASTARG="$lastarg" \
+         CLAUDE_STUB_ROSTER="$namedroster"
+  "$wt" bgname -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '## 委譲元' "$log" \
+   && grep -Fq '報告先 name: test-delegator' "$log" \
+   && grep -q 'report-to: test-delegator' <<<"$out"; then
+  echo "ok: delegator name is resolved, injected, and reported"
+else
+  echo "FAIL: name injection rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
+fi
+
+# Same argv element: the last argument must contain BOTH the original prompt and
+# the injected block. Two separate arguments would make claude read the block as
+# a stray positional instead of part of the delegated instructions.
+if grep -Fq "$prompt" "$lastarg" && grep -Fq '報告先 name: test-delegator' "$lastarg"; then
+  echo "ok: the injected block rides inside the prompt argument"
+else
+  echo "FAIL: injected block is not in the prompt argv element"; fail=1
+fi
+
+# No claude ancestor (a human running the script from a plain shell) -> nothing
+# is injected and no report-to line is printed. Silence is correct here: there
+# is no delegator to report to.
+log="$tmp/bg-noname"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" bgnoname -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! grep -Fq '委譲元' "$log" \
+   && ! grep -q 'report-to' <<<"$out"; then
+  echo "ok: no delegator resolvable -> nothing injected, nothing reported"
+else echo "FAIL: unexpected injection rc=$rc"; fail=1; fi
+
+# A roster entry without a `name` field (older sessions have none) must be
+# treated as unresolvable rather than injecting an empty name.
+nonameroster="$tmp/roster-noname.json"
+cat >"$nonameroster" <<EOF
+[{"pid":$$,"cwd":"$cwdrepo","kind":"interactive","sessionId":"ffffffff-1111-2222-3333-444444444444","status":"busy"}]
+EOF
+log="$tmp/bg-nullname"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$nonameroster"
+  "$wt" bgnullname -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -Fq '委譲元' "$log" && ! grep -q 'report-to' <<<"$out"; then
+  echo "ok: a roster entry without a name is treated as unresolvable"
+else echo "FAIL: nameless entry injected rc=$rc"; fail=1; fi
+
+# --tmux gets the same injection: a human may be sitting with that session, but
+# the delegate still benefits from knowing who asked.
+log="$tmp/tmux-name"
+(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$namedroster"
+  "$wt" --tmux tmuxname -- "$prompt"; }) >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && grep -Fq '報告先 name: test-delegator' "$log"; then
+  echo "ok: --tmux receives the same delegator injection"
+else echo "FAIL: --tmux missing injection rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1; fi
 
 exit "$fail"

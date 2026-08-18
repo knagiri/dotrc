@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-stop-bg -- stop a BACKGROUND claude session by its short id.
+#
+# A delegated background session normally exits on its own when the task
+# completes. One case does not: a session that received a message (e.g. it asked
+# the delegator a question and got an answer) stays alive at `idle` after it
+# finishes, because receiving makes it a participant in a conversation. The side
+# that replied is the one that knows to close it, and it already holds the short
+# id from claude-worktree's output.
+#
+# This wrapper exists so that ability can be granted without granting `claude
+# stop *`, which would let an agent kill ANY session -- including the user's own
+# interactive one. The guard refuses anything that is not kind=="background",
+# and refuses ids that do not resolve to exactly one live session.
+#
+# There is deliberately no bulk sweep: `idle` also covers a delegate that asked a
+# question and is waiting for the reply, so sweeping would kill live work.
+#
+# Usage:
+#   claude-stop-bg <short-id>        # 8 hex chars, as printed by claude-worktree
+
+usage() {
+  awk '/^#!/ {next} /^#/ {sub(/^# ?/, ""); print; seen=1; next} seen {exit}' "$0"
+  exit "${1:-1}"
+}
+
+[ $# -eq 1 ] || usage 1
+case "$1" in -h|--help) usage 0 ;; esac
+id="$1"
+
+# Validate the shape before touching the roster. The realistic mistake is
+# passing the full UUID (which `claude stop` itself rejects), and catching it
+# here gives a message that names the actual problem.
+if [[ ! "$id" =~ ^[0-9a-f]{8}$ ]]; then
+  echo "claude-stop-bg: not a short session id (want 8 hex chars): $id" >&2
+  exit 1
+fi
+
+command -v claude >/dev/null 2>&1 || {
+  echo "claude-stop-bg: the claude CLI is required" >&2
+  exit 1
+}
+
+command -v jq >/dev/null 2>&1 || {
+  echo "claude-stop-bg: jq is required to verify the session kind" >&2
+  exit 1
+}
+
+# Fetch the roster and parse it as two separate steps (rather than piping
+# straight into jq) so a roster-fetch failure gets its own diagnostic instead
+# of `set -e` exiting silently with no output at all.
+roster="$(claude agents --json 2>/dev/null)" || {
+  echo "claude-stop-bg: could not read the session roster" >&2
+  exit 1
+}
+
+# Resolve the id to exactly one live session and read its kind. An empty result
+# means either "no match" or "more than one match"; both are refusals, because
+# stopping the wrong session cannot be undone.
+kind="$(jq -r --arg id "$id" \
+  '[.[] | select(.sessionId | startswith($id))] | if length == 1 then .[0].kind else "" end' \
+  <<<"$roster")"
+
+case "$kind" in
+  background) ;;
+  "") echo "claude-stop-bg: no unique live session matching: $id" >&2; exit 1 ;;
+  *)  echo "claude-stop-bg: refusing to stop a $kind session: $id" >&2; exit 1 ;;
+esac
+
+claude stop "$id"
