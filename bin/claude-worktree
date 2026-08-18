@@ -241,10 +241,33 @@ if [ "$use_tmux" = 0 ]; then
   #
   # cwd matters: the delegate reads the checkout it is started in, so the launch
   # runs inside the worktree. A subshell keeps this script's own cwd untouched.
+  # Under `set -e`, an assignment's exit status IS the command substitution's
+  # exit status: a bare `launch_out="$(... claude ...)"` would abort the script
+  # right here if claude itself failed, discarding the just-captured stderr
+  # along with it. Since a delegation is fire-and-forget, that leaves the
+  # caller with nothing but an unexplained rc=1. The `if cmd; then :; else ...`
+  # shape (NOT `if ! cmd; then`) is deliberate: negating the condition with `!`
+  # also negates the exit status `$?` sees inside the branch, so `rc=$?` there
+  # would read back 0 even though claude failed. Falling through to `else`
+  # keeps `$?` as claude's real exit code.
   if [ -n "$model" ]; then
-    launch_out="$(cd "$wt_path" && claude --bg --permission-mode acceptEdits --model "$model" "$prompt" 2>&1)"
+    if launch_out="$(cd "$wt_path" && claude --bg --permission-mode acceptEdits --model "$model" "$prompt" 2>&1)"; then
+      :
+    else
+      rc=$?
+      echo "claude-worktree: claude --bg failed (exit $rc); worktree left at $wt_path:" >&2
+      printf '%s\n' "$launch_out" >&2
+      exit "$rc"
+    fi
   else
-    launch_out="$(cd "$wt_path" && claude --bg --permission-mode acceptEdits "$prompt" 2>&1)"
+    if launch_out="$(cd "$wt_path" && claude --bg --permission-mode acceptEdits "$prompt" 2>&1)"; then
+      :
+    else
+      rc=$?
+      echo "claude-worktree: claude --bg failed (exit $rc); worktree left at $wt_path:" >&2
+      printf '%s\n' "$launch_out" >&2
+      exit "$rc"
+    fi
   fi
 
   # `backgrounded · <id>`. Pull the first 8-hex-char field off that line rather
