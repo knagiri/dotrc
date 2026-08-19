@@ -104,7 +104,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
      保守的に reap。詳細は worktree-scope.md §7）
 
 7. **報告を受け取ったら**: 委譲先は `implement-and-review` 手順 6 に従い、完了・不足・中断を
-   SendMessage で送ってくる。扱いは `delegate-to-worktree` 手順 6 と同じ（返信・返信した委譲先の
-   `claude-stop-bg` での後片付け・permission 承認を代行しないところまで）。ここへ再掲せず参照に
+   SendMessage で送ってくる。扱いは `delegate-to-worktree` 手順 6 と同じ（返信・完了報告を受けた
+   後の `claude-stop-bg` での後片付け・permission 承認を代行しないところまで）。ここへ再掲せず参照に
    留めるのは、規約の出所を 1 つに保つため（二重管理でズレると、委譲先が返信を待ったまま
    行き止まりになる）。
