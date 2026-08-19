@@ -117,12 +117,18 @@ queue="$(sqlite3 -separator $'\t' "$db" \
 # results also arrive as type=="user" entries, so they are excluded by shape
 # (content is a string or contains something other than tool_result); counting
 # them would cut every turn down to its final tool call. Sidechain entries are
-# subagent traffic, not this session's own messages.
+# subagent traffic, not this session's own messages. isMeta=="true" entries
+# (e.g. the skill-launch "Base directory for this skill: ..." injection, or
+# "[Request interrupted by user]") are also type=="user" with non-tool_result
+# content but are not something the human typed, so they are excluded too --
+# counting one as a turn boundary would truncate the turn right past a
+# SendMessage and make the guard below skip a session that is actually
+# waiting on a reply.
 last_turn_sent_message() {
   jq -s '
     [ .[] | select((.isSidechain != true) and (.type == "user" or .type == "assistant")) ] as $msgs
     | ( [ $msgs | to_entries[]
-          | select(.value.type == "user")
+          | select(.value.type == "user" and (.value.isMeta != true))
           | select( (.value.message.content | type) == "string"
                     or ( (.value.message.content | type) == "array"
                          and ( [ .value.message.content[]?.type ] | any(. != "tool_result") ) ) )
