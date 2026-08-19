@@ -45,8 +45,8 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 
 3. **方針を提示して終了**: 上記を構造化した**最終メッセージ**として出力する（新規ファイルは
    作らない。出力は実行中セッションの最終メッセージとして残る。`--tmux` 委譲先なら
-   `gts <session>` / `tmux attach` で後から読める。既定の background 委譲先は完遂すると終了して
-   最終メッセージが誰にも届かないので、`implement-and-review` 手順 6 の完了報告
+   `gts <session>` / `tmux attach` で後から読める。既定の background 委譲先は人間不在で走り、
+   最終メッセージは誰にも読まれないまま委譲元に閉じられるので、`implement-and-review` 手順 6 の完了報告
    （SendMessage）に要点を添えて委譲元へ届ける）。**改善点が無ければ
    「対応すべきハーネスなし」と述べて no-op 終了**する。実装や委譲はしない。
 
