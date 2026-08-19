@@ -5,8 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 )
 
 // Run is the CLI entrypoint for `claude-queue reset`.
@@ -15,7 +16,7 @@ func Run(args []string) {
 	force := fs.Bool("force", false, "skip confirmation prompt")
 	_ = fs.Parse(args)
 
-	path := dbPath()
+	path := db.DefaultPath()
 	if !*force {
 		fmt.Fprintf(os.Stderr, "About to delete %s. Continue? [y/N]: ", path)
 		r := bufio.NewReader(os.Stdin)
@@ -38,15 +39,4 @@ func Run(args []string) {
 	} else {
 		fmt.Fprintf(os.Stderr, "nothing to remove at %s\n", path)
 	}
-}
-
-func dbPath() string {
-	if p := os.Getenv("CLAUDE_QUEUE_DB"); p != "" {
-		return p
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "session-queue.db"
-	}
-	return filepath.Join(home, ".claude", "session-queue.db")
 }

@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-reap-bg [--dry-run] [--idle-minutes <n>] [<short-id>...] -- conservatively
+# stop background claude sessions that finished and were never closed.
+#
+# A delegated background session does NOT end when its task ends: it sits at
+# `idle` waiting for further input and, roughly an hour later, disappears
+# without firing SessionEnd, leaving a ghost row in claude-queue. The primary
+# fix is for the delegator to run claude-stop-bg once it has the completion
+# report -- this sweep only picks up what that path dropped.
+#
+# Deciding "finished" from the outside is guesswork, so every candidate must
+# clear ALL of these; anything short of that is SKIPPED with the blocking
+# reason, never stopped on a hunch:
+#   * the roster (`claude agents --json`) says kind=="background" and
+#     status=="idle" -- a busy session is still working.
+#   * claude-queue's latest event for it is idle_done (the Stop hook), and that
+#     event is at least --idle-minutes old (default 15). The queue is the only
+#     record of WHEN the turn ended; the roster has no timestamp for it.
+#   * the last assistant turn in the transcript contains no SendMessage
+#     tool_use. A delegate that asked its delegator a question and is waiting
+#     for the reply also sits at `idle`, and killing that discards live work.
+#     This is the check that makes a bulk sweep safe at all -- it is exactly the
+#     case claude-stop-bg's header calls out as the reason it has no sweep of
+#     its own.
+#
+# Stopping goes through claude-stop-bg, never `claude stop` directly, so that
+# wrapper's guard (refuse anything not kind=="background", refuse ambiguous
+# ids) still applies on top of the checks here.
+#
+# Manual, best-effort: exits 0 even when candidates are skipped. There is no
+# cron/daemon on purpose -- an unattended killer of sessions is exactly what
+# the conservative predicates above are trying to avoid becoming.
+#
+# Usage:
+#   claude-reap-bg [--dry-run] [--idle-minutes <n>] [<short-id>...]
+#
+#   --dry-run           report what would be stopped, stop nothing
+#   --idle-minutes <n>  age the idle_done event must reach (default 15)
+#   <short-id>...       restrict the sweep to these 8-hex-char ids (still fully
+#                       gated; ids that are not live idle background sessions
+#                       are reported skipped)
+
+usage() {
+  awk '/^#!/ {next} /^#/ {sub(/^# ?/, ""); print; seen=1; next} seen {exit}' "$0"
+  exit "${1:-1}"
+}
+
+dry_run=0
+idle_minutes=15
+declare -a filters=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    --dry-run) dry_run=1; shift ;;
+    --idle-minutes)
+      [ $# -ge 2 ] || { echo "claude-reap-bg: --idle-minutes needs a value" >&2; exit 1; }
+      idle_minutes="$2"; shift 2 ;;
+    --idle-minutes=*) idle_minutes="${1#*=}"; shift ;;
+    --) shift; while [ $# -gt 0 ]; do filters+=("$1"); shift; done ;;
+    -*) echo "claude-reap-bg: unknown flag: $1" >&2; usage 1 ;;
+    *) filters+=("$1"); shift ;;
+  esac
+done
+
+if [[ ! "$idle_minutes" =~ ^[0-9]+$ ]]; then
+  echo "claude-reap-bg: --idle-minutes wants a non-negative integer: $idle_minutes" >&2
+  exit 1
+fi
+idle_seconds=$(( idle_minutes * 60 ))
+
+for tool in claude jq sqlite3; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "claude-reap-bg: $tool is required" >&2
+    exit 1
+  }
+done
+
+command -v claude-stop-bg >/dev/null 2>&1 || {
+  echo "claude-reap-bg: claude-stop-bg is required (stopping never bypasses it)" >&2
+  exit 1
+}
+
+db="${CLAUDE_QUEUE_DB:-$HOME/.claude/session-queue.db}"
+[ -f "$db" ] || {
+  echo "claude-reap-bg: no claude-queue database at $db" >&2
+  exit 1
+}
+
+# Report accumulators, mirroring git-reap-gone. Each entry is "<id>\t<detail>".
+declare -a reaped=()
+declare -a skipped=()
+reap_ok()   { reaped+=("$1"$'\t'"$2"); }
+reap_skip() { skipped+=("$1"$'\t'"$2"); }
+
+# Fetch the roster as its own step (rather than piping into jq) so a fetch
+# failure gets a diagnostic instead of `set -e` exiting silently.
+roster="$(claude agents --json 2>/dev/null)" || {
+  echo "claude-reap-bg: could not read the session roster" >&2
+  exit 1
+}
+
+# Read the whole queue view once and match ids in bash afterwards. Building a
+# per-session SQL string would mean interpolating roster-supplied text into a
+# query; reading everything up front removes that question entirely.
+queue="$(sqlite3 -separator $'\t' "$db" \
+  "SELECT session_id, raw_state, created_at, COALESCE(transcript_path, '') FROM queue")" || {
+  echo "claude-reap-bg: could not read the claude-queue database at $db" >&2
+  exit 1
+}
+
+# last_turn_sent_message <transcript.jsonl> -- true when the most recent
+# assistant turn issued a SendMessage.
+#
+# "Turn" is the run of assistant entries after the last real user prompt. Tool
+# results also arrive as type=="user" entries, so they are excluded by shape
+# (content is a string or contains something other than tool_result); counting
+# them would cut every turn down to its final tool call. Sidechain entries are
+# subagent traffic, not this session's own messages. isMeta=="true" entries
+# (e.g. the skill-launch "Base directory for this skill: ..." injection, or
+# "[Request interrupted by user]") are also type=="user" with non-tool_result
+# content but are not something the human typed, so they are excluded too --
+# counting one as a turn boundary would truncate the turn right past a
+# SendMessage and make the guard below skip a session that is actually
+# waiting on a reply.
+last_turn_sent_message() {
+  jq -s '
+    [ .[] | select((.isSidechain != true) and (.type == "user" or .type == "assistant")) ] as $msgs
+    | ( [ $msgs | to_entries[]
+          | select(.value.type == "user" and (.value.isMeta != true))
+          | select( (.value.message.content | type) == "string"
+                    or ( (.value.message.content | type) == "array"
+                         and ( [ .value.message.content[]?.type ] | any(. != "tool_result") ) ) )
+          | .key ] | last // -1 ) as $start
+    | [ $msgs[($start + 1):][]
+        | select(.type == "assistant")
+        | .message.content[]? | select(.type == "tool_use") | .name ]
+    | any(. == "SendMessage")
+  ' "$1"
+}
+
+in_list() { local x="$1"; shift; for e in "$@"; do [ "$e" = "$x" ] && return 0; done; return 1; }
+
+# Candidates: live background sessions the roster reports as idle.
+declare -a candidates=()
+while IFS= read -r sid; do
+  [ -n "$sid" ] || continue
+  candidates+=("$sid")
+done < <(jq -r '.[] | select(.kind == "background" and .status == "idle") | .sessionId' <<<"$roster")
+
+declare -a shorts=()
+for sid in "${candidates[@]}"; do shorts+=("${sid:0:8}"); done
+
+# Requested ids that are not candidates get a skip line, so a caller who named
+# an id learns why nothing happened to it.
+if [ "${#filters[@]}" -gt 0 ]; then
+  for f in "${filters[@]}"; do
+    if [ "${#shorts[@]}" -eq 0 ] || ! in_list "$f" "${shorts[@]}"; then
+      reap_skip "$f" "not a live idle background session"
+    fi
+  done
+fi
+
+now="$(date +%s)"
+
+for sid in "${candidates[@]}"; do
+  short="${sid:0:8}"
+  if [ "${#filters[@]}" -gt 0 ] && ! in_list "$short" "${filters[@]}"; then
+    continue
+  fi
+
+  row=""
+  while IFS=$'\t' read -r q_id q_state q_created q_transcript; do
+    if [ "$q_id" = "$sid" ]; then
+      row="found"
+      break
+    fi
+  done <<<"$queue"
+
+  if [ -z "$row" ]; then
+    reap_skip "$short" "no live claude-queue row (untracked, or already ended)"
+    continue
+  fi
+
+  if [ "$q_state" != "idle_done" ]; then
+    reap_skip "$short" "latest queue event is '$q_state', not idle_done"
+    continue
+  fi
+
+  age=$(( now - q_created ))
+  if [ "$age" -lt "$idle_seconds" ]; then
+    reap_skip "$short" "idle for $(( age / 60 ))m, under the ${idle_minutes}m threshold"
+    continue
+  fi
+
+  # No transcript means the SendMessage check cannot run. Skip rather than
+  # assume: an unverifiable session is indistinguishable from one holding a
+  # pending question.
+  if [ -z "$q_transcript" ] || [ ! -r "$q_transcript" ]; then
+    reap_skip "$short" "no readable transcript to check for a pending question"
+    continue
+  fi
+  if ! sent="$(last_turn_sent_message "$q_transcript" 2>/dev/null)"; then
+    reap_skip "$short" "could not parse the transcript ($q_transcript)"
+    continue
+  fi
+  if [ "$sent" != "false" ]; then
+    reap_skip "$short" "last turn sent a SendMessage (likely awaiting a reply)"
+    continue
+  fi
+
+  if [ "$dry_run" = 1 ]; then
+    reap_ok "$short" "would stop (idle $(( age / 60 ))m)"
+    continue
+  fi
+  if claude-stop-bg "$short"; then
+    reap_ok "$short" "stopped (idle $(( age / 60 ))m)"
+  else
+    reap_skip "$short" "claude-stop-bg refused"
+  fi
+done
+
+echo
+label="reaped"
+if [ "$dry_run" = 1 ]; then label="would reap"; fi
+if [ "${#reaped[@]}" -gt 0 ]; then
+  echo "$label (${#reaped[@]}):"
+  for e in "${reaped[@]}"; do printf '  %s\n' "${e/$'\t'/  -- }"; done
+else
+  echo "$label (0): nothing"
+fi
+if [ "${#skipped[@]}" -gt 0 ]; then
+  echo "skipped (${#skipped[@]}):"
+  for e in "${skipped[@]}"; do printf '  %s\n' "${e/$'\t'/  -- }"; done
+fi
