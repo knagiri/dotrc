@@ -11,10 +11,19 @@ set -euo pipefail
 # inside another worktree.
 #
 # When a prompt is given, the default is a BACKGROUND agent (`claude --bg`,
-# acceptEdits) started with the worktree as its cwd. It exits by itself once the
-# task completes, so neither sessions nor worktrees pile up, and tool calls that
-# need approval block and wait rather than degrading silently. Reach it with
+# acceptEdits) started with the worktree as its cwd. Tool calls that need
+# approval block and wait rather than degrading silently. Reach it with
 # `claude attach <short-id>` (the id is printed at launch).
+#
+# A delegate does NOT exit when its task completes: it stays at `status: idle`
+# waiting for further input (a different state from `status: waiting` /
+# `waitingFor: permission prompt`). It falls off the roster roughly an hour
+# later, but that expiry fires no `SessionEnd` hook, so claude-queue is left
+# with a ghost row whose `terminated_at` never gets filled in. Only `claude
+# stop` (= `claude-stop-bg`) closes the tracking cleanly, which is why the
+# delegator closes the session itself once it has the completion report --
+# whether or not it replied to anything. Worktrees outlive the session either
+# way; `git-reap-gone` reaps them.
 #
 # `--tmux` selects the other mode: claude is launched INSIDE a fresh detached
 # tmux session (session name = worktree basename, matching the `gts` convention).
@@ -58,9 +67,10 @@ set -euo pipefail
 #                  local branch, else origin/<branch> (tracked, no fetch), else
 #                  created fresh from the current HEAD.
 #   -- <prompt>    everything after `--` is the initial prompt. By default the
-#                  delegate is started with `claude --bg` (acceptEdits): it exits
-#                  by itself when the task completes, and is reached with
-#                  `claude attach <short-id>`. With --tmux, see above.
+#                  delegate is started with `claude --bg` (acceptEdits) and is
+#                  reached with `claude attach <short-id>`; it stays alive once
+#                  the task completes, so the delegator closes it with
+#                  `claude-stop-bg`. With --tmux, see above.
 
 usage() {
   # Print the first contiguous "# " comment block (the description), skipping the
