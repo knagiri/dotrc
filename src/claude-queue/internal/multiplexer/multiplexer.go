@@ -17,7 +17,7 @@ type Multiplexer interface {
 	// from a prior PaneID() call.
 	Switch(target string) error
 	// NewWindow opens a new window running argv with cwd as its working
-	// directory, without moving focus. Returns an error when there is no
+	// directory and moves focus to it. Returns an error when there is no
 	// multiplexer to open a window in.
 	NewWindow(cwd string, argv []string) error
 }
