@@ -12,7 +12,10 @@ set -euo pipefail
 # MUST RUN WITH THE INTEGRATION BASE CHECKED OUT. The base is origin/HEAD (e.g.
 # origin/main); its local counterpart is that name with the remote prefix
 # stripped (main). If HEAD is not on the local base branch the script exits 1
-# without touching anything, and says which branch to check out. That exit 1 is
+# without touching anything, and says which branch to check out -- or, if that
+# branch is already checked out in another worktree (the linked-worktree case:
+# `git switch` there would be refused, git forbids the same branch in two
+# worktrees at once), points at that worktree's path instead. That exit 1 is
 # not a "skip" -- it is a usage error, like an unknown flag, and does not
 # contradict the best-effort exit 0 below.
 #
@@ -119,6 +122,24 @@ fi
 # contain slashes (origin/release/2.0).
 base_local="${base#origin/}"
 
+# Map branch name -> worktree path from `git worktree list --porcelain`. Blocks
+# are separated by blank lines; a "branch refs/heads/<name>" line ties the
+# preceding "worktree <path>" line to a branch (detached worktrees have none).
+# Built BEFORE the HEAD check below so that check can tell whether base_local is
+# already checked out elsewhere (a linked worktree cannot `git switch` to it).
+declare -A wt_of=()
+cur_wt=""
+while IFS= read -r line; do
+  case "$line" in
+    "worktree "*) cur_wt="${line#worktree }" ;;
+    "branch refs/heads/"*) wt_of["${line#branch refs/heads/}"]="$cur_wt" ;;
+    "") cur_wt="" ;;
+  esac
+done < <(git worktree list --porcelain)
+
+# The worktree this script is invoked from -- never remove it.
+self_wt="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
 if [ -n "$base" ]; then
   # (A) HEAD must be the local base. Detached HEAD has no branch name and is
   # therefore a mismatch too. Bail before touching anything.
@@ -127,7 +148,17 @@ if [ -n "$base" ]; then
     echo "git-reap-gone: HEAD is on '${head_branch:-(detached)}' but must be on '$base_local'." >&2
     echo "git-reap-gone: \`git branch -d\` measures [gone] branches against HEAD, so reaping" >&2
     echo "git-reap-gone: from anywhere else disagrees with this script's gate." >&2
-    echo "git-reap-gone: run \`git switch $base_local\` and retry." >&2
+    base_wt="${wt_of[$base_local]:-}"
+    if [ -n "$base_wt" ] && [ "$base_wt" != "$self_wt" ]; then
+      # base_local is already checked out in another worktree (worktree-scope.md
+      # §7's primary caller: an agent cleaning up from inside the very linked
+      # worktree it was delegated into). `git switch $base_local` here would fail
+      # with "fatal: '$base_local' is already used by worktree at ...", so point
+      # at that checkout instead of issuing advice the caller cannot follow.
+      echo "git-reap-gone: '$base_local' is already checked out at '$base_wt' -- run it from there." >&2
+    else
+      echo "git-reap-gone: run \`git switch $base_local\` and retry." >&2
+    fi
     exit 1
   fi
 
@@ -141,22 +172,6 @@ if [ -n "$base" ]; then
     fi
   fi
 fi
-
-# Map branch name -> worktree path from `git worktree list --porcelain`. Blocks
-# are separated by blank lines; a "branch refs/heads/<name>" line ties the
-# preceding "worktree <path>" line to a branch (detached worktrees have none).
-declare -A wt_of=()
-cur_wt=""
-while IFS= read -r line; do
-  case "$line" in
-    "worktree "*) cur_wt="${line#worktree }" ;;
-    "branch refs/heads/"*) wt_of["${line#branch refs/heads/}"]="$cur_wt" ;;
-    "") cur_wt="" ;;
-  esac
-done < <(git worktree list --porcelain)
-
-# The worktree this script is invoked from -- never remove it.
-self_wt="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
 # Collect [gone] local branches. `%(upstream:track)` is literally "[gone]" when
 # the tracked upstream was pruned.
