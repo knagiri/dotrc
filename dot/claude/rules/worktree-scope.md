@@ -191,7 +191,8 @@ git-reap-gone [--no-fetch] [<branch>...]
 ```
 
 - **トリガーは推論せず `[gone]` 状態**。リモートが merge 時にブランチを削除 → `git fetch --prune`（スクリプト冒頭で自動実行）で local が `[gone]` 化する、という権威ある外部イベントだけを完了の合図にする。`--no-fetch` で冒頭 fetch を抑制できる（呼び出し側／cron が fetch を制御する場合）。
-- **reap してよい条件（全通過のみ削除）**: ①統合先（`origin/HEAD` = 通常 `origin/main`）に対し未統合コミットが無い、②worktree が紐づくならそれが clean、③その worktree が今いる worktree でない。裸ブランチ（worktree 無し）は①のみで判定。
+- **統合先のローカルブランチ（通常 `main`）を checkout した状態で実行する**。そうでなければ何も触らず exit 1 し、どのブランチへ switch すればよいかを案内する。`git branch -d` は「upstream があればそれ、無ければ HEAD」の 2 択でしか判定できず base を渡せない。`[gone]` は upstream が消えた状態なので必ず HEAD 基準に落ち、HEAD が統合先でないと下の gate と別の起点を測ることになるため。続けて `$base`（`origin/HEAD`）への `git merge --ff-only` を試み、古いローカル統合先を追随させる（`--no-fetch` の有無に依らず実行。失敗しても abort せず警告して続行する — gate の安全性は ff に依存せず、失敗の帰結は skip が増えるだけで誤削除方向には倒れない）。
+- **reap してよい条件（全通過のみ削除）**: ①統合先（`origin/HEAD` = 通常 `origin/main`）に対し未統合コミットが無い、②HEAD から到達可能（`git branch -d` が実際に使う判定の先取り。**worktree を消す前**に確認するので「worktree だけ消えてブランチが残る」中途半端な状態が構造的に生じない）、③worktree が紐づくならそれが clean、④その worktree が今いる worktree でない。裸ブランチ（worktree 無し）は①②のみで判定。
 - **削除は安全形だけ**: `git worktree remove`（**`--force` 無し**）＋ `git branch -d`（**`-D` ではない**）。条件を欠くもの・git が拒否したものは **skip し、何が blocking か report** する。決して force にエスカレートしない。これにより dirty／別ブランチへ切替済み（→ `[gone]` ブランチに worktree が紐づかない）等で spawn 中の worktree は自動的に対象外になる。
 - 引数でブランチ名を指定するとその対象だけを（同じゲートを通して）reap する。無指定なら全 `[gone]` を sweep。
 - **manual 運用**。cron/janitor の常駐は当面作らない。ただし全 `[gone]` を sweep できる形なので、将来そのまま cron/loop に挿せる。
