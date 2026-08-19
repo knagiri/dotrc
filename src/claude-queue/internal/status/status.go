@@ -3,7 +3,6 @@ package status
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
@@ -46,7 +45,7 @@ func Format(counts map[string]int, asciiMode bool) string {
 // Run is the CLI entrypoint for `claude-queue status`.
 // Never returns a non-zero exit: on error prints empty string.
 func Run() {
-	path := dbPath()
+	path := db.DefaultPath()
 	conn, err := db.Open(path)
 	if err != nil {
 		return
@@ -62,15 +61,4 @@ func Run() {
 
 func asciiEnv() bool {
 	return os.Getenv("CLAUDE_QUEUE_ASCII") == "1"
-}
-
-func dbPath() string {
-	if p := os.Getenv("CLAUDE_QUEUE_DB"); p != "" {
-		return p
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "session-queue.db"
-	}
-	return filepath.Join(home, ".claude", "session-queue.db")
 }

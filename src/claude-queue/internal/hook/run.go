@@ -24,7 +24,7 @@ func Run(event string) {
 		logDebug("event mismatch: argv=%s stdin=%s (argv wins)", event, in.HookEventName)
 	}
 
-	path := dbPath()
+	path := db.DefaultPath()
 	conn, err := db.Open(path)
 	if err != nil {
 		logDebug("db.Open(%s): %v", path, err)
@@ -39,17 +39,6 @@ func Run(event string) {
 		return
 	}
 	mux.RefreshStatus()
-}
-
-func dbPath() string {
-	if p := os.Getenv("CLAUDE_QUEUE_DB"); p != "" {
-		return p
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "session-queue.db"
-	}
-	return filepath.Join(home, ".claude", "session-queue.db")
 }
 
 func logDebug(format string, args ...interface{}) {
