@@ -19,13 +19,19 @@ func (tmuxImpl) Switch(target string) error {
 	return exec.Command("tmux", "switch-client", "-t", target).Run()
 }
 
-// NewWindow opens the command in a detached window (-d) so the caller's pane
-// keeps focus; -c sets the window's working directory.
+// NewWindow opens the command in a new window and makes it current, so
+// picking a background session in the picker actually takes the user there;
+// -c sets the window's working directory.
 func (tmuxImpl) NewWindow(cwd string, argv []string) error {
-	args := []string{"new-window", "-d"}
+	return exec.Command("tmux", newWindowArgs(cwd, argv)...).Run()
+}
+
+// newWindowArgs builds the tmux argv. Split out from NewWindow so the
+// contract can be asserted without starting a tmux server.
+func newWindowArgs(cwd string, argv []string) []string {
+	args := []string{"new-window"}
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
-	args = append(args, argv...)
-	return exec.Command("tmux", args...).Run()
+	return append(args, argv...)
 }
