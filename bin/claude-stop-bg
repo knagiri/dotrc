@@ -3,12 +3,14 @@ set -euo pipefail
 
 # claude-stop-bg -- stop a BACKGROUND claude session by its short id.
 #
-# A delegated background session normally exits on its own when the task
-# completes. One case does not: a session that received a message (e.g. it asked
-# the delegator a question and got an answer) stays alive at `idle` after it
-# finishes, because receiving makes it a participant in a conversation. The side
-# that replied is the one that knows to close it, and it already holds the short
-# id from claude-worktree's output.
+# A delegated background session does NOT exit when its task completes. It stays
+# at `status: idle` waiting for further input -- whether or not it ever exchanged
+# messages with its delegator -- and falls off the roster roughly an hour later.
+# That expiry fires no `SessionEnd` hook, so claude-queue is left with a ghost
+# row whose `terminated_at` never gets filled in; stopping the session here is
+# what closes the tracking cleanly. So the delegator runs this once it has the
+# completion report, whether or not it replied to anything, and it already holds
+# the short id from claude-worktree's output.
 #
 # This wrapper exists so that ability can be granted without granting `claude
 # stop *`, which would let an agent kill ANY session -- including the user's own
