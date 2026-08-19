@@ -28,11 +28,16 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
 - **既定は session 起動形式**。必ず `claude-worktree --model opus <name> -b <branch> -- "<prompt>"`
   の `--` 付きで呼ぶ。`--` 無しの add-only モード（path を stdout に出すだけ）は使わない。
 - **既定は background 起動**。`claude-worktree --model opus <name> -b <branch> -- "<prompt>"` は
-  `claude --bg` で委譲先を起こす。完遂すれば委譲先は自分で終了するので session は溜まらない
-  （**worktree は残る**。後片付けは `worktree-scope.md` §7 の `git-reap-gone`）。
+  `claude --bg` で委譲先を起こす。委譲先は完遂しても session を終えず `idle` で残るので、
+  手順 6 のとおり委譲元が `claude-stop-bg` で閉じる（**worktree も残る**。後片付けは
+  `worktree-scope.md` §7 の `git-reap-gone`）。
 - **`--tmux` は人間が同席する委譲にだけ使う**。HOW をその場で詰める、設計対話が要る等、
   interactivity を前提とする委譲は今後も一級のユースケースであり、退避路ではない。
-  fire-and-forget の委譲に付けてはいけない（付けると閉じない session が残る）。
+  fire-and-forget の委譲に付けてはいけない。`--tmux` は `kind` が `background` ではない
+  interactive session を起こすため、`claude-stop-bg` は `refusing to stop a $kind session`
+  で拒否し、委譲元が手順 6 のように閉じる手段を持たない（bg 委譲は `idle` で残っても
+  `claude-stop-bg` で閉じられるのと対照的）。人間が attach するか tmux session 自体を
+  落とすまで、session も占有した tmux session も残り続ける。
 - **委譲先（B）のモデルは `--model opus` で固定する。** 長時間の agentic 実行を担う役なので、
   呼び出し元セッションのモデルを継承させない。
 - **add-only 例外**: 「worktree だけ作って」など、明示的に初期タスクを伴わない要求の
@@ -92,11 +97,14 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    委譲先へ入る唯一の経路でもある（`C-q q` の picker からも同じ場所へ飛べる）。
 
 6. **報告を受け取ったら**: 委譲先は完了・不足・中断を SendMessage で送ってくる。
-   - **完了 / 中断**: 内容をユーザーに伝える。**質問に返信していなければ** session の後片付けは
-     不要（委譲先は自分で終了する）。返信していた場合は次のバレットのとおり閉じる。
-   - **不足（質問）**: 答えられるなら SendMessage で返信する。**返信した委譲先は完遂後も
-     `idle` で残る**ので、完了報告を受けた時点で `claude-stop-bg <short-id>` で閉じる。
-     判断がユーザーに属する質問は、代わりにユーザーへ取り次ぐ。
+   - **完了 / 中断**: 内容をユーザーに伝えたうえで、**質問に返信したかに関わらず**
+     `claude-stop-bg <short-id>` で委譲先を閉じる。委譲先は完遂しても session を終えず
+     `idle` で次の入力を待ち続け（承認待ちの `status: waiting` とは別状態）、放置すると
+     約 60 分居座る。しかもその自然消滅では `SessionEnd` が飛ばないので claude-queue の
+     `terminated_at` は NULL のまま幽霊行が残る。追跡がきれいに閉じるのは
+     `claude stop`（= `claude-stop-bg`）経路だけ。
+   - **不足（質問）**: 答えられるなら SendMessage で返信する。判断がユーザーに属する質問は、
+     代わりにユーザーへ取り次ぐ。返信後は完了報告を待ち、上のとおり閉じる。
    - **permission 承認の代理はしない。** 承認は harness レベルの UI イベントで、委譲元が
      肩代わりすると cross-session permission laundering になる。ユーザーに
      `claude attach <short-id>`（または `C-q q`）を案内する。
