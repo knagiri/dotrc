@@ -244,10 +244,12 @@ if [ -n "$delegator" ]; then
 fi
 
 if [ "$use_tmux" = 0 ]; then
-  # Background agent (default). It exits on its own when the task completes,
-  # which is the whole point of preferring it over an interactive session. The
-  # id is assigned by --bg (it ignores --session-id), so the only way to learn
-  # it is to read the launch banner back.
+  # Background agent (default). It does NOT exit on its own when the task
+  # completes -- see the header for that. It's preferred over an interactive
+  # session because it doesn't occupy a tmux session/pane and blocks on
+  # approval-requiring tool calls instead of degrading silently. The id is
+  # assigned by --bg (it ignores --session-id), so the only way to learn it is
+  # to read the launch banner back.
   #
   # cwd matters: the delegate reads the checkout it is started in, so the launch
   # runs inside the worktree. A subshell keeps this script's own cwd untouched.
