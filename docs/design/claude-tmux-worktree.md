@@ -160,8 +160,9 @@ worktree の滞留も同様に残る — ①はどちらの経路でも走り、
 
 ③との噛み合わせは「pane 無し = 追跡は完全、ジャンプだけ不能」になる。status-right のカウントは
 `terminated_at IS NULL` と state だけで絞るので background も普通に乗る。ジャンプは picker が
-`tmux_pane` の有無で分岐し、NULL なら `tmux new-window -d -c <cwd> claude attach <short-id>` で
-開く（`claude attach` は short id しか受けない）。承認待ちで止まった background 委譲先へ入る
+`tmux_pane` の有無で分岐し、NULL なら `tmux new-window -c <cwd> claude attach <short-id>` で
+開く（`claude attach` は short id しか受けない）。`-d` を付けないのは、pane 有りの
+`switch-client` と揃えて「選んだら実際にそこへ移る」を守るため。承認待ちで止まった background 委譲先へ入る
 経路はこれだけなので、picker から隠さず出す。
 
 ### ④は **メイン** toplevel 基準でパスを作る
