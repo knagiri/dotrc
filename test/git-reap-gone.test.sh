@@ -201,4 +201,24 @@ else
   bad "G: rc=$rc"; sed 's/^/  out| /' <<<"$out"
 fi
 
+# --- H: worktree directory hand-removed -> skipped, not misread as clean -----
+# `git worktree remove` was never run; only the directory itself was `rm -rf`'d,
+# leaving the worktree registered in `git worktree list --porcelain`. Without
+# the explicit `[ ! -d "$wt" ]` guard, `git -C <gone dir> status --porcelain`
+# would fail and its empty stdout would be misread as "clean", leading straight
+# into a `git worktree remove` that also fails on the missing directory.
+read -r bare work < <(new_case caseH)
+merged_gone "$work"
+git -C "$work" worktree add -q "$tmp/caseH/wt" feat
+rm -rf "$tmp/caseH/wt"
+out="$(cd "$work" && "$src" 2>&1)"; rc=$?
+branch_left=$(git -C "$work" rev-parse --verify -q refs/heads/feat >/dev/null && echo yes || echo no)
+if [ "$rc" -eq 0 ] && [ "$branch_left" = yes ] \
+   && grep -q 'worktree directory is missing' <<<"$out" \
+   && grep -q 'git worktree prune' <<<"$out"; then
+  ok "H: a hand-removed worktree directory is skipped, not misread as clean"
+else
+  bad "H: rc=$rc branch_left=$branch_left"; sed 's/^/  out| /' <<<"$out"
+fi
+
 exit "$fail"
