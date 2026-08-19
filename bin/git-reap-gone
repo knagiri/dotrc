@@ -12,7 +12,9 @@ set -euo pipefail
 # MUST RUN WITH THE INTEGRATION BASE CHECKED OUT. The base is origin/HEAD (e.g.
 # origin/main); its local counterpart is that name with the remote prefix
 # stripped (main). If HEAD is not on the local base branch the script exits 1
-# without touching anything, and says which branch to check out -- or, if that
+# without touching any branch, worktree, or working tree -- though by then the
+# leading `git fetch --prune` below has already run, so remote-tracking refs
+# are already updated -- and says which branch to check out -- or, if that
 # branch is already checked out in another worktree (the linked-worktree case:
 # `git switch` there would be refused, git forbids the same branch in two
 # worktrees at once), points at that worktree's path instead. That exit 1 is
