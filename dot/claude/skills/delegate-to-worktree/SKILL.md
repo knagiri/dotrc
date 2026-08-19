@@ -33,7 +33,11 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
   `worktree-scope.md` §7 の `git-reap-gone`）。
 - **`--tmux` は人間が同席する委譲にだけ使う**。HOW をその場で詰める、設計対話が要る等、
   interactivity を前提とする委譲は今後も一級のユースケースであり、退避路ではない。
-  fire-and-forget の委譲に付けてはいけない（付けると閉じない session が残る）。
+  fire-and-forget の委譲に付けてはいけない。`--tmux` は `kind` が `background` ではない
+  interactive session を起こすため、`claude-stop-bg` は `refusing to stop a $kind session`
+  で拒否し、委譲元が手順 6 のように閉じる手段を持たない（bg 委譲は `idle` で残っても
+  `claude-stop-bg` で閉じられるのと対照的）。人間が attach するか tmux session 自体を
+  落とすまで、session も占有した tmux session も残り続ける。
 - **委譲先（B）のモデルは `--model opus` で固定する。** 長時間の agentic 実行を担う役なので、
   呼び出し元セッションのモデルを継承させない。
 - **add-only 例外**: 「worktree だけ作って」など、明示的に初期タスクを伴わない要求の
