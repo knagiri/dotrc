@@ -45,7 +45,8 @@ cat >"$roster" <<'EOF'
   {"pid":2,"cwd":"/w/fresh","kind":"background","sessionId":"bbbbbbbb-1111-2222-3333-444444444444","status":"idle"},
   {"pid":3,"cwd":"/w/asked","kind":"background","sessionId":"cccccccc-1111-2222-3333-444444444444","status":"idle"},
   {"pid":4,"cwd":"/w/busy","kind":"background","sessionId":"dddddddd-1111-2222-3333-444444444444","status":"busy"},
-  {"pid":5,"cwd":"/w/human","kind":"interactive","sessionId":"eeeeeeee-1111-2222-3333-444444444444","status":"idle"}
+  {"pid":5,"cwd":"/w/human","kind":"interactive","sessionId":"eeeeeeee-1111-2222-3333-444444444444","status":"idle"},
+  {"pid":6,"cwd":"/w/asked-meta","kind":"background","sessionId":"ffffffff-1111-2222-3333-444444444444","status":"idle"}
 ]
 EOF
 
@@ -71,8 +72,29 @@ cat >"$asked" <<'EOF'
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"waiting for the reply"}]}}
 EOF
 
+# `asked_meta` is `asked` with an isMeta injected entry (skill-launch style)
+# tacked on after the SendMessage turn. isMeta entries are not something the
+# human typed, so they must not count as a turn boundary -- if they did, the
+# "last turn" window would start after this entry and would no longer contain
+# the SendMessage, and the session would be wrongly stopped mid-question.
+asked_meta="$tmp/asked_meta.jsonl"
+cat >"$asked_meta" <<'EOF'
+{"type":"user","message":{"role":"user","content":"go do the thing"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"SendMessage","input":{}}]}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /x"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"waiting for the reply"}]}}
+EOF
+
 # Fixture database. Ages are relative to unixepoch() so the thresholds are
 # exercised without freezing the clock.
+#
+# This DDL is a hand-written subset of src/claude-queue/internal/db/schema.go
+# (the `Schema` constant) -- the source of truth. It intentionally drops
+# `effective_state` and `priority` from the `queue` view because
+# claude-reap-bg only ever reads `session_id`, `raw_state`, `created_at`, and
+# `transcript_path`, plus the view's live-row filter (terminated_at IS NULL
+# AND state != 'ended'). If schema.go's column names or that filter change,
+# update this block to match.
 db="$tmp/queue.db"
 sqlite3 "$db" <<SQL
 CREATE TABLE sessions (
@@ -105,7 +127,8 @@ INSERT INTO sessions(session_id, transcript_path) VALUES
   ('bbbbbbbb-1111-2222-3333-444444444444', '$quiet'),
   ('cccccccc-1111-2222-3333-444444444444', '$asked'),
   ('dddddddd-1111-2222-3333-444444444444', '$quiet'),
-  ('eeeeeeee-1111-2222-3333-444444444444', '$quiet');
+  ('eeeeeeee-1111-2222-3333-444444444444', '$quiet'),
+  ('ffffffff-1111-2222-3333-444444444444', '$asked_meta');
 
 -- ripe: stopped 40 minutes ago. fresh: 2 minutes ago (under the threshold).
 INSERT INTO events(session_id, event_type, state, created_at) VALUES
@@ -113,7 +136,8 @@ INSERT INTO events(session_id, event_type, state, created_at) VALUES
   ('bbbbbbbb-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 120),
   ('cccccccc-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
   ('dddddddd-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
-  ('eeeeeeee-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400);
+  ('eeeeeeee-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
+  ('ffffffff-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400);
 SQL
 
 stoplog="$tmp/stop.log"
@@ -143,6 +167,14 @@ else echo "FAIL: fresh session not skipped out=$out"; fail=1; fi
 if ! stopped cccccccc && grep -q 'cccccccc.*SendMessage' <<<"$out"; then
   echo "ok: session whose last turn sent a SendMessage is skipped"
 else echo "FAIL: asking session not skipped out=$out"; fail=1; fi
+
+# An isMeta injected entry (skill-launch style) after the SendMessage must not
+# be mistaken for a turn boundary -- otherwise the "last turn" window would
+# start past it, no longer see the SendMessage, and the session would be
+# wrongly stopped while still awaiting a reply.
+if ! stopped ffffffff && grep -q 'ffffffff.*SendMessage' <<<"$out"; then
+  echo "ok: an isMeta entry after SendMessage does not defeat the pending-reply guard"
+else echo "FAIL: isMeta-confused session not skipped out=$out"; fail=1; fi
 
 # status=="busy" -> never a candidate, so it is not even reported.
 if ! stopped dddddddd && ! grep -q dddddddd <<<"$out"; then
