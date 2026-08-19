@@ -38,7 +38,7 @@
 | ② tmux セッション | `gts`(`ghq-tmux-session`) | worktree dir ごとに tmux session を作って attach/switch | session 名 = dir basename |
 | ③ Claude 可視化 | `claude-queue` | 全 pane の Claude 状態を SQLite 化、status-right 表示 + fzf popup で pane へジャンプ | `$TMUX_PANE`（②を経ない既定経路では NULL。short session id で識別） |
 | ④ 分岐起動 | `claude-worktree` | ①の worktree 追加を常に行い、既定は⑤の起動、`--tmux` 指定時のみ②のセットアップ（③はどちらの経路でも追跡する） | worktree dir / short session id（`--tmux` 時は tmux session） |
-| ⑤ background 起動 | `claude --bg` | 人間不在の委譲先を起こし、完遂で自ら終了する | short session id（8 桁） |
+| ⑤ background 起動 | `claude --bg` | 人間不在の委譲先を起こす。完遂後も `idle` で残るので委譲元が閉じる | short session id（8 桁） |
 
 **鍵となる連結（②を作る経路に限る）:** worktree dir の basename = tmux session 名。区切り文字を
 `_` に統一してあるため、`①の dir 名 dotrc_foo` → `②の session 名 dotrc_foo` が自動的に一致し、
@@ -110,8 +110,8 @@ claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 3. ④が worktree B を作り、その中で `claude --bg` を起動する（tmux session は作らない）
 4. ユーザーは `claude attach <short-id>` で様子を見る。`C-q q`（③picker）からも同じ場所へ飛べる
    - 承認待ちで止まっていれば、attach した画面にその prompt がそのまま出る
-5. 委譲先は完遂すると自分で終了する。質問に返信した場合だけ `idle` で残るので
-   `claude-stop-bg <short-id>` で閉じる
+5. 委譲先は完遂しても session を終えず `idle` で待ち続ける。委譲元は完了報告を受けたら、
+   質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（理由は後述）
 
 ## 設計判断と根拠
 
@@ -142,12 +142,21 @@ worktree dir の basename はそのまま tmux session 名になる。tmux の�
 `status: waiting`, `waitingFor: permission prompt` を返す）。人間不在の委譲先が「静かに劣化した
 まま完了扱い」になることがないので、`-p` の棄却理由も解消している。
 
-そのうえで background は**タスクを完遂するとプロセスが終わる**。interactive 起動の唯一の不満
-（完遂しても REPL に残り、session が溜まる）がこれで消えるため、④の既定を
-background に置いた。**worktree の滞留は background でも変わらない** — ①はどちらの経路でも
-走り、誰も消さないので、後片付けは `worktree-scope.md` §7 の `git-reap-gone`（manual 運用）が
-担う。tmux session を作る経路は `--tmux` として残してある — 人間が同席して
-設計を詰めるような、interactivity を要求する委譲のためで、退避路ではない。
+そのうえで background は tmux session も pane も占有しない。人間が同席しない委譲にはそれで
+足りるため、④の既定を background に置いた。
+
+一方で **session の滞留は background でも消えない**。タスクを完遂しても session は終わらず、
+`claude agents --json` の `status: idle`（承認待ちの `status: waiting` / `waitingFor: permission
+prompt` とは別状態）で次の入力を待ち続ける。放置すると完遂から約 60 分で roster から消えるが、
+その消滅では `SessionEnd` が飛ばないため③の `terminated_at` は NULL のまま残り、`queue` view に
+幽霊行が残る。追跡がきれいに閉じるのは `claude stop`（= `claude-stop-bg`）で閉じた経路だけ。
+したがって委譲元は、完了報告を受けたら質問へ返信したかに関わらず `claude-stop-bg <short-id>` で
+閉じる（`delegate-to-worktree` 手順 6 / `worktree-scope.md` §6）。
+
+worktree の滞留も同様に残る — ①はどちらの経路でも走り、誰も消さないので、後片付けは
+`worktree-scope.md` §7 の `git-reap-gone`（manual 運用）が担う。tmux session を作る経路は
+`--tmux` として残してある — 人間が同席して設計を詰めるような、interactivity を要求する
+委譲のためで、退避路ではない。
 
 ③との噛み合わせは「pane 無し = 追跡は完全、ジャンプだけ不能」になる。status-right のカウントは
 `terminated_at IS NULL` と state だけで絞るので background も普通に乗る。ジャンプは picker が
