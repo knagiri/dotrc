@@ -184,4 +184,21 @@ else
   bad "F: protected-branch message rc=$rc master_left=$master_left"; sed 's/^/  out| /' <<<"$out"
 fi
 
+# --- G: HEAD off base AND base already checked out in another worktree -------
+# Simulates the primary caller of worktree-scope.md §7: an agent running the
+# script from inside the very linked worktree it was delegated into. `git
+# switch main` there would fail with "already used by worktree", so the
+# message must point at the other checkout's path instead.
+read -r bare work < <(new_case caseG)
+git -C "$work" checkout -q -b side
+git -C "$work" checkout -q main   # main stays checked out in $work
+git -C "$work" worktree add -q "$tmp/caseG/wt2" side
+out="$(cd "$tmp/caseG/wt2" && "$src" --no-fetch 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -q "already checked out at '$work'" <<<"$out" \
+   && ! grep -q 'git switch main' <<<"$out"; then
+  ok "G: HEAD off base from a linked worktree points at the other checkout"
+else
+  bad "G: rc=$rc"; sed 's/^/  out| /' <<<"$out"
+fi
+
 exit "$fail"
