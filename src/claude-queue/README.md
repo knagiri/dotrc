@@ -40,6 +40,7 @@ make install
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
 | `claude-queue picker` | fzf を popup で起動し、選択 session の pane に `tmux switch-client`。pane が無い（background session）行は `tmux new-window` で `claude attach <short-id>` を起動 |
+| `claude-queue reconcile` | `claude agents --json` に載っていない生存扱いの row を terminated にする（picker 起動時に自動実行される） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue --version` | バージョン表示 |
 
@@ -120,7 +121,6 @@ v0.1 MVP の後続候補。優先度順に整理（implementation plan の final
 
 ### Refactor / Polish
 - **MCP tool naming**: `mcp__server__tool` → `server.tool` 整形（`internal/summary/summary.go:toolInputSummary` に TODO あり）
-- **共有 `dbPath()` の抽出**: 現状 hook/run.go, status/, picker/, reset/ で 4 重複。`internal/config` か `internal/paths` に集約
 - **共有 icon maps の抽出**: status/ と picker/ で emoji/ascii マップが重複。`internal/icons` 化
 - **`db.ListRows` filter**: `where[0]` を上書きする現方式を slice-of-states に書き換え。state 追加時の保守性向上
 - **status の debug log**: `db.Open` 失敗を once-per-process で throttle log

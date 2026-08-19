@@ -12,6 +12,7 @@ import (
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/summary"
 )
 
@@ -122,12 +123,23 @@ func Run(args []string) {
 	showStale := fs.Bool("show-stale", false, "include stale sessions")
 	_ = fs.Parse(args)
 
-	conn, err := db.Open(dbPath())
+	conn, err := db.Open(db.DefaultPath())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return
 	}
 	defer conn.Close()
+
+	// Reconcile before reading the rows, so the list never offers a session
+	// that has already vanished. This is the cheapest place to put it: the
+	// picker is user-driven (so it runs rarely) and it is the one caller that
+	// would otherwise show the stale rows. Best-effort -- an unreadable roster
+	// is no reason to refuse to display the queue.
+	if n, err := reconcile.Sweep(conn); err != nil {
+		fmt.Fprintln(os.Stderr, "reconcile skipped:", err)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "reconciled %d ended session(s)\n", n)
+	}
 
 	rows, err := db.ListRows(conn, db.ListOpts{
 		ShowWorking: *showWorking,
@@ -199,15 +211,4 @@ func runFzf(input string) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(string(out), "\n"), nil
-}
-
-func dbPath() string {
-	if p := os.Getenv("CLAUDE_QUEUE_DB"); p != "" {
-		return p
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "session-queue.db"
-	}
-	return filepath.Join(home, ".claude", "session-queue.db")
 }

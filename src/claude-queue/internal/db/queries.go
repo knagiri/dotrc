@@ -88,6 +88,28 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	return out, rows.Err()
 }
 
+// LiveSessionIDs returns the session ids the ledger still considers running,
+// i.e. every row that never got a terminated_at. Ordered oldest first so a
+// reconcile pass reports in a stable order.
+func LiveSessionIDs(conn *sql.DB) ([]string, error) {
+	rows, err := conn.Query(
+		"SELECT session_id FROM sessions WHERE terminated_at IS NULL ORDER BY started_at, session_id",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("live sessions: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // TerminateSession marks a session ended (terminated_at + ForcedEnd event),
 // matching the cleanup pattern in hook.forcedEndSiblings. Used by the picker
 // when tmux switch-client fails because the recorded pane no longer exists.

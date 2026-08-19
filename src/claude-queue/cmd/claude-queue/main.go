@@ -6,6 +6,7 @@ import (
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hook"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/picker"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reset"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/status"
 )
@@ -14,7 +15,7 @@ import (
 var version = "dev"
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: claude-queue {hook <event>|status|picker|reset} [flags]")
+	fmt.Fprintln(os.Stderr, "usage: claude-queue {hook <event>|status|picker|reconcile|reset} [flags]")
 	fmt.Fprintln(os.Stderr, "       claude-queue --version")
 }
 
@@ -38,6 +39,8 @@ func main() {
 		status.Run()
 	case "picker":
 		picker.Run(os.Args[2:])
+	case "reconcile":
+		reconcile.Run(os.Args[2:])
 	case "reset":
 		reset.Run(os.Args[2:])
 	default:
