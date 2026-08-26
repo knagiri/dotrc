@@ -18,9 +18,12 @@
 ### Trailing 引数の有無を両方許可するには 2 行に分ける
 
 ```json
-"Bash(git -C * status)",
-"Bash(git -C * status *)"
+"Bash(aws --profile * s3 ls)",
+"Bash(aws --profile * s3 ls *)"
 ```
+
+例を git で書かないのは、git では subcommand より前に `*` を置けないため（次節末尾を参照）。
+git の rule では wildcard は subcommand より後ろにだけ置く。
 
 ### allowlist 不要（auto-allow されるもの）
 
@@ -29,7 +32,20 @@
 - 組み込み read-only コマンド: `ls`, `cat`, `head`, `tail`, `grep`, `find`, `wc`, `diff`, `stat`, `du`, `cd`, および `git status`/`log`/`diff`/`show` 等の read-only サブコマンド
 - 自動剥がしされる process wrapper: `timeout`, `time`, `nice`, `nohup`, `stdbuf`, （フラグ無し）`xargs`
 
-ただし `git -C <path>` を介すると read-only サブコマンドでも auto-allow が効かなくなるので、別途 allow rule が必要。
+ただし `git -C <path>` を介すると read-only サブコマンドでも auto-allow が効かなくなる。この穴を
+`Bash(git -C * <sub>)` で埋めることはできない。subcommand より前の `*` は `-c` / `--exec-path`
+等のグローバルオプションにもマッチする。つまり `Bash(git -C * log)` は
+`git -C <path> -c core.pager=<任意コマンド> log` のような呼び出しまで吸い、承認なしの任意コマンド
+実行を通しうる（実質「git のグローバルオプション全部を allow」になる）。Claude Code 2.1.246 はこの形の rule を起動時に警告する。
+
+したがって既定の対処は allowlist の工夫ではなく cwd を直すこと。[working-directory.md](./working-directory.md)
+に従い `/cd <dir>` を頼んで止まる。[worktree-scope.md](./worktree-scope.md) §3 が許す「別 repo の
+一度きりの read-only 覗き見」で `git -C <絶対パス>` を使う場合は、承認プロンプトが出るのを
+受け入れる（一度きりなので摩擦が小さい）。
+
+由来: 2026-08-26、Claude Code 2.1.246 が起動時に user 設定（`~/.claude/settings.json`）の
+`Bash(git -C * <sub>)` 32 行それぞれへ警告を出したのが発端。user 設定由来なので全 project で出る。
+同 32 行を削除し、上の方針へ差し替えた。
 
 ### ファイル系 permission は Read/Edit の 2 ファミリでしか照合されない
 
