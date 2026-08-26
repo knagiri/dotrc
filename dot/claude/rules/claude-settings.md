@@ -18,12 +18,15 @@
 ### Trailing 引数の有無を両方許可するには 2 行に分ける
 
 ```json
-"Bash(aws --profile * s3 ls)",
-"Bash(aws --profile * s3 ls *)"
+"Bash(git log * --oneline)",
+"Bash(git log * --oneline *)"
 ```
 
-例を git で書かないのは、git では subcommand より前に `*` を置けないため（次節末尾を参照）。
-git の rule では wildcard は subcommand より後ろにだけ置く。
+`*` は subcommand より後ろに置く。コマンド名直後（オプションが入る位置）に `*` を置くと、
+**コマンド種別に関わらず**起動時に警告される（実測: `Bash(aws --profile * s3 ls)` /
+`Bash(docker --context * ps)` でも出る）。git はその位置に `-c` / `--exec-path` を挿せるため
+危険度が特に高く、警告文にも git 固有の一文が付く（次節末尾を参照）。subcommand より後ろなら、
+上のように後続に literal トークンが続く多重 wildcard でも警告されない。
 
 ### allowlist 不要（auto-allow されるもの）
 
@@ -36,7 +39,9 @@ git の rule では wildcard は subcommand より後ろにだけ置く。
 `Bash(git -C * <sub>)` で埋めることはできない。subcommand より前の `*` は `-c` / `--exec-path`
 等のグローバルオプションにもマッチする。つまり `Bash(git -C * log)` は
 `git -C <path> -c core.pager=<任意コマンド> log` のような呼び出しまで吸い、承認なしの任意コマンド
-実行を通しうる（実質「git のグローバルオプション全部を allow」になる）。Claude Code 2.1.246 はこの形の rule を起動時に警告する。
+実行を通しうる（実質「git のグローバルオプション全部を allow」になる）。Claude Code 2.1.246 は
+この形の rule を起動時に警告する（警告はコマンド名直後の `*` に対してコマンド種別に関わらず出て、
+git ではこの理由に触れる一文が加わる）。
 
 したがって既定の対処は allowlist の工夫ではなく cwd を直すこと。[working-directory.md](./working-directory.md)
 に従い `/cd <dir>` を頼んで止まる。[worktree-scope.md](./worktree-scope.md) §3 が許す「別 repo の
