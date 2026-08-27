@@ -76,6 +76,39 @@ git 固有の一文が付く（次節末尾を参照）。
 
 由来: PR #23 で `settings.json` から `Glob(...)` / `Write(...)` / `MultiEdit(...)` 形の dead rule 23 件を削除した際に判明。
 
+### 3 層の使い分け — 委譲先に効かせたい rule は tracked に置く
+
+permission rule の置き場所は 3 つあり、伝播の経路がそれぞれ違う（$HOME への展開 / repo の git
+管理下 / その checkout 限り）。
+
+| 置き場所 | 伝播経路 | 何を置くか |
+|---|---|---|
+| `~/.claude/settings.json`（dotrc の `dot/claude/settings.json`） | dotrc の git 管理下だが、効くのは `bin/deploy.sh` が張る symlink 経由（[dotrc-deploy.md](./dotrc-deploy.md) 参照）。linked worktree で編集しても、そのまま委譲先には効かない | 複数 repo で使うもの |
+| `<repo>/.claude/settings.json` | **repo の git 管理下**。branch を checkout すれば載る | repo 固有で、worktree へ伝播させたいもの |
+| `<repo>/.claude/settings.local.json` | 管理外 | その checkout 限りの一時的なもの |
+
+`git worktree add` は branch を checkout するだけなので、git 管理外の `settings.local.json` は
+新しい worktree に一切載らない。そして UI の「don't ask again」が書き込む先はこの
+`settings.local.json` である。つまり対話中に溜めた許可は、[worktree-scope.md](./worktree-scope.md) §6 の
+委譲先にはまったく効かない。
+
+人間が同席していれば承認プロンプトはその場で捌けるが、background 委譲先は人間不在で走るので
+そこで固まる。しかも承認は代理できない（cross-session permission laundering）ため、回収に
+人手が要る。したがって**委譲先でも要る定型の検証コマンド**（テスト実行、`git fetch origin` 等）の
+rule は、tracked な置き場所へ昇格させる（複数 repo で使うなら `~/.claude/settings.json` = dotrc の
+`dot/claude/settings.json`、repo 固有なら `<repo>/.claude/settings.json`。振り分けは上の表の
+とおり）。その checkout 限りの実験や、ローカルのパスに依存する許可は local に残してよい
+（他人の checkout では dead rule になるだけで、伝播させる価値が無いため）。
+
+由来: background 委譲が permission prompt で構造的に停止した実測 4 本連続。いずれも
+`bash test/*.test.sh` / `go test` / `git fetch origin` という定型の検証コマンドだった。
+`implement-and-review` は PR を出す前に必ず `git fetch origin` を撃つ設計なので、穴が塞がるまで
+全委譲が必ず止まる状態だった。同種の rule は `.claude/settings.local.json` に個別に溜まって
+いたが、git 管理外で伝播しなかったのが根本原因。repo 固有の `bash test/*` は tracked な
+`<repo>/.claude/settings.json` を新設して解決し、複数 repo で使う `git fetch origin` / `go test`
+は表の基準どおり `~/.claude/settings.json`（dotrc の `dot/claude/settings.json`）側へ足した
+（PR #47）。
+
 ### Hot-reload
 
 `.claude/settings.local.json` 等の編集は再起動なしに即時反映される（実測確認）。
