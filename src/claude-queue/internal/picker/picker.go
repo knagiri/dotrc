@@ -227,15 +227,26 @@ func Run(args []string) {
 	cwd := strings.TrimSpace(fields[6])
 
 	mux := multiplexer.Detect()
+	paneResolved := false
 	if pane == "" {
 		pane = resolvePane(mux, sessionID)
+		paneResolved = pane != ""
 	}
 	switch act := DecideAction(sessionID, pane, cwd); act.Kind {
 	case "switch":
 		if err := mux.Switch(act.Pane); err != nil {
 			fmt.Fprintf(os.Stderr, "switch failed (pane likely gone): %v\n", err)
-			if termErr := db.TerminateSession(conn, sessionID); termErr != nil {
-				fmt.Fprintln(os.Stderr, "terminate:", termErr)
+			// A pane resolvePane found was confirmed live moments ago via both
+			// the process roster and the current tmux pane table -- a failed
+			// switch to it says nothing about the session's liveness (same
+			// reasoning as the attach path below, which never terminates on a
+			// failed open). Only the ledger-recorded pane, whose staleness is
+			// exactly what "pane likely gone" is diagnosing, still warrants
+			// terminating on failure.
+			if !paneResolved {
+				if termErr := db.TerminateSession(conn, sessionID); termErr != nil {
+					fmt.Fprintln(os.Stderr, "terminate:", termErr)
+				}
 			}
 		}
 	case "attach":
