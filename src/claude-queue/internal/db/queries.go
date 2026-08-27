@@ -111,8 +111,9 @@ func LiveSessionIDs(conn *sql.DB) ([]string, error) {
 }
 
 // TerminateSession marks a session ended (terminated_at + ForcedEnd event),
-// matching the cleanup pattern in hook.forcedEndSiblings. Used by the picker
-// when tmux switch-client fails because the recorded pane no longer exists.
+// matching the cleanup pattern in hook.forcedEndSiblings. The reconcile sweep is
+// the only caller that decides to close a row: it does so from the live agent
+// roster, which is authoritative, rather than from a failed tmux command.
 func TerminateSession(conn *sql.DB, sessionID string) error {
 	tx, err := conn.Begin()
 	if err != nil {

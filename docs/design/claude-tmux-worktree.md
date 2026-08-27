@@ -79,11 +79,13 @@ worktree dir は ghq 配下の兄弟ディレクトリとして `ghq list` に�
 - `settings.json` の hooks が Claude ライフサイクル各イベントで `claude-queue hook <event>` を呼び、
   `$TMUX_PANE` をキーに状態を SQLite（`~/.claude/session-queue.db`）へ記録
 - tmux `status-right` に `claude-queue status`（working/awaiting_approval/idle_done のカウント）
-- `C-q q` で popup → fzf picker → 選択 session の pane へ `tmux switch-client`
+- `C-q q` で popup → fzf picker → 選択 session へ到達（pane への `tmux switch-client` / `claude attach` /
+  `claude --resume` を後述の順で選ぶ）
 - **L3 自己修復**: 新規 `SessionStart` 時、同一 `$TMUX_PANE` 上の生存 session を `ForcedEnd`
   （`/exit`・`/clear` で `SessionEnd` が飛ばないバグの後始末）
 
-→ ③は **pane を ID とする**。この前提が④の設計（後述）を縛る。
+→ ③は **記録のキーとして pane を使う**。この前提が④の設計（後述）を縛る。ただし到達手段としては
+当てにしない（後述の「③との噛み合わせ」）。
 
 ### ④ claude-worktree（`bin/claude-worktree`）
 
@@ -159,17 +161,38 @@ worktree の滞留も同様に残る — ①はどちらの経路でも走り、
 委譲のためで、退避路ではない。
 
 ③との噛み合わせは「pane 無し = 追跡は完全、ジャンプだけ不能」になる。status-right のカウントは
-`terminated_at IS NULL` と state だけで絞るので background も普通に乗る。ジャンプは picker が
-`tmux_pane` の有無で分岐し、NULL のときはまず現行 tmux server 上の pane を再解決し、見つかれば
-そちらへ switch する。再解決できなかった（background session、または pane がこの tmux server の
-外にある）場合のみ、その worktree の tmux session（session 名 = worktree ディレクトリ名。`gts` /
-`claude-worktree` と同じ慣習）を単位に開く。無ければ session ごと作成、既にあれば window を足して
-client をそこへ移す（`claude attach` は short id しか受けない）。
-popup を開いた時点の current session には作らない — これが「1 worktree = 1 tmux session」を
-守る理由で、承認待ちで止まった background 委譲先へ入る経路はこれだけなので picker から隠さず
-出す。flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` の `=` 接頭辞・末尾 `:`・`-S` に
-よる window 再利用）は `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを
-参照（README.md は挙動レベルの説明に留め、flag レベルは書かない）。
+`terminated_at IS NULL` と state だけで絞るので background も普通に乗る。
+
+ジャンプ側は **pane を到達手段の第一候補に留め、当てにはしない**。`tmux_pane` は NULL になるだけで
+なく、既に置き換わった tmux server の pane を指し続けることがある — pane id は tmux server 単位の
+カウンタで、新しい server は `%0` から振り直すため、列の値が現行 server に実在するというだけでは
+同一 session の pane だと確認したことにならない。到達順の詳細（pane → background の attach →
+interactive の resume → roster に無い session の直接 resume → transcript/cwd の実在確認）は
+README.md「picker の到達手段」節に一本化してあるので、そちらを参照する。
+
+interactive session を resume の前に終わらせてよいかは、**判定不能を orphan 扱いしない安全側の
+判断**に立つ。確定条件を「その server が到達不能であること」に置き、**プロセスの生死では測らない**。
+tmux server は socket 単位なので、自分が switch-client できない server でも socket を持っていれば
+別端末から attach して使用中でありうる。逆に socket を別 server に明け渡した server は、プロセスが
+残っていても新しい client を受け付けない。生死で測ると前者を殺し後者を助けられない — 到達可能性を
+決めているのは socket の所有者のほうだから、そちらを見る。確定できないときは何もしない — 別端末で
+使用中の可能性を「たぶん大丈夫」で押し切らないため。条件の詳細は README.md「picker の到達手段」節に
+一本化してある。SIGTERM だけを使い SIGKILL へ上げないのも同じ側の判断で、居座るプロセスは
+transcript を掴んだままなので、強制排除は復元しようとしている会話自体を失うリスクを取ることになる。
+
+残余リスクとして、socket が明け渡される前から attach していた client は既存の接続で動き続けるが、
+その socket はもう別 server のものなので列挙する手段が無い。それでも kill に踏み切るのは、踏み切ら
+なければその会話が恒久的に到達不能になるためで、天秤の反対側を明示しておく。
+
+resume が pane への switch と決定的に違うのは、**元プロセスを引き継がず別プロセスを立てる**点で、
+同一 transcript を 2 プロセスが掴む状態になる。だから resume の前にプロセスを終わらせる必要があり、
+終わらせ方は上の安全側の判断に従う。resume には transcript と cwd の実在確認も要る — 存在しない
+uuid を `--resume` に渡してもエラーにはならず、その id で空の新規 session が立ってしまうため、
+確認を欠いた resume は「成功したように見えて会話を失う」。
+
+flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` の `=` 接頭辞・末尾 `:`・`-S` による window
+再利用）は `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを参照
+（README.md は挙動レベルの説明に留め、flag レベルは書かない）。
 
 ### ④は **メイン** toplevel 基準でパスを作る
 
