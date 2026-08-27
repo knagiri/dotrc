@@ -61,9 +61,10 @@ set -euo pipefail
 #                  the new worktree (repeatable). For files the delegated session
 #                  needs but which the branch does not carry (gitignored specs,
 #                  uncommitted notes). Must live inside cwd's checkout.
-#                  `mise.local.toml` is seeded by default when the checkout has
-#                  one (that is how the delegate gets its GitHub token); unlike
-#                  an explicit --seed, its absence is a no-op, not an error.
+#                  Paths listed in the checkout's `.claude/worktree-seed` are
+#                  seeded on top of these, without being asked for; unlike an
+#                  explicit --seed, a listed path that is missing is skipped
+#                  rather than fatal.
 #   name           worktree label (suffix after the underscore); also the new
 #                  branch name when -b is omitted
 #   -b <branch>    branch to check out / create (default: <name>). Resolved as:
@@ -165,23 +166,40 @@ if [ "${#seeds[@]}" -gt 0 ]; then
   done
 fi
 
-# Default seed. A delegate is expected to open a PR, so the GitHub token has to
-# reach it; here that token comes from mise, which reads it out of the checkout's
-# mise.local.toml. That file is a pointer (`_.file = ~/...`) -- the secret itself
-# stays under $HOME and mise reads it directly -- so copying it carries nothing
-# sensitive into the worktree or the repo.
+# Default seeds, declared by the repo rather than guessed by this script.
+# `.claude/worktree-seed` lists one path per line (relative to the checkout root;
+# blank lines and lines starting with `#` are ignored) that should follow the
+# checkout into every new worktree. That is where a repo names the gitignored
+# config a delegate cannot work without -- the file supplying its GitHub token,
+# a local .env -- without every such filename having to be hardcoded here.
 #
-# Unlike an explicit --seed, an absent file is a no-op rather than a failure:
-# most checkouts have no mise.local.toml, and the delegation must not depend on
-# one existing. Skipped when the same path was passed explicitly, so it is
-# neither copied nor logged twice.
-default_seed="mise.local.toml"
-if [ -n "$seed_top" ] && [ -e "$seed_top/$default_seed" ]; then
-  seeded_default=0
-  for rel in ${seed_rels[@]+"${seed_rels[@]}"}; do
-    if [ "$rel" = "$default_seed" ]; then seeded_default=1; break; fi
-  done
-  [ "$seeded_default" = 1 ] || seed_rels+=("$default_seed")
+# Terms differ from an explicit --seed in exactly one place: a listed path that
+# does not exist is skipped rather than fatal, because the list is written once
+# for the repo while any given checkout may not have every entry. A malformed
+# entry (absolute, or escaping the checkout) still fails loudly -- the list is
+# committed and reviewed, so a bad line is a bug to surface, not to tolerate.
+# Entries also passed as --seed are skipped, so nothing is copied or logged twice.
+if [ -n "$seed_top" ] && [ -f "$seed_top/.claude/worktree-seed" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"   # ltrim
+    line="${line%"${line##*[![:space:]]}"}"   # rtrim
+    case "$line" in
+      ""|"#"*) continue ;;
+      /*) echo "claude-worktree: worktree-seed entry must be relative: $line" >&2; exit 1 ;;
+    esac
+    entry_abs="$(realpath -m -- "$seed_top/$line")"
+    case "$entry_abs" in
+      "$seed_top"/*) ;;
+      *) echo "claude-worktree: worktree-seed entry is outside $seed_top: $line" >&2; exit 1 ;;
+    esac
+    [ -e "$entry_abs" ] || continue
+    entry_rel="${entry_abs#"$seed_top"/}"
+    dup=0
+    for rel in ${seed_rels[@]+"${seed_rels[@]}"}; do
+      if [ "$rel" = "$entry_rel" ]; then dup=1; break; fi
+    done
+    [ "$dup" = 1 ] || seed_rels+=("$entry_rel")
+  done <"$seed_top/.claude/worktree-seed"
 fi
 
 # A background session already living in this worktree means a second delegation
