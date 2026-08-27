@@ -27,6 +27,14 @@ type Multiplexer interface {
 	// including when the multiplexer cannot be queried at all, since neither
 	// case gives the caller a pane to switch to.
 	FindPane(pid int) (string, bool)
+	// PaneExists reports whether target is still a pane of the server this
+	// process talks to. False also covers "could not ask", for the same reason
+	// as FindPane: either way the caller has no pane it can switch to.
+	PaneExists(target string) bool
+	// ServerPID returns the pid of the multiplexer server process, so a
+	// caller can tell a pane of this server from a pane of another one.
+	// Reports false when there is no server to ask.
+	ServerPID() (int, bool)
 }
 
 // Detect selects an implementation based on environment variables.
@@ -57,3 +65,12 @@ func (noopImpl) OpenSession(name, cwd string, argv []string) error {
 // FindPane has no panes to search without a multiplexer. Unlike OpenSession this
 // needs no error: "not found" is already the answer the caller acts on.
 func (noopImpl) FindPane(pid int) (string, bool) { return "", false }
+
+// PaneExists is false for the same reason: with no server to ask, no pane the
+// caller was handed can be confirmed to still be there.
+func (noopImpl) PaneExists(target string) bool { return false }
+
+// ServerPID has no server, which is exactly what the false reports. Callers use
+// it to decide whether a session's pane lives elsewhere; without a server of our
+// own there is nothing to compare against.
+func (noopImpl) ServerPID() (int, bool) { return 0, false }
