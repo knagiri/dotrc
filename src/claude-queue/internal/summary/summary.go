@@ -14,6 +14,7 @@ type Input struct {
 	EffectiveState string
 	RawState       string
 	Payload        string // raw JSON from events.payload
+	PriorState     string // resumable rows only: the state before the end
 }
 
 // Summarize returns the picker summary column for a queue row.
@@ -27,8 +28,22 @@ func Summarize(in Input) string {
 		return "working"
 	case "stale":
 		return "stale (was " + in.RawState + ")"
+	case "resumable":
+		return summarizeResumable(in.PriorState)
 	}
 	return in.EffectiveState
+}
+
+// summarizeResumable names what the session was doing when it was cut off,
+// which is the one thing that distinguishes these rows from each other: the
+// payload of an end event carries only its reason, and the raw state is 'ended'
+// for all of them. A session whose only recorded event is the end has no prior
+// state to report.
+func summarizeResumable(prior string) string {
+	if prior == "" {
+		return "resumable"
+	}
+	return "resumable (was " + prior + ")"
 }
 
 // TruncateWidth trims s to at most cols terminal columns (double-width chars count 2).
