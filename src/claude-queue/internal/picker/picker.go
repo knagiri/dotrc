@@ -97,10 +97,9 @@ func rowTranscript(row db.Row) string {
 // on disk rather than in the ledger.
 //
 // It is the same pair resumeBlocked checks when a row is picked, applied a step
-// earlier so a candidate that cannot be reopened is never listed at all -- and
-// so the count reported when the queue is empty is a count of rows that will
-// actually resume. fileExists and dirExists are parameters so the rule can be
-// exercised without laying out transcripts and worktrees on a real filesystem.
+// earlier so a candidate that cannot be reopened is never listed at all.
+// fileExists and dirExists are parameters so the rule can be exercised without
+// laying out transcripts and worktrees on a real filesystem.
 func filterResumable(rows []db.Row, fileExists, dirExists func(string) bool) []db.Row {
 	var out []db.Row
 	for _, r := range rows {
@@ -116,11 +115,10 @@ func filterResumable(rows []db.Row, fileExists, dirExists func(string) bool) []d
 	return out
 }
 
-// noRowsMessage explains an empty picker. The resumable count is the reason it
-// is not just a constant: a host that has just come back up has no live session
-// at all, and that is precisely when the flag that would show the recoverable
-// ones needs advertising -- there is no way to discover it from inside the
-// popup.
+// noRowsMessage explains an empty picker, naming the resumable count and the
+// flag that would list them: a host that has just come back up has no live
+// session at all, which is exactly when a default-off flag has to advertise
+// itself. The count is post-filter, so it never offers rows that cannot resume.
 func noRowsMessage(resumable int, shown bool) string {
 	if resumable == 0 || shown {
 		return "no active sessions"

@@ -367,8 +367,14 @@ func TestResumableCandidates_CarriesResumeInputs(t *testing.T) {
 		t.Errorf("cwd/transcript = %q/%q, want /w/a and /t/a.jsonl",
 			got[0].Cwd.String, got[0].TranscriptPath.String)
 	}
-	if got[0].TmuxPane.String != "%1" {
-		t.Errorf("tmux_pane = %q, want %%1", got[0].TmuxPane.String)
+	// The pane, by contrast, must NOT come through even though the ledger still
+	// holds one. It names a pane of a process that has ended, and the picker's
+	// last-resort fallback would trust it whenever the roster cannot be read --
+	// switching to whatever unrelated pane inherited that id on the new server
+	// instead of resuming the conversation.
+	if got[0].TmuxPane.Valid {
+		t.Errorf("tmux_pane = %q, want NULL: a terminated row's pane is never its own",
+			got[0].TmuxPane.String)
 	}
 }
 

@@ -116,9 +116,21 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 // worth offering back. json_valid guards the extract because a SessionEnd with
 // no reason stores an empty payload string, which json_extract rejects as
 // malformed rather than reading as absent.
+//
+// tmux_pane is dropped rather than selected. The ledger never clears it -- the
+// upsert COALESCEs it forward -- so on these rows it always names the pane of a
+// process that has ended, and pane ids are a per-server counter that a fresh
+// server restarts from %0, meaning the recorded id almost certainly resolves to
+// an unrelated live pane after a reboot. The picker's last-resort fallback
+// trusts a ledger pane when the roster cannot be read, on the grounds that an
+// unreadable roster is not evidence the session ended; for a row selected by
+// terminated_at that premise is simply false, and honouring it would switch to
+// a stranger's pane instead of resuming, silently. Where a pane is genuinely
+// reachable the roster names the process and the picker re-derives the pane
+// from its ancestry, so nothing is lost by withholding this column.
 func ResumableCandidates(conn *sql.DB) ([]Row, error) {
 	rows, err := conn.Query(`
-		SELECT s.session_id, s.tmux_pane, s.cwd, s.transcript_path,
+		SELECT s.session_id, NULL AS tmux_pane, s.cwd, s.transcript_path,
 		       e.event_type, e.state AS raw_state, ? AS effective_state,
 		       e.payload, e.created_at,
 		       CASE WHEN p.state IN ('working', 'awaiting_approval') THEN ? ELSE ? END AS priority,

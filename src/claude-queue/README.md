@@ -98,25 +98,33 @@ session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同�
 で絞るため）が、会話 jsonl は残っており `claude --resume <uuid>` で復元できる。`--show-resumable`
 はこの「terminated だが resume で拾い直せる row」を一覧に加える。既定 off、`C-q Q` 側だけに付ける。
 
-対象になる条件は 5 つで、SQL 側（`db.ResumableCandidates`）と Go 側（`picker.filterResumable`）に
-分かれる。
+対象になる条件は、SQL 側（`db.ResumableCandidates`）と Go 側（`picker.filterResumable`）に分かれる。
+後者がファイルシステムを見る必要があるため。
 
-- `terminated_at` がセット済みで、最後の event が `ended`
-- 最後の event が `SessionEnd` かつ payload の `reason` が `prompt_input_exit` **でない**。
-  `prompt_input_exit` は人が REPL を区切りで閉じた end なので除く。signal 経由の end（SIGTERM /
+SQL 側:
+
+- `terminated_at` がセット済み
+- 最後の event が `ended`（`SessionEnd` または `ForcedEnd`）
+- その event が `SessionEnd` なら payload の `reason` が `prompt_input_exit` **でない**。
+  `prompt_input_exit` は人が REPL を区切りで閉じた end。signal 経由の end（SIGTERM /
   `claude stop` / ホスト停止）と、reconcile が合成した `ForcedEnd`（payload を持たない）が残る
-- `transcript_path` と `cwd` がどちらも記録済みで、**実際にファイル／ディレクトリとして存在する**。
-  短命 session は jsonl を書かず、reap 済み worktree は cwd が消えているため、記録の有無だけでは
-  足りない（存在しない uuid の `--resume` は空 session を作ってしまう）
+
+Go 側:
+
+- `transcript_path` が空でなく、そのファイルが実在する（短命 session は jsonl を書かない）
+- `cwd` が空でなく、そのディレクトリが実在する（reap 済み worktree では消えている）
 
 並び順は live な row の全部より後ろ。resumable 同士では、終了直前の state が `working` /
 `awaiting_approval` だったもの（作業途中で落ちた可能性が高い）を先に出し、その中では新しい順。
 summary は `resumable (was working)` のように終了直前の state を出す — payload には end の
 reason しか無く、raw state は全部 `ended` なので、row を見分けられるのはここだけ。
 
-**live な row が 0 件のときは、resumable の候補数と flag を stderr に出す。** 再起動直後は
-まさにこの状態で、popup の中から flag の存在に気づく経路が無いため。拾える窓は auto-GC の
-保持期間（7 日）と同じ。
+`tmux_pane` は運ばない（クエリ側で NULL にする）。ledger はこの列を終了時にクリアせず持ち回るため、
+resumable な row の pane は必ず「終わったプロセスの pane」であり、pane id は server 単位のカウンタで
+新しい server は `%0` から振り直すので、再起動後は無関係な live pane に衝突する。
+
+live な row が 0 件のときは、resumable の候補数と flag を stderr に出す（理由は design doc 参照）。
+拾える窓は auto-GC の保持期間（7 日）と同じ。
 
 選択したときの到達手段は上の一覧と同じで、resumable 専用の分岐は無い。プロセスはもう無いので
 通常は「roster に居ない session の直接 resume」に落ちるが、reconcile が早めに閉じた等で実際には
@@ -161,6 +169,11 @@ bind-key Q display-popup -E -w 80% -h 60% "claude-queue picker --show-working --
 prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`Q` は絞り込みを外した全部入り
 （working / stale / resumable も出す）。
 
+`dot/tmux.conf` は `bin/deploy.sh` の symlink 経由なので pull した時点で反映されるが、
+`bin/claude-queue` は `.gitignore` 対象で `make install` でしか更新されない。flag が増えた
+バージョンを pull したら、tmux.conf を reload する前に `make install` を回す（古い binary は
+未知の flag で usage を出して exit するだけなので、popup が無反応に見える）。
+
 ## Troubleshooting
 
 | 症状 | 調べ方 |
@@ -189,10 +202,10 @@ PR 作成時に description に貼って確認：
 - [ ] tmux 外で起動した（`TMUX` を持たない）interactive session を picker から選ぶと、kill されず「別端末で使用中の可能性」の理由が出る
 - [ ] transcript が無い / cwd が reap 済みの session を picker から選ぶと、resume されずどちらが欠けたかが出る
 - [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
-- [ ] ホスト再起動後（live 0 件）に `C-q q` を開くと、resumable の候補数と `--show-resumable` を案内する stderr が出る
+- [ ] live 0 件の状態で `claude-queue picker` を**シェルから直接**起動すると、resumable の候補数と `--show-resumable` を案内する stderr が出る（`display-popup -E` は command の exit で popup を閉じるので、`C-q q` 経路ではこの案内は読めない）
 - [ ] `C-q Q` で resumable な row が live な row の後ろに並び、終了直前が `working` / `awaiting_approval` のものが先頭に来る
 - [ ] resumable な row を選ぶと同じ session id のまま会話が復元される（kill 段階を経ずに resume される）
-- [ ] `/exit` で閉じた session（`reason: prompt_input_exit`）は `--show-resumable` でも出ない
+- [ ] `SessionEnd` が `reason: prompt_input_exit` で飛んだ session は `--show-resumable` でも出ない（`SessionEnd` が飛ばず L3 の `ForcedEnd` で閉じた `/exit` `/clear` は payload を持たないので出る）
 - [ ] 同 pane で `/clear` 後、旧 session が view から消える（L3）
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
 - [ ] 2 pane 並行で approve 連打、busy_timeout 超過しない
