@@ -22,6 +22,7 @@ var emoji = map[string]string{
 	"idle_done":         "✅",
 	"working":           "⚙️",
 	"stale":             "🧟",
+	db.StateResumable:   "💤",
 }
 
 var ascii = map[string]string{
@@ -29,6 +30,7 @@ var ascii = map[string]string{
 	"idle_done":         "[.]",
 	"working":           "[*]",
 	"stale":             "[X]",
+	db.StateResumable:   "[~]",
 }
 
 // FormatLine renders one queue row as a tab-delimited line for fzf.
@@ -56,6 +58,7 @@ func FormatLine(row db.Row, worktree string, nowSec int64, asciiMode bool) strin
 		EffectiveState: row.EffectiveState,
 		RawState:       row.RawState,
 		Payload:        row.Payload.String,
+		PriorState:     row.PriorState.String,
 	})
 
 	age := formatAge(nowSec - row.CreatedAt)
@@ -87,6 +90,44 @@ func rowTranscript(row db.Row) string {
 		return row.TranscriptPath.String
 	}
 	return ""
+}
+
+// filterResumable drops the candidates whose resume would fail, which is the
+// half of the test db.ResumableCandidates cannot make: both preconditions live
+// on disk rather than in the ledger.
+//
+// It is the same pair resumeBlocked checks when a row is picked, applied a step
+// earlier so a candidate that cannot be reopened is never listed at all -- and
+// so the count reported when the queue is empty is a count of rows that will
+// actually resume. fileExists and dirExists are parameters so the rule can be
+// exercised without laying out transcripts and worktrees on a real filesystem.
+func filterResumable(rows []db.Row, fileExists, dirExists func(string) bool) []db.Row {
+	var out []db.Row
+	for _, r := range rows {
+		transcript, cwd := rowTranscript(r), rowCwd(r)
+		if transcript == "" || cwd == "" {
+			continue
+		}
+		if !fileExists(transcript) || !dirExists(cwd) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// noRowsMessage explains an empty picker. The resumable count is the reason it
+// is not just a constant: a host that has just come back up has no live session
+// at all, and that is precisely when the flag that would show the recoverable
+// ones needs advertising -- there is no way to discover it from inside the
+// popup.
+func noRowsMessage(resumable int, shown bool) string {
+	if resumable == 0 || shown {
+		return "no active sessions"
+	}
+	return fmt.Sprintf(
+		"no active sessions, but %d can be resumed: reopen the picker with --show-resumable (prefix Q)",
+		resumable)
 }
 
 func formatAge(sec int64) string {
@@ -369,6 +410,7 @@ func Run(args []string) {
 	fs := flag.NewFlagSet("picker", flag.ExitOnError)
 	showWorking := fs.Bool("show-working", false, "include working sessions")
 	showStale := fs.Bool("show-stale", false, "include stale sessions")
+	showResumable := fs.Bool("show-resumable", false, "include ended sessions a resume could reopen")
 	_ = fs.Parse(args)
 
 	conn, err := db.Open(db.DefaultPath())
@@ -397,8 +439,25 @@ func Run(args []string) {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return
 	}
+	// Read the resumable rows whether or not they will be listed: the count is
+	// what the empty-queue message needs in order to point at the flag.
+	// Best-effort for the same reason the sweep above is -- a failure here is no
+	// reason to withhold the live queue.
+	var resumable []db.Row
+	if cands, err := db.ResumableCandidates(conn); err != nil {
+		fmt.Fprintln(os.Stderr, "resumable lookup skipped:", err)
+	} else {
+		resumable = filterResumable(cands, isFile, isDir)
+	}
+	if *showResumable {
+		// Appended, not merged: ResumableCandidates hands back priorities above
+		// every one the queue view assigns, so concatenation is already the
+		// global order and fzf is run with --no-sort.
+		rows = append(rows, resumable...)
+	}
+
 	if len(rows) == 0 {
-		fmt.Fprintln(os.Stderr, "no active sessions")
+		fmt.Fprintln(os.Stderr, noRowsMessage(len(resumable), *showResumable))
 		return
 	}
 

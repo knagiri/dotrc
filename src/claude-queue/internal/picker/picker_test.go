@@ -92,6 +92,184 @@ func TestFormatLine_DeepCwdShowsWorktree(t *testing.T) {
 	}
 }
 
+// A resumable row is rendered from the same eight columns as a live one, but
+// its state is not one any hook writes, so both icon maps and the summary have
+// to know it -- an unmapped state renders as an empty icon and a bare
+// "resumable", which is the failure this asserts against.
+func TestFormatLine_Resumable(t *testing.T) {
+	row := db.Row{
+		SessionID:      "s9",
+		TmuxPane:       sql.NullString{String: "%3", Valid: true},
+		Cwd:            sql.NullString{String: "/home/x/ghq/dotrc_wt", Valid: true},
+		TranscriptPath: sql.NullString{String: "/home/x/.claude/projects/enc/s9.jsonl", Valid: true},
+		EventType:      "ForcedEnd",
+		RawState:       "ended",
+		EffectiveState: db.StateResumable,
+		PriorState:     sql.NullString{String: "working", Valid: true},
+		CreatedAt:      nowMinus(7200),
+	}
+
+	fields := strings.Split(FormatLine(row, "dotrc_wt", nowUnix(), false), "\t")
+	if len(fields) != 8 {
+		t.Fatalf("want 8 fields, got %d", len(fields))
+	}
+	if fields[0] != emoji[db.StateResumable] || fields[0] == "" {
+		t.Errorf("emoji icon = %q, want %q", fields[0], emoji[db.StateResumable])
+	}
+	if !strings.Contains(fields[2], "resumable") {
+		t.Errorf("summary = %q, want it to say the row is resumable", fields[2])
+	}
+	// What the session was doing when it was cut off is the only thing telling
+	// these rows apart, so it has to survive into the summary.
+	if !strings.Contains(fields[2], "working") {
+		t.Errorf("summary = %q, want it to name the prior state", fields[2])
+	}
+	if fields[3] != "2h" {
+		t.Errorf("age = %q, want 2h", fields[3])
+	}
+	// The resume path needs both of these off the picked line.
+	if fields[6] != "/home/x/ghq/dotrc_wt" || fields[7] != "/home/x/.claude/projects/enc/s9.jsonl" {
+		t.Errorf("hidden cwd/transcript = %q/%q", fields[6], fields[7])
+	}
+
+	asciiIcon := strings.Split(FormatLine(row, "dotrc_wt", nowUnix(), true), "\t")[0]
+	if asciiIcon == "" {
+		t.Error("ascii icon is empty: CLAUDE_QUEUE_ASCII=1 would render the column blank")
+	}
+	if asciiIcon == fields[0] {
+		t.Errorf("ascii icon = %q, same as the emoji one", asciiIcon)
+	}
+}
+
+// The filesystem half of the resumable test. db.ResumableCandidates cannot make
+// it, and skipping it would list rows whose resume silently starts an empty
+// session under the same id.
+func TestFilterResumable(t *testing.T) {
+	row := func(id, cwd, transcript string) db.Row {
+		return db.Row{
+			SessionID:      id,
+			Cwd:            sql.NullString{String: cwd, Valid: cwd != ""},
+			TranscriptPath: sql.NullString{String: transcript, Valid: transcript != ""},
+			EffectiveState: db.StateResumable,
+		}
+	}
+	// Only these two paths exist.
+	files := func(p string) bool { return p == "/t/ok.jsonl" }
+	dirs := func(p string) bool { return p == "/w/ok" }
+
+	in := []db.Row{
+		row("keep", "/w/ok", "/t/ok.jsonl"),
+		row("no-transcript-recorded", "/w/ok", ""),
+		row("no-cwd-recorded", "", "/t/ok.jsonl"),
+		// A short-lived session records a transcript path but never writes the
+		// file, so the ledger having one is only half the check.
+		row("transcript-missing", "/w/ok", "/t/gone.jsonl"),
+		// A reaped worktree takes the directory the resume would run in.
+		row("cwd-reaped", "/w/reaped", "/t/ok.jsonl"),
+	}
+
+	got := filterResumable(in, files, dirs)
+	if len(got) != 1 || got[0].SessionID != "keep" {
+		var ids []string
+		for _, r := range got {
+			ids = append(ids, r.SessionID)
+		}
+		t.Fatalf("filterResumable kept %v, want [keep]", ids)
+	}
+
+	if got := filterResumable(nil, files, dirs); got != nil {
+		t.Errorf("filterResumable(nil) = %+v, want nil", got)
+	}
+}
+
+// The empty picker is the state a host reboot leaves behind, and the flag that
+// would show the recoverable sessions cannot be discovered from inside the
+// popup -- so the count has to be in the message.
+func TestNoRowsMessage(t *testing.T) {
+	const plain = "no active sessions"
+
+	if got := noRowsMessage(0, false); got != plain {
+		t.Errorf("nothing to resume = %q, want %q", got, plain)
+	}
+	// Already listing them: there is nothing left to point at.
+	if got := noRowsMessage(3, true); got != plain {
+		t.Errorf("with the flag already on = %q, want %q", got, plain)
+	}
+
+	got := noRowsMessage(3, false)
+	if !strings.Contains(got, "3") {
+		t.Errorf("message = %q, want the candidate count in it", got)
+	}
+	if !strings.Contains(got, "--show-resumable") {
+		t.Errorf("message = %q, want it to name the flag", got)
+	}
+}
+
+// Selecting a resumable row must reach the resume path PR #55 already built,
+// not a second one. This walks the whole chain the pick goes through -- render
+// the row, split the line, resolve the pane, route -- for a session the roster
+// no longer lists.
+func TestResumableRowRoutesToResume(t *testing.T) {
+	row := db.Row{
+		SessionID: testUUID,
+		// A pane id left over from a tmux server that has since been replaced.
+		// It exists on the current server (it is a per-server counter that
+		// restarts from %0), so trusting it would switch to an unrelated pane.
+		TmuxPane:       sql.NullString{String: "%1", Valid: true},
+		Cwd:            sql.NullString{String: "/w/a", Valid: true},
+		TranscriptPath: sql.NullString{String: "/t/a.jsonl", Valid: true},
+		EffectiveState: db.StateResumable,
+		RawState:       "ended",
+		PriorState:     sql.NullString{String: "working", Valid: true},
+		CreatedAt:      nowMinus(60),
+	}
+	fields := strings.Split(FormatLine(row, "wt", nowUnix(), false), "\t")
+	mux := &fakeMux{panes: map[string]bool{"%1": true}}
+
+	// The roster was read and does not list the session: the host it ran on went
+	// down, so there is no process to displace.
+	tgt := Target{
+		SessionID:        fields[4],
+		Pane:             reachablePane(mux, nil, fields[4], fields[5], true),
+		Cwd:              fields[6],
+		TranscriptPath:   fields[7],
+		RosterOK:         true,
+		TranscriptExists: true,
+		CwdExists:        true,
+	}
+
+	act := DecideAction(tgt)
+	if act.Kind != "resume" {
+		t.Fatalf("Kind = %q, want resume (%+v)", act.Kind, act)
+	}
+	if act.Resume != testUUID {
+		t.Errorf("Resume = %q, want the full uuid %q", act.Resume, testUUID)
+	}
+	if act.KillPID != 0 {
+		t.Errorf("KillPID = %d, want 0: nothing is running to kill", act.KillPID)
+	}
+	if act.Cwd != "/w/a" {
+		t.Errorf("Cwd = %q, want /w/a", act.Cwd)
+	}
+}
+
+// A row that came back from the resumable query but whose session turns out to
+// be running after all -- reconcile closed it early, or it was restarted since
+// -- falls back to the existing routing instead of resuming onto a live
+// process. Resumable rows add no branch of their own to DecideAction.
+func TestResumableRowInRosterFallsBackToExistingRouting(t *testing.T) {
+	agents := []roster.Agent{{SessionID: testUUID, PID: 100, Kind: "background"}}
+	mux := &fakeMux{}
+
+	tgt := resumable()
+	tgt.Pane = reachablePane(mux, agents, testUUID, "%1", true)
+	tgt.InRoster, tgt.Kind, tgt.PID = true, "background", 100
+
+	if act := DecideAction(tgt); act.Kind != "attach" || act.Short != "61c846eb" {
+		t.Errorf("DecideAction = %+v, want attach by short id", act)
+	}
+}
+
 func TestFormatAge(t *testing.T) {
 	cases := []struct {
 		sec  int64
