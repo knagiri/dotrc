@@ -95,11 +95,12 @@ permission rule の置き場所は 3 つあり、伝播の経路がそれぞれ�
 人間が同席していれば承認プロンプトはその場で捌けるが、background 委譲先は人間不在で走るので
 そこで固まる。しかも承認は代理できない（cross-session permission laundering）ため、回収に
 人手が要る。したがって**委譲先でも要る定型の検証コマンド**（テスト実行、`git fetch origin` 等）の
-rule は、tracked な `<repo>/.claude/settings.json` へ昇格させる。その checkout 限りの実験や、
-ローカルのパスに依存する許可は local に残してよい（他人の checkout では dead rule になるだけで、
-伝播させる価値が無いため）。
+rule は、tracked な置き場所へ昇格させる（複数 repo で使うなら `~/.claude/settings.json` = dotrc の
+`dot/claude/settings.json`、repo 固有なら `<repo>/.claude/settings.json`。振り分けは上の表の
+とおり）。その checkout 限りの実験や、ローカルのパスに依存する許可は local に残してよい
+（他人の checkout では dead rule になるだけで、伝播させる価値が無いため）。
 
-由来: background 委譲が permission prompt で構造的に停止した実測 5 回。いずれも
+由来: background 委譲が permission prompt で構造的に停止した実測 4 本連続。いずれも
 `bash test/*.test.sh` / `go test` / `git fetch origin` という定型の検証コマンドだった。
 `implement-and-review` は PR を出す前に必ず `git fetch origin` を撃つ設計なので、穴が塞がるまで
 全委譲が必ず止まる状態だった。同種の rule は `.claude/settings.local.json` に個別に溜まって
