@@ -92,6 +92,11 @@ linked worktree で作業するため、worktree 側で `make install` しても
 main の working tree）側で再ビルドするか、worktree の変更をそちらへ merge / pull してから
 再ビルドする。
 
+**linked worktree で作業している agent は、この再ビルドを checkout を跨いで自分で行わない。**
+別 checkout の `bin/` への書き込みは worktree のスコープ外であり（`worktree-scope.md` §2）、
+`cd` / `git -C` で checkout を渡り歩いて回避するのも承認プロンプトで詰まる
+（`working-directory.md`）。merge 後に再ビルドが要る旨を委譲元・人間へ報告し、そこで止まる。
+
 ```
 make -C src/claude-queue install
 find src/claude-queue -name '*.go' -newer bin/claude-queue   # 出力が空ならバイナリがソースより新しい
