@@ -30,6 +30,12 @@ func (tmuxImpl) OpenSession(name, cwd string, argv []string) error {
 	if name == "" {
 		return errors.New("no session name")
 	}
+	// Sanitize here, not in the caller: this is the tmux-specific target
+	// escaping rule (see sanitizeSessionName), so it belongs with the other
+	// tmux implementation, not leaked across the Multiplexer interface. Every
+	// tmux invocation below must see the same sanitized name has-session
+	// checks, so this has to run before any of them.
+	name = sanitizeSessionName(name)
 	window := windowName(argv)
 	if err := exec.Command("tmux", "has-session", "-t="+name).Run(); err != nil {
 		// A new session must be created detached. The picker runs inside
@@ -104,4 +110,16 @@ func windowName(argv []string) string {
 		}
 	}
 	return b.String()
+}
+
+// sanitizeSessionName makes a worktree directory name usable as a tmux target.
+//
+// tmux does not reject "." or ":" in `new-session -s`; it silently rewrites
+// them to "_", which is worse than rejecting them: the session would exist
+// under a name that the `has-session -t=` lookup never matches ("." is read as
+// the window.pane separator), so every pick would create yet another session.
+// Substituting up front keeps the name we ask for and the name tmux stores
+// identical. claude-worktree already uses "_" as its separator for this reason.
+func sanitizeSessionName(name string) string {
+	return strings.NewReplacer(".", "_", ":", "_").Replace(name)
 }

@@ -15,8 +15,10 @@ import (
 // column and the tmux session name are after.
 //
 // The name is returned raw -- the on-disk directory name is what the column
-// should show. Escaping for tmux targets is sanitizeSessionName's job, applied
-// only where a target is actually built.
+// should show. Escaping for a multiplexer target (tmux's "." / ":" rewrite,
+// e.g.) is that multiplexer implementation's own job, applied only where a
+// target is actually built; this package stays multiplexer-agnostic per the
+// Multiplexer abstraction (see internal/multiplexer's doc comment).
 func worktreeName(cwd string) string {
 	if cwd == "" {
 		return ""
@@ -65,16 +67,4 @@ func (c worktreeCache) name(cwd string) string {
 	n := worktreeName(cwd)
 	c[cwd] = n
 	return n
-}
-
-// sanitizeSessionName makes a worktree directory name usable as a tmux target.
-//
-// tmux does not reject "." or ":" in `new-session -s`; it silently rewrites
-// them to "_", which is worse than rejecting them: the session would exist
-// under a name that the `has-session -t=` lookup never matches ("." is read as
-// the window.pane separator), so every pick would create yet another session.
-// Substituting up front keeps the name we ask for and the name tmux stores
-// identical. claude-worktree already uses "_" as its separator for this reason.
-func sanitizeSessionName(name string) string {
-	return strings.NewReplacer(".", "_", ":", "_").Replace(name)
 }

@@ -197,8 +197,7 @@ func Run(args []string) {
 		// Do NOT terminate the session on failure the way the pane path does:
 		// a failed window open says nothing about whether the session is alive,
 		// and the manual command still works.
-		session := sanitizeSessionName(names.name(act.Cwd))
-		if err := mux.OpenSession(session, act.Cwd, []string{"claude", "attach", act.Short}); err != nil {
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, []string{"claude", "attach", act.Short}); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: claude attach %s\n", err, act.Short)
 		}
 	default:

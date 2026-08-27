@@ -130,6 +130,45 @@ func TestNewWindowArgs(t *testing.T) {
 	}
 }
 
+func TestSanitizeSessionName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "already valid",
+			in:   "dotrc_queue-picker-worktree-session",
+			want: "dotrc_queue-picker-worktree-session",
+		},
+		{
+			// tmux reads "." as the window.pane separator in -t targets, and
+			// silently stores the session under the substituted name anyway.
+			name: "dot becomes underscore",
+			in:   "eversteel.api",
+			want: "eversteel_api",
+		},
+		{
+			// ":" is the session:window separator.
+			name: "colon becomes underscore",
+			in:   "repo:branch",
+			want: "repo_branch",
+		},
+		{
+			name: "empty stays empty",
+			in:   "",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeSessionName(tt.in); got != tt.want {
+				t.Errorf("sanitizeSessionName(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWindowName(t *testing.T) {
 	tests := []struct {
 		name string
