@@ -10,10 +10,14 @@ allowlist の工夫ではなく cwd 自体を直す。[working-directory.md](./w
 
 | パターン | 例 | 代替 |
 |---|---|---|
-| `$VAR` 変数展開 | `git -C $PWD status` | リテラルで書く（cwd ならそのまま `git status`） |
+| `$VAR` 変数展開 | `docker --context $CTX ps` | リテラルで書く |
 | バックスラッシュエスケープ空白 | `cd Application\ Support` | ダブルクォートで囲む（`"Application Support"`） |
 | 自動剥がしされない process wrapper | `npx`, `docker exec`, `devbox run`, `watch`, `setsid`, `find -exec`, `find -delete` | ツールを直接インストールするか、末端まで具体化した allow ルールを足す（`Bash(npx tool *)` ではなく `Bash(npx prettier --check .)`） |
 | allowlist 外かつ組み込み read-only でないコマンド | `tar`, `gzip`, `mv` 等 | allow ルールを追加する、または専用ツールで代替する |
+
+`git -C <dir>` は `$VAR` 展開の有無に関わらず allow 自体が無い（[claude-settings.md](./claude-settings.md)
+参照）ので、リテラルに書き直しても承認は消えない。cwd がズレているのが原因なら
+[working-directory.md](./working-directory.md) に従い `/cd` で直す。
 
 ### 複合コマンドはサブコマンド単位で評価される
 
