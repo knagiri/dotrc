@@ -171,12 +171,18 @@ interactive の resume → roster に無い session の直接 resume → transcr
 README.md「picker の到達手段」節に一本化してあるので、そちらを参照する。
 
 interactive session を resume の前に終わらせてよいかは、**判定不能を orphan 扱いしない安全側の
-判断**に立つ。確定条件は「別 tmux server にある」だけでなく「その server が既に無い」まで含む
-（tmux server は socket 単位なので、別 server が生きている限り別端末からの attach が起こり得る）。
-どちらかが確定できないときは何もしない — 別端末で使用中の可能性を「たぶん大丈夫」で押し切らない
-ため。条件の詳細（`/proc` の参照箇所、分類の全パターン）は README.md「picker の到達手段」節に
+判断**に立つ。確定条件を「その server が到達不能であること」に置き、**プロセスの生死では測らない**。
+tmux server は socket 単位なので、自分が switch-client できない server でも socket を持っていれば
+別端末から attach して使用中でありうる。逆に socket を別 server に明け渡した server は、プロセスが
+残っていても新しい client を受け付けない。生死で測ると前者を殺し後者を助けられない — 到達可能性を
+決めているのは socket の所有者のほうだから、そちらを見る。確定できないときは何もしない — 別端末で
+使用中の可能性を「たぶん大丈夫」で押し切らないため。条件の詳細は README.md「picker の到達手段」節に
 一本化してある。SIGTERM だけを使い SIGKILL へ上げないのも同じ側の判断で、居座るプロセスは
 transcript を掴んだままなので、強制排除は復元しようとしている会話自体を失うリスクを取ることになる。
+
+残余リスクとして、socket が明け渡される前から attach していた client は既存の接続で動き続けるが、
+その socket はもう別 server のものなので列挙する手段が無い。それでも kill に踏み切るのは、踏み切ら
+なければその会話が恒久的に到達不能になるためで、天秤の反対側を明示しておく。
 
 resume が pane への switch と決定的に違うのは、**元プロセスを引き継がず別プロセスを立てる**点で、
 同一 transcript を 2 プロセスが掴む状態になる。だから resume の前にプロセスを終わらせる必要があり、

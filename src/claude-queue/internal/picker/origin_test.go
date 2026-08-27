@@ -10,63 +10,81 @@ func environ(entries ...string) string {
 	return strings.Join(entries, "\x00") + "\x00"
 }
 
-// alwaysAlive and neverAlive are the liveness stubs the "another server"
-// cases exercise classifyOrigin with, so the rule is pinned without touching
-// a real /proc.
-func alwaysAlive(int) bool { return true }
-func neverAlive(int) bool  { return false }
+// ownedBy is the socket-lookup stub the "another server" cases exercise
+// classifyOrigin with, so the rule is pinned without a tmux server. pid 0
+// stands for "the socket is not there"; unknownOwner is the lookup that could
+// not answer at all.
+func ownedBy(pid int) socketOwner {
+	return func(string) (int, bool) { return pid, true }
+}
+
+func unknownOwner(string) (int, bool) { return 0, false }
 
 // classifyOrigin is what decides whether a live session may be killed to be
 // resumed, so every answer it can give is pinned here. The rule errs toward
 // originUnknown -- "do not kill" -- whenever the environment does not settle
 // the question, and toward originForeignLive -- also "do not kill" -- whenever
-// a different tmux server's liveness cannot be ruled out.
+// a different tmux server still owns the socket it was started on.
 func TestClassifyOrigin(t *testing.T) {
 	cases := []struct {
 		name             string
 		environ          string
 		currentServerPID int
-		alive            func(int) bool
+		owner            socketOwner
 		want             serverOrigin
 	}{{
 		name:             "same server",
 		environ:          environ("PATH=/usr/bin", "TMUX=/tmp/tmux-1000/default,1234,0", "TMUX_PANE=%3"),
 		currentServerPID: 1234,
-		alive:            neverAlive,
+		owner:            ownedBy(1234),
 		want:             originCurrent,
 	}, {
-		// The measured majority: the process outlived the tmux server it was
-		// started in, and that server's pid is confirmed gone, so no client --
-		// ours or anyone else's -- can ever reach its pane again.
-		name:             "another server, confirmed dead",
+		// The measured majority: the process outlived the server it was
+		// started in, and the socket it recorded now belongs to a different
+		// server. The old pid may well still be running, but nothing can open
+		// a client onto it any more.
+		name:             "another server, socket taken over",
 		environ:          environ("TMUX=/tmp/tmux-1000/default,1234,0"),
 		currentServerPID: 5678,
-		alive:            neverAlive,
+		owner:            ownedBy(5678),
+		want:             originOrphan,
+	}, {
+		// pid 0 from the lookup means the socket is gone entirely: nothing is
+		// listening, so the same conclusion holds.
+		name:             "another server, socket gone",
+		environ:          environ("TMUX=/tmp/tmux-1000/default,1234,0"),
+		currentServerPID: 5678,
+		owner:            ownedBy(0),
 		want:             originOrphan,
 	}, {
 		// tmux servers are per-socket: a different server pid does not by
-		// itself mean unreachable. If that server's pid is still running, a
-		// human may be attached to it from another terminal via `tmux -L`/`-S`
-		// right now, so it must not be killed.
-		name:             "another server, still running",
-		environ:          environ("TMUX=/tmp/tmux-1000/default,1234,0"),
+		// itself mean unreachable. This one still owns its socket, so a human
+		// can `tmux -L other attach` into it right now.
+		name:             "another server, still owns its socket",
+		environ:          environ("TMUX=/tmp/tmux-1000/other,1234,0"),
 		currentServerPID: 5678,
-		alive:            alwaysAlive,
+		owner:            ownedBy(1234),
 		want:             originForeignLive,
 	}, {
-		// Liveness of the other server could not be determined at all: the
-		// safe answer is the same as "cannot tell", not "assume dead".
-		name:             "another server, liveness undeterminable",
+		// The socket could not be queried at all: the safe answer is "cannot
+		// tell", not "assume unreachable".
+		name:             "another server, socket unqueryable",
 		environ:          environ("TMUX=/tmp/tmux-1000/default,1234,0"),
 		currentServerPID: 5678,
-		alive:            nil,
+		owner:            unknownOwner,
+		want:             originUnknown,
+	}, {
+		name:             "another server, no lookup available",
+		environ:          environ("TMUX=/tmp/tmux-1000/default,1234,0"),
+		currentServerPID: 5678,
+		owner:            nil,
 		want:             originUnknown,
 	}, {
 		// No TMUX at all: a terminal somewhere owns this process.
 		name:             "no TMUX means outside tmux",
 		environ:          environ("PATH=/usr/bin", "TERM=xterm"),
 		currentServerPID: 5678,
-		alive:            neverAlive,
+		owner:            ownedBy(0),
 		want:             originOutside,
 	}, {
 		// TMUX_PANE also starts with "TMUX", and reading it as the socket
@@ -74,26 +92,26 @@ func TestClassifyOrigin(t *testing.T) {
 		name:             "TMUX_PANE alone is not TMUX",
 		environ:          environ("TMUX_PANE=%3"),
 		currentServerPID: 5678,
-		alive:            neverAlive,
+		owner:            ownedBy(0),
 		want:             originOutside,
 	}, {
 		name:             "unparseable TMUX",
 		environ:          environ("TMUX=nonsense"),
 		currentServerPID: 5678,
-		alive:            neverAlive,
+		owner:            ownedBy(0),
 		want:             originUnknown,
 	}, {
 		name:             "non-numeric server pid",
 		environ:          environ("TMUX=/tmp/tmux-1000/default,notapid,0"),
 		currentServerPID: 5678,
-		alive:            neverAlive,
+		owner:            ownedBy(0),
 		want:             originUnknown,
 	}, {
 		// Nothing to compare against, so nothing is provably an orphan.
 		name:             "no server pid of our own",
 		environ:          environ("TMUX=/tmp/tmux-1000/default,1234,0"),
 		currentServerPID: 0,
-		alive:            neverAlive,
+		owner:            ownedBy(0),
 		want:             originUnknown,
 	}, {
 		// The pid is the second-to-last field, so a comma in the socket path
@@ -101,19 +119,19 @@ func TestClassifyOrigin(t *testing.T) {
 		name:             "socket path containing a comma",
 		environ:          environ("TMUX=/tmp/odd,dir/default,1234,0"),
 		currentServerPID: 1234,
-		alive:            neverAlive,
+		owner:            ownedBy(0),
 		want:             originCurrent,
 	}, {
 		name:             "empty environ",
 		environ:          "",
 		currentServerPID: 1234,
-		alive:            neverAlive,
+		owner:            ownedBy(0),
 		want:             originOutside,
 	}}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := classifyOrigin(c.environ, c.currentServerPID, c.alive); got != c.want {
+			if got := classifyOrigin(c.environ, c.currentServerPID, c.owner); got != c.want {
 				t.Errorf("classifyOrigin = %v, want %v", got, c.want)
 			}
 		})
@@ -162,5 +180,45 @@ func TestServerOriginString(t *testing.T) {
 			t.Errorf("origin %d reuses the description %q", o, s)
 		}
 		seen[s] = true
+	}
+}
+
+// The socket half of the TMUX triple is what the killability check queries, so
+// it has to survive a path containing the separator the triple is split on.
+func TestTmuxServerPID(t *testing.T) {
+	cases := []struct {
+		name       string
+		environ    string
+		wantSocket string
+		wantPID    int
+		wantOK     bool
+	}{{
+		name:       "plain path",
+		environ:    environ("TMUX=/tmp/tmux-1000/default,1234,0"),
+		wantSocket: "/tmp/tmux-1000/default",
+		wantPID:    1234,
+		wantOK:     true,
+	}, {
+		name:       "path containing a comma",
+		environ:    environ("TMUX=/tmp/odd,dir/default,1234,7"),
+		wantSocket: "/tmp/odd,dir/default",
+		wantPID:    1234,
+		wantOK:     true,
+	}, {
+		name:    "too few fields",
+		environ: environ("TMUX=/tmp/tmux-1000/default,1234"),
+	}, {
+		name:    "no TMUX",
+		environ: environ("TMUX_PANE=%3"),
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			socket, pid, ok := tmuxServerPID(c.environ)
+			if ok != c.wantOK || socket != c.wantSocket || pid != c.wantPID {
+				t.Errorf("tmuxServerPID = (%q, %d, %v), want (%q, %d, %v)",
+					socket, pid, ok, c.wantSocket, c.wantPID, c.wantOK)
+			}
+		})
 	}
 }

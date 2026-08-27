@@ -70,13 +70,19 @@ make install
 3. **pane に到達できない interactive session は `claude --resume <uuid>`**。`claude attach` は
    background 専用で、interactive に投げると `No job matching` で失敗する。resume は元プロセスを
    引き継がず別プロセスを立てるので、先にプロセスを終わらせる必要がある。終わらせてよいのは
-   **別 tmux server にあると確定し、かつその server が既に無いと確定した場合だけ**
-   （`/proc/<pid>/environ` の `TMUX` から server pid を取り現行 server の pid と比較したうえで、
-   その server pid が `/proc` に残っているかで生死を見る）。tmux server は socket 単位なので、
-   別 server の pid が生きている限り別端末からそこに attach して使用中の可能性が残る。`TMUX` が
-   無い（tmux 外で起動）・`/proc` が読めない・別 server の生死を確定できない等、いずれかが
-   確定できないときは何もせず理由を出す。確定したときは SIGTERM を送り roster から消えるまで
-   最大 10 秒待つ。消えなければ resume せず報告して終わる（SIGKILL へは上げない）
+   **その session の tmux server がもう誰からも到達できないと確定した場合だけ**。
+   `/proc/<pid>/environ` の `TMUX=<socket>,<serverpid>,<n>` から socket と server pid を取り、
+   (a) server pid が現行 server と異なり、(b) その socket の現在の所有者が記録された server pid
+   ではない（別 server に置き換わっている、または socket 自体が無い）ことを確認する。tmux server は
+   socket 単位なので、自分が switch-client できない server でも socket を持っていれば別端末から
+   `tmux -L other attach` で使用中でありうる — 判断材料はプロセスの生死ではなく socket の所有者。
+   `TMUX` が無い（tmux 外で起動）・`/proc` が読めない・socket を問い合わせられない等、確定できない
+   ときは何もせず理由を出す。確定したときは SIGTERM を送り roster から消えるまで最大 10 秒待つ。
+   消えなければ resume せず報告して終わる（SIGKILL へは上げない）。
+
+   socket が置き換わる前から attach していた client は既存の接続で動き続けるが、その socket は
+   もう別 server のものなので列挙する手段が無い。この残余リスクを取るのは、取らなければ会話が
+   恒久的に到達不能になるため
 4. **roster に居ない session はそのまま `claude --resume`**。止めるプロセスが無い
 5. **resume は transcript と cwd が実在するときだけ行う**。存在しない uuid を `--resume` に
    渡してもエラーにならず、その id で空の新規 session が立ってしまう。短命 session は jsonl を
@@ -142,7 +148,8 @@ PR 作成時に description に貼って確認：
 - [ ] `claude --bg` で起動した background session（tmux_pane が NULL）を picker から選択、その worktree の tmux session に window が開いて `claude attach` される（popup を開いた session には増えない）
 - [ ] worktree のサブディレクトリで起動した session が、picker の 2 列目に worktree 名で並ぶ
 - [ ] `tmux_pane` が NULL の interactive session（他 pane の同 tmux server 上に存在するもの）を picker から選ぶと、`claude attach` ではなく再解決した pane へ直接 switch される
-- [ ] `tmux_pane` が別 tmux server の pane を指す interactive session を picker から選ぶと、SIGTERM 後に `claude --resume` で同じ session id のまま会話が復元される
+- [ ] `tmux_pane` が「socket を別 server に明け渡した tmux server」の pane を指す interactive session を picker から選ぶと、SIGTERM 後に `claude --resume` で同じ session id のまま会話が復元される
+- [ ] 別 socket（`tmux -L other`）で稼働中の server 上の interactive session を picker から選ぶと、kill されず理由が出る
 - [ ] tmux 外で起動した（`TMUX` を持たない）interactive session を picker から選ぶと、kill されず「別端末で使用中の可能性」の理由が出る
 - [ ] transcript が無い / cwd が reap 済みの session を picker から選ぶと、resume されずどちらが欠けたかが出る
 - [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
