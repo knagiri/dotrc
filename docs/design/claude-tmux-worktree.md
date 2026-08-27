@@ -80,7 +80,8 @@ worktree dir は ghq 配下の兄弟ディレクトリとして `ghq list` に�
   `$TMUX_PANE` をキーに状態を SQLite（`~/.claude/session-queue.db`）へ記録
 - tmux `status-right` に `claude-queue status`（working/awaiting_approval/idle_done のカウント）
 - `C-q q` で popup → fzf picker → 選択 session へ到達（pane への `tmux switch-client` / `claude attach` /
-  `claude --resume` を後述の順で選ぶ）
+  `claude --resume` を後述の順で選ぶ）。`C-q Q` は絞り込みを外し、working / stale と、終了済みだが
+  resume で拾い直せる row（`--show-resumable`）も出す
 - **L3 自己修復**: 新規 `SessionStart` 時、同一 `$TMUX_PANE` 上の生存 session を `ForcedEnd`
   （`/exit`・`/clear` で `SessionEnd` が飛ばないバグの後始末）
 
@@ -193,6 +194,28 @@ uuid を `--resume` に渡してもエラーにはならず、その id で空�
 flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` の `=` 接頭辞・末尾 `:`・`-S` による window
 再利用）は `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを参照
 （README.md は挙動レベルの説明に留め、flag レベルは書かない）。
+
+### 終了済み row は view を広げず別クエリで拾う
+
+ホストが落ちると全 session が閉じ、`queue` view（`terminated_at IS NULL`）は空になる。会話 jsonl は
+残っているので resume で戻せるが、そのために view の絞り込みを緩めることはしない。view は
+「今どこかで動いている session」の定義であり、status-right のカウントも reconcile も L3 自己修復も
+その定義に乗っている。終了済みを混ぜると、生きている session の数を数える手段が消える。
+
+代わりに終了済み側だけを別クエリ（`db.ResumableCandidates`）で引き、`resumable` という擬似 state を
+付けて live な row の後ろへ並べる。既定 off の `--show-resumable` に閉じるのは、平常時の picker が
+GC 保持期間ぶんの終了済み row を抱えて使いにくくなるのを避けるため。判定条件と並び順は README.md
+「終了済み session の掘り起こし」節に一本化してある。
+
+resume できるかの確認を SQL と Go に分けるのは、条件の半分がファイルシステム側にあるため。
+transcript が記録されていても短命 session は jsonl を書かず、cwd は reap 済み worktree なら消えて
+いる。確認を欠いた `--resume` はエラーにならず空 session を作るので、**列挙の時点で**落としておく
+必要がある。案内に出す候補数もこの確認を通したあとの数にする — でなければ、実際には resume
+できない row を数えて勧めることになる。
+
+live な row が 0 件のときに候補数と flag を stderr に出すのは、再起動直後がまさにその状態で、
+popup の中には flag を知る経路が無いからである。既定 off の機能は、必要になる瞬間に自分から
+名乗らないと無いのと同じになる。
 
 ### ④は **メイン** toplevel 基準でパスを作る
 
