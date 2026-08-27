@@ -10,8 +10,8 @@ paths:
 このリポジトリ（dotrc）の `dot/` 配下は、`bin/deploy.sh` が張る symlink 経由でホームから
 参照される。**symlink はエントリ単位で張られるため、新しいトップレベルエントリを足しても
 `deploy.sh` を再実行するまでホーム側からは不可視のまま**になる。この rule は dotrc の
-`dot/` ツリーと `src/claude-queue` を触る作業でだけロードする（他リポジトリでは効かない話
-なので `paths` でスコープする）。
+`dot/` ツリー、`bin/deploy.sh`、`src/claude-queue` を触る作業でだけロードする（他リポジトリ
+では効かない話なので `paths` でスコープする）。
 
 ### 1. 実物を読んでから書く
 
@@ -80,13 +80,21 @@ merge して終わりにすると、repo 上は正しいのにホーム側は未
 `bin/claude-queue` は symlink ではなく `make -C src/claude-queue install` が `bin/` へ吐く
 バイナリで、`.gitignore` に入っている（実体は checkout ごとのローカルビルド）。したがって
 `src/claude-queue` を変更した PR を merge / pull しても、**バイナリは更新されない**。symlink
-経由で反映される skill / rule / `bin/` のスクリプトとは、反映経路がそもそも違う。
+経由で反映される skill / rule（`dot/` 配下、§2〜§3）とも、`bin/deploy.sh` が `~/.bashrc` へ
+PATH を追加するだけで symlink は張らない `bin/` のスクリプトとも、反映経路がそもそも違う
+（`bin/deploy.sh` 冒頭を参照）。
 
-`src/claude-queue` を触ったら、merge 後に再ビルドする。
+`src/claude-queue` を触ったら、merge 後に再ビルドする。ビルド先は実行した checkout の `bin/`
+（`Makefile` の `BIN` は `git rev-parse --show-toplevel` で解決する）で、ホームの PATH に
+乗るのは `bin/deploy.sh` を走らせた checkout の `bin/`（§3 と同じ理屈）。委譲先 agent は既定で
+linked worktree で作業するため、worktree 側で `make install` してもホームから叩かれる
+バイナリは更新されない。ホーム側へ反映したいなら、`bin/deploy.sh` を走らせた checkout（通常
+main の working tree）側で再ビルドするか、worktree の変更をそちらへ merge / pull してから
+再ビルドする。
 
 ```
 make -C src/claude-queue install
-ls -l --time-style=+%m-%d\ %H:%M bin/claude-queue   # ソースより新しいことを確認
+find src/claude-queue -name '*.go' -newer bin/claude-queue   # 出力が空ならバイナリがソースより新しい
 ```
 
 ソースは直っているのにバイナリは古い、という乖離は「直したはずの挙動が直っていない」として
