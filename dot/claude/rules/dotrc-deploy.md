@@ -2,14 +2,16 @@
 paths:
   - "**/dot/**"
   - "**/bin/deploy.sh"
+  - "**/src/claude-queue/**"
 ---
 
 ## dotrc の展開経路（`bin/deploy.sh`）と新規エントリの落とし穴
 
 このリポジトリ（dotrc）の `dot/` 配下は、`bin/deploy.sh` が張る symlink 経由でホームから
 参照される。**symlink はエントリ単位で張られるため、新しいトップレベルエントリを足しても
-`deploy.sh` を再実行するまでホーム側からは不可視のまま**になる。この rule は dot/ ツリーを
-触る作業でだけロードする（他リポジトリでは効かない話なので `paths` でスコープする）。
+`deploy.sh` を再実行するまでホーム側からは不可視のまま**になる。この rule は dotrc の
+`dot/` ツリーと `src/claude-queue` を触る作業でだけロードする（他リポジトリでは効かない話
+なので `paths` でスコープする）。
 
 ### 1. 実物を読んでから書く
 
@@ -42,7 +44,7 @@ paths:
   ホーム側から一切見えない。`dot/` 直下に新しいディレクトリを足した場合（→ `~/.<name>`）も同じ。
 
 境目は「そのエントリに対応する symlink が既にあるか」であって、ファイルが repo に
-commit されたかではない。
+commit されたかではない。ただし symlink 経路そのものに乗らない成果物もある（§5）。
 
 ### 4. したがって、新規エントリを足す変更では展開を明示する
 
@@ -73,6 +75,23 @@ merge して終わりにすると、repo 上は正しいのにホーム側は未
 `~/.bashrc` に cruft が積む）。Go が入っている環境では claude-queue の `make install` も
 再実行のたびに走る。気になる場合は再実行後に `~/.bashrc` の重複ブロックを手で整理する。
 
+### 5. symlink では届かないもの — ビルド成果物は再ビルドが要る
+
+`bin/claude-queue` は symlink ではなく `make -C src/claude-queue install` が `bin/` へ吐く
+バイナリで、`.gitignore` に入っている（実体は checkout ごとのローカルビルド）。したがって
+`src/claude-queue` を変更した PR を merge / pull しても、**バイナリは更新されない**。symlink
+経由で反映される skill / rule / `bin/` のスクリプトとは、反映経路がそもそも違う。
+
+`src/claude-queue` を触ったら、merge 後に再ビルドする。
+
+```
+make -C src/claude-queue install
+ls -l --time-style=+%m-%d\ %H:%M bin/claude-queue   # ソースより新しいことを確認
+```
+
+ソースは直っているのにバイナリは古い、という乖離は「直したはずの挙動が直っていない」として
+現れる。修正内容そのものを疑う方向へ切り分けが向かうので、原因に辿り着くまでが遠い。
+
 ---
 
 由来: 委譲ランの自己内省で捕捉。`dot/claude/agents/`（`pr-judge` / `pr-fix` / `impl-light` /
@@ -80,3 +99,7 @@ merge して終わりにすると、repo 上は正しいのにホーム側は未
 `pr-review-automerge` が指定する `pr-judge` / `pr-fix` の agent type を解決できずに
 general-purpose での代替を強いられた。根本原因は個々の作業ミスではなく、「新規カテゴリ追加時に
 展開経路の再実行が要る」ことがどこにも明文化されていなかった点。
+
+§5 の由来: picker の `-d` 除去（PR #48）を merge した後もフォーカスが移らず、原因の切り分けに
+1 往復かかった。ソースからは `-d` が消えていたが、動いていたのは merge の 57 分前にビルドした
+バイナリだった。
