@@ -166,8 +166,8 @@ worktree の滞留も同様に残る — ①はどちらの経路でも走り、
 popup を開いた時点の current session には作らない — これが「1 worktree = 1 tmux session」を
 守る理由で、承認待ちで止まった background 委譲先へ入る経路はこれだけなので picker から隠さず
 出す。flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` の `=` 接頭辞・末尾 `:`・`-S` に
-よる window 再利用）は `src/claude-queue/README.md` と `internal/multiplexer/tmux.go` のコメント
-に一本化してあるので、そちらを参照。
+よる window 再利用）は `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを
+参照（README.md は挙動レベルの説明に留め、flag レベルは書かない）。
 
 ### ④は **メイン** toplevel 基準でパスを作る
 
