@@ -39,7 +39,7 @@ make install
 |---|---|
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
-| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述） |
+| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` / `--show-resumable` で一覧を広げる |
 | `claude-queue reconcile` | `claude agents --json` に載っていない生存扱いの row を terminated にする（picker 起動時に自動実行される） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue --version` | バージョン表示 |
@@ -49,7 +49,7 @@ make install
 | Var | 意味 |
 |---|---|
 | `CLAUDE_QUEUE_DB` | DB パス override（既定 `~/.claude/session-queue.db`） |
-| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X]` に切替 |
+| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X] [~]` に切替 |
 | `CLAUDE_QUEUE_DEBUG=1` | エラーを `~/.claude/session-queue.log` に追記 |
 
 ### picker の到達手段
@@ -92,6 +92,37 @@ make install
 session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同じ慣習）。popup を開いた
 時点の current session には作らない。
 
+### 終了済み session の掘り起こし（`--show-resumable`）
+
+ホスト再起動などで session が全部閉じると `queue` view は空になる（`terminated_at IS NULL`
+で絞るため）が、会話 jsonl は残っており `claude --resume <uuid>` で復元できる。`--show-resumable`
+はこの「terminated だが resume で拾い直せる row」を一覧に加える。既定 off、`C-q Q` 側だけに付ける。
+
+対象になる条件は 5 つで、SQL 側（`db.ResumableCandidates`）と Go 側（`picker.filterResumable`）に
+分かれる。
+
+- `terminated_at` がセット済みで、最後の event が `ended`
+- 最後の event が `SessionEnd` かつ payload の `reason` が `prompt_input_exit` **でない**。
+  `prompt_input_exit` は人が REPL を区切りで閉じた end なので除く。signal 経由の end（SIGTERM /
+  `claude stop` / ホスト停止）と、reconcile が合成した `ForcedEnd`（payload を持たない）が残る
+- `transcript_path` と `cwd` がどちらも記録済みで、**実際にファイル／ディレクトリとして存在する**。
+  短命 session は jsonl を書かず、reap 済み worktree は cwd が消えているため、記録の有無だけでは
+  足りない（存在しない uuid の `--resume` は空 session を作ってしまう）
+
+並び順は live な row の全部より後ろ。resumable 同士では、終了直前の state が `working` /
+`awaiting_approval` だったもの（作業途中で落ちた可能性が高い）を先に出し、その中では新しい順。
+summary は `resumable (was working)` のように終了直前の state を出す — payload には end の
+reason しか無く、raw state は全部 `ended` なので、row を見分けられるのはここだけ。
+
+**live な row が 0 件のときは、resumable の候補数と flag を stderr に出す。** 再起動直後は
+まさにこの状態で、popup の中から flag の存在に気づく経路が無いため。拾える窓は auto-GC の
+保持期間（7 日）と同じ。
+
+選択したときの到達手段は上の一覧と同じで、resumable 専用の分岐は無い。プロセスはもう無いので
+通常は「roster に居ない session の直接 resume」に落ちるが、reconcile が早めに閉じた等で実際には
+生きていた場合は roster を見て既存のロジック（switch / attach / orphan なら kill してから resume）に
+そのまま乗る。
+
 ## State machine
 
 | hook event | state |
@@ -104,6 +135,9 @@ session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同�
 | `SessionEnd` | ended（view から除外） |
 
 Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
+
+`ended` は view から外れるが、`--show-resumable` はこの外れた row を別クエリで拾い直して
+`resumable` という擬似 state で並べる（前述）。hook が書く state ではない。
 
 ## L3 自己修復
 
@@ -121,9 +155,11 @@ events を削除。
 set -g status-interval 5
 set -g status-right '#(claude-queue status) | %H:%M'
 bind-key q display-popup -E -w 80% -h 60% "claude-queue picker"
+bind-key Q display-popup -E -w 80% -h 60% "claude-queue picker --show-working --show-stale --show-resumable"
 ```
 
-prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。
+prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`Q` は絞り込みを外した全部入り
+（working / stale / resumable も出す）。
 
 ## Troubleshooting
 
@@ -153,6 +189,10 @@ PR 作成時に description に貼って確認：
 - [ ] tmux 外で起動した（`TMUX` を持たない）interactive session を picker から選ぶと、kill されず「別端末で使用中の可能性」の理由が出る
 - [ ] transcript が無い / cwd が reap 済みの session を picker から選ぶと、resume されずどちらが欠けたかが出る
 - [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
+- [ ] ホスト再起動後（live 0 件）に `C-q q` を開くと、resumable の候補数と `--show-resumable` を案内する stderr が出る
+- [ ] `C-q Q` で resumable な row が live な row の後ろに並び、終了直前が `working` / `awaiting_approval` のものが先頭に来る
+- [ ] resumable な row を選ぶと同じ session id のまま会話が復元される（kill 段階を経ずに resume される）
+- [ ] `/exit` で閉じた session（`reason: prompt_input_exit`）は `--show-resumable` でも出ない
 - [ ] 同 pane で `/clear` 後、旧 session が view から消える（L3）
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
 - [ ] 2 pane 並行で approve 連打、busy_timeout 超過しない
