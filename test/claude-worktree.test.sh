@@ -115,6 +115,42 @@ if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] \
   echo "ok: repeated --seed and directory seeds replace rather than nest on reseed"
 else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
 
+# --- default seed: mise.local.toml --------------------------------------------
+# A delegate is expected to open PRs, so the GitHub token mise exports has to
+# reach it -- which means the checkout's mise.local.toml has to. It is seeded
+# without being asked for, but on terms opposite to an explicit --seed: absence
+# is a no-op, because most checkouts have none.
+
+# Absent -> the worktree is still created, and nothing is copied.
+out="$(cd "$cwdrepo" && "$wt" nomise 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}_nomise" ] \
+   && [ ! -e "${cwdrepo}_nomise/mise.local.toml" ]; then
+  echo "ok: an absent mise.local.toml is a no-op, not a failure"
+else echo "FAIL: absent default seed rc=$rc out=$out"; fail=1; fi
+
+printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$cwdrepo/mise.local.toml"
+
+# Present -> copied to the same relative path with no --seed given at all.
+err="$tmp/mise-default-err"
+out="$(cd "$cwdrepo" && "$wt" misedefault 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '_.file' "${cwdrepo}_misedefault/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
+  echo "ok: mise.local.toml is seeded by default when the checkout has one"
+else echo "FAIL: default mise seed rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
+
+# Naming it explicitly as well must not copy or log it twice.
+err="$tmp/mise-explicit-err"
+out="$(cd "$cwdrepo" && "$wt" --seed mise.local.toml miseexplicit 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '_.file' "${cwdrepo}_miseexplicit/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
+  echo "ok: explicit --seed mise.local.toml does not double-seed"
+else echo "FAIL: explicit mise seed rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
+
+# Removed again so the launch-mode tests below stay unaffected by it.
+rm -f "$cwdrepo/mise.local.toml"
+
 # --- session-launch mode (with a prompt) --------------------------------------
 # We can't reproduce real tmux/claude behavior, so we stub `tmux` on PATH: it
 # fails `has-session` (so the script proceeds) and records `new-session`'s argv
