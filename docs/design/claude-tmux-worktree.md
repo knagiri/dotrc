@@ -160,10 +160,16 @@ worktree の滞留も同様に残る — ①はどちらの経路でも走り、
 
 ③との噛み合わせは「pane 無し = 追跡は完全、ジャンプだけ不能」になる。status-right のカウントは
 `terminated_at IS NULL` と state だけで絞るので background も普通に乗る。ジャンプは picker が
-`tmux_pane` の有無で分岐し、NULL なら `tmux new-window -c <cwd> claude attach <short-id>` で
-開く（`claude attach` は short id しか受けない）。`-d` を付けないのは、pane 有りの
-`switch-client` と揃えて「選んだら実際にそこへ移る」を守るため。承認待ちで止まった
-background 委譲先へ入る経路はこれだけなので、picker から隠さず出す。
+`tmux_pane` の有無で分岐し、NULL ならその worktree の tmux session（session 名 = worktree
+ディレクトリ名。`gts` / `claude-worktree` と同じ慣習）を単位に開く。`has-session` で判定し、
+無ければ `new-session -d -s <name> -n <window> ...` で session ごと作成、既にあれば
+`new-window -S -n <window> -t "=<name>:" ...` で window を追加してから `switch-client` で
+そこへ移る（`claude attach` は short id しか受けない）。`-d` の要否は経路によって**逆**になる —
+`new-session` は popup 内での attach 競合を避けるため **必須**、`new-window` は付けると window
+が背景に残って選んでも何も起きて見えなくなるため **禁止**。`-t` の `=` 接頭辞・末尾 `:`・`-S`
+による window 再利用（同じ target を二度選んでも window が増えない）の詳細は
+`src/claude-queue/README.md` と `internal/multiplexer/tmux.go` のコメントを参照。承認待ちで
+止まった background 委譲先へ入る経路はこれだけなので、picker から隠さず出す。
 
 ### ④は **メイン** toplevel 基準でパスを作る
 

@@ -10,32 +10,35 @@ import (
 // is checked without starting a real tmux server.
 func TestNewSessionArgs(t *testing.T) {
 	tests := []struct {
-		name string
-		sess string
-		cwd  string
-		argv []string
-		want []string
+		name   string
+		sess   string
+		window string
+		cwd    string
+		argv   []string
+		want   []string
 	}{
 		{
-			name: "with cwd",
-			sess: "dotrc_wt",
-			cwd:  "/w/a",
-			argv: []string{"claude", "attach", "abc"},
-			want: []string{"new-session", "-d", "-s", "dotrc_wt", "-c", "/w/a", "claude", "attach", "abc"},
+			name:   "with cwd",
+			sess:   "dotrc_wt",
+			window: "claude-attach-abc",
+			cwd:    "/w/a",
+			argv:   []string{"claude", "attach", "abc"},
+			want:   []string{"new-session", "-d", "-s", "dotrc_wt", "-n", "claude-attach-abc", "-c", "/w/a", "claude", "attach", "abc"},
 		},
 		{
-			name: "without cwd",
-			sess: "dotrc_wt",
-			cwd:  "",
-			argv: []string{"claude", "attach", "abc"},
-			want: []string{"new-session", "-d", "-s", "dotrc_wt", "claude", "attach", "abc"},
+			name:   "without cwd",
+			sess:   "dotrc_wt",
+			window: "claude-attach-abc",
+			cwd:    "",
+			argv:   []string{"claude", "attach", "abc"},
+			want:   []string{"new-session", "-d", "-s", "dotrc_wt", "-n", "claude-attach-abc", "claude", "attach", "abc"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := newSessionArgs(tt.sess, tt.cwd, tt.argv)
+			got := newSessionArgs(tt.sess, tt.window, tt.cwd, tt.argv)
 			if !slices.Equal(got, tt.want) {
-				t.Errorf("newSessionArgs(%q, %q, %v) = %v, want %v", tt.sess, tt.cwd, tt.argv, got, tt.want)
+				t.Errorf("newSessionArgs(%q, %q, %q, %v) = %v, want %v", tt.sess, tt.window, tt.cwd, tt.argv, got, tt.want)
 			}
 			// Creating the session detached is mandatory: the picker runs in
 			// a display-popup, and an attaching new-session would fight it
@@ -44,6 +47,27 @@ func TestNewSessionArgs(t *testing.T) {
 				t.Errorf("newSessionArgs(...) = %v, must contain -d", got)
 			}
 		})
+	}
+}
+
+// TestNewSessionArgsWindowNameMatchesNewWindow pins the regression this fix
+// addresses: the window newSessionArgs creates (via -n) must be named exactly
+// what newWindowArgs' -S will later look for. If these two ever diverge, a
+// second OpenSession pick of the same target stacks a second window instead
+// of -S selecting the first one -- the idempotency newWindowArgs documents
+// would only hold when the session already existed, never on first creation.
+func TestNewSessionArgsWindowNameMatchesNewWindow(t *testing.T) {
+	argv := []string{"claude", "attach", "abc"}
+	window := windowName(argv)
+
+	sessionArgs := newSessionArgs("dotrc_wt", window, "/w/a", argv)
+	windowArgs := newWindowArgs("dotrc_wt", window, "/w/a", argv)
+
+	sessionWindowName := sessionArgs[slices.Index(sessionArgs, "-n")+1]
+	targetWindowName := windowArgs[slices.Index(windowArgs, "-n")+1]
+
+	if sessionWindowName != targetWindowName {
+		t.Errorf("newSessionArgs names the initial window %q, but newWindowArgs' -S looks for %q; a second pick would stack a new window instead of reusing it", sessionWindowName, targetWindowName)
 	}
 }
 
