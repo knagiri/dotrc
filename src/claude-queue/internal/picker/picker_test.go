@@ -253,6 +253,37 @@ func TestResumableRowRoutesToResume(t *testing.T) {
 	}
 }
 
+// The unreadable-roster case, which is where a resumable row carrying a pane
+// would do real damage. reachablePane's last-resort fallback trusts the ledger
+// pane when the roster cannot be read, because an unreadable roster is not
+// evidence a session ended -- true for a live row, false for one selected by
+// terminated_at. Pane ids are a per-server counter restarting at %0, so after a
+// reboot the recorded id resolves to an unrelated live pane and the pick would
+// switch to a stranger's session with no error. db.ResumableCandidates withholds
+// the column so the fallback has nothing to trust; this asserts the whole chain
+// from the rendered line, since it is FormatLine's hidden column that feeds it.
+func TestResumableRowCarriesNoPaneForTheRosterFallback(t *testing.T) {
+	row := db.Row{
+		SessionID:      testUUID,
+		TmuxPane:       sql.NullString{}, // what ResumableCandidates hands back
+		Cwd:            sql.NullString{String: "/w/a", Valid: true},
+		TranscriptPath: sql.NullString{String: "/t/a.jsonl", Valid: true},
+		EffectiveState: db.StateResumable,
+		RawState:       "ended",
+		CreatedAt:      nowMinus(60),
+	}
+	fields := strings.Split(FormatLine(row, "wt", nowUnix(), false), "\t")
+	if fields[5] != "" {
+		t.Fatalf("hidden tmux_pane = %q, want empty for a resumable row", fields[5])
+	}
+
+	// %0 and %1 exist on the rebooted server, belonging to unrelated sessions.
+	mux := &fakeMux{panes: map[string]bool{"%0": true, "%1": true}}
+	if got := reachablePane(mux, nil, fields[4], fields[5], false); got != "" {
+		t.Errorf("reachablePane with an unreadable roster = %q, want empty", got)
+	}
+}
+
 // A row that came back from the resumable query but whose session turns out to
 // be running after all -- reconcile closed it early, or it was restarted since
 // -- falls back to the existing routing instead of resuming onto a live

@@ -209,13 +209,22 @@ GC 保持期間ぶんの終了済み row を抱えて使いにくくなるのを
 
 resume できるかの確認を SQL と Go に分けるのは、条件の半分がファイルシステム側にあるため。
 transcript が記録されていても短命 session は jsonl を書かず、cwd は reap 済み worktree なら消えて
-いる。確認を欠いた `--resume` はエラーにならず空 session を作るので、**列挙の時点で**落としておく
-必要がある。案内に出す候補数もこの確認を通したあとの数にする — でなければ、実際には resume
-できない row を数えて勧めることになる。
+いる。確認を欠いた `--resume` はエラーにならず空 session を作るので、選択時ではなく**列挙の時点で**
+落とす。案内に出す候補数も同じ確認を通したあとの数にする — でなければ、実際には resume できない
+row を数えて勧めることになる。
 
 live な row が 0 件のときに候補数と flag を stderr に出すのは、再起動直後がまさにその状態で、
-popup の中には flag を知る経路が無いからである。既定 off の機能は、必要になる瞬間に自分から
-名乗らないと無いのと同じになる。
+popup の中には flag を知る経路が無いからである。ただし `display-popup -E` は command の exit で
+popup を閉じるため、この案内が読めるのは picker をシェルから直接起動した場合に限られる。既存の
+`no active sessions` も同じ構造だが、読ませる前提の操作案内をそこに置いたのはこの変更が最初なので、
+到達性は未解決の論点として残る。
+
+`tmux_pane` を resumable な row では運ばないのは、ledger がこの列を終了時にクリアしないためである。
+pane id は tmux server 単位のカウンタで新しい server は `%0` から振り直すので、終了したプロセスの
+pane id は再起動後の server では無関係な live pane に衝突する。picker は roster が読めないときだけ
+ledger の pane を信用する（roster が読めないことは session の死の証拠にならないから）が、
+`terminated_at` で選んだ row にはその前提が成り立たない — 死んでいる証拠を別に持っているので、
+信用すると会話の復元ではなく他人の pane への switch になる。
 
 ### ④は **メイン** toplevel 基準でパスを作る
 
