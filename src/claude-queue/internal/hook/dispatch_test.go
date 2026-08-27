@@ -155,6 +155,62 @@ func TestDispatch_SessionEnd_SetsTerminated(t *testing.T) {
 	}
 }
 
+// `claude --resume <uuid>` keeps the session id, so a session that already
+// ended once comes back under the same primary key. Unless the upsert clears
+// terminated_at, the row stays closed forever and the queue view -- which
+// filters on terminated_at IS NULL -- never shows the resumed session again.
+func TestDispatch_SessionStartAfterEnd_Resurrects(t *testing.T) {
+	d := openTestDB(t)
+	for _, ev := range []string{"SessionStart", "SessionEnd", "SessionStart"} {
+		in := &Input{SessionID: "s", HookEventName: ev, Cwd: "/work"}
+		if err := Dispatch(d, ev, in); err != nil {
+			t.Fatalf("%s: %v", ev, err)
+		}
+	}
+
+	var terminated sql.NullInt64
+	if err := d.DB.QueryRow(
+		"SELECT terminated_at FROM sessions WHERE session_id = 's'",
+	).Scan(&terminated); err != nil {
+		t.Fatalf("query terminated_at: %v", err)
+	}
+	if terminated.Valid {
+		t.Errorf("terminated_at = %d after resume, want NULL", terminated.Int64)
+	}
+
+	var rows int
+	if err := d.DB.QueryRow(
+		"SELECT COUNT(*) FROM queue WHERE session_id = 's'",
+	).Scan(&rows); err != nil {
+		t.Fatalf("count queue: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("queue rows for the resumed session = %d, want 1", rows)
+	}
+}
+
+// The resurrect above must not leak into SessionEnd itself: that event upserts
+// (clearing terminated_at) before setting it, so the ordering inside Dispatch is
+// what keeps a genuine end closed.
+func TestDispatch_SessionEndStillTerminatesAfterResurrect(t *testing.T) {
+	d := openTestDB(t)
+	for _, ev := range []string{"SessionStart", "SessionEnd", "SessionStart", "SessionEnd"} {
+		in := &Input{SessionID: "s", HookEventName: ev}
+		if err := Dispatch(d, ev, in); err != nil {
+			t.Fatalf("%s: %v", ev, err)
+		}
+	}
+	var terminated sql.NullInt64
+	if err := d.DB.QueryRow(
+		"SELECT terminated_at FROM sessions WHERE session_id = 's'",
+	).Scan(&terminated); err != nil {
+		t.Fatalf("query terminated_at: %v", err)
+	}
+	if !terminated.Valid {
+		t.Error("terminated_at is NULL after the second SessionEnd, want it set")
+	}
+}
+
 func TestDispatch_NonSessionStart_BackfillsTmuxPane(t *testing.T) {
 	// Simulates the real bug: SessionStart hook was missed, so the session
 	// row exists with NULL tmux_pane (created defensively by a later event
