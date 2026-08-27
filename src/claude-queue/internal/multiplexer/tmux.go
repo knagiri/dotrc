@@ -163,6 +163,47 @@ func findPane(pid int, panes map[int]string, parent func(int) (int, bool)) (stri
 	return "", false
 }
 
+// PaneExists reports whether target is listed by the current server, across
+// every session on it (-a). The ledger's pane column is not authoritative -- a
+// recorded pane can belong to a tmux server that has since been replaced -- so
+// the picker checks a pane before trusting it rather than switching blind and
+// reading the failure as "the session died".
+func (tmuxImpl) PaneExists(target string) bool {
+	panes, err := listPanes()
+	if err != nil {
+		return false
+	}
+	return paneListed(panes, target)
+}
+
+// paneListed is the membership test, over the same pid -> pane map listPanes
+// already builds, so no second tmux call is needed. Taking the map as an
+// argument keeps it testable without a tmux server.
+func paneListed(panes map[int]string, target string) bool {
+	if target == "" {
+		return false
+	}
+	for _, pane := range panes {
+		if pane == target {
+			return true
+		}
+	}
+	return false
+}
+
+// ServerPID returns the pid of the tmux server this process talks to.
+func (tmuxImpl) ServerPID() (int, bool) {
+	out, err := exec.Command("tmux", "display", "-p", "#{pid}").Output()
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
 // listPanes maps each pane's pid to its pane id for the whole server.
 func listPanes() (map[int]string, error) {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id}").Output()
