@@ -30,16 +30,17 @@ func (tmuxImpl) OpenSession(name, cwd string, argv []string) error {
 	if name == "" {
 		return errors.New("no session name")
 	}
+	window := windowName(argv)
 	if err := exec.Command("tmux", "has-session", "-t="+name).Run(); err != nil {
 		// A new session must be created detached. The picker runs inside
 		// `display-popup -E`, and an attaching new-session would try to take
 		// over that popup's terminal; switch-client below moves the client
 		// deliberately instead. This is why -d is right here and wrong for
 		// new-window, where it would leave the pick looking like a no-op.
-		if err := exec.Command("tmux", newSessionArgs(name, cwd, argv)...).Run(); err != nil {
+		if err := exec.Command("tmux", newSessionArgs(name, window, cwd, argv)...).Run(); err != nil {
 			return err
 		}
-	} else if err := exec.Command("tmux", newWindowArgs(name, windowName(argv), cwd, argv)...).Run(); err != nil {
+	} else if err := exec.Command("tmux", newWindowArgs(name, window, cwd, argv)...).Run(); err != nil {
 		return err
 	}
 	return exec.Command("tmux", "switch-client", "-t="+name).Run()
@@ -47,8 +48,16 @@ func (tmuxImpl) OpenSession(name, cwd string, argv []string) error {
 
 // newSessionArgs builds the tmux argv for creating the session. Split out from
 // OpenSession so the contract can be asserted without starting a tmux server.
-func newSessionArgs(name, cwd string, argv []string) []string {
-	args := []string{"new-session", "-d", "-s", name}
+//
+// -n names the initial window explicitly with the same windowName(argv) used
+// by newWindowArgs below. Without it tmux auto-names the window from the
+// shell command, which does not match the name newWindowArgs' -S looks for,
+// so a session created via this path would never dedupe on a second pick of
+// the same target (a second window would stack instead of -S selecting the
+// first one). Naming it here also disables tmux's automatic-rename for the
+// window, so the name -S depends on cannot drift later.
+func newSessionArgs(name, window, cwd string, argv []string) []string {
+	args := []string{"new-session", "-d", "-s", name, "-n", window}
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
