@@ -1,7 +1,10 @@
 package picker
 
 import (
+	"errors"
+	"io/fs"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -21,9 +24,8 @@ const (
 	// /proc is unreadable (a non-Linux host, a process owned by someone else,
 	// a process that exited mid-check), the TMUX value does not parse, we have
 	// no server pid of our own to compare against, or (see originForeignLive)
-	// the other server's liveness itself could not be checked. It is
-	// deliberately the zero value, so a Target left unfilled defaults to "do
-	// not kill".
+	// the other server's socket could not be queried. It is deliberately the
+	// zero value, so a Target left unfilled defaults to "do not kill".
 	originUnknown serverOrigin = iota
 	// originOutside means the process has no TMUX in its environment: it was
 	// started outside a multiplexer altogether. Not an orphan -- there is a
@@ -33,19 +35,23 @@ const (
 	// pane should have been found by FindPane; seeing this alongside an
 	// unreachable pane means the pane closed while the process lived on.
 	originCurrent
-	// originOrphan means the process belongs to a tmux server that is not
-	// ours, and that other server is confirmed gone (its pid is no longer
-	// running). No client -- ours or anyone else's -- can still be attached to
-	// it, so the conversation is only recoverable by ending the process and
-	// resuming the transcript.
+	// originOrphan means the process belongs to a tmux server that no longer
+	// owns the socket it was started on: either the socket is gone, or another
+	// server has taken the path over. Nobody can open a new client onto it, so
+	// the conversation is only recoverable by ending the process and resuming
+	// the transcript.
+	//
+	// A client that was already attached when the socket changed hands keeps
+	// working over its existing connection, and there is no way left to
+	// enumerate it -- the socket that would answer the question now belongs to
+	// someone else. That residual risk is what the whole path trades against
+	// leaving the conversation unreachable forever.
 	originOrphan
 	// originForeignLive means the process belongs to a tmux server that is not
-	// ours, but that server's pid is still running. tmux servers are scoped
-	// per socket (`tmux -L`/`-S`), so a live server we cannot switch-client
-	// into may still have a human attached to it from another terminal. Not
-	// killable: the safety this package exists to provide (never end a
-	// session someone may be using elsewhere) only holds if a still-running
-	// foreign server is treated the same as one we can see is in use.
+	// ours but still owns its socket. tmux servers are scoped per socket
+	// (`tmux -L` / `-S`), so a server we cannot switch-client into is perfectly
+	// reachable by `tmux -L other attach` from another terminal, and a human
+	// may be in it right now. Not killable.
 	originForeignLive
 )
 
@@ -58,9 +64,9 @@ func (o serverOrigin) String() string {
 	case originCurrent:
 		return "on this tmux server, but its pane is gone"
 	case originOrphan:
-		return "on another tmux server, which is no longer running"
+		return "on a tmux server that no longer owns its socket"
 	case originForeignLive:
-		return "on another tmux server that is still running"
+		return "on another tmux server that is still reachable through its own socket"
 	default:
 		return "on an unknown tmux server"
 	}
@@ -76,15 +82,15 @@ func originOf(pid, currentServerPID int) serverOrigin {
 	if !ok {
 		return originUnknown
 	}
-	return classifyOrigin(environ, currentServerPID, processAlive)
+	return classifyOrigin(environ, currentServerPID, socketServerPID)
 }
 
 // classifyOrigin is the rule itself, over the raw NUL-separated environment
-// block, so every branch can be exercised without a live process. The
-// liveness check for a foreign server's pid is injected rather than reading
-// /proc directly, so it too can be exercised without one.
-func classifyOrigin(environ string, currentServerPID int, alive func(int) bool) serverOrigin {
-	serverPID, ok := tmuxServerPID(environ)
+// block, so every branch can be exercised without a live process. The socket
+// lookup is injected rather than shelling out from here, so it too can be
+// exercised without a tmux server.
+func classifyOrigin(environ string, currentServerPID int, owner socketOwner) serverOrigin {
+	socket, serverPID, ok := tmuxServerPID(environ)
 	if !ok {
 		// No TMUX at all means "outside tmux"; a TMUX that does not parse
 		// means we simply do not know. tmuxServerPID reports both as false, so
@@ -102,53 +108,82 @@ func classifyOrigin(environ string, currentServerPID int, alive func(int) bool) 
 	}
 	// A different server pid than ours is not enough on its own: tmux servers
 	// are per-socket, so a server we cannot see (`tmux -L other`) can still be
-	// alive and have a human attached to it right now. Only a server that is
-	// confirmed gone may be treated as an orphan; if liveness cannot be
-	// checked, that is the same "cannot tell, so do not kill" answer as any
-	// other unsettled case.
-	if alive == nil {
+	// serving clients through its own socket. The question that decides
+	// killability is not whether that pid is running but whether anyone can
+	// still open a client onto it -- which is answered by asking the socket the
+	// session recorded who owns it now.
+	//
+	// Checking the pid alone would be both too strict and too lax: a server
+	// whose socket was taken over lingers as a live process that nobody can
+	// reach (the measured case this path exists for), while a pid that has been
+	// recycled onto an unrelated process would read as "gone".
+	if owner == nil {
 		return originUnknown
 	}
-	if alive(serverPID) {
+	ownerPID, ok := owner(socket)
+	if !ok {
+		return originUnknown
+	}
+	if ownerPID == serverPID {
 		return originForeignLive
 	}
 	return originOrphan
 }
 
-// processAlive reports whether pid names a process still running, by testing
-// for /proc/<pid>. Its one blind spot is pid reuse: if the original tmux
-// server already exited and the kernel handed its pid to an unrelated
-// process, this reports "alive" for the wrong process. That misreading still
-// lands on the safe side for classifyOrigin's caller -- do not kill -- so it
-// is left as is rather than chased with a start-time comparison /proc does
-// not expose cheaply.
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	_, err := os.Stat("/proc/" + strconv.Itoa(pid))
-	return err == nil
-}
+// socketOwner reports the pid of the tmux server currently listening on a
+// socket path. A zero pid with ok means the socket is not there at all, i.e.
+// no server owns it; !ok means the question could not be answered, which
+// classifyOrigin turns into "do not kill".
+type socketOwner func(socket string) (int, bool)
 
-// tmuxServerPID pulls the server pid out of TMUX=<socket>,<serverpid>,<n>.
+// socketServerPID asks the server on socket for its pid.
 //
-// The pid is taken from the second-to-last comma-separated field rather than
-// index 1, so a socket path containing a comma does not shift the answer to a
-// path fragment.
-func tmuxServerPID(environ string) (int, bool) {
-	value, ok := environValue(environ, "TMUX")
-	if !ok {
+// A missing socket file is an answer, not a failure: nothing is listening, so
+// no client can be opened onto whatever process still holds the old pid. Any
+// other stat error, or a tmux invocation that does not yield a pid, leaves the
+// question unanswered.
+func socketServerPID(socket string) (int, bool) {
+	if socket == "" {
 		return 0, false
 	}
-	fields := strings.Split(value, ",")
-	if len(fields) < 3 {
+	if _, err := os.Stat(socket); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, true
+		}
 		return 0, false
 	}
-	pid, err := strconv.Atoi(fields[len(fields)-2])
+	out, err := exec.Command("tmux", "-S", socket, "display", "-p", "#{pid}").Output()
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
 	if err != nil || pid <= 0 {
 		return 0, false
 	}
 	return pid, true
+}
+
+// tmuxServerPID splits TMUX=<socket>,<serverpid>,<n> into the socket path and
+// the server pid.
+//
+// The pid is taken from the second-to-last comma-separated field rather than
+// index 1, and the socket from everything before it, so a socket path
+// containing a comma neither shifts the pid onto a path fragment nor loses its
+// tail.
+func tmuxServerPID(environ string) (socket string, pid int, ok bool) {
+	value, found := environValue(environ, "TMUX")
+	if !found {
+		return "", 0, false
+	}
+	fields := strings.Split(value, ",")
+	if len(fields) < 3 {
+		return "", 0, false
+	}
+	pid, err := strconv.Atoi(fields[len(fields)-2])
+	if err != nil || pid <= 0 {
+		return "", 0, false
+	}
+	return strings.Join(fields[:len(fields)-2], ","), pid, true
 }
 
 func hasTMUX(environ string) bool {
