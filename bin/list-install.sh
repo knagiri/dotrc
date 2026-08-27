@@ -10,7 +10,7 @@ commands=( \
     "node" "mise" \
     "uv" \
     "go" \
-    "eza" "bat" "fd" "rg" "fzf" "jq" \
+    "eza" "bat" "fd" "rg" "fzf" "jq" "sqlite3" \
     "nvim" "tree-sitter" "tmux" \
     "lazygit" "lazysql" \
     "claude" \
