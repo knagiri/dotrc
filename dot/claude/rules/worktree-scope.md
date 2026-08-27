@@ -152,6 +152,8 @@ claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-
 - プロンプト無しなら worktree 追加のみ（stdout にパスのみ出力。`git wa` の置き換え）
 - `--self` は worktree の基準 repo を、cwd の repo ではなく **`claude-worktree` 自身が置かれている repo**（symlink 解決後。= dotrc）にする。無関係な project で作業中に dotrc のグローバル harness（rules / skills / bin）を切りたいときに使う。`--seed` のコピー元は `--self` の有無に関わらず cwd の checkout のまま
 - `--seed <path>`（繰り返し可）は、現 checkout の `<path>` を新 worktree の同じ相対位置へコピーする。存在しない／checkout 外の seed は worktree 作成前に fail する
+- `mise.local.toml` は現 checkout 直下に在れば**既定で seed される**（明示 `--seed` と併用しても二重にはならない）。委譲先は既定で PR を出すので GitHub token の供給は前提であり、この repo ではそれを mise 経由で流しているため。明示 `--seed` と違い、**無いときは何もしない**（fail しない）。ファイル自体は `_.file = "~/..."` の pointer で秘密は home 配下に残るため、worktree にも repo にも秘密は入らない
+- 委譲先で token が無いときに `~/.config/gh/personal.env` 等の秘密ファイルを直接 source する回避策は使わない。既定 seed で供給されるのが正規経路であり、それが効かないなら seed の不具合として直す
 - `--model <alias>` は起動する claude のモデルを固定する（friendly alias。`opus` / `sonnet` / `haiku`）。省略すると継承した既定モデルのまま。委譲先は長時間の agentic 実行を担うので、`delegate-to-worktree` / `harness-from-feedback` は `--model opus` を付けて呼ぶ
 - settings.json で allow 済み（`claude-worktree` / `claude-worktree *`、`claude-stop-bg` / `claude-stop-bg *`）なので承認なしで実行できる
 
