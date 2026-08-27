@@ -19,13 +19,14 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 		TmuxPane:       sql.NullString{String: "%1", Valid: true},
 		Cwd:            sql.NullString{String: "/home/x/projects/everysteel-api", Valid: true},
 		EffectiveState: "awaiting_approval",
+		TranscriptPath: sql.NullString{String: "/home/x/.claude/projects/enc/s1.jsonl", Valid: true},
 		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"pnpm prisma migrate"}}`, Valid: true},
 		CreatedAt:      nowMinus(120),
 	}
 	got := FormatLine(row, "everysteel-api", nowUnix(), false)
 	fields := strings.Split(got, "\t")
-	if len(fields) != 7 {
-		t.Fatalf("want 7 tab-separated fields, got %d: %q", len(fields), got)
+	if len(fields) != 8 {
+		t.Fatalf("want 8 tab-separated fields, got %d: %q", len(fields), got)
 	}
 	if fields[0] != "⏳" {
 		t.Errorf("icon = %q, want ⏳", fields[0])
@@ -47,6 +48,24 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 	}
 	if fields[6] != "/home/x/projects/everysteel-api" {
 		t.Errorf("hidden cwd = %q, want the full path", fields[6])
+	}
+	// The resume path refuses to run without a transcript, so the path has to
+	// reach the pick through this hidden column.
+	if fields[7] != "/home/x/.claude/projects/enc/s1.jsonl" {
+		t.Errorf("hidden transcript_path = %q, want the full path", fields[7])
+	}
+}
+
+// A row the ledger has no transcript for still renders; the column is empty,
+// which is what resumeBlocked reads as "nothing to resume".
+func TestFormatLine_NoTranscript(t *testing.T) {
+	row := db.Row{SessionID: "s3", EffectiveState: "idle_done", CreatedAt: nowMinus(10)}
+	fields := strings.Split(FormatLine(row, "wt", nowUnix(), false), "\t")
+	if len(fields) != 8 {
+		t.Fatalf("want 8 fields, got %d", len(fields))
+	}
+	if fields[7] != "" {
+		t.Errorf("hidden transcript_path = %q, want empty", fields[7])
 	}
 }
 
@@ -92,35 +111,202 @@ func TestFormatAge(t *testing.T) {
 	}
 }
 
-// A background session has no tmux pane, so the picker cannot switch to it --
-// it has to open the session with `claude attach` instead. These cases pin the
-// routing, which is the only part with branching worth testing; the exec calls
-// themselves are one-liners in the multiplexer.
+const testUUID = "61c846eb-8205-4a8e-8a0d-7772410051c9"
+
+// resumable is a Target whose resume preconditions all hold, so each case below
+// can state only the field it is about.
+func resumable() Target {
+	return Target{
+		SessionID:        testUUID,
+		Cwd:              "/w/a",
+		TranscriptPath:   "/t/a.jsonl",
+		RosterOK:         true,
+		TranscriptExists: true,
+		CwdExists:        true,
+	}
+}
+
+// DecideAction is the whole routing rule, and every one of its branches decides
+// whether a live process gets a SIGTERM -- so all of them are covered here
+// rather than only the interesting ones. The exec calls they route to are
+// one-liners in the multiplexer.
 func TestDecideAction(t *testing.T) {
-	const uuid = "61c846eb-8205-4a8e-8a0d-7772410051c9"
-
-	got := DecideAction(uuid, "%12", "/w/a")
-	if got.Kind != "switch" || got.Pane != "%12" {
-		t.Errorf("with a pane: got %+v, want switch to %%12", got)
+	withPane := func(f func(*Target)) Target {
+		tgt := resumable()
+		f(&tgt)
+		return tgt
 	}
 
-	// `claude attach` only accepts the 8-char short id; passing the full UUID
-	// fails with "No job matching".
-	got = DecideAction(uuid, "", "/w/a")
-	if got.Kind != "attach" || got.Short != "61c846eb" || got.Cwd != "/w/a" {
-		t.Errorf("without a pane: got %+v, want attach 61c846eb in /w/a", got)
-	}
+	cases := []struct {
+		name    string
+		target  Target
+		kind    string
+		short   string
+		pane    string
+		resume  string
+		killPID int
+	}{{
+		// A reachable pane wins over everything else: the session is right there.
+		name:   "reachable pane switches",
+		target: withPane(func(tg *Target) { tg.Pane = "%12" }),
+		kind:   "switch",
+		pane:   "%12",
+	}, {
+		// Even a live interactive session on another server: if its pane came
+		// back reachable, nothing may be killed.
+		name: "reachable pane beats an orphan process",
+		target: withPane(func(tg *Target) {
+			tg.Pane, tg.InRoster, tg.Kind, tg.PID, tg.Origin = "%12", true, "interactive", 4242, originOrphan
+		}),
+		kind: "switch",
+		pane: "%12",
+	}, {
+		name:   "no session id is not actionable",
+		target: withPane(func(tg *Target) { tg.SessionID = "" }),
+		kind:   "none",
+	}, {
+		// An unreadable roster is not evidence the process ended, and resuming
+		// a live session puts two of them on one transcript.
+		name:   "unreadable roster refuses to resume",
+		target: withPane(func(tg *Target) { tg.RosterOK = false }),
+		kind:   "none",
+	}, {
+		// `claude attach` only accepts the 8-char short id; the full UUID
+		// fails with "No job matching".
+		name: "background session attaches by short id",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID = true, "background", 100
+		}),
+		kind:  "attach",
+		short: "61c846eb",
+	}, {
+		// Short ids that are already <= 8 chars must not be sliced out of range.
+		name: "short session id is not truncated",
+		target: withPane(func(tg *Target) {
+			tg.SessionID, tg.InRoster, tg.Kind, tg.PID = "abc", true, "background", 100
+		}),
+		kind:  "attach",
+		short: "abc",
+	}, {
+		// `claude agents --json` has been observed to list the same session id
+		// under two pids at once -- the duplicate-transcript state a resume
+		// must not create. There is no single pid to act on without guessing,
+		// so this refuses rather than kill one of the two arbitrarily.
+		name: "duplicate roster entries are not touched",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOrphan
+			tg.RosterMatches, tg.DuplicatePIDs = 2, []int{4242, 5252}
+		}),
+		kind: "none",
+	}, {
+		// The one case that may kill: the process provably belongs to a tmux
+		// server no client of ours can reach.
+		name: "orphan interactive session is ended then resumed",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOrphan
+		}),
+		kind:    "resume",
+		resume:  testUUID,
+		killPID: 4242,
+	}, {
+		name: "session started outside tmux is left alone",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOutside
+		}),
+		kind: "none",
+	}, {
+		// A different tmux server pid is not enough: if that server is
+		// confirmed still running, a human may be attached to it from another
+		// terminal (a different socket entirely), so it must not be killed.
+		name: "interactive session on a still-running foreign server is left alone",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originForeignLive
+		}),
+		kind: "none",
+	}, {
+		// /proc unreadable, TMUX unparseable, or no server pid of our own: the
+		// safe answer is the same as for a session in use elsewhere.
+		name: "unknown origin is left alone",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originUnknown
+		}),
+		kind: "none",
+	}, {
+		name: "same-server session with a closed pane is left alone",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originCurrent
+		}),
+		kind: "none",
+	}, {
+		name: "orphan with no pid cannot be ended, so is left alone",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 0, originOrphan
+		}),
+		kind: "none",
+	}, {
+		// Nothing to displace, so no kill: this is the plain resume.
+		name:   "session absent from the roster resumes directly",
+		target: resumable(),
+		kind:   "resume",
+		resume: testUUID,
+	}, {
+		name:   "no recorded transcript blocks the resume",
+		target: withPane(func(tg *Target) { tg.TranscriptPath, tg.TranscriptExists = "", false }),
+		kind:   "none",
+	}, {
+		// Short-lived sessions never write a jsonl, so a recorded path is only
+		// half the check. `claude --resume` with an id it cannot find starts an
+		// empty session under that id instead of failing.
+		name:   "transcript missing on disk blocks the resume",
+		target: withPane(func(tg *Target) { tg.TranscriptExists = false }),
+		kind:   "none",
+	}, {
+		name:   "no recorded cwd blocks the resume",
+		target: withPane(func(tg *Target) { tg.Cwd, tg.CwdExists = "", false }),
+		kind:   "none",
+	}, {
+		// A reaped worktree takes the cwd resume resolves transcripts against.
+		name:   "reaped cwd blocks the resume",
+		target: withPane(func(tg *Target) { tg.CwdExists = false }),
+		kind:   "none",
+	}, {
+		// The preconditions gate the kill path too: an orphan whose transcript
+		// is gone must not be killed for a resume that cannot happen.
+		name: "orphan with no transcript is not killed",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOrphan
+			tg.TranscriptExists = false
+		}),
+		kind: "none",
+	}}
 
-	// A row with neither a pane nor a usable id is not actionable.
-	got = DecideAction("", "", "/w/a")
-	if got.Kind != "none" || got.Reason == "" {
-		t.Errorf("empty session id: got %+v, want none with a reason", got)
-	}
-
-	// Short ids that are already <= 8 chars must not be sliced out of range.
-	got = DecideAction("abc", "", "")
-	if got.Kind != "attach" || got.Short != "abc" {
-		t.Errorf("short session id: got %+v, want attach abc", got)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := DecideAction(c.target)
+			if got.Kind != c.kind {
+				t.Fatalf("Kind = %q, want %q (%+v)", got.Kind, c.kind, got)
+			}
+			if got.Pane != c.pane {
+				t.Errorf("Pane = %q, want %q", got.Pane, c.pane)
+			}
+			if got.Short != c.short {
+				t.Errorf("Short = %q, want %q", got.Short, c.short)
+			}
+			if got.Resume != c.resume {
+				t.Errorf("Resume = %q, want %q", got.Resume, c.resume)
+			}
+			if got.KillPID != c.killPID {
+				t.Errorf("KillPID = %d, want %d", got.KillPID, c.killPID)
+			}
+			if c.kind == "none" && got.Reason == "" {
+				t.Error("none without a reason: the pick would look like a no-op")
+			}
+			if c.kind == "attach" || c.kind == "resume" {
+				if got.Cwd != c.target.Cwd {
+					t.Errorf("Cwd = %q, want %q", got.Cwd, c.target.Cwd)
+				}
+			}
+		})
 	}
 }
 
@@ -158,41 +344,216 @@ func TestPaneForSession(t *testing.T) {
 	}
 }
 
-// The resolved pane has to reach DecideAction as if it had come from the ledger,
-// so the pick lands on the switch path. This pins the composition the wiring in
-// Run relies on.
-func TestResolvedPaneRoutesToSwitch(t *testing.T) {
-	agents := []roster.Agent{{SessionID: "live", PID: 200, Kind: "interactive"}}
-	find := func(int) (string, bool) { return "%7", true }
+// fakeMux is a Multiplexer whose pane answers are set per test. Only the
+// lookups reachablePane makes are wired; Switch and OpenSession are the exec
+// one-liners this package does not test.
+type fakeMux struct {
+	panes     map[string]bool // PaneExists
+	find      map[int]string  // FindPane
+	serverPID int             // ServerPID; 0 means "no server"
+}
 
-	pane := paneForSession(agents, "live", find)
-	if act := DecideAction("live", pane, "/w/a"); act.Kind != "switch" || act.Pane != "%7" {
-		t.Errorf("DecideAction with a resolved pane = %+v, want switch to %%7", act)
+func (f *fakeMux) PaneID() string                                 { return "" }
+func (f *fakeMux) RefreshStatus()                                 {}
+func (f *fakeMux) Switch(target string) error                     { return nil }
+func (f *fakeMux) OpenSession(name, cwd string, a []string) error { return nil }
+func (f *fakeMux) FindPane(pid int) (string, bool) {
+	pane, ok := f.find[pid]
+	return pane, ok
+}
+func (f *fakeMux) PaneExists(target string) bool { return f.panes[target] }
+func (f *fakeMux) ServerPID() (int, bool)        { return f.serverPID, f.serverPID > 0 }
+
+// The ledger's pane column is not identity-checked: PaneExists only proves
+// *some* pane on this server has that id, not that it belongs to the picked
+// session. tmux pane ids are a per-server counter that restarts from %0 on a
+// fresh server, so a stale id from a since-replaced server can collide with
+// an unrelated live pane. Whenever the roster can name the session's actual
+// process, its pane is re-derived by walking that process's ancestry instead
+// -- an identity check PaneExists cannot offer -- and the ledger column is
+// used as-is only when the roster itself could not be read (rosterOK is
+// false), never when it was read successfully but simply lists no entry for
+// the session: that absence is evidence the process ended, not a reason to
+// trust a stale id.
+func TestReachablePane(t *testing.T) {
+	live := []roster.Agent{{SessionID: "live", PID: 200, Kind: "interactive"}}
+	dup := []roster.Agent{
+		{SessionID: "dup", PID: 200, Kind: "interactive"},
+		{SessionID: "dup", PID: 201, Kind: "interactive"},
 	}
-	// Without the resolution the same row goes to attach, which is the bug.
-	if act := DecideAction("live", "", "/w/a"); act.Kind != "attach" {
-		t.Errorf("DecideAction without a pane = %+v, want attach", act)
+
+	cases := []struct {
+		name       string
+		agents     []roster.Agent
+		mux        *fakeMux
+		sessionID  string
+		ledgerPane string
+		rosterOK   bool
+		want       string
+	}{{
+		// Gate (a): once the roster names the session's process, its
+		// identity-verified pane wins even over a ledger pane that also
+		// exists on this server -- the ledger id may be an unrelated pane
+		// that happens to collide.
+		name:       "roster-verified pane wins over a live ledger pane",
+		agents:     live,
+		mux:        &fakeMux{panes: map[string]bool{"%3": true}, find: map[int]string{200: "%7"}},
+		sessionID:  "live",
+		ledgerPane: "%3",
+		rosterOK:   true,
+		want:       "%7",
+	}, {
+		name:       "stale ledger pane falls back to re-resolution",
+		agents:     live,
+		mux:        &fakeMux{find: map[int]string{200: "%7"}},
+		sessionID:  "live",
+		ledgerPane: "%3",
+		rosterOK:   true,
+		want:       "%7",
+	}, {
+		// The roster names the process but its ancestry resolves to no pane
+		// at all (e.g. it lives on another server). Even though the ledger id
+		// happens to exist on this server, it must not be trusted: the roster
+		// already had identity to check and it did not confirm this pane.
+		name:       "ledger pane collision with an unrelated live pane is not trusted",
+		agents:     live,
+		mux:        &fakeMux{panes: map[string]bool{"%3": true}},
+		sessionID:  "live",
+		ledgerPane: "%3",
+		rosterOK:   true,
+		want:       "",
+	}, {
+		name:      "empty ledger pane re-resolves",
+		agents:    live,
+		mux:       &fakeMux{find: map[int]string{200: "%7"}},
+		sessionID: "live",
+		rosterOK:  true,
+		want:      "%7",
+	}, {
+		// Gate (b): the ledger pane is the fallback of last resort, used only
+		// when the roster itself could not be read -- there is nothing better
+		// to check identity against.
+		name:       "roster unreadable falls back to the ledger pane",
+		agents:     live,
+		mux:        &fakeMux{panes: map[string]bool{"%9": true}},
+		sessionID:  "gone",
+		ledgerPane: "%9",
+		rosterOK:   false,
+		want:       "%9",
+	}, {
+		// The roster was read successfully and simply has no entry for this
+		// session: that is evidence the process ended, not a reason to trust
+		// a ledger pane that may belong to a since-replaced server. "" here
+		// is what routes DecideAction to the resume path instead of a
+		// possibly-unrelated live pane.
+		name:       "roster read but session absent does not use the ledger pane",
+		agents:     live,
+		mux:        &fakeMux{panes: map[string]bool{"%9": true}},
+		sessionID:  "gone",
+		ledgerPane: "%9",
+		rosterOK:   true,
+		want:       "",
+	}, {
+		name:       "session absent from roster and ledger pane not on this server",
+		agents:     live,
+		mux:        &fakeMux{},
+		sessionID:  "gone",
+		ledgerPane: "%9",
+		rosterOK:   false,
+		want:       "",
+	}, {
+		// A roster entry duplicated under two pids (see Target.RosterMatches)
+		// must not stop pane resolution at the first pid tried.
+		name:      "duplicate roster entries try every pid for a pane",
+		agents:    dup,
+		mux:       &fakeMux{find: map[int]string{201: "%8"}},
+		sessionID: "dup",
+		rosterOK:  true,
+		want:      "%8",
+	}, {
+		// Nothing to look the process up by, and an empty pane column: the row
+		// is not reachable by any pane.
+		name:       "no session id and no ledger pane",
+		agents:     live,
+		mux:        &fakeMux{find: map[int]string{200: "%7"}},
+		ledgerPane: "",
+		rosterOK:   true,
+		want:       "",
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := reachablePane(c.mux, c.agents, c.sessionID, c.ledgerPane, c.rosterOK); got != c.want {
+				t.Errorf("reachablePane = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
-// A failed switch to a resolved pane (paneResolved=true) must not terminate
-// the row: the pane was just confirmed live via the process roster, so the
-// failure says nothing about the session. Only a failed switch to the
-// ledger-recorded pane (paneResolved=false) still warrants it -- that pane's
-// staleness is exactly what the failure is diagnosing. This pins the fix in
-// commit 41eaf2f, which regressed on a live session being terminated after a
-// resolved pane's switch failed.
-func TestSwitchTo(t *testing.T) {
-	failing := func(string) error { return errors.New("no such pane") }
-	okay := func(string) error { return nil }
+// The re-derived pane has to reach DecideAction as if it had come from the
+// ledger, so the pick lands on the switch path rather than on a resume that
+// would kill a session whose pane is right here.
+func TestReachablePaneRoutesToSwitch(t *testing.T) {
+	agents := []roster.Agent{{SessionID: testUUID, PID: 200, Kind: "interactive"}}
+	mux := &fakeMux{find: map[int]string{200: "%7"}}
 
-	if err, terminate := switchTo(failing, "%9", true); err == nil || terminate {
-		t.Errorf("failed switch to a resolved pane: err=%v terminate=%v, want non-nil err, terminate=false", err, terminate)
+	tgt := resumable()
+	tgt.InRoster, tgt.Kind, tgt.PID, tgt.Origin = true, "interactive", 200, originOrphan
+	tgt.Pane = reachablePane(mux, agents, testUUID, "%stale", true)
+
+	if act := DecideAction(tgt); act.Kind != "switch" || act.Pane != "%7" {
+		t.Errorf("DecideAction with a re-derived pane = %+v, want switch to %%7", act)
 	}
-	if err, terminate := switchTo(failing, "%9", false); err == nil || !terminate {
-		t.Errorf("failed switch to a ledger pane: err=%v terminate=%v, want non-nil err, terminate=true", err, terminate)
-	}
-	if err, terminate := switchTo(okay, "%9", false); err != nil || terminate {
-		t.Errorf("successful switch: err=%v terminate=%v, want nil err, terminate=false", err, terminate)
-	}
+}
+
+// The wait after a SIGTERM is what keeps a resume from opening a transcript the
+// dying process is still flushing. It has to be sure the session ended, so an
+// unreadable roster counts as "still there" rather than as "gone".
+func TestWaitGone(t *testing.T) {
+	present := []roster.Agent{{SessionID: "s", PID: 1}}
+	rosterErr := errors.New("claude agents --json: exit 1")
+
+	t.Run("absent immediately", func(t *testing.T) {
+		ticks := 0
+		ok := waitGone("s", func() ([]roster.Agent, error) { return nil, nil }, func() { ticks++ }, 5)
+		if !ok || ticks != 1 {
+			t.Errorf("got (%v, %d ticks), want (true, 1 tick)", ok, ticks)
+		}
+	})
+
+	t.Run("leaves partway through", func(t *testing.T) {
+		reads := 0
+		list := func() ([]roster.Agent, error) {
+			reads++
+			if reads < 3 {
+				return present, nil
+			}
+			return nil, nil
+		}
+		if !waitGone("s", list, func() {}, 5) {
+			t.Error("waitGone = false, want true once the session leaves the roster")
+		}
+	})
+
+	t.Run("never leaves", func(t *testing.T) {
+		ticks := 0
+		ok := waitGone("s", func() ([]roster.Agent, error) { return present, nil }, func() { ticks++ }, 4)
+		if ok || ticks != 4 {
+			t.Errorf("got (%v, %d ticks), want (false, 4 ticks)", ok, ticks)
+		}
+	})
+
+	t.Run("unreadable roster is not proof of death", func(t *testing.T) {
+		if waitGone("s", func() ([]roster.Agent, error) { return nil, rosterErr }, func() {}, 3) {
+			t.Error("waitGone = true on an unreadable roster, want false")
+		}
+	})
+
+	// Another session leaving does not stand in for this one.
+	t.Run("other sessions do not count", func(t *testing.T) {
+		other := []roster.Agent{{SessionID: "t", PID: 2}}
+		if !waitGone("s", func() ([]roster.Agent, error) { return other, nil }, func() {}, 2) {
+			t.Error("waitGone = false when only another session is listed, want true")
+		}
+	})
 }
