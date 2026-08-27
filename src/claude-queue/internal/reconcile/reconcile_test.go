@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
 func TestToClose(t *testing.T) {
@@ -105,5 +106,22 @@ func TestTerminateSessionRemovesRowFromQueue(t *testing.T) {
 	}
 	if !reflect.DeepEqual(remaining, []string{"alive"}) {
 		t.Errorf("queue after sweep = %v, want [alive]", remaining)
+	}
+}
+
+// The projection Sweep feeds to ToClose. An agent without a session id has to be
+// dropped rather than passed through as "": ToClose matches on equality, so a ""
+// in the live set would spare any tracked row that also lost its id.
+func TestSessionIDs(t *testing.T) {
+	got := sessionIDs([]roster.Agent{
+		{SessionID: "a", PID: 1},
+		{SessionID: "", PID: 2},
+		{SessionID: "b", PID: 3},
+	})
+	if !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Errorf("sessionIDs = %v, want [a b]", got)
+	}
+	if got := sessionIDs(nil); len(got) != 0 {
+		t.Errorf("sessionIDs(nil) = %v, want empty", got)
 	}
 }
