@@ -192,6 +192,54 @@ if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_listabs" ]; then
   echo "ok: an absolute seed-list entry fails before the worktree is created"
 else echo "FAIL: absolute list entry accepted rc=$rc"; fail=1; fi
 
+# --- default seeds when cwd is ITSELF a linked worktree of the anchor repo ----
+# The same-repo guard compares via --git-common-dir (not --show-toplevel)
+# specifically so a cwd that is a linked worktree of the repo being anchored to
+# (main_top) still counts as same-repo. None of the tests above exercise the
+# POSITIVE side of that comparison: they run from either the main checkout
+# (where toplevel == main_top trivially, so a --show-toplevel regression would
+# not be caught) or an unrelated repo entirely (already same-repo == false
+# either way). Regressing the comparison to --show-toplevel would make a linked
+# worktree's OWN toplevel -- not the shared repo -- get compared against
+# main_top, silently disabling the default seed for exactly this repo's primary
+# delegation workflow (delegating FROM a linked worktree). Two cases: default
+# anchor, and --self (anchored to the script's own repo).
+
+# Case A: no --self. cwd is a linked worktree of cwdrepo; default anchor
+# (main_top) also resolves to cwdrepo, so the guard must pass and the default
+# seed list in the LINKED WORKTREE's own checkout (seed_top always resolves
+# against cwd, per --seed's existing semantics) must be honored.
+lwdefault="$tmp/cwdrepo-lw-default"
+git -C "$cwdrepo" worktree add -q "$lwdefault" -b lw-default-branch
+mkdir -p "$lwdefault/.claude"
+printf 'mise.local.toml\n' >"$lwdefault/.claude/worktree-seed"
+printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$lwdefault/mise.local.toml"
+
+err="$tmp/lw-default-err"
+out="$(cd "$lwdefault" && "$wt" fromlwdefault 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '_.file' "${cwdrepo}_fromlwdefault/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
+  echo "ok: default seed list is honored when cwd is a linked worktree of the anchor repo"
+else echo "FAIL: linked-worktree default seed rc=$rc out=$out"; fail=1; fi
+
+# Case B: --self. cwd is a linked worktree of scriptrepo; --self anchors to
+# scriptrepo, so the guard must likewise pass and honor that linked worktree's
+# own default seed list.
+lwself="$tmp/scriptrepo-lw-self"
+git -C "$scriptrepo" worktree add -q "$lwself" -b lw-self-branch
+mkdir -p "$lwself/.claude"
+printf 'mise.local.toml\n' >"$lwself/.claude/worktree-seed"
+printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$lwself/mise.local.toml"
+
+err="$tmp/lw-self-err"
+out="$(cd "$lwself" && "$wt" --self fromlwself 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '_.file' "${scriptrepo}_fromlwself/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
+  echo "ok: default seed list is honored when cwd is a linked worktree of the --self-anchored repo"
+else echo "FAIL: linked-worktree --self default seed rc=$rc out=$out"; fail=1; fi
+
 # Removed again so the launch-mode tests below are unaffected by either.
 rm -rf "$cwdrepo/.claude" "$cwdrepo/mise.local.toml"
 
