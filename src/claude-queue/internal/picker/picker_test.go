@@ -2,10 +2,12 @@ package picker
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
 func nowUnix() int64         { return 1_800_000_000 }
@@ -119,5 +121,78 @@ func TestDecideAction(t *testing.T) {
 	got = DecideAction("abc", "", "")
 	if got.Kind != "attach" || got.Short != "abc" {
 		t.Errorf("short session id: got %+v, want attach abc", got)
+	}
+}
+
+// A row whose tmux_pane went NULL still has a live process, and when that
+// process runs in the current tmux server the picker must switch to its pane
+// rather than fall through to `claude attach` -- which only serves background
+// jobs and would silently close a fresh window for an interactive session.
+func TestPaneForSession(t *testing.T) {
+	agents := []roster.Agent{
+		{SessionID: "bg", PID: 100, Kind: "background"},
+		{SessionID: "live", PID: 200, Kind: "interactive"},
+	}
+	// Only pid 200 sits under a pane; 100 is a background agent with none.
+	find := func(pid int) (string, bool) {
+		if pid == 200 {
+			return "%7", true
+		}
+		return "", false
+	}
+
+	if got := paneForSession(agents, "live", find); got != "%7" {
+		t.Errorf("paneForSession(live) = %q, want %%7", got)
+	}
+	// A live agent with no pane must stay empty so DecideAction routes it to
+	// attach, which is the correct path for a background session.
+	if got := paneForSession(agents, "bg", find); got != "" {
+		t.Errorf("paneForSession(bg) = %q, want empty", got)
+	}
+	// A session the roster does not list is already gone; nothing to resolve.
+	if got := paneForSession(agents, "missing", find); got != "" {
+		t.Errorf("paneForSession(missing) = %q, want empty", got)
+	}
+	if got := paneForSession(nil, "live", find); got != "" {
+		t.Errorf("paneForSession over an empty roster = %q, want empty", got)
+	}
+}
+
+// The resolved pane has to reach DecideAction as if it had come from the ledger,
+// so the pick lands on the switch path. This pins the composition the wiring in
+// Run relies on.
+func TestResolvedPaneRoutesToSwitch(t *testing.T) {
+	agents := []roster.Agent{{SessionID: "live", PID: 200, Kind: "interactive"}}
+	find := func(int) (string, bool) { return "%7", true }
+
+	pane := paneForSession(agents, "live", find)
+	if act := DecideAction("live", pane, "/w/a"); act.Kind != "switch" || act.Pane != "%7" {
+		t.Errorf("DecideAction with a resolved pane = %+v, want switch to %%7", act)
+	}
+	// Without the resolution the same row goes to attach, which is the bug.
+	if act := DecideAction("live", "", "/w/a"); act.Kind != "attach" {
+		t.Errorf("DecideAction without a pane = %+v, want attach", act)
+	}
+}
+
+// A failed switch to a resolved pane (paneResolved=true) must not terminate
+// the row: the pane was just confirmed live via the process roster, so the
+// failure says nothing about the session. Only a failed switch to the
+// ledger-recorded pane (paneResolved=false) still warrants it -- that pane's
+// staleness is exactly what the failure is diagnosing. This pins the fix in
+// commit 41eaf2f, which regressed on a live session being terminated after a
+// resolved pane's switch failed.
+func TestSwitchTo(t *testing.T) {
+	failing := func(string) error { return errors.New("no such pane") }
+	okay := func(string) error { return nil }
+
+	if err, terminate := switchTo(failing, "%9", true); err == nil || terminate {
+		t.Errorf("failed switch to a resolved pane: err=%v terminate=%v, want non-nil err, terminate=false", err, terminate)
+	}
+	if err, terminate := switchTo(failing, "%9", false); err == nil || !terminate {
+		t.Errorf("failed switch to a ledger pane: err=%v terminate=%v, want non-nil err, terminate=true", err, terminate)
+	}
+	if err, terminate := switchTo(okay, "%9", false); err != nil || terminate {
+		t.Errorf("successful switch: err=%v terminate=%v, want nil err, terminate=false", err, terminate)
 	}
 }

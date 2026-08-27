@@ -21,6 +21,12 @@ type Multiplexer interface {
 	// there. cwd is the window's working directory. Returns an error when
 	// there is no multiplexer to open a session in.
 	OpenSession(name, cwd string, argv []string) error
+	// FindPane returns the pane pid is running in, walking up the process
+	// tree until a pane matches, so a process started deeper than the pane's
+	// own shell is still located. Reports false when there is no such pane --
+	// including when the multiplexer cannot be queried at all, since neither
+	// case gives the caller a pane to switch to.
+	FindPane(pid int) (string, bool)
 }
 
 // Detect selects an implementation based on environment variables.
@@ -47,3 +53,7 @@ func (noopImpl) Switch(target string) error { return nil }
 func (noopImpl) OpenSession(name, cwd string, argv []string) error {
 	return errors.New("no multiplexer detected")
 }
+
+// FindPane has no panes to search without a multiplexer. Unlike OpenSession this
+// needs no error: "not found" is already the answer the caller acts on.
+func (noopImpl) FindPane(pid int) (string, bool) { return "", false }

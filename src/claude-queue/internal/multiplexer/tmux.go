@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -122,4 +123,85 @@ func windowName(argv []string) string {
 // identical. claude-worktree already uses "_" as its separator for this reason.
 func sanitizeSessionName(name string) string {
 	return strings.NewReplacer(".", "_", ":", "_").Replace(name)
+}
+
+// maxPaneWalk bounds how far up the process tree FindPane looks. A claude
+// process sits a handful of levels below its pane (pane shell -> wrappers ->
+// node), so the limit is generous; it is here to keep a cycle or a mis-reported
+// parent from spinning, not to reject legitimate depth.
+const maxPaneWalk = 10
+
+// FindPane locates the tmux pane pid belongs to, across every session on the
+// server (-a), not just the client's own.
+func (tmuxImpl) FindPane(pid int) (string, bool) {
+	panes, err := listPanes()
+	if err != nil {
+		return "", false
+	}
+	return findPane(pid, panes, parentPID)
+}
+
+// findPane is the walk itself, taking the pane table and the parent lookup as
+// arguments so it can be tested with neither tmux nor ps running.
+//
+// Bailing out at pid <= 1 rather than at 0 alone matters: reaching init means the
+// walk left the pane's subtree, and pid 1's parent is itself on some systems.
+func findPane(pid int, panes map[int]string, parent func(int) (int, bool)) (string, bool) {
+	for depth := 0; depth < maxPaneWalk; depth++ {
+		if pid <= 1 {
+			return "", false
+		}
+		if pane, ok := panes[pid]; ok {
+			return pane, true
+		}
+		next, ok := parent(pid)
+		if !ok {
+			return "", false
+		}
+		pid = next
+	}
+	return "", false
+}
+
+// listPanes maps each pane's pid to its pane id for the whole server.
+func listPanes() (map[int]string, error) {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id}").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parsePanes(string(out)), nil
+}
+
+// parsePanes reads the "#{pane_pid} #{pane_id}" lines listPanes asks for.
+// Unparseable lines are skipped rather than failed on: one odd pane must not
+// cost the caller the rest of the table.
+func parsePanes(out string) map[int]string {
+	panes := map[int]string{}
+	for _, line := range strings.Split(out, "\n") {
+		pidStr, paneID, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil {
+			continue
+		}
+		panes[pid] = paneID
+	}
+	return panes
+}
+
+// parentPID returns pid's parent. This asks ps instead of reading /proc so the
+// walk also works where /proc does not exist (macOS); the cost is a subprocess
+// per level, which the maxPaneWalk bound keeps small.
+func parentPID(pid int) (int, bool) {
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0, false
+	}
+	ppid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, false
+	}
+	return ppid, true
 }

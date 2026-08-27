@@ -42,6 +42,9 @@ func Dispatch(d *Deps, event string, in *Input) error {
 		}
 	}
 
+	// Must stay after upsertSession, which clears terminated_at on every event
+	// (see its doc comment). Same transaction, so the order alone decides whether
+	// a SessionEnd leaves the row closed.
 	if event == "SessionEnd" {
 		if _, err := tx.Exec(
 			"UPDATE sessions SET terminated_at = unixepoch() WHERE session_id = ?",
@@ -69,6 +72,15 @@ func Dispatch(d *Deps, event string, in *Input) error {
 	return nil
 }
 
+// upsertSession creates or refreshes the session row.
+//
+// terminated_at is cleared on EVERY event, not just SessionStart: a live hook
+// event is itself the disproof of a recorded end. `claude --resume <uuid>` keeps
+// the session id, so without this a session that ended once would stay filtered
+// out of the queue view (WHERE terminated_at IS NULL) forever.
+//
+// Dispatch relies on running this BEFORE it re-sets terminated_at for SessionEnd
+// -- both happen in the same transaction, so a genuine end still lands closed.
 func upsertSession(tx *sql.Tx, in *Input, pane string) error {
 	var paneVal interface{}
 	if pane != "" {
@@ -80,7 +92,8 @@ func upsertSession(tx *sql.Tx, in *Input, pane string) error {
 		ON CONFLICT(session_id) DO UPDATE SET
 			tmux_pane       = COALESCE(excluded.tmux_pane, sessions.tmux_pane),
 			cwd             = COALESCE(excluded.cwd, sessions.cwd),
-			transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path)
+			transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path),
+			terminated_at   = NULL
 	`, in.SessionID, paneVal, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath))
 	if err != nil {
 		return fmt.Errorf("upsert session: %w", err)
