@@ -39,7 +39,7 @@ make install
 |---|---|
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
-| `claude-queue picker` | fzf を popup で起動し、選択 session の pane に `tmux switch-client`。pane が無い（background session）行は、その worktree の tmux session（無ければ作成）に window を開いて `claude attach <short-id>` を起動し、client をそこへ移す。session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同じ慣習） |
+| `claude-queue picker` | fzf を popup で起動し、選択 session の pane に `tmux switch-client`。pane 列が空の行はまず `claude agents --json` とプロセス祖先辿りで現行 tmux server 上の pane を再解決し、見つかればそちらへ switch する。再解決できなかった（background session、または pane がこの tmux server の外にある）場合のみ、その worktree の tmux session（無ければ作成）に window を開いて `claude attach <short-id>` を起動し、client をそこへ移す。session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同じ慣習） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない生存扱いの row を terminated にする（picker 起動時に自動実行される） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue --version` | バージョン表示 |
@@ -91,7 +91,7 @@ prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。
 |---|---|
 | status-right が更新されない | `~/.claude/session-queue.db` 存在確認、`claude-queue status` 単体起動 |
 | hook が動かない | `CLAUDE_QUEUE_DEBUG=1` で `~/.claude/session-queue.log` 確認 |
-| picker から jump できない | `sqlite3 ~/.claude/session-queue.db "SELECT tmux_pane FROM sessions WHERE terminated_at IS NULL"` |
+| picker から jump できない | `sqlite3 ~/.claude/session-queue.db "SELECT tmux_pane FROM sessions WHERE terminated_at IS NULL"` で確認。`tmux_pane` が NULL でも picker は pane 再解決を試みるので、これだけでは jump 不能と断定できない。`claude agents --json` で該当 session が生存扱いか、`tmux list-panes -a` にプロセスが実在するかも合わせて見る |
 | DB が壊れた | `claude-queue reset` |
 
 ## Manual verification checklist
@@ -107,6 +107,8 @@ PR 作成時に description に貼って確認：
 - [ ] `C-q q` で popup、Enter で目的 pane にジャンプ、popup 自動閉
 - [ ] `claude --bg` で起動した background session（tmux_pane が NULL）を picker から選択、その worktree の tmux session に window が開いて `claude attach` される（popup を開いた session には増えない）
 - [ ] worktree のサブディレクトリで起動した session が、picker の 2 列目に worktree 名で並ぶ
+- [ ] `tmux_pane` が NULL の interactive session（他 pane の同 tmux server 上に存在するもの）を picker から選ぶと、`claude attach` ではなく再解決した pane へ直接 switch される
+- [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
 - [ ] 同 pane で `/clear` 後、旧 session が view から消える（L3）
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
 - [ ] 2 pane 並行で approve 連打、busy_timeout 超過しない
