@@ -39,7 +39,7 @@ make install
 |---|---|
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
-| `claude-queue picker` | fzf を popup で起動し、選択 session の pane に `tmux switch-client`。pane 列が空の行はまず `claude agents --json` とプロセス祖先辿りで現行 tmux server 上の pane を再解決し、見つかればそちらへ switch する。再解決できなかった（background session、または pane がこの tmux server の外にある）場合のみ、その worktree の tmux session（無ければ作成）に window を開いて `claude attach <short-id>` を起動し、client をそこへ移す。session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同じ慣習） |
+| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない生存扱いの row を terminated にする（picker 起動時に自動実行される） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue --version` | バージョン表示 |
@@ -51,6 +51,34 @@ make install
 | `CLAUDE_QUEUE_DB` | DB パス override（既定 `~/.claude/session-queue.db`） |
 | `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X]` に切替 |
 | `CLAUDE_QUEUE_DEBUG=1` | エラーを `~/.claude/session-queue.log` に追記 |
+
+### picker の到達手段
+
+選択された session への到達手段を次の順で決める。
+
+1. **到達できる pane があれば `tmux switch-client`**。ledger の `tmux_pane` は現行 tmux
+   server に実在するときだけ使い、実在しなければ `claude agents --json` の pid から
+   プロセス祖先を辿って再解決する（`tmux_pane` が NULL の行も同じ経路）。switch が失敗しても
+   row は terminate しない — pane の実在は直前に確認済みなので、失敗は session の死を意味しない
+2. **background session は `claude attach <short-id>`**。その worktree の tmux session
+   （無ければ作成）に window を開き、client をそこへ移す。承認待ちで止まった background
+   委譲先へ入る経路はこれだけ
+3. **pane に到達できない interactive session は `claude --resume <uuid>`**。`claude attach` は
+   background 専用で、interactive に投げると `No job matching` で失敗する。resume は元プロセスを
+   引き継がず別プロセスを立てるので、先にプロセスを終わらせる必要がある。終わらせてよいのは
+   **pane が別 tmux server にあると確定した場合だけ**（`/proc/<pid>/environ` の `TMUX` から
+   server pid を取り、現行 server の pid と比較する）。`TMUX` が無い（tmux 外で起動）・`/proc`
+   が読めない等で確定できないときは、別端末で使用中の可能性があるので何もせず理由を出す。
+   確定したときは SIGTERM を送り roster から消えるまで最大 10 秒待つ。消えなければ resume せず
+   報告して終わる（SIGKILL へは上げない）
+4. **roster に居ない session はそのまま `claude --resume`**。止めるプロセスが無い
+5. **resume は transcript と cwd が実在するときだけ行う**。存在しない uuid を `--resume` に
+   渡してもエラーにならず、その id で空の新規 session が立ってしまう。短命 session は jsonl を
+   書かないので `transcript_path` があってもファイルが無いことがあり、reap 済み worktree の
+   session は cwd 側が消えている。どちらが欠けたかを stderr に出して終わる
+
+session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同じ慣習）。popup を開いた
+時点の current session には作らない。
 
 ## State machine
 
@@ -91,7 +119,7 @@ prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。
 |---|---|
 | status-right が更新されない | `~/.claude/session-queue.db` 存在確認、`claude-queue status` 単体起動 |
 | hook が動かない | `CLAUDE_QUEUE_DEBUG=1` で `~/.claude/session-queue.log` 確認 |
-| picker から jump できない | `sqlite3 ~/.claude/session-queue.db "SELECT tmux_pane FROM sessions WHERE terminated_at IS NULL"` で確認。`tmux_pane` が NULL でも picker は pane 再解決を試みるので、これだけでは jump 不能と断定できない。`claude agents --json` で該当 session が生存扱いか、`tmux list-panes -a` にプロセスが実在するかも合わせて見る |
+| picker から jump できない | picker が理由を stderr に出す（resume できない場合は transcript / cwd のどちらが欠けているかまで出る）。`tmux_pane` 列は NULL でも stale でも picker が再解決を試みるので、DB を見るだけでは jump 不能と断定できない。`claude agents --json` の生存扱いと `tmux list-panes -a` のプロセス実在を合わせて見る |
 | DB が壊れた | `claude-queue reset` |
 
 ## Manual verification checklist
@@ -108,6 +136,9 @@ PR 作成時に description に貼って確認：
 - [ ] `claude --bg` で起動した background session（tmux_pane が NULL）を picker から選択、その worktree の tmux session に window が開いて `claude attach` される（popup を開いた session には増えない）
 - [ ] worktree のサブディレクトリで起動した session が、picker の 2 列目に worktree 名で並ぶ
 - [ ] `tmux_pane` が NULL の interactive session（他 pane の同 tmux server 上に存在するもの）を picker から選ぶと、`claude attach` ではなく再解決した pane へ直接 switch される
+- [ ] `tmux_pane` が別 tmux server の pane を指す interactive session を picker から選ぶと、SIGTERM 後に `claude --resume` で同じ session id のまま会話が復元される
+- [ ] tmux 外で起動した（`TMUX` を持たない）interactive session を picker から選ぶと、kill されず「別端末で使用中の可能性」の理由が出る
+- [ ] transcript が無い / cwd が reap 済みの session を picker から選ぶと、resume されずどちらが欠けたかが出る
 - [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
 - [ ] 同 pane で `/clear` 後、旧 session が view から消える（L3）
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
