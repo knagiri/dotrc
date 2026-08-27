@@ -20,7 +20,7 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"pnpm prisma migrate"}}`, Valid: true},
 		CreatedAt:      nowMinus(120),
 	}
-	got := FormatLine(row, nowUnix(), false)
+	got := FormatLine(row, "everysteel-api", nowUnix(), false)
 	fields := strings.Split(got, "\t")
 	if len(fields) != 7 {
 		t.Fatalf("want 7 tab-separated fields, got %d: %q", len(fields), got)
@@ -29,7 +29,7 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 		t.Errorf("icon = %q, want ⏳", fields[0])
 	}
 	if fields[1] != "everysteel-api" {
-		t.Errorf("cwd basename = %q, want everysteel-api", fields[1])
+		t.Errorf("worktree = %q, want everysteel-api", fields[1])
 	}
 	if !strings.Contains(fields[2], "Bash: pnpm prisma migrate") {
 		t.Errorf("summary = %q", fields[2])
@@ -45,6 +45,29 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 	}
 	if fields[6] != "/home/x/projects/everysteel-api" {
 		t.Errorf("hidden cwd = %q, want the full path", fields[6])
+	}
+}
+
+// The visible column names the worktree, which is not the cwd's basename when
+// the session was started in a subdirectory. Getting the cwd's basename here
+// is the bug this column had: a session recorded under .../src/claude-queue
+// showed up as "claude-queue" and could not be found by its worktree name.
+func TestFormatLine_DeepCwdShowsWorktree(t *testing.T) {
+	const cwd = "/home/x/ghq/github.com/knagiri/dotrc_queue-picker/src/claude-queue"
+	row := db.Row{
+		SessionID:      "s2",
+		Cwd:            sql.NullString{String: cwd, Valid: true},
+		EffectiveState: "idle_done",
+		CreatedAt:      nowMinus(30),
+	}
+	fields := strings.Split(FormatLine(row, "dotrc_queue-picker", nowUnix(), false), "\t")
+	if fields[1] != "dotrc_queue-picker" {
+		t.Errorf("worktree = %q, want dotrc_queue-picker", fields[1])
+	}
+	// The full cwd still rides along hidden: the attach path opens the window
+	// in the directory the session actually ran in.
+	if fields[6] != cwd {
+		t.Errorf("hidden cwd = %q, want %q", fields[6], cwd)
 	}
 }
 

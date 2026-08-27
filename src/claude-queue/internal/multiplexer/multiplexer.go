@@ -16,10 +16,11 @@ type Multiplexer interface {
 	// Switch focuses the pane/target identified by the string returned
 	// from a prior PaneID() call.
 	Switch(target string) error
-	// NewWindow opens a new window running argv with cwd as its working
-	// directory and moves focus to it. Returns an error when there is no
-	// multiplexer to open a window in.
-	NewWindow(cwd string, argv []string) error
+	// OpenSession opens argv in a window of the multiplexer session named
+	// name, creating that session if it does not exist, and moves the client
+	// there. cwd is the window's working directory. Returns an error when
+	// there is no multiplexer to open a session in.
+	OpenSession(name, cwd string, argv []string) error
 }
 
 // Detect selects an implementation based on environment variables.
@@ -40,9 +41,9 @@ func (noopImpl) PaneID() string             { return "" }
 func (noopImpl) RefreshStatus()             {}
 func (noopImpl) Switch(target string) error { return nil }
 
-// NewWindow cannot succeed without a multiplexer, and callers need to know:
+// OpenSession cannot succeed without a multiplexer, and callers need to know:
 // unlike Switch, there is no silent degradation that still gets the user to
 // their session. The error is what makes the caller print a manual fallback.
-func (noopImpl) NewWindow(cwd string, argv []string) error {
+func (noopImpl) OpenSession(name, cwd string, argv []string) error {
 	return errors.New("no multiplexer detected")
 }
