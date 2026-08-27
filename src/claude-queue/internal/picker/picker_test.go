@@ -2,6 +2,7 @@ package picker
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -171,5 +172,27 @@ func TestResolvedPaneRoutesToSwitch(t *testing.T) {
 	// Without the resolution the same row goes to attach, which is the bug.
 	if act := DecideAction("live", "", "/w/a"); act.Kind != "attach" {
 		t.Errorf("DecideAction without a pane = %+v, want attach", act)
+	}
+}
+
+// A failed switch to a resolved pane (paneResolved=true) must not terminate
+// the row: the pane was just confirmed live via the process roster, so the
+// failure says nothing about the session. Only a failed switch to the
+// ledger-recorded pane (paneResolved=false) still warrants it -- that pane's
+// staleness is exactly what the failure is diagnosing. This pins the fix in
+// commit 41eaf2f, which regressed on a live session being terminated after a
+// resolved pane's switch failed.
+func TestSwitchTo(t *testing.T) {
+	failing := func(string) error { return errors.New("no such pane") }
+	okay := func(string) error { return nil }
+
+	if err, terminate := switchTo(failing, "%9", true); err == nil || terminate {
+		t.Errorf("failed switch to a resolved pane: err=%v terminate=%v, want non-nil err, terminate=false", err, terminate)
+	}
+	if err, terminate := switchTo(failing, "%9", false); err == nil || !terminate {
+		t.Errorf("failed switch to a ledger pane: err=%v terminate=%v, want non-nil err, terminate=true", err, terminate)
+	}
+	if err, terminate := switchTo(okay, "%9", false); err != nil || terminate {
+		t.Errorf("successful switch: err=%v terminate=%v, want nil err, terminate=false", err, terminate)
 	}
 }
