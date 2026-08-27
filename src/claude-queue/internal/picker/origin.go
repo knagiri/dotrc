@@ -19,9 +19,11 @@ type serverOrigin int
 const (
 	// originUnknown is the answer whenever the question could not be settled:
 	// /proc is unreadable (a non-Linux host, a process owned by someone else,
-	// a process that exited mid-check), the TMUX value does not parse, or we
-	// have no server pid of our own to compare against. It is deliberately the
-	// zero value, so a Target left unfilled defaults to "do not kill".
+	// a process that exited mid-check), the TMUX value does not parse, we have
+	// no server pid of our own to compare against, or (see originForeignLive)
+	// the other server's liveness itself could not be checked. It is
+	// deliberately the zero value, so a Target left unfilled defaults to "do
+	// not kill".
 	originUnknown serverOrigin = iota
 	// originOutside means the process has no TMUX in its environment: it was
 	// started outside a multiplexer altogether. Not an orphan -- there is a
@@ -32,9 +34,19 @@ const (
 	// unreachable pane means the pane closed while the process lived on.
 	originCurrent
 	// originOrphan means the process belongs to a tmux server that is not
-	// ours. No client of ours can ever reach it, so the conversation is only
-	// recoverable by ending the process and resuming the transcript.
+	// ours, and that other server is confirmed gone (its pid is no longer
+	// running). No client -- ours or anyone else's -- can still be attached to
+	// it, so the conversation is only recoverable by ending the process and
+	// resuming the transcript.
 	originOrphan
+	// originForeignLive means the process belongs to a tmux server that is not
+	// ours, but that server's pid is still running. tmux servers are scoped
+	// per socket (`tmux -L`/`-S`), so a live server we cannot switch-client
+	// into may still have a human attached to it from another terminal. Not
+	// killable: the safety this package exists to provide (never end a
+	// session someone may be using elsewhere) only holds if a still-running
+	// foreign server is treated the same as one we can see is in use.
+	originForeignLive
 )
 
 // String renders the origin for the stderr message explaining why a pick did
@@ -46,7 +58,9 @@ func (o serverOrigin) String() string {
 	case originCurrent:
 		return "on this tmux server, but its pane is gone"
 	case originOrphan:
-		return "on another tmux server"
+		return "on another tmux server, which is no longer running"
+	case originForeignLive:
+		return "on another tmux server that is still running"
 	default:
 		return "on an unknown tmux server"
 	}
@@ -62,12 +76,14 @@ func originOf(pid, currentServerPID int) serverOrigin {
 	if !ok {
 		return originUnknown
 	}
-	return classifyOrigin(environ, currentServerPID)
+	return classifyOrigin(environ, currentServerPID, processAlive)
 }
 
 // classifyOrigin is the rule itself, over the raw NUL-separated environment
-// block, so every branch can be exercised without a live process.
-func classifyOrigin(environ string, currentServerPID int) serverOrigin {
+// block, so every branch can be exercised without a live process. The
+// liveness check for a foreign server's pid is injected rather than reading
+// /proc directly, so it too can be exercised without one.
+func classifyOrigin(environ string, currentServerPID int, alive func(int) bool) serverOrigin {
 	serverPID, ok := tmuxServerPID(environ)
 	if !ok {
 		// No TMUX at all means "outside tmux"; a TMUX that does not parse
@@ -84,7 +100,34 @@ func classifyOrigin(environ string, currentServerPID int) serverOrigin {
 	if serverPID == currentServerPID {
 		return originCurrent
 	}
+	// A different server pid than ours is not enough on its own: tmux servers
+	// are per-socket, so a server we cannot see (`tmux -L other`) can still be
+	// alive and have a human attached to it right now. Only a server that is
+	// confirmed gone may be treated as an orphan; if liveness cannot be
+	// checked, that is the same "cannot tell, so do not kill" answer as any
+	// other unsettled case.
+	if alive == nil {
+		return originUnknown
+	}
+	if alive(serverPID) {
+		return originForeignLive
+	}
 	return originOrphan
+}
+
+// processAlive reports whether pid names a process still running, by testing
+// for /proc/<pid>. Its one blind spot is pid reuse: if the original tmux
+// server already exited and the kernel handed its pid to an unrelated
+// process, this reports "alive" for the wrong process. That misreading still
+// lands on the safe side for classifyOrigin's caller -- do not kill -- so it
+// is left as is rather than chased with a start-time comparison /proc does
+// not expose cheaply.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	_, err := os.Stat("/proc/" + strconv.Itoa(pid))
+	return err == nil
 }
 
 // tmuxServerPID pulls the server pid out of TMUX=<socket>,<serverpid>,<n>.

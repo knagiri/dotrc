@@ -259,14 +259,22 @@ func shortID(sessionID string) string {
 // collision as true. So whenever the roster can identify the session's actual
 // process, its pane is re-derived by walking that process's ancestry
 // (paneForSession) instead -- an identity check the ledger id cannot offer.
-// The ledger pane is used as-is only as a last resort, when the roster has no
-// entry to check identity against (including when it could not be read at
-// all): there is nothing better to fall back to.
-func reachablePane(mux multiplexer.Multiplexer, agents []roster.Agent, sessionID, ledgerPane string) string {
+//
+// The ledger pane is used as-is only when the roster could not be consulted
+// at all (rosterOK is false): there is nothing better to fall back to, and an
+// unreadable roster is not evidence the session ended. It is deliberately
+// NOT used when the roster was read successfully but simply has no entry for
+// sessionID -- that absence is itself evidence the process ended (the same
+// signal reconcile.Sweep acts on), so a ledger pane surviving under a
+// since-replaced server is never that session's pane and trusting it would
+// switch to an unrelated live pane that happens to share the stale id.
+// Returning "" here instead routes DecideAction to the resume path, which is
+// the correct outcome for a session the roster no longer lists.
+func reachablePane(mux multiplexer.Multiplexer, agents []roster.Agent, sessionID, ledgerPane string, rosterOK bool) string {
 	if len(agentsFor(agents, sessionID)) > 0 {
 		return paneForSession(agents, sessionID, mux.FindPane)
 	}
-	if ledgerPane != "" && mux.PaneExists(ledgerPane) {
+	if !rosterOK && ledgerPane != "" && mux.PaneExists(ledgerPane) {
 		return ledgerPane
 	}
 	return ""
@@ -474,7 +482,7 @@ func describeTarget(mux multiplexer.Multiplexer, sessionID, ledgerPane, cwd, tra
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "roster lookup skipped:", err)
 	}
-	pane := reachablePane(mux, agents, sessionID, ledgerPane)
+	pane := reachablePane(mux, agents, sessionID, ledgerPane, err == nil)
 
 	t := Target{
 		SessionID:      sessionID,

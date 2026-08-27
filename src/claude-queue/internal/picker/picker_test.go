@@ -215,6 +215,15 @@ func TestDecideAction(t *testing.T) {
 		}),
 		kind: "none",
 	}, {
+		// A different tmux server pid is not enough: if that server is
+		// confirmed still running, a human may be attached to it from another
+		// terminal (a different socket entirely), so it must not be killed.
+		name: "interactive session on a still-running foreign server is left alone",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originForeignLive
+		}),
+		kind: "none",
+	}, {
 		// /proc unreadable, TMUX unparseable, or no server pid of our own: the
 		// safe answer is the same as for a session in use elsewhere.
 		name: "unknown origin is left alone",
@@ -362,7 +371,10 @@ func (f *fakeMux) ServerPID() (int, bool)        { return f.serverPID, f.serverP
 // an unrelated live pane. Whenever the roster can name the session's actual
 // process, its pane is re-derived by walking that process's ancestry instead
 // -- an identity check PaneExists cannot offer -- and the ledger column is
-// used as-is only when the roster has nothing to check identity against.
+// used as-is only when the roster itself could not be read (rosterOK is
+// false), never when it was read successfully but simply lists no entry for
+// the session: that absence is evidence the process ended, not a reason to
+// trust a stale id.
 func TestReachablePane(t *testing.T) {
 	live := []roster.Agent{{SessionID: "live", PID: 200, Kind: "interactive"}}
 	dup := []roster.Agent{
@@ -376,6 +388,7 @@ func TestReachablePane(t *testing.T) {
 		mux        *fakeMux
 		sessionID  string
 		ledgerPane string
+		rosterOK   bool
 		want       string
 	}{{
 		// Gate (a): once the roster names the session's process, its
@@ -387,6 +400,7 @@ func TestReachablePane(t *testing.T) {
 		mux:        &fakeMux{panes: map[string]bool{"%3": true}, find: map[int]string{200: "%7"}},
 		sessionID:  "live",
 		ledgerPane: "%3",
+		rosterOK:   true,
 		want:       "%7",
 	}, {
 		name:       "stale ledger pane falls back to re-resolution",
@@ -394,6 +408,7 @@ func TestReachablePane(t *testing.T) {
 		mux:        &fakeMux{find: map[int]string{200: "%7"}},
 		sessionID:  "live",
 		ledgerPane: "%3",
+		rosterOK:   true,
 		want:       "%7",
 	}, {
 		// The roster names the process but its ancestry resolves to no pane
@@ -405,29 +420,46 @@ func TestReachablePane(t *testing.T) {
 		mux:        &fakeMux{panes: map[string]bool{"%3": true}},
 		sessionID:  "live",
 		ledgerPane: "%3",
+		rosterOK:   true,
 		want:       "",
 	}, {
 		name:      "empty ledger pane re-resolves",
 		agents:    live,
 		mux:       &fakeMux{find: map[int]string{200: "%7"}},
 		sessionID: "live",
+		rosterOK:  true,
 		want:      "%7",
 	}, {
 		// Gate (b): the ledger pane is the fallback of last resort, used only
-		// when the roster has no entry for this session to check identity
-		// against.
-		name:       "session absent from roster falls back to the ledger pane",
+		// when the roster itself could not be read -- there is nothing better
+		// to check identity against.
+		name:       "roster unreadable falls back to the ledger pane",
 		agents:     live,
 		mux:        &fakeMux{panes: map[string]bool{"%9": true}},
 		sessionID:  "gone",
 		ledgerPane: "%9",
+		rosterOK:   false,
 		want:       "%9",
+	}, {
+		// The roster was read successfully and simply has no entry for this
+		// session: that is evidence the process ended, not a reason to trust
+		// a ledger pane that may belong to a since-replaced server. "" here
+		// is what routes DecideAction to the resume path instead of a
+		// possibly-unrelated live pane.
+		name:       "roster read but session absent does not use the ledger pane",
+		agents:     live,
+		mux:        &fakeMux{panes: map[string]bool{"%9": true}},
+		sessionID:  "gone",
+		ledgerPane: "%9",
+		rosterOK:   true,
+		want:       "",
 	}, {
 		name:       "session absent from roster and ledger pane not on this server",
 		agents:     live,
 		mux:        &fakeMux{},
 		sessionID:  "gone",
 		ledgerPane: "%9",
+		rosterOK:   false,
 		want:       "",
 	}, {
 		// A roster entry duplicated under two pids (see Target.RosterMatches)
@@ -436,6 +468,7 @@ func TestReachablePane(t *testing.T) {
 		agents:    dup,
 		mux:       &fakeMux{find: map[int]string{201: "%8"}},
 		sessionID: "dup",
+		rosterOK:  true,
 		want:      "%8",
 	}, {
 		// Nothing to look the process up by, and an empty pane column: the row
@@ -444,12 +477,13 @@ func TestReachablePane(t *testing.T) {
 		agents:     live,
 		mux:        &fakeMux{find: map[int]string{200: "%7"}},
 		ledgerPane: "",
+		rosterOK:   true,
 		want:       "",
 	}}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := reachablePane(c.mux, c.agents, c.sessionID, c.ledgerPane); got != c.want {
+			if got := reachablePane(c.mux, c.agents, c.sessionID, c.ledgerPane, c.rosterOK); got != c.want {
 				t.Errorf("reachablePane = %q, want %q", got, c.want)
 			}
 		})
@@ -465,7 +499,7 @@ func TestReachablePaneRoutesToSwitch(t *testing.T) {
 
 	tgt := resumable()
 	tgt.InRoster, tgt.Kind, tgt.PID, tgt.Origin = true, "interactive", 200, originOrphan
-	tgt.Pane = reachablePane(mux, agents, testUUID, "%stale")
+	tgt.Pane = reachablePane(mux, agents, testUUID, "%stale", true)
 
 	if act := DecideAction(tgt); act.Kind != "switch" || act.Pane != "%7" {
 		t.Errorf("DecideAction with a re-derived pane = %+v, want switch to %%7", act)

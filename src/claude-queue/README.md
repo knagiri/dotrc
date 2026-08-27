@@ -58,23 +58,25 @@ make install
 
 1. **到達できる pane があれば `tmux switch-client`**。roster に該当 session があれば
    `claude agents --json` の pid からプロセス祖先を辿って pane を解決する（identity 込みの
-   確認）。roster に無いとき（読み取り失敗時など）だけ、ledger の `tmux_pane` が現行 tmux
-   server に実在するかを最後の手段として見る — pane id は server 単位のカウンタで新しい
-   server は `%0` から振り直すため、実在するだけでは同一 session の pane だと確認したことに
-   ならない。switch が失敗しても row は terminate しない — 直前に確認したのは pane の実在
-   （かつ可能なら identity）であって、失敗は switch 自体の問題（client 未接続等）であり
-   session の死を意味しない
+   確認）。ledger の `tmux_pane` を最後の手段として見るのは **roster を読めなかったときだけ**
+   （roster は読めたが該当 session が無い場合は含まない — それはプロセス終了の証拠なので
+   使わない）。pane id は server 単位のカウンタで新しい server は `%0` から振り直すため、
+   実在するだけでは同一 session の pane だと確認したことにならない。switch が失敗しても row は
+   terminate しない — 直前に確認したのは pane の実在（かつ可能なら identity）であって、失敗は
+   switch 自体の問題（client 未接続等）であり session の死を意味しない
 2. **background session は `claude attach <short-id>`**。その worktree の tmux session
    （無ければ作成）に window を開き、client をそこへ移す。承認待ちで止まった background
    委譲先へ入る経路はこれだけ
 3. **pane に到達できない interactive session は `claude --resume <uuid>`**。`claude attach` は
    background 専用で、interactive に投げると `No job matching` で失敗する。resume は元プロセスを
    引き継がず別プロセスを立てるので、先にプロセスを終わらせる必要がある。終わらせてよいのは
-   **pane が別 tmux server にあると確定した場合だけ**（`/proc/<pid>/environ` の `TMUX` から
-   server pid を取り、現行 server の pid と比較する）。`TMUX` が無い（tmux 外で起動）・`/proc`
-   が読めない等で確定できないときは、別端末で使用中の可能性があるので何もせず理由を出す。
-   確定したときは SIGTERM を送り roster から消えるまで最大 10 秒待つ。消えなければ resume せず
-   報告して終わる（SIGKILL へは上げない）
+   **別 tmux server にあると確定し、かつその server が既に無いと確定した場合だけ**
+   （`/proc/<pid>/environ` の `TMUX` から server pid を取り現行 server の pid と比較したうえで、
+   その server pid が `/proc` に残っているかで生死を見る）。tmux server は socket 単位なので、
+   別 server の pid が生きている限り別端末からそこに attach して使用中の可能性が残る。`TMUX` が
+   無い（tmux 外で起動）・`/proc` が読めない・別 server の生死を確定できない等、いずれかが
+   確定できないときは何もせず理由を出す。確定したときは SIGTERM を送り roster から消えるまで
+   最大 10 秒待つ。消えなければ resume せず報告して終わる（SIGKILL へは上げない）
 4. **roster に居ない session はそのまま `claude --resume`**。止めるプロセスが無い
 5. **resume は transcript と cwd が実在するときだけ行う**。存在しない uuid を `--resume` に
    渡してもエラーにならず、その id で空の新規 session が立ってしまう。短命 session は jsonl を
