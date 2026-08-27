@@ -22,11 +22,17 @@
 "Bash(git log * --oneline *)"
 ```
 
-`*` は subcommand より後ろに置く。コマンド名直後（オプションが入る位置）に `*` を置くと、
+`*` は**最初の subcommand より後ろ**に置く。それより前（＝オプションが入る位置）に `*` を置くと、
 **コマンド種別に関わらず**起動時に警告される（実測: `Bash(aws --profile * s3 ls)` /
-`Bash(docker --context * ps)` でも出る）。git はその位置に `-c` / `--exec-path` を挿せるため
-危険度が特に高く、警告文にも git 固有の一文が付く（次節末尾を参照）。subcommand より後ろなら、
-上のように後続に literal トークンが続く多重 wildcard でも警告されない。
+`Bash(docker --context * ps)` でも出る。`*` はコマンド名の直後とは限らず、`--profile` のような
+オプションの後ろでも subcommand より前なら警告対象）。
+
+逆に最初の subcommand より後ろなら、そこにオプションが挟まる形でも警告されない（実測:
+`Bash(uv run --package * ruff format)` は出ない。`run` が subcommand なので `*` はその後ろ）。
+上のように後続に literal トークンが続く多重 wildcard も同様。
+
+git は subcommand より前の位置に `-c` / `--exec-path` を挿せるため危険度が特に高く、警告文にも
+git 固有の一文が付く（次節末尾を参照）。
 
 ### allowlist 不要（auto-allow されるもの）
 
@@ -40,8 +46,8 @@
 等のグローバルオプションにもマッチする。つまり `Bash(git -C * log)` は
 `git -C <path> -c core.pager=<任意コマンド> log` のような呼び出しまで吸い、承認なしの任意コマンド
 実行を通しうる（実質「git のグローバルオプション全部を allow」になる）。Claude Code 2.1.246 は
-この形の rule を起動時に警告する（警告はコマンド名直後の `*` に対してコマンド種別に関わらず出て、
-git ではこの理由に触れる一文が加わる）。
+この形の rule を起動時に警告する（警告は最初の subcommand より前の `*` に対してコマンド種別に
+関わらず出て、git ではこの理由に触れる一文が加わる）。
 
 したがって既定の対処は allowlist の工夫ではなく cwd を直すこと。[working-directory.md](./working-directory.md)
 に従い `/cd <dir>` を頼んで止まる。[worktree-scope.md](./worktree-scope.md) §3 が許す「別 repo の
