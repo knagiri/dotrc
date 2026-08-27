@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
@@ -35,9 +36,11 @@ var ascii = map[string]string{
 // The worktree name comes right after the icon so it starts at a fixed
 // position and stays scannable; the variable-width summary is demoted behind
 // it and left untruncated.
-// Hidden columns: session_id (5), tmux_pane (6), full cwd (7). The full cwd is
-// carried separately from the worktree name because a background session is
-// opened in a window that needs a real working directory.
+// Hidden columns: session_id (5), tmux_pane (6), full cwd (7),
+// transcript_path (8). The full cwd is carried separately from the worktree
+// name because a background session is opened in a window that needs a real
+// working directory; the transcript path rides along because the resume path
+// must not run without confirming the conversation file is actually on disk.
 //
 // worktree is passed in rather than derived here: resolving it needs git (see
 // worktreeName), and keeping FormatLine pure is what lets the column contract
@@ -62,7 +65,10 @@ func FormatLine(row db.Row, worktree string, nowSec int64, asciiMode bool) strin
 		pane = row.TmuxPane.String
 	}
 
-	return strings.Join([]string{icon, worktree, sum, age, row.SessionID, pane, rowCwd(row)}, "\t")
+	return strings.Join([]string{
+		icon, worktree, sum, age,
+		row.SessionID, pane, rowCwd(row), rowTranscript(row),
+	}, "\t")
 }
 
 // rowCwd unwraps the nullable cwd column into the "" that the rest of the
@@ -70,6 +76,15 @@ func FormatLine(row db.Row, worktree string, nowSec int64, asciiMode bool) strin
 func rowCwd(row db.Row) string {
 	if row.Cwd.Valid {
 		return row.Cwd.String
+	}
+	return ""
+}
+
+// rowTranscript unwraps transcript_path the same way; "" means the ledger never
+// recorded one, which the resume path treats as "nothing to resume".
+func rowTranscript(row db.Row) string {
+	if row.TranscriptPath.Valid {
+		return row.TranscriptPath.String
 	}
 	return ""
 }
@@ -89,99 +104,224 @@ func formatAge(sec int64) string {
 	}
 }
 
-// Action is what selecting a picker row should do. Keeping the decision in a
-// pure function separates the routing rule -- which is the part with branches
-// worth testing -- from the exec calls that carry it out.
-type Action struct {
-	Kind   string // "switch" | "attach" | "none"
-	Pane   string // switch: tmux pane id
-	Short  string // attach: 8-char session id, the only form `claude attach` takes
-	Cwd    string // attach: working directory for the new window
-	Reason string // none: message for stderr
+// Target is everything DecideAction needs to know about a picked row: what the
+// ledger recorded, what the live roster says about the session's process, and
+// whether the two files a resume depends on are actually there.
+//
+// Gathering it costs subprocesses and stat calls, all of which stay in Run;
+// this struct is the seam that keeps the routing rule -- the part with branches
+// worth testing -- free of them.
+type Target struct {
+	SessionID      string // full UUID as the ledger holds it
+	Pane           string // pane confirmed reachable on this server, or ""
+	Cwd            string
+	TranscriptPath string
+
+	// RosterOK distinguishes "the roster says this session is not running"
+	// from "the roster could not be read", which is the same distinction
+	// reconcile.Sweep turns on. Only the former is evidence the process ended,
+	// and resuming a session whose process is still alive puts two of them on
+	// one transcript.
+	RosterOK bool
+	InRoster bool
+	Kind     string // roster kind: "interactive" | "background"
+	PID      int
+	Origin   serverOrigin
+
+	TranscriptExists bool
+	CwdExists        bool
 }
 
-// DecideAction routes a selected row. A session tracked with a tmux pane is
-// reached by switching to it. A background session has no pane (it does not
-// inherit $TMUX_PANE), so it is opened with `claude attach` in a fresh window
-// instead -- which is also how a background session blocked on a permission
-// prompt gets answered, since that prompt cannot be routed anywhere else.
-func DecideAction(sessionID, pane, cwd string) Action {
-	if pane != "" {
-		return Action{Kind: "switch", Pane: pane}
+// Action is what selecting a picker row should do.
+type Action struct {
+	Kind    string // "switch" | "attach" | "resume" | "none"
+	Pane    string // switch: tmux pane id
+	Short   string // attach: 8-char session id, the only form `claude attach` takes
+	Cwd     string // attach / resume: working directory for the new window
+	Resume  string // resume: full UUID, the form `claude --resume` needs
+	KillPID int    // resume: pid to SIGTERM first; 0 when no process is left
+	Reason  string // none: message for stderr
+}
+
+// DecideAction routes a selected row, in the order the four reachable states
+// were measured in:
+//
+//  1. A pane we can reach is always the answer -- the session is right there.
+//  2. A background session has no pane (it does not inherit $TMUX_PANE), so it
+//     is opened with `claude attach` in a fresh window. This is also the only
+//     way a background session blocked on a permission prompt gets answered.
+//  3. An interactive session with no reachable pane cannot be attached at all:
+//     `claude attach` serves background jobs only and answers "No job matching
+//     <id>", and because `tmux new-window` reports the status of creating the
+//     window rather than of the command inside it, the window opens, the
+//     command fails, the window closes, and the pick looks like a no-op. The
+//     conversation is recoverable by resuming its transcript instead -- but
+//     `claude --resume` does not take over the running process, it starts a
+//     second one on the same transcript. So the process has to end first, and
+//     that is only safe when its tmux server is provably not ours: anything
+//     else may be a session a human is using in another terminal.
+//  4. A session the roster does not list has no process to displace, so it
+//     resumes directly.
+//
+// Resuming needs the transcript and the working directory to exist, which is
+// checked last so it covers both paths that reach it. `claude --resume` with an
+// id it cannot find does not fail -- it silently starts an empty session under
+// that id -- so an unverified resume would look like success and lose the row.
+func DecideAction(t Target) Action {
+	if t.Pane != "" {
+		return Action{Kind: "switch", Pane: t.Pane}
 	}
-	if sessionID == "" {
+	if t.SessionID == "" {
 		return Action{Kind: "none", Reason: "no tmux pane and no session id recorded"}
 	}
-	short := sessionID
-	if len(short) > 8 {
-		short = short[:8]
+	if !t.RosterOK {
+		return Action{Kind: "none", Reason: "live agent roster unreadable, so the session may still be running: not resuming"}
 	}
-	return Action{Kind: "attach", Short: short, Cwd: cwd}
+	if t.InRoster {
+		if t.Kind == "background" {
+			return Action{Kind: "attach", Short: shortID(t.SessionID), Cwd: t.Cwd}
+		}
+		if t.Origin != originOrphan {
+			return Action{Kind: "none", Reason: fmt.Sprintf(
+				"session %s is running (pid %d, %s) and may be in use in another terminal: not resuming",
+				shortID(t.SessionID), t.PID, t.Origin)}
+		}
+		if t.PID <= 0 {
+			return Action{Kind: "none", Reason: "session runs on another tmux server but the roster recorded no pid to end it with"}
+		}
+	}
+	if reason := resumeBlocked(t); reason != "" {
+		return Action{Kind: "none", Reason: reason}
+	}
+	act := Action{Kind: "resume", Resume: t.SessionID, Cwd: t.Cwd}
+	if t.InRoster {
+		act.KillPID = t.PID
+	}
+	return act
 }
 
-// resolvePane re-derives the tmux pane of a picked row the ledger recorded none
-// for, by locating the live agent's process in the current tmux server.
-//
-// The pane column is not authoritative: it goes NULL for reasons not yet pinned
-// down, and an interactive session whose row lost its pane cannot be reached by
-// the attach fallback at all. `claude attach` only knows background jobs and
-// answers "No job matching <id>", while `tmux new-window` reports the exit status
-// of the window creation and not of the command inside it -- so the window opens,
-// the command fails, the window closes, and the pick looks like a no-op with
-// nothing printed. Walking the process tree recovers the pane instead; measured
-// against sessions that did record one, it agrees exactly.
-//
-// Called for the single picked row only, never for the whole list: roster.List
-// costs a subprocess and the panes of rows the user did not select are never
-// needed. An unreadable roster leaves the pane empty, which drops back to the
-// attach path -- the behaviour before this lookup existed.
-func resolvePane(mux multiplexer.Multiplexer, sessionID string) string {
-	if sessionID == "" {
-		return ""
-	}
-	agents, err := roster.List()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "pane lookup skipped:", err)
-		return ""
-	}
-	return paneForSession(agents, sessionID, mux.FindPane)
-}
-
-// paneForSession is the lookup itself, taking the pane finder as an argument so
-// the roster-to-pane wiring can be tested without tmux.
-func paneForSession(agents []roster.Agent, sessionID string, find func(int) (string, bool)) string {
-	for _, a := range agents {
-		if a.SessionID != sessionID {
-			continue
-		}
-		if pane, ok := find(a.PID); ok {
-			return pane
-		}
-		// The session is live but outside this tmux server (a session that
-		// outlived the server it started in, or a background agent that never
-		// had a pane). Looking at later entries cannot help: session ids are
-		// unique in the roster.
-		return ""
+// resumeBlocked names the missing precondition for a resume, or "" when there
+// is none. Both are on disk rather than in the ledger, so the ledger having
+// recorded a path is only half the check.
+func resumeBlocked(t Target) string {
+	switch {
+	case t.TranscriptPath == "":
+		return "cannot resume: the ledger recorded no transcript path for this session"
+	case !t.TranscriptExists:
+		return "cannot resume: transcript " + t.TranscriptPath + " is not on disk (the session ended before writing one)"
+	case t.Cwd == "":
+		return "cannot resume: the ledger recorded no working directory for this session"
+	case !t.CwdExists:
+		return "cannot resume: working directory " + t.Cwd + " no longer exists (its worktree was reaped)"
 	}
 	return ""
 }
 
-// switchTo performs the tmux switch to a picked pane and decides whether a
-// failure should terminate the row in the ledger. Pulled out of Run's
-// "switch" case so the decision -- the part with a branch worth testing --
-// can be exercised without tmux; sw is mux.Switch in production.
-func switchTo(sw func(string) error, pane string, paneResolved bool) (err error, terminate bool) {
-	err = sw(pane)
-	if err == nil {
-		return nil, false
+// shortID truncates a session id to the 8 chars `claude attach` takes, and the
+// form every message about a session uses.
+func shortID(sessionID string) string {
+	if len(sessionID) > 8 {
+		return sessionID[:8]
 	}
-	// A pane resolvePane found was confirmed live moments ago via both the
-	// process roster and the current tmux pane table -- a failed switch to it
-	// says nothing about the session's liveness (same reasoning as the attach
-	// path below, which never terminates on a failed open). Only the
-	// ledger-recorded pane, whose staleness is exactly what "pane likely gone"
-	// is diagnosing, still warrants terminating on failure.
-	return err, !paneResolved
+	return sessionID
+}
+
+// reachablePane returns a pane of the current server the picked row can be
+// switched to, preferring the one the ledger recorded and falling back to
+// re-deriving it from the live process. "" means neither is reachable.
+//
+// The pane column is not authoritative in either direction. It goes NULL for
+// reasons not yet pinned down, and it also keeps pointing at panes of a tmux
+// server that has since been replaced -- 44 of 48 live rows measured were in
+// that state. So a recorded pane is checked against the server's pane table
+// before being trusted, rather than switched to blind: a failed switch used to
+// be read as "the session died" and closed a row whose session was fine.
+//
+// Walking the process tree recovers the pane where the recorded one is unusable;
+// measured against sessions that did record a valid one, it agrees exactly.
+func reachablePane(mux multiplexer.Multiplexer, agents []roster.Agent, sessionID, ledgerPane string) string {
+	if ledgerPane != "" && mux.PaneExists(ledgerPane) {
+		return ledgerPane
+	}
+	return paneForSession(agents, sessionID, mux.FindPane)
+}
+
+// paneForSession is the process-tree lookup itself, taking the pane finder as an
+// argument so the roster-to-pane wiring can be tested without tmux.
+func paneForSession(agents []roster.Agent, sessionID string, find func(int) (string, bool)) string {
+	a, ok := agentFor(agents, sessionID)
+	if !ok {
+		return ""
+	}
+	if pane, found := find(a.PID); found {
+		return pane
+	}
+	// The session is live but outside this tmux server (a session that
+	// outlived the server it started in, or a background agent that never had
+	// a pane). Which of the two it is decides whether the session may be
+	// killed and resumed, and that is originOf's question, not this one's.
+	return ""
+}
+
+// agentFor finds a session in the roster. Session ids are unique there, so the
+// first match is the only one.
+func agentFor(agents []roster.Agent, sessionID string) (roster.Agent, bool) {
+	if sessionID == "" {
+		return roster.Agent{}, false
+	}
+	for _, a := range agents {
+		if a.SessionID == sessionID {
+			return a, true
+		}
+	}
+	return roster.Agent{}, false
+}
+
+// killPollAttempts and killPollInterval bound the wait for a SIGTERM'd session
+// to leave the roster: 10s in half-second steps. Claude flushes its transcript
+// on the way out, so resuming before it is gone would reopen a half-written
+// conversation -- and would also be the two-processes-one-transcript state the
+// kill exists to avoid.
+const (
+	killPollAttempts = 20
+	killPollInterval = 500 * time.Millisecond
+)
+
+// endSession asks pid to exit and waits for the roster to stop listing
+// sessionID.
+//
+// SIGTERM only, never SIGKILL: a session that ignores the signal is a session
+// still holding its transcript, and forcing it out risks losing the very
+// conversation the resume is trying to recover. Refusing to resume is the
+// conservative answer -- the user keeps a live process and an intact transcript
+// and can decide what to do with them.
+func endSession(pid int, sessionID string) error {
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("SIGTERM to pid %d: %w", pid, err)
+	}
+	if !waitGone(sessionID, roster.List, func() { time.Sleep(killPollInterval) }, killPollAttempts) {
+		return fmt.Errorf("session %s is still in the roster after SIGTERM to pid %d", shortID(sessionID), pid)
+	}
+	return nil
+}
+
+// waitGone polls until the roster stops listing sessionID, with the roster read
+// and the sleep injected so the loop is testable without a process to kill.
+//
+// A roster that cannot be read counts as "still there": it is not evidence the
+// session ended, and the whole point of the wait is to be sure it did.
+func waitGone(sessionID string, list func() ([]roster.Agent, error), tick func(), attempts int) bool {
+	for i := 0; i < attempts; i++ {
+		tick()
+		agents, err := list()
+		if err != nil {
+			continue
+		}
+		if _, ok := agentFor(agents, sessionID); !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Run is the CLI entrypoint for `claude-queue picker`.
@@ -237,28 +377,26 @@ func Run(args []string) {
 	}
 
 	fields := strings.Split(selected, "\t")
-	if len(fields) < 7 {
+	if len(fields) < 8 {
 		return
 	}
 	sessionID := strings.TrimSpace(fields[4])
-	pane := strings.TrimSpace(fields[5])
+	ledgerPane := strings.TrimSpace(fields[5])
 	cwd := strings.TrimSpace(fields[6])
+	transcript := strings.TrimSpace(fields[7])
 
 	mux := multiplexer.Detect()
-	paneResolved := false
-	if pane == "" {
-		pane = resolvePane(mux, sessionID)
-		paneResolved = pane != ""
-	}
-	switch act := DecideAction(sessionID, pane, cwd); act.Kind {
+
+	switch act := DecideAction(describeTarget(mux, sessionID, ledgerPane, cwd, transcript)); act.Kind {
 	case "switch":
-		if switchErr, terminate := switchTo(mux.Switch, act.Pane, paneResolved); switchErr != nil {
-			fmt.Fprintf(os.Stderr, "switch failed (pane likely gone): %v\n", switchErr)
-			if terminate {
-				if termErr := db.TerminateSession(conn, sessionID); termErr != nil {
-					fmt.Fprintln(os.Stderr, "terminate:", termErr)
-				}
-			}
+		// A failed switch does not terminate the row. Every pane that reaches
+		// here was confirmed present in this server's pane table moments ago
+		// (see reachablePane), so a failure is about the switch itself -- no
+		// client attached, a pane closed in between -- and not evidence that
+		// the session died. Closing rows is reconcile.Sweep's job, and it
+		// decides from the authoritative roster instead of from a guess.
+		if err := mux.Switch(act.Pane); err != nil {
+			fmt.Fprintf(os.Stderr, "switch to %s failed: %v\n", act.Pane, err)
 		}
 	case "attach":
 		// Open the session belonging to the row's worktree, not whichever
@@ -273,9 +411,75 @@ func Run(args []string) {
 		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, []string{"claude", "attach", act.Short}); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: claude attach %s\n", err, act.Short)
 		}
+	case "resume":
+		// Reopen the conversation from its transcript. `claude --resume` keeps
+		// the session id, so the ledger row survives the restart rather than
+		// being replaced by a second one. The full UUID is required: the short
+		// form is what `claude attach` takes, not this.
+		if act.KillPID != 0 {
+			if err := endSession(act.KillPID, act.Resume); err != nil {
+				fmt.Fprintf(os.Stderr, "not resuming: %v\n", err)
+				return
+			}
+		}
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, []string{"claude", "--resume", act.Resume}); err != nil {
+			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && claude --resume %s\n", err, act.Cwd, act.Resume)
+		}
 	default:
 		fmt.Fprintln(os.Stderr, act.Reason)
 	}
+}
+
+// describeTarget gathers the state DecideAction routes on: the reachable pane,
+// the live roster's view of the session, and whether the resume preconditions
+// hold on disk.
+//
+// The roster is read once here for both the pane lookup and the routing, since
+// each read costs a subprocess. It is read for the single picked row only: the
+// panes of rows the user did not select are never needed.
+func describeTarget(mux multiplexer.Multiplexer, sessionID, ledgerPane, cwd, transcript string) Target {
+	agents, err := roster.List()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "roster lookup skipped:", err)
+	}
+	pane := reachablePane(mux, agents, sessionID, ledgerPane)
+
+	t := Target{
+		SessionID:      sessionID,
+		Pane:           pane,
+		Cwd:            cwd,
+		TranscriptPath: transcript,
+		RosterOK:       err == nil,
+
+		TranscriptExists: isFile(transcript),
+		CwdExists:        isDir(cwd),
+	}
+	if a, ok := agentFor(agents, sessionID); ok {
+		t.InRoster, t.Kind, t.PID = true, a.Kind, a.PID
+		if pane == "" {
+			// Only asked when the pane is unreachable: that is the one case
+			// where the process's tmux server changes what we may do to it.
+			serverPID, _ := mux.ServerPID()
+			t.Origin = originOf(a.PID, serverPID)
+		}
+	}
+	return t
+}
+
+func isFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
+}
+
+func isDir(path string) bool {
+	if path == "" {
+		return false
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }
 
 func runFzf(input string) (string, error) {
