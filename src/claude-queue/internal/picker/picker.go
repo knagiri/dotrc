@@ -166,6 +166,24 @@ func paneForSession(agents []roster.Agent, sessionID string, find func(int) (str
 	return ""
 }
 
+// switchTo performs the tmux switch to a picked pane and decides whether a
+// failure should terminate the row in the ledger. Pulled out of Run's
+// "switch" case so the decision -- the part with a branch worth testing --
+// can be exercised without tmux; sw is mux.Switch in production.
+func switchTo(sw func(string) error, pane string, paneResolved bool) (err error, terminate bool) {
+	err = sw(pane)
+	if err == nil {
+		return nil, false
+	}
+	// A pane resolvePane found was confirmed live moments ago via both the
+	// process roster and the current tmux pane table -- a failed switch to it
+	// says nothing about the session's liveness (same reasoning as the attach
+	// path below, which never terminates on a failed open). Only the
+	// ledger-recorded pane, whose staleness is exactly what "pane likely gone"
+	// is diagnosing, still warrants terminating on failure.
+	return err, !paneResolved
+}
+
 // Run is the CLI entrypoint for `claude-queue picker`.
 func Run(args []string) {
 	fs := flag.NewFlagSet("picker", flag.ExitOnError)
@@ -234,16 +252,9 @@ func Run(args []string) {
 	}
 	switch act := DecideAction(sessionID, pane, cwd); act.Kind {
 	case "switch":
-		if err := mux.Switch(act.Pane); err != nil {
-			fmt.Fprintf(os.Stderr, "switch failed (pane likely gone): %v\n", err)
-			// A pane resolvePane found was confirmed live moments ago via both
-			// the process roster and the current tmux pane table -- a failed
-			// switch to it says nothing about the session's liveness (same
-			// reasoning as the attach path below, which never terminates on a
-			// failed open). Only the ledger-recorded pane, whose staleness is
-			// exactly what "pane likely gone" is diagnosing, still warrants
-			// terminating on failure.
-			if !paneResolved {
+		if switchErr, terminate := switchTo(mux.Switch, act.Pane, paneResolved); switchErr != nil {
+			fmt.Fprintf(os.Stderr, "switch failed (pane likely gone): %v\n", switchErr)
+			if terminate {
 				if termErr := db.TerminateSession(conn, sessionID); termErr != nil {
 					fmt.Fprintln(os.Stderr, "terminate:", termErr)
 				}
