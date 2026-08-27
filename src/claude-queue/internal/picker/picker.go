@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,14 +30,18 @@ var ascii = map[string]string{
 }
 
 // FormatLine renders one queue row as a tab-delimited line for fzf.
-// Visible columns (--with-nth=1,2,3,4): icon, cwd-basename, summary, age.
-// cwd-basename (the worktree dir name) comes right after the icon so it
-// starts at a fixed position and stays scannable; the variable-width summary
-// is demoted behind it and left untruncated.
+// Visible columns (--with-nth=1,2,3,4): icon, worktree, summary, age.
+// The worktree name comes right after the icon so it starts at a fixed
+// position and stays scannable; the variable-width summary is demoted behind
+// it and left untruncated.
 // Hidden columns: session_id (5), tmux_pane (6), full cwd (7). The full cwd is
-// carried separately from the basename because a background session is opened
-// in a new window that needs a real working directory.
-func FormatLine(row db.Row, nowSec int64, asciiMode bool) string {
+// carried separately from the worktree name because a background session is
+// opened in a window that needs a real working directory.
+//
+// worktree is passed in rather than derived here: resolving it needs git (see
+// worktreeName), and keeping FormatLine pure is what lets the column contract
+// be asserted without a repository on disk.
+func FormatLine(row db.Row, worktree string, nowSec int64, asciiMode bool) string {
 	icons := emoji
 	if asciiMode {
 		icons = ascii
@@ -51,16 +54,6 @@ func FormatLine(row db.Row, nowSec int64, asciiMode bool) string {
 		Payload:        row.Payload.String,
 	})
 
-	cwdFull := ""
-	if row.Cwd.Valid {
-		cwdFull = row.Cwd.String
-	}
-
-	cwdBase := ""
-	if cwdFull != "" {
-		cwdBase = filepath.Base(cwdFull)
-	}
-
 	age := formatAge(nowSec - row.CreatedAt)
 
 	pane := ""
@@ -68,7 +61,16 @@ func FormatLine(row db.Row, nowSec int64, asciiMode bool) string {
 		pane = row.TmuxPane.String
 	}
 
-	return strings.Join([]string{icon, cwdBase, sum, age, row.SessionID, pane, cwdFull}, "\t")
+	return strings.Join([]string{icon, worktree, sum, age, row.SessionID, pane, rowCwd(row)}, "\t")
+}
+
+// rowCwd unwraps the nullable cwd column into the "" that the rest of the
+// picker treats as "no working directory recorded".
+func rowCwd(row db.Row) string {
+	if row.Cwd.Valid {
+		return row.Cwd.String
+	}
+	return ""
 }
 
 func formatAge(sec int64) string {
@@ -157,8 +159,9 @@ func Run(args []string) {
 	var buf bytes.Buffer
 	now := time.Now().Unix()
 	asciiMode := os.Getenv("CLAUDE_QUEUE_ASCII") == "1"
+	names := worktreeCache{}
 	for _, r := range rows {
-		buf.WriteString(FormatLine(r, now, asciiMode))
+		buf.WriteString(FormatLine(r, names.name(rowCwd(r)), now, asciiMode))
 		buf.WriteByte('\n')
 	}
 
@@ -185,11 +188,18 @@ func Run(args []string) {
 			}
 		}
 	case "attach":
+		// Open the session belonging to the row's worktree, not whichever
+		// session the popup happened to be invoked from -- that is what keeps
+		// "1 worktree = 1 tmux session" (the gts / claude-worktree convention)
+		// intact. The cache lookup is a hit: the name was already resolved to
+		// render this row.
+		//
 		// Do NOT terminate the session on failure the way the pane path does:
 		// a failed window open says nothing about whether the session is alive,
 		// and the manual command still works.
-		if err := mux.NewWindow(act.Cwd, []string{"claude", "attach", act.Short}); err != nil {
-			fmt.Fprintf(os.Stderr, "new window failed: %v\nrun: claude attach %s\n", err, act.Short)
+		session := sanitizeSessionName(names.name(act.Cwd))
+		if err := mux.OpenSession(session, act.Cwd, []string{"claude", "attach", act.Short}); err != nil {
+			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: claude attach %s\n", err, act.Short)
 		}
 	default:
 		fmt.Fprintln(os.Stderr, act.Reason)
