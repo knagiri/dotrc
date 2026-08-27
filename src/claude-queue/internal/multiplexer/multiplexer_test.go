@@ -56,8 +56,10 @@ func TestPaneListed(t *testing.T) {
 	if !paneListed(panes, "%7") {
 		t.Error("paneListed(%7) = false, want true")
 	}
-	// A pane of a tmux server that has since been replaced: this is the state
-	// 44 of 48 measured live rows were in.
+	// A pane of a tmux server that has since been replaced: this is common
+	// because the pane id column keeps whatever value it had when the server
+	// that owned it was still running, and a fresh server restarts pane ids
+	// from %0.
 	if paneListed(panes, "%99") {
 		t.Error("paneListed(%99) = true, want false")
 	}
