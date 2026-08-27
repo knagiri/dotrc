@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
 func nowUnix() int64         { return 1_800_000_000 }
@@ -119,5 +120,56 @@ func TestDecideAction(t *testing.T) {
 	got = DecideAction("abc", "", "")
 	if got.Kind != "attach" || got.Short != "abc" {
 		t.Errorf("short session id: got %+v, want attach abc", got)
+	}
+}
+
+// A row whose tmux_pane went NULL still has a live process, and when that
+// process runs in the current tmux server the picker must switch to its pane
+// rather than fall through to `claude attach` -- which only serves background
+// jobs and would silently close a fresh window for an interactive session.
+func TestPaneForSession(t *testing.T) {
+	agents := []roster.Agent{
+		{SessionID: "bg", PID: 100, Kind: "background"},
+		{SessionID: "live", PID: 200, Kind: "interactive"},
+	}
+	// Only pid 200 sits under a pane; 100 is a background agent with none.
+	find := func(pid int) (string, bool) {
+		if pid == 200 {
+			return "%7", true
+		}
+		return "", false
+	}
+
+	if got := paneForSession(agents, "live", find); got != "%7" {
+		t.Errorf("paneForSession(live) = %q, want %%7", got)
+	}
+	// A live agent with no pane must stay empty so DecideAction routes it to
+	// attach, which is the correct path for a background session.
+	if got := paneForSession(agents, "bg", find); got != "" {
+		t.Errorf("paneForSession(bg) = %q, want empty", got)
+	}
+	// A session the roster does not list is already gone; nothing to resolve.
+	if got := paneForSession(agents, "missing", find); got != "" {
+		t.Errorf("paneForSession(missing) = %q, want empty", got)
+	}
+	if got := paneForSession(nil, "live", find); got != "" {
+		t.Errorf("paneForSession over an empty roster = %q, want empty", got)
+	}
+}
+
+// The resolved pane has to reach DecideAction as if it had come from the ledger,
+// so the pick lands on the switch path. This pins the composition the wiring in
+// Run relies on.
+func TestResolvedPaneRoutesToSwitch(t *testing.T) {
+	agents := []roster.Agent{{SessionID: "live", PID: 200, Kind: "interactive"}}
+	find := func(int) (string, bool) { return "%7", true }
+
+	pane := paneForSession(agents, "live", find)
+	if act := DecideAction("live", pane, "/w/a"); act.Kind != "switch" || act.Pane != "%7" {
+		t.Errorf("DecideAction with a resolved pane = %+v, want switch to %%7", act)
+	}
+	// Without the resolution the same row goes to attach, which is the bug.
+	if act := DecideAction("live", "", "/w/a"); act.Kind != "attach" {
+		t.Errorf("DecideAction without a pane = %+v, want attach", act)
 	}
 }
