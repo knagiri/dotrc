@@ -115,6 +115,134 @@ if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] \
   echo "ok: repeated --seed and directory seeds replace rather than nest on reseed"
 else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
 
+# --- default seeds declared in .claude/worktree-seed ---------------------------
+# A repo names the gitignored files a delegate cannot work without (the config
+# supplying its GitHub token, a local .env) in .claude/worktree-seed, and they
+# are copied without --seed being given. Terms differ from an explicit --seed in
+# one place: a listed path that is absent here is skipped, not fatal.
+
+# No list at all -> unchanged behavior (nothing copied, worktree still created).
+out="$(cd "$cwdrepo" && "$wt" nolist 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}_nolist" ]; then
+  echo "ok: no .claude/worktree-seed is a no-op"
+else echo "FAIL: absent seed list rc=$rc out=$out"; fail=1; fi
+
+mkdir -p "$cwdrepo/.claude"
+# Blank lines, a comment, and an entry this checkout does not have are all in the
+# list on purpose: the first two must be ignored and the third must be SKIPPED,
+# because the list is written once for the repo while any checkout may lack an
+# entry. An explicit --seed of the same missing path would abort instead.
+cat >"$cwdrepo/.claude/worktree-seed" <<'LIST'
+# a comment line
+
+mise.local.toml
+does/not/exist.env
+LIST
+printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$cwdrepo/mise.local.toml"
+
+err="$tmp/list-default-err"
+out="$(cd "$cwdrepo" && "$wt" listdefault 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '_.file' "${cwdrepo}_listdefault/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ] \
+   && [ ! -e "${cwdrepo}_listdefault/does" ]; then
+  echo "ok: listed paths are seeded, missing ones skipped, comments ignored"
+else echo "FAIL: seed list rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
+
+# Naming a listed path explicitly as well must not copy or log it twice.
+err="$tmp/list-explicit-err"
+out="$(cd "$cwdrepo" && "$wt" --seed mise.local.toml listexplicit 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '_.file' "${cwdrepo}_listexplicit/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
+  echo "ok: a listed path also passed as --seed is not seeded twice"
+else echo "FAIL: list/--seed overlap rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
+
+# The default list is scoped to same-repo: --self anchors the WORKTREE to the
+# SCRIPT repo while the list still lives in cwd's (unrelated) repo, so it must
+# NOT be read -- otherwise an unrelated cwd repo's list (e.g. naming a secret
+# file that repo happens to have) would leak into the anchor repo's worktree
+# with no explicit request from the caller. Explicit --seed is unaffected.
+out="$(cd "$cwdrepo" && "$wt" --self selfnolist 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_selfnolist" ] \
+   && [ ! -e "${scriptrepo}_selfnolist/mise.local.toml" ]; then
+  echo "ok: --self does not read an unrelated cwd repo's default seed list"
+else echo "FAIL: --self default-seed leak rc=$rc out=$out present?=$([ -e "${scriptrepo}_selfnolist/mise.local.toml" ] && echo yes || echo no)"; fail=1; fi
+
+out="$(cd "$cwdrepo" && "$wt" --self --seed mise.local.toml selfexplicitseed 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_selfexplicitseed" ] \
+   && grep -Fq '_.file' "${scriptrepo}_selfexplicitseed/mise.local.toml" 2>/dev/null; then
+  echo "ok: --self with explicit --seed still copies from cwd's checkout"
+else echo "FAIL: --self explicit --seed rc=$rc out=$out"; fail=1; fi
+
+# An entry escaping the checkout has no relative path in the worktree. Unlike a
+# merely absent entry this is a bug in a committed, reviewed file, so it must
+# fail loudly -- and before the worktree exists.
+printf '../outside.md\n' >"$cwdrepo/.claude/worktree-seed"
+(cd "$cwdrepo" && "$wt" listescape) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_listescape" ]; then
+  echo "ok: a seed-list entry outside the checkout fails before the worktree is created"
+else echo "FAIL: escaping list entry accepted rc=$rc"; fail=1; fi
+
+# An absolute entry is rejected outright (same committed-and-reviewed reasoning
+# as the escaping-entry case above), before the worktree is created.
+printf '/etc/passwd\n' >"$cwdrepo/.claude/worktree-seed"
+(cd "$cwdrepo" && "$wt" listabs) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_listabs" ]; then
+  echo "ok: an absolute seed-list entry fails before the worktree is created"
+else echo "FAIL: absolute list entry accepted rc=$rc"; fail=1; fi
+
+# --- default seeds when cwd is ITSELF a linked worktree of the anchor repo ----
+# The same-repo guard compares via --git-common-dir (not --show-toplevel)
+# specifically so a cwd that is a linked worktree of the repo being anchored to
+# (main_top) still counts as same-repo. None of the tests above exercise the
+# POSITIVE side of that comparison: they run from either the main checkout
+# (where toplevel == main_top trivially, so a --show-toplevel regression would
+# not be caught) or an unrelated repo entirely (already same-repo == false
+# either way). Regressing the comparison to --show-toplevel would make a linked
+# worktree's OWN toplevel -- not the shared repo -- get compared against
+# main_top, silently disabling the default seed for exactly this repo's primary
+# delegation workflow (delegating FROM a linked worktree). Two cases: default
+# anchor, and --self (anchored to the script's own repo).
+
+# Case A: no --self. cwd is a linked worktree of cwdrepo; default anchor
+# (main_top) also resolves to cwdrepo, so the guard must pass and the default
+# seed list in the LINKED WORKTREE's own checkout (seed_top always resolves
+# against cwd, per --seed's existing semantics) must be honored.
+lwdefault="$tmp/cwdrepo-lw-default"
+git -C "$cwdrepo" worktree add -q "$lwdefault" -b lw-default-branch
+mkdir -p "$lwdefault/.claude"
+printf 'mise.local.toml\n' >"$lwdefault/.claude/worktree-seed"
+printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$lwdefault/mise.local.toml"
+
+err="$tmp/lw-default-err"
+out="$(cd "$lwdefault" && "$wt" fromlwdefault 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '_.file' "${cwdrepo}_fromlwdefault/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
+  echo "ok: default seed list is honored when cwd is a linked worktree of the anchor repo"
+else echo "FAIL: linked-worktree default seed rc=$rc out=$out"; fail=1; fi
+
+# Case B: --self. cwd is a linked worktree of scriptrepo; --self anchors to
+# scriptrepo, so the guard must likewise pass and honor that linked worktree's
+# own default seed list.
+lwself="$tmp/scriptrepo-lw-self"
+git -C "$scriptrepo" worktree add -q "$lwself" -b lw-self-branch
+mkdir -p "$lwself/.claude"
+printf 'mise.local.toml\n' >"$lwself/.claude/worktree-seed"
+printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$lwself/mise.local.toml"
+
+err="$tmp/lw-self-err"
+out="$(cd "$lwself" && "$wt" --self fromlwself 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Fq '_.file' "${scriptrepo}_fromlwself/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
+  echo "ok: default seed list is honored when cwd is a linked worktree of the --self-anchored repo"
+else echo "FAIL: linked-worktree --self default seed rc=$rc out=$out"; fail=1; fi
+
+# Removed again so the launch-mode tests below are unaffected by either.
+rm -rf "$cwdrepo/.claude" "$cwdrepo/mise.local.toml"
+
 # --- session-launch mode (with a prompt) --------------------------------------
 # We can't reproduce real tmux/claude behavior, so we stub `tmux` on PATH: it
 # fails `has-session` (so the script proceeds) and records `new-session`'s argv
