@@ -17,7 +17,27 @@ type Row struct {
 	Payload        sql.NullString
 	CreatedAt      int64
 	Priority       int
+
+	// PriorState is the state the session was last in before it ended, and is
+	// set only for the resumable rows -- a live row's own RawState already says
+	// what it is doing. It is what separates "the host went down mid-task" from
+	// "the work was finished and the session closed", which decides both the
+	// resumable ordering and what the summary column says.
+	PriorState sql.NullString
 }
+
+// StateResumable is the pseudo effective_state of a terminated row that
+// `claude --resume` can reopen. It is not a state any hook writes: the ledger
+// only knows 'ended', and this names the subset of ended rows worth offering.
+const StateResumable = "resumable"
+
+// priorityResumable / priorityResumableIdle sort the resumable rows behind
+// every live one -- the queue view's own priorities top out at 5 -- and, among
+// themselves, put the sessions that were interrupted mid-task first.
+const (
+	priorityResumable     = 6
+	priorityResumableIdle = 7
+)
 
 // ListOpts filters the queue listing.
 type ListOpts struct {
@@ -62,7 +82,8 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	}
 	q := fmt.Sprintf(`
 		SELECT session_id, tmux_pane, cwd, transcript_path,
-		       event_type, raw_state, effective_state, payload, created_at, priority
+		       event_type, raw_state, effective_state, payload, created_at, priority,
+		       NULL AS prior_state
 		FROM queue
 		WHERE %s
 		ORDER BY priority ASC, created_at DESC
@@ -72,14 +93,69 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
 	}
-	defer rows.Close()
+	return scanRows(rows)
+}
 
+// ResumableCandidates returns the terminated rows whose conversation
+// `claude --resume` could reopen, ordered to follow the live rows: interrupted
+// sessions first, newest first within each group.
+//
+// This is only the half of the test that SQL can answer. A resume also needs
+// the transcript and the working directory to still be on disk, and the ledger
+// having recorded a path is no evidence of that -- short-lived sessions never
+// write a jsonl, and a reaped worktree takes the cwd with it. Callers must run
+// the surviving candidates past a filesystem check (picker.filterResumable)
+// before offering them, because `claude --resume` with an id it cannot find
+// starts an empty session under that id instead of failing.
+//
+// The reason filter is what keeps the list to sessions that were CUT OFF. A
+// SessionEnd carrying reason 'prompt_input_exit' is a human closing the REPL at
+// a stopping point, so it is excluded; every other end is either a signal
+// (SIGTERM, `claude stop`, the host going down) or a ForcedEnd synthesised by
+// reconcile after a session vanished without notice, and those are the ones
+// worth offering back. json_valid guards the extract because a SessionEnd with
+// no reason stores an empty payload string, which json_extract rejects as
+// malformed rather than reading as absent.
+func ResumableCandidates(conn *sql.DB) ([]Row, error) {
+	rows, err := conn.Query(`
+		SELECT s.session_id, s.tmux_pane, s.cwd, s.transcript_path,
+		       e.event_type, e.state AS raw_state, ? AS effective_state,
+		       e.payload, e.created_at,
+		       CASE WHEN p.state IN ('working', 'awaiting_approval') THEN ? ELSE ? END AS priority,
+		       p.state AS prior_state
+		FROM events e
+		JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
+		  ON e.id = l.mid
+		JOIN sessions s ON s.session_id = e.session_id
+		LEFT JOIN events p ON p.id = (
+		  SELECT MAX(id) FROM events
+		  WHERE session_id = e.session_id AND id < e.id AND state != 'ended'
+		)
+		WHERE s.terminated_at IS NOT NULL
+		  AND e.state = 'ended'
+		  AND COALESCE(
+		        CASE WHEN json_valid(e.payload) THEN json_extract(e.payload, '$.reason') END,
+		        ''
+		      ) != 'prompt_input_exit'
+		ORDER BY priority ASC, e.created_at DESC
+	`, StateResumable, priorityResumable, priorityResumableIdle)
+	if err != nil {
+		return nil, fmt.Errorf("list resumable: %w", err)
+	}
+	return scanRows(rows)
+}
+
+// scanRows drains a query shaped like the column list both listings select, and
+// closes it. Shared so the two cannot drift apart in column order.
+func scanRows(rows *sql.Rows) ([]Row, error) {
+	defer rows.Close()
 	var out []Row
 	for rows.Next() {
 		var r Row
 		if err := rows.Scan(
 			&r.SessionID, &r.TmuxPane, &r.Cwd, &r.TranscriptPath,
 			&r.EventType, &r.RawState, &r.EffectiveState, &r.Payload, &r.CreatedAt, &r.Priority,
+			&r.PriorState,
 		); err != nil {
 			return nil, err
 		}

@@ -61,6 +61,23 @@ func TestSummaryForStale(t *testing.T) {
 	}
 }
 
+// A resumable row's own state is 'ended' and its payload holds only the end
+// reason, so the prior state is the only thing that distinguishes one of these
+// rows from another.
+func TestSummaryForResumable(t *testing.T) {
+	got := Summarize(Input{EffectiveState: "resumable", RawState: "ended", PriorState: "working"})
+	if got != "resumable (was working)" {
+		t.Errorf("got %q, want %q", got, "resumable (was working)")
+	}
+}
+
+func TestSummaryForResumable_NoPriorState(t *testing.T) {
+	got := Summarize(Input{EffectiveState: "resumable", RawState: "ended"})
+	if got != "resumable" {
+		t.Errorf("got %q, want %q", got, "resumable")
+	}
+}
+
 func TestTruncateWidth_JapanesePreservesWidth(t *testing.T) {
 	got := TruncateWidth("あいうえおかきくけこ", 6)
 	if got != "あいう" {
