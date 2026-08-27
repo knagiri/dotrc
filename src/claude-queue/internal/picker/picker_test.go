@@ -188,6 +188,17 @@ func TestDecideAction(t *testing.T) {
 		kind:  "attach",
 		short: "abc",
 	}, {
+		// `claude agents --json` has been observed to list the same session id
+		// under two pids at once -- the duplicate-transcript state a resume
+		// must not create. There is no single pid to act on without guessing,
+		// so this refuses rather than kill one of the two arbitrarily.
+		name: "duplicate roster entries are not touched",
+		target: withPane(func(tg *Target) {
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOrphan
+			tg.RosterMatches, tg.DuplicatePIDs = 2, []int{4242, 5252}
+		}),
+		kind: "none",
+	}, {
 		// The one case that may kill: the process provably belongs to a tmux
 		// server no client of ours can reach.
 		name: "orphan interactive session is ended then resumed",
@@ -344,48 +355,93 @@ func (f *fakeMux) FindPane(pid int) (string, bool) {
 func (f *fakeMux) PaneExists(target string) bool { return f.panes[target] }
 func (f *fakeMux) ServerPID() (int, bool)        { return f.serverPID, f.serverPID > 0 }
 
-// The ledger's pane column keeps pointing at panes of tmux servers that have
-// since been replaced, so a recorded pane is only usable if this server still
-// lists it. When it does not, the pane is re-derived from the live process --
-// otherwise a stale pane would be switched to and its failure misread as the
-// session having died.
+// The ledger's pane column is not identity-checked: PaneExists only proves
+// *some* pane on this server has that id, not that it belongs to the picked
+// session. tmux pane ids are a per-server counter that restarts from %0 on a
+// fresh server, so a stale id from a since-replaced server can collide with
+// an unrelated live pane. Whenever the roster can name the session's actual
+// process, its pane is re-derived by walking that process's ancestry instead
+// -- an identity check PaneExists cannot offer -- and the ledger column is
+// used as-is only when the roster has nothing to check identity against.
 func TestReachablePane(t *testing.T) {
-	agents := []roster.Agent{{SessionID: "live", PID: 200, Kind: "interactive"}}
+	live := []roster.Agent{{SessionID: "live", PID: 200, Kind: "interactive"}}
+	dup := []roster.Agent{
+		{SessionID: "dup", PID: 200, Kind: "interactive"},
+		{SessionID: "dup", PID: 201, Kind: "interactive"},
+	}
 
 	cases := []struct {
 		name       string
+		agents     []roster.Agent
 		mux        *fakeMux
 		sessionID  string
 		ledgerPane string
 		want       string
 	}{{
-		name:       "live ledger pane is used as is",
+		// Gate (a): once the roster names the session's process, its
+		// identity-verified pane wins even over a ledger pane that also
+		// exists on this server -- the ledger id may be an unrelated pane
+		// that happens to collide.
+		name:       "roster-verified pane wins over a live ledger pane",
+		agents:     live,
 		mux:        &fakeMux{panes: map[string]bool{"%3": true}, find: map[int]string{200: "%7"}},
 		sessionID:  "live",
 		ledgerPane: "%3",
-		want:       "%3",
+		want:       "%7",
 	}, {
-		// Gate (b): a non-empty pane column is no longer trusted on its own.
 		name:       "stale ledger pane falls back to re-resolution",
+		agents:     live,
 		mux:        &fakeMux{find: map[int]string{200: "%7"}},
 		sessionID:  "live",
 		ledgerPane: "%3",
 		want:       "%7",
 	}, {
-		name:       "stale ledger pane with no live pane resolves to nothing",
-		mux:        &fakeMux{},
+		// The roster names the process but its ancestry resolves to no pane
+		// at all (e.g. it lives on another server). Even though the ledger id
+		// happens to exist on this server, it must not be trusted: the roster
+		// already had identity to check and it did not confirm this pane.
+		name:       "ledger pane collision with an unrelated live pane is not trusted",
+		agents:     live,
+		mux:        &fakeMux{panes: map[string]bool{"%3": true}},
 		sessionID:  "live",
 		ledgerPane: "%3",
 		want:       "",
 	}, {
 		name:      "empty ledger pane re-resolves",
+		agents:    live,
 		mux:       &fakeMux{find: map[int]string{200: "%7"}},
 		sessionID: "live",
 		want:      "%7",
 	}, {
+		// Gate (b): the ledger pane is the fallback of last resort, used only
+		// when the roster has no entry for this session to check identity
+		// against.
+		name:       "session absent from roster falls back to the ledger pane",
+		agents:     live,
+		mux:        &fakeMux{panes: map[string]bool{"%9": true}},
+		sessionID:  "gone",
+		ledgerPane: "%9",
+		want:       "%9",
+	}, {
+		name:       "session absent from roster and ledger pane not on this server",
+		agents:     live,
+		mux:        &fakeMux{},
+		sessionID:  "gone",
+		ledgerPane: "%9",
+		want:       "",
+	}, {
+		// A roster entry duplicated under two pids (see Target.RosterMatches)
+		// must not stop pane resolution at the first pid tried.
+		name:      "duplicate roster entries try every pid for a pane",
+		agents:    dup,
+		mux:       &fakeMux{find: map[int]string{201: "%8"}},
+		sessionID: "dup",
+		want:      "%8",
+	}, {
 		// Nothing to look the process up by, and an empty pane column: the row
 		// is not reachable by any pane.
 		name:       "no session id and no ledger pane",
+		agents:     live,
 		mux:        &fakeMux{find: map[int]string{200: "%7"}},
 		ledgerPane: "",
 		want:       "",
@@ -393,7 +449,7 @@ func TestReachablePane(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := reachablePane(c.mux, agents, c.sessionID, c.ledgerPane); got != c.want {
+			if got := reachablePane(c.mux, c.agents, c.sessionID, c.ledgerPane); got != c.want {
 				t.Errorf("reachablePane = %q, want %q", got, c.want)
 			}
 		})

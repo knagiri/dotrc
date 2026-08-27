@@ -56,10 +56,14 @@ make install
 
 選択された session への到達手段を次の順で決める。
 
-1. **到達できる pane があれば `tmux switch-client`**。ledger の `tmux_pane` は現行 tmux
-   server に実在するときだけ使い、実在しなければ `claude agents --json` の pid から
-   プロセス祖先を辿って再解決する（`tmux_pane` が NULL の行も同じ経路）。switch が失敗しても
-   row は terminate しない — pane の実在は直前に確認済みなので、失敗は session の死を意味しない
+1. **到達できる pane があれば `tmux switch-client`**。roster に該当 session があれば
+   `claude agents --json` の pid からプロセス祖先を辿って pane を解決する（identity 込みの
+   確認）。roster に無いとき（読み取り失敗時など）だけ、ledger の `tmux_pane` が現行 tmux
+   server に実在するかを最後の手段として見る — pane id は server 単位のカウンタで新しい
+   server は `%0` から振り直すため、実在するだけでは同一 session の pane だと確認したことに
+   ならない。switch が失敗しても row は terminate しない — 直前に確認したのは pane の実在
+   （かつ可能なら identity）であって、失敗は switch 自体の問題（client 未接続等）であり
+   session の死を意味しない
 2. **background session は `claude attach <short-id>`**。その worktree の tmux session
    （無ければ作成）に window を開き、client をそこへ移す。承認待ちで止まった background
    委譲先へ入る経路はこれだけ

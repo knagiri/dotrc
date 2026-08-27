@@ -128,6 +128,17 @@ type Target struct {
 	PID      int
 	Origin   serverOrigin
 
+	// RosterMatches is how many roster entries carry SessionID. `claude agents
+	// --json` has been observed to list the same session id under two pids
+	// (a resume that raced a still-running process onto the same transcript,
+	// which is exactly the state this package must not create). >1 means
+	// identity is ambiguous: acting on "the" pid would pick one of the two
+	// arbitrarily, so DecideAction refuses instead of guessing.
+	RosterMatches int
+	// DuplicatePIDs holds every pid RosterMatches counted, for the "none"
+	// message when RosterMatches > 1.
+	DuplicatePIDs []int
+
 	TranscriptExists bool
 	CwdExists        bool
 }
@@ -176,6 +187,16 @@ func DecideAction(t Target) Action {
 	}
 	if !t.RosterOK {
 		return Action{Kind: "none", Reason: "live agent roster unreadable, so the session may still be running: not resuming"}
+	}
+	if t.RosterMatches > 1 {
+		// The roster already has two processes on this session id -- the
+		// duplicate-transcript state a resume must not create. There is no
+		// single pid a kill or an attach can target without guessing which
+		// entry is the "real" one, so the conservative answer is to leave
+		// both alone and report what was seen.
+		return Action{Kind: "none", Reason: fmt.Sprintf(
+			"session %s appears %d times in the live roster (pids %v): not touching it",
+			shortID(t.SessionID), t.RosterMatches, t.DuplicatePIDs)}
 	}
 	if t.InRoster {
 		if t.Kind == "background" {
@@ -227,34 +248,42 @@ func shortID(sessionID string) string {
 }
 
 // reachablePane returns a pane of the current server the picked row can be
-// switched to, preferring the one the ledger recorded and falling back to
-// re-deriving it from the live process. "" means neither is reachable.
+// switched to. "" means none is reachable.
 //
-// The pane column is not authoritative in either direction. It goes NULL for
-// reasons not yet pinned down, and it also keeps pointing at panes of a tmux
-// server that has since been replaced -- 44 of 48 live rows measured were in
-// that state. So a recorded pane is checked against the server's pane table
-// before being trusted, rather than switched to blind: a failed switch used to
-// be read as "the session died" and closed a row whose session was fine.
-//
-// Walking the process tree recovers the pane where the recorded one is unusable;
-// measured against sessions that did record a valid one, it agrees exactly.
+// The ledger's pane column is never trusted on its own. `PaneExists` is only a
+// membership test against the current server's pane table -- it does not
+// confirm the pane belongs to *this* session -- and tmux pane ids are a
+// per-server counter that a fresh server restarts from %0. A stale id
+// recorded under a since-replaced server therefore collides with an unrelated
+// live pane on the current one almost certainly, and PaneExists reports that
+// collision as true. So whenever the roster can identify the session's actual
+// process, its pane is re-derived by walking that process's ancestry
+// (paneForSession) instead -- an identity check the ledger id cannot offer.
+// The ledger pane is used as-is only as a last resort, when the roster has no
+// entry to check identity against (including when it could not be read at
+// all): there is nothing better to fall back to.
 func reachablePane(mux multiplexer.Multiplexer, agents []roster.Agent, sessionID, ledgerPane string) string {
+	if len(agentsFor(agents, sessionID)) > 0 {
+		return paneForSession(agents, sessionID, mux.FindPane)
+	}
 	if ledgerPane != "" && mux.PaneExists(ledgerPane) {
 		return ledgerPane
 	}
-	return paneForSession(agents, sessionID, mux.FindPane)
+	return ""
 }
 
 // paneForSession is the process-tree lookup itself, taking the pane finder as an
 // argument so the roster-to-pane wiring can be tested without tmux.
+//
+// It tries every roster entry for sessionID, not just the first: `claude
+// agents --json` has been observed to list the same session id twice (see
+// Target.RosterMatches), and stopping at the first entry risks missing the
+// one pid that actually resolves to a pane.
 func paneForSession(agents []roster.Agent, sessionID string, find func(int) (string, bool)) string {
-	a, ok := agentFor(agents, sessionID)
-	if !ok {
-		return ""
-	}
-	if pane, found := find(a.PID); found {
-		return pane
+	for _, a := range agentsFor(agents, sessionID) {
+		if pane, found := find(a.PID); found {
+			return pane
+		}
 	}
 	// The session is live but outside this tmux server (a session that
 	// outlived the server it started in, or a background agent that never had
@@ -263,18 +292,21 @@ func paneForSession(agents []roster.Agent, sessionID string, find func(int) (str
 	return ""
 }
 
-// agentFor finds a session in the roster. Session ids are unique there, so the
-// first match is the only one.
-func agentFor(agents []roster.Agent, sessionID string) (roster.Agent, bool) {
+// agentsFor returns every roster entry for sessionID. Session ids are not
+// guaranteed unique there -- see Target.RosterMatches -- so callers that act
+// on identity (pane resolution, kill, resume) need to see all of them rather
+// than assume the first is the only one.
+func agentsFor(agents []roster.Agent, sessionID string) []roster.Agent {
 	if sessionID == "" {
-		return roster.Agent{}, false
+		return nil
 	}
+	var matches []roster.Agent
 	for _, a := range agents {
 		if a.SessionID == sessionID {
-			return a, true
+			matches = append(matches, a)
 		}
 	}
-	return roster.Agent{}, false
+	return matches
 }
 
 // killPollAttempts and killPollInterval bound the wait for a SIGTERM'd session
@@ -317,7 +349,7 @@ func waitGone(sessionID string, list func() ([]roster.Agent, error), tick func()
 		if err != nil {
 			continue
 		}
-		if _, ok := agentFor(agents, sessionID); !ok {
+		if len(agentsFor(agents, sessionID)) == 0 {
 			return true
 		}
 	}
@@ -454,7 +486,15 @@ func describeTarget(mux multiplexer.Multiplexer, sessionID, ledgerPane, cwd, tra
 		TranscriptExists: isFile(transcript),
 		CwdExists:        isDir(cwd),
 	}
-	if a, ok := agentFor(agents, sessionID); ok {
+	matches := agentsFor(agents, sessionID)
+	t.RosterMatches = len(matches)
+	if t.RosterMatches > 1 {
+		for _, a := range matches {
+			t.DuplicatePIDs = append(t.DuplicatePIDs, a.PID)
+		}
+	}
+	if len(matches) > 0 {
+		a := matches[0]
 		t.InRoster, t.Kind, t.PID = true, a.Kind, a.PID
 		if pane == "" {
 			// Only asked when the pane is unreachable: that is the one case
