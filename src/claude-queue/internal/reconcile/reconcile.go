@@ -15,13 +15,12 @@ package reconcile
 
 import (
 	"database/sql"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
 // ToClose returns the tracked session ids that the live roster does not list,
@@ -43,25 +42,28 @@ func ToClose(tracked, live []string) []string {
 	return out
 }
 
-// roster returns the session ids reported by `claude agents --json`.
-func roster() ([]string, error) {
-	out, err := exec.Command("claude", "agents", "--json").Output()
+// liveIDs returns the session ids of the live agent roster. The error from
+// roster.List is passed through untouched: Sweep's contract turns on being able
+// to tell "the roster is empty" from "the roster could not be read".
+func liveIDs() ([]string, error) {
+	agents, err := roster.List()
 	if err != nil {
-		return nil, fmt.Errorf("claude agents --json: %w", err)
+		return nil, err
 	}
-	var agents []struct {
-		SessionID string `json:"sessionId"`
-	}
-	if err := json.Unmarshal(out, &agents); err != nil {
-		return nil, fmt.Errorf("parse roster: %w", err)
-	}
+	return sessionIDs(agents), nil
+}
+
+// sessionIDs projects the roster onto its session ids, dropping entries that
+// carry none -- an id-less agent can never match a tracked row, and letting ""
+// through would make it match every row whose id failed to be recorded.
+func sessionIDs(agents []roster.Agent) []string {
 	ids := make([]string, 0, len(agents))
 	for _, a := range agents {
 		if a.SessionID != "" {
 			ids = append(ids, a.SessionID)
 		}
 	}
-	return ids, nil
+	return ids
 }
 
 // Sweep matches the ledger against the live roster and terminates every tracked
@@ -72,7 +74,7 @@ func roster() ([]string, error) {
 // died, and treating it as one would terminate every tracked session at once.
 // Callers are expected to skip the pass on error rather than fail.
 func Sweep(conn *sql.DB) (int, error) {
-	live, err := roster()
+	live, err := liveIDs()
 	if err != nil {
 		return 0, err
 	}

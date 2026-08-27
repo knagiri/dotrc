@@ -201,3 +201,88 @@ func TestWindowName(t *testing.T) {
 		})
 	}
 }
+
+// findPane is exercised through its injected lookups so the walk is asserted
+// without a tmux server or a real process tree.
+func TestFindPane(t *testing.T) {
+	panes := map[int]string{100: "%3", 200: "%7"}
+
+	// chain models `ps -o ppid=`: 104 -> 103 -> 102 -> 100 (a pane pid).
+	chain := map[int]int{104: 103, 103: 102, 102: 100, 300: 1}
+	parent := func(pid int) (int, bool) {
+		ppid, ok := chain[pid]
+		return ppid, ok
+	}
+
+	t.Run("the pane pid itself matches", func(t *testing.T) {
+		got, ok := findPane(200, panes, parent)
+		if !ok || got != "%7" {
+			t.Errorf("findPane(200) = (%q, %v), want (%%7, true)", got, ok)
+		}
+	})
+
+	t.Run("a descendant matches via its ancestor", func(t *testing.T) {
+		// This is the case the picker depends on: the claude process is several
+		// levels below the shell tmux recorded as the pane's pid.
+		got, ok := findPane(104, panes, parent)
+		if !ok || got != "%3" {
+			t.Errorf("findPane(104) = (%q, %v), want (%%3, true)", got, ok)
+		}
+	})
+
+	t.Run("no pane in the ancestry", func(t *testing.T) {
+		// Walking out to init means the process is not under any pane.
+		if got, ok := findPane(300, panes, parent); ok {
+			t.Errorf("findPane(300) = (%q, true), want not found", got)
+		}
+	})
+
+	t.Run("an unknown parent stops the walk", func(t *testing.T) {
+		if got, ok := findPane(999, panes, parent); ok {
+			t.Errorf("findPane(999) = (%q, true), want not found", got)
+		}
+	})
+
+	t.Run("pid at or below init is never searched", func(t *testing.T) {
+		for _, pid := range []int{1, 0, -1} {
+			if got, ok := findPane(pid, map[int]string{1: "%1", 0: "%0"}, parent); ok {
+				t.Errorf("findPane(%d) = (%q, true), want not found", pid, got)
+			}
+		}
+	})
+
+	t.Run("the depth limit cuts a long chain off", func(t *testing.T) {
+		// A parent chain that only reaches the pane beyond maxPaneWalk must be
+		// abandoned rather than followed forever.
+		deep := func(pid int) (int, bool) { return pid + 1, true }
+		if got, ok := findPane(1000, map[int]string{1000 + maxPaneWalk: "%9"}, deep); ok {
+			t.Errorf("findPane past the depth limit = (%q, true), want not found", got)
+		}
+		// One step inside the limit still resolves, which is what shows the
+		// cutoff above is the limit and not an off-by-one that never matches.
+		if got, ok := findPane(1000, map[int]string{1000 + maxPaneWalk - 1: "%9"}, deep); !ok || got != "%9" {
+			t.Errorf("findPane at the last allowed depth = (%q, %v), want (%%9, true)", got, ok)
+		}
+	})
+}
+
+func TestParsePanes(t *testing.T) {
+	// Real `tmux list-panes -a -F "#{pane_pid} #{pane_id}"` output, plus the
+	// trailing newline it always ends with.
+	got := parsePanes("2249851 %0\n198617 %12\n")
+	want := map[int]string{2249851: "%0", 198617: "%12"}
+	if len(got) != len(want) {
+		t.Fatalf("parsePanes = %v, want %v", got, want)
+	}
+	for pid, pane := range want {
+		if got[pid] != pane {
+			t.Errorf("parsePanes[%d] = %q, want %q", pid, got[pid], pane)
+		}
+	}
+
+	// Lines tmux would never emit must be skipped, not turned into a 0 pid that
+	// the walk could then match against.
+	if got := parsePanes("junk\n\nnotapid %1\n42 %2\n"); len(got) != 1 || got[42] != "%2" {
+		t.Errorf("parsePanes with junk lines = %v, want only 42:%%2", got)
+	}
+}

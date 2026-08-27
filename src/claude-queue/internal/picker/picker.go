@@ -12,6 +12,7 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/summary"
 )
 
@@ -118,6 +119,53 @@ func DecideAction(sessionID, pane, cwd string) Action {
 	return Action{Kind: "attach", Short: short, Cwd: cwd}
 }
 
+// resolvePane re-derives the tmux pane of a picked row the ledger recorded none
+// for, by locating the live agent's process in the current tmux server.
+//
+// The pane column is not authoritative: it goes NULL for reasons not yet pinned
+// down, and an interactive session whose row lost its pane cannot be reached by
+// the attach fallback at all. `claude attach` only knows background jobs and
+// answers "No job matching <id>", while `tmux new-window` reports the exit status
+// of the window creation and not of the command inside it -- so the window opens,
+// the command fails, the window closes, and the pick looks like a no-op with
+// nothing printed. Walking the process tree recovers the pane instead; measured
+// against sessions that did record one, it agrees exactly.
+//
+// Called for the single picked row only, never for the whole list: roster.List
+// costs a subprocess and the panes of rows the user did not select are never
+// needed. An unreadable roster leaves the pane empty, which drops back to the
+// attach path -- the behaviour before this lookup existed.
+func resolvePane(mux multiplexer.Multiplexer, sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	agents, err := roster.List()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pane lookup skipped:", err)
+		return ""
+	}
+	return paneForSession(agents, sessionID, mux.FindPane)
+}
+
+// paneForSession is the lookup itself, taking the pane finder as an argument so
+// the roster-to-pane wiring can be tested without tmux.
+func paneForSession(agents []roster.Agent, sessionID string, find func(int) (string, bool)) string {
+	for _, a := range agents {
+		if a.SessionID != sessionID {
+			continue
+		}
+		if pane, ok := find(a.PID); ok {
+			return pane
+		}
+		// The session is live but outside this tmux server (a session that
+		// outlived the server it started in, or a background agent that never
+		// had a pane). Looking at later entries cannot help: session ids are
+		// unique in the roster.
+		return ""
+	}
+	return ""
+}
+
 // Run is the CLI entrypoint for `claude-queue picker`.
 func Run(args []string) {
 	fs := flag.NewFlagSet("picker", flag.ExitOnError)
@@ -179,6 +227,9 @@ func Run(args []string) {
 	cwd := strings.TrimSpace(fields[6])
 
 	mux := multiplexer.Detect()
+	if pane == "" {
+		pane = resolvePane(mux, sessionID)
+	}
 	switch act := DecideAction(sessionID, pane, cwd); act.Kind {
 	case "switch":
 		if err := mux.Switch(act.Pane); err != nil {
