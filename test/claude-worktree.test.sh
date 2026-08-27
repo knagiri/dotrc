@@ -115,41 +115,60 @@ if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] \
   echo "ok: repeated --seed and directory seeds replace rather than nest on reseed"
 else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
 
-# --- default seed: mise.local.toml --------------------------------------------
-# A delegate is expected to open PRs, so the GitHub token mise exports has to
-# reach it -- which means the checkout's mise.local.toml has to. It is seeded
-# without being asked for, but on terms opposite to an explicit --seed: absence
-# is a no-op, because most checkouts have none.
+# --- default seeds declared in .claude/worktree-seed ---------------------------
+# A repo names the gitignored files a delegate cannot work without (the config
+# supplying its GitHub token, a local .env) in .claude/worktree-seed, and they
+# are copied without --seed being given. Terms differ from an explicit --seed in
+# one place: a listed path that is absent here is skipped, not fatal.
 
-# Absent -> the worktree is still created, and nothing is copied.
-out="$(cd "$cwdrepo" && "$wt" nomise 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}_nomise" ] \
-   && [ ! -e "${cwdrepo}_nomise/mise.local.toml" ]; then
-  echo "ok: an absent mise.local.toml is a no-op, not a failure"
-else echo "FAIL: absent default seed rc=$rc out=$out"; fail=1; fi
+# No list at all -> unchanged behavior (nothing copied, worktree still created).
+out="$(cd "$cwdrepo" && "$wt" nolist 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}_nolist" ]; then
+  echo "ok: no .claude/worktree-seed is a no-op"
+else echo "FAIL: absent seed list rc=$rc out=$out"; fail=1; fi
 
+mkdir -p "$cwdrepo/.claude"
+# Blank lines, a comment, and an entry this checkout does not have are all in the
+# list on purpose: the first two must be ignored and the third must be SKIPPED,
+# because the list is written once for the repo while any checkout may lack an
+# entry. An explicit --seed of the same missing path would abort instead.
+cat >"$cwdrepo/.claude/worktree-seed" <<'LIST'
+# a comment line
+
+mise.local.toml
+does/not/exist.env
+LIST
 printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$cwdrepo/mise.local.toml"
 
-# Present -> copied to the same relative path with no --seed given at all.
-err="$tmp/mise-default-err"
-out="$(cd "$cwdrepo" && "$wt" misedefault 2>"$err")"; rc=$?
+err="$tmp/list-default-err"
+out="$(cd "$cwdrepo" && "$wt" listdefault 2>"$err")"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Fq '_.file' "${cwdrepo}_misedefault/mise.local.toml" 2>/dev/null \
-   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
-  echo "ok: mise.local.toml is seeded by default when the checkout has one"
-else echo "FAIL: default mise seed rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
+   && grep -Fq '_.file' "${cwdrepo}_listdefault/mise.local.toml" 2>/dev/null \
+   && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ] \
+   && [ ! -e "${cwdrepo}_listdefault/does" ]; then
+  echo "ok: listed paths are seeded, missing ones skipped, comments ignored"
+else echo "FAIL: seed list rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
 
-# Naming it explicitly as well must not copy or log it twice.
-err="$tmp/mise-explicit-err"
-out="$(cd "$cwdrepo" && "$wt" --seed mise.local.toml miseexplicit 2>"$err")"; rc=$?
+# Naming a listed path explicitly as well must not copy or log it twice.
+err="$tmp/list-explicit-err"
+out="$(cd "$cwdrepo" && "$wt" --seed mise.local.toml listexplicit 2>"$err")"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Fq '_.file' "${cwdrepo}_miseexplicit/mise.local.toml" 2>/dev/null \
+   && grep -Fq '_.file' "${cwdrepo}_listexplicit/mise.local.toml" 2>/dev/null \
    && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
-  echo "ok: explicit --seed mise.local.toml does not double-seed"
-else echo "FAIL: explicit mise seed rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
+  echo "ok: a listed path also passed as --seed is not seeded twice"
+else echo "FAIL: list/--seed overlap rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
 
-# Removed again so the launch-mode tests below stay unaffected by it.
-rm -f "$cwdrepo/mise.local.toml"
+# An entry escaping the checkout has no relative path in the worktree. Unlike a
+# merely absent entry this is a bug in a committed, reviewed file, so it must
+# fail loudly -- and before the worktree exists.
+printf '../outside.md\n' >"$cwdrepo/.claude/worktree-seed"
+(cd "$cwdrepo" && "$wt" listescape) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_listescape" ]; then
+  echo "ok: a seed-list entry outside the checkout fails before the worktree is created"
+else echo "FAIL: escaping list entry accepted rc=$rc"; fail=1; fi
+
+# Removed again so the launch-mode tests below are unaffected by either.
+rm -rf "$cwdrepo/.claude" "$cwdrepo/mise.local.toml"
 
 # --- session-launch mode (with a prompt) --------------------------------------
 # We can't reproduce real tmux/claude behavior, so we stub `tmux` on PATH: it
