@@ -158,6 +158,23 @@ if [ "$rc" -eq 0 ] \
   echo "ok: a listed path also passed as --seed is not seeded twice"
 else echo "FAIL: list/--seed overlap rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
 
+# The default list is scoped to same-repo: --self anchors the WORKTREE to the
+# SCRIPT repo while the list still lives in cwd's (unrelated) repo, so it must
+# NOT be read -- otherwise an unrelated cwd repo's list (e.g. naming a secret
+# file that repo happens to have) would leak into the anchor repo's worktree
+# with no explicit request from the caller. Explicit --seed is unaffected.
+out="$(cd "$cwdrepo" && "$wt" --self selfnolist 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_selfnolist" ] \
+   && [ ! -e "${scriptrepo}_selfnolist/mise.local.toml" ]; then
+  echo "ok: --self does not read an unrelated cwd repo's default seed list"
+else echo "FAIL: --self default-seed leak rc=$rc out=$out present?=$([ -e "${scriptrepo}_selfnolist/mise.local.toml" ] && echo yes || echo no)"; fail=1; fi
+
+out="$(cd "$cwdrepo" && "$wt" --self --seed mise.local.toml selfexplicitseed 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_selfexplicitseed" ] \
+   && grep -Fq '_.file' "${scriptrepo}_selfexplicitseed/mise.local.toml" 2>/dev/null; then
+  echo "ok: --self with explicit --seed still copies from cwd's checkout"
+else echo "FAIL: --self explicit --seed rc=$rc out=$out"; fail=1; fi
+
 # An entry escaping the checkout has no relative path in the worktree. Unlike a
 # merely absent entry this is a bug in a committed, reviewed file, so it must
 # fail loudly -- and before the worktree exists.
@@ -166,6 +183,14 @@ printf '../outside.md\n' >"$cwdrepo/.claude/worktree-seed"
 if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_listescape" ]; then
   echo "ok: a seed-list entry outside the checkout fails before the worktree is created"
 else echo "FAIL: escaping list entry accepted rc=$rc"; fail=1; fi
+
+# An absolute entry is rejected outright (same committed-and-reviewed reasoning
+# as the escaping-entry case above), before the worktree is created.
+printf '/etc/passwd\n' >"$cwdrepo/.claude/worktree-seed"
+(cd "$cwdrepo" && "$wt" listabs) >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_listabs" ]; then
+  echo "ok: an absolute seed-list entry fails before the worktree is created"
+else echo "FAIL: absolute list entry accepted rc=$rc"; fail=1; fi
 
 # Removed again so the launch-mode tests below are unaffected by either.
 rm -rf "$cwdrepo/.claude" "$cwdrepo/mise.local.toml"

@@ -64,7 +64,9 @@ set -euo pipefail
 #                  Paths listed in the checkout's `.claude/worktree-seed` are
 #                  seeded on top of these, without being asked for; unlike an
 #                  explicit --seed, a listed path that is missing is skipped
-#                  rather than fatal.
+#                  rather than fatal. That default list only applies when cwd's
+#                  repo IS the one being anchored to (see --self): an unrelated
+#                  cwd repo's list is not read.
 #   name           worktree label (suffix after the underscore); also the new
 #                  branch name when -b is omitted
 #   -b <branch>    branch to check out / create (default: <name>). Resolved as:
@@ -179,7 +181,22 @@ fi
 # entry (absolute, or escaping the checkout) still fails loudly -- the list is
 # committed and reviewed, so a bad line is a bug to surface, not to tolerate.
 # Entries also passed as --seed are skipped, so nothing is copied or logged twice.
-if [ -n "$seed_top" ] && [ -f "$seed_top/.claude/worktree-seed" ]; then
+#
+# Scoped to same-repo only: apply the DEFAULT list only when cwd's repo is the
+# same repo the worktree is being anchored to (main_top). `--self` exists
+# precisely so cwd can be an unrelated project repo (see usage) -- without this
+# guard, that unrelated repo's own `.claude/worktree-seed` would be read and its
+# entries copied into the anchor repo's worktree with no explicit request from
+# the caller (confirmed by reproduction: an unrelated cwd repo's listed secret
+# ended up seeded into the anchor repo's worktree under --self). Compare via
+# --git-common-dir (not toplevel) so a cwd that is itself a linked worktree of
+# the SAME repo as main_top still counts as same-repo. Explicit --seed is
+# unaffected: the caller named that path, so it stays honored regardless.
+seed_repo_common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+seed_main_top=""
+[ -z "$seed_repo_common" ] || seed_main_top="$(dirname "$seed_repo_common")"
+
+if [ -n "$seed_top" ] && [ "$seed_main_top" = "$main_top" ] && [ -f "$seed_top/.claude/worktree-seed" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line#"${line%%[![:space:]]*}"}"   # ltrim
     line="${line%"${line##*[![:space:]]}"}"   # rtrim
