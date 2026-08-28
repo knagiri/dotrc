@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/state"
 )
 
 func openTestDB(t *testing.T) *Deps {
@@ -208,6 +209,126 @@ func TestDispatch_SessionEndStillTerminatesAfterResurrect(t *testing.T) {
 	}
 	if !terminated.Valid {
 		t.Error("terminated_at is NULL after the second SessionEnd, want it set")
+	}
+}
+
+// queueRows counts how many rows the picker's view surfaces for a session. The
+// view has two predicates -- terminated_at IS NULL and a latest event that is
+// not 'ended' -- so it is the only assertion that covers both halves of a
+// resurrection at once.
+func queueRows(t *testing.T, d *Deps, id string) int {
+	t.Helper()
+	var n int
+	if err := d.DB.QueryRow(
+		"SELECT COUNT(*) FROM queue WHERE session_id = ?", id,
+	).Scan(&n); err != nil {
+		t.Fatalf("count queue rows for %s: %v", id, err)
+	}
+	return n
+}
+
+func terminatedAt(t *testing.T, d *Deps, id string) sql.NullInt64 {
+	t.Helper()
+	var at sql.NullInt64
+	if err := d.DB.QueryRow(
+		"SELECT terminated_at FROM sessions WHERE session_id = ?", id,
+	).Scan(&at); err != nil {
+		t.Fatalf("query terminated_at for %s: %v", id, err)
+	}
+	return at
+}
+
+// reconcileTerminate replays what a `claude-queue reconcile` pass does to a row
+// it judges gone -- db.TerminateSession is literally the per-session call
+// reconcile.Sweep makes -- and asserts the row really did leave the view, so a
+// later "it came back" assertion cannot pass by never having left.
+func reconcileTerminate(t *testing.T, d *Deps, id string) {
+	t.Helper()
+	if err := db.TerminateSession(d.DB, id); err != nil {
+		t.Fatalf("TerminateSession(%s): %v", id, err)
+	}
+	if n := queueRows(t, d, id); n != 0 {
+		t.Fatalf("session %s still has %d queue row(s) right after reconcile closed it", id, n)
+	}
+}
+
+// reconcile closes every tracked row that `claude agents --json` does not list,
+// and a session that is alive but absent from that roster is a misjudgement
+// rather than an impossibility. This pins the misjudgement as RECOVERABLE: the
+// next hook event from the still-running session puts it back in the queue view.
+//
+// The table covers every event that says "alive", not just SessionStart,
+// because a session that reconcile wrongly closed is by definition already up
+// and will never fire SessionStart again -- recovery that needed one would be no
+// recovery at all for the case that motivates it.
+//
+// Both mechanisms are asserted separately, since either one regressing alone is
+// enough to make the terminate permanent:
+//   - upsertSession clears terminated_at (the view's terminated_at IS NULL)
+//   - the event Dispatch inserts carries a non-'ended' state (the view's
+//     e.state != 'ended'), superseding the synthetic ForcedEnd reconcile wrote
+func TestDispatch_AfterReconcileTerminate_LiveEventRestoresRow(t *testing.T) {
+	for _, ev := range []string{
+		"SessionStart", "UserPromptSubmit",
+		"PermissionRequest", "PermissionDenied",
+		"PostToolUse", "PostToolUseFailure",
+		"Stop", "StopFailure",
+	} {
+		t.Run(ev, func(t *testing.T) {
+			d := openTestDB(t)
+			seed := &Input{SessionID: "s", HookEventName: "SessionStart", Cwd: "/work"}
+			if err := Dispatch(d, "SessionStart", seed); err != nil {
+				t.Fatalf("seed SessionStart: %v", err)
+			}
+			reconcileTerminate(t, d, "s")
+
+			in := &Input{SessionID: "s", HookEventName: ev, ToolName: "Bash"}
+			if err := Dispatch(d, ev, in); err != nil {
+				t.Fatalf("%s after reconcile: %v", ev, err)
+			}
+
+			if at := terminatedAt(t, d, "s"); at.Valid {
+				t.Errorf("terminated_at = %d after %s, want NULL", at.Int64, ev)
+			}
+			if n := queueRows(t, d, "s"); n != 1 {
+				t.Errorf("queue rows after %s = %d, want 1", ev, n)
+			}
+			want, _ := state.ForEvent(ev)
+			var got string
+			if err := d.DB.QueryRow(
+				"SELECT raw_state FROM queue WHERE session_id = 's'",
+			).Scan(&got); err != nil {
+				t.Fatalf("query raw_state: %v", err)
+			}
+			if got != want {
+				t.Errorf("raw_state = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// The recovery above must not extend to SessionEnd. It is the one event that is
+// not evidence of life, so a session reconcile closed and that then genuinely
+// ends has to stay closed -- otherwise the upsert's terminated_at = NULL would
+// reopen rows on the way out.
+func TestDispatch_AfterReconcileTerminate_SessionEndStaysClosed(t *testing.T) {
+	d := openTestDB(t)
+	seed := &Input{SessionID: "s", HookEventName: "SessionStart", Cwd: "/work"}
+	if err := Dispatch(d, "SessionStart", seed); err != nil {
+		t.Fatalf("seed SessionStart: %v", err)
+	}
+	reconcileTerminate(t, d, "s")
+
+	end := &Input{SessionID: "s", HookEventName: "SessionEnd", Reason: "other"}
+	if err := Dispatch(d, "SessionEnd", end); err != nil {
+		t.Fatalf("SessionEnd after reconcile: %v", err)
+	}
+
+	if at := terminatedAt(t, d, "s"); !at.Valid {
+		t.Error("terminated_at is NULL after SessionEnd, want it set")
+	}
+	if n := queueRows(t, d, "s"); n != 0 {
+		t.Errorf("queue rows after SessionEnd = %d, want 0", n)
 	}
 }
 
