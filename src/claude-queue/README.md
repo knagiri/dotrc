@@ -92,6 +92,19 @@ make install
 session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同じ慣習）。popup を開いた
 時点の current session には作らない。
 
+window を開く attach / resume の経路では、`claude` をそのまま pane のプロセスにせず shell 経由で
+走らせ、終了後は shell へ置き換える。`claude attach` は `C-z` で「shell へ戻る」と言うが、戻る先の
+shell が無ければ pane ごと閉じ、その window しか持たない session は道連れに消える。shell を挟めば
+window も session も残る。起動が即座に失敗したときも、エラーが pane に残って読める
+（`tmux new-window` は中のコマンドの exit status を返さないので、window が閉じると失敗の理由ごと
+消えていた）。
+
+コマンドが終わった window は shell に置き換わると同時に `<元の名前>~exited` へ改名する。同じ
+対象を選び直したときの window 再利用は名前の一致で決まるので、改名しないと「claude が居ない
+shell だけの window」が名前を握り続け、選び直しても `claude attach` が二度と走らなくなる。改名で
+名前を手放すことで、claude が走っている間の選び直しは同じ window に集約され、抜けたあとの
+選び直しは新しい window で起動し直す。
+
 ### 終了済み session の掘り起こし（`--show-resumable`）
 
 ホスト再起動などで session が全部閉じると `queue` view は空になる（`terminated_at IS NULL`

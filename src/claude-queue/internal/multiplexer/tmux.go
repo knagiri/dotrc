@@ -68,7 +68,7 @@ func newSessionArgs(name, window, cwd string, argv []string) []string {
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
-	return append(args, argv...)
+	return append(args, windowCommand(window, argv)...)
 }
 
 // newWindowArgs builds the tmux argv for adding a window to an existing
@@ -84,7 +84,77 @@ func newWindowArgs(name, window, cwd string, argv []string) []string {
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
-	return append(args, argv...)
+	return append(args, windowCommand(window, argv)...)
+}
+
+// exitedSuffix marks a window whose command has finished and which now holds
+// nothing but the fallback shell. windowName never emits "~" (it keeps only
+// [A-Za-z0-9_-]), so a renamed window can never collide with the name a later
+// pick asks -S for -- which is the whole point of the rename, see windowCommand.
+const exitedSuffix = "~exited"
+
+// windowCommand renders argv as the one trailing argument tmux runs in the new
+// window. Passing a single argument matters: tmux runs a lone argument through
+// a shell and execs a multi-argument one directly, and only the shell form can
+// keep the pane alive past the command.
+//
+// Without it the pane's process is `claude attach` itself, so there is nothing
+// to fall back to. `claude attach --help` promises "Ctrl+Z drops back to your
+// shell", but Ctrl+Z ends the attach, which closes the pane, which closes the
+// window -- and a session the picker just created owns only that window, so the
+// whole session disappears with it. `exec`ing a shell afterwards gives Ctrl+Z
+// somewhere to land. It also makes a command that fails immediately readable:
+// `tmux new-window` does not surface the command's exit status, so before this
+// the error scrolled past with the closing window.
+//
+// The rename in between is what keeps that surviving window from swallowing the
+// next pick. newWindowArgs' -S selects an existing window of the same name
+// *instead of* running the command, which was harmless while the window died
+// with the command: -S never found a stale one. Once the window outlives the
+// command, picking the same target again would land the user in the leftover
+// shell and never re-run `claude attach`. Renaming on the way out releases the
+// name, so -S still collapses repeat picks while claude is actually running
+// there, and a pick after it exited gets a fresh window. A tmux that cannot be
+// reached here just leaves the name in place; the ";" chain still reaches exec.
+//
+// Empty argv yields no argument at all, which is how tmux is asked for the
+// default-command (an empty one, the default, starts default-shell as a login
+// shell). The wrapper below is not that: it execs $SHELL without -l, so the
+// fallback is interactive but not a login shell. Nothing here depends on the
+// difference -- the pane only has to stay open and read a shell's rc.
+func windowCommand(window string, argv []string) []string {
+	if len(argv) == 0 {
+		return nil
+	}
+	quoted := make([]string, 0, len(argv))
+	for _, a := range argv {
+		quoted = append(quoted, shellQuote(a))
+	}
+	// -t "$TMUX_PANE" addresses the pane this command runs in, rather than
+	// whichever window the client happens to have current by then.
+	return []string{strings.Join(quoted, " ") +
+		`; tmux rename-window -t "$TMUX_PANE" ` + shellQuote(window+exitedSuffix) +
+		`; exec "${SHELL:-/bin/bash}"`}
+}
+
+// shellQuote renders s as a single literal word for a POSIX shell. argv reaches
+// here from the ledger (session ids, and cwd-derived values in the future), so
+// the values are data rather than anything this package chose; splicing them
+// into a command string unquoted would let a space or a quote in one of them
+// change what runs.
+//
+// Single quotes suspend every other form of expansion, so the only character
+// needing care is the single quote itself: it cannot be escaped inside single
+// quotes, and is instead spliced in as a backslash-escaped quote between two
+// quoted runs.
+//
+// The shell reading this is tmux's default-shell, not necessarily /bin/sh, so
+// "POSIX shell" is an assumption rather than a guarantee. It holds for every
+// Bourne-family shell; a csh or fish login shell would reject the ${SHELL:-...}
+// form above regardless of the quoting, which is a pre-existing limit of
+// running commands through tmux rather than something this quoting can fix.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // windowName derives a window name from the command being run, so repeated
