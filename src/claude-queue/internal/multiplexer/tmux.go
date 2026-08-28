@@ -68,7 +68,7 @@ func newSessionArgs(name, window, cwd string, argv []string) []string {
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
-	return append(args, argv...)
+	return append(args, windowCommand(argv)...)
 }
 
 // newWindowArgs builds the tmux argv for adding a window to an existing
@@ -84,7 +84,49 @@ func newWindowArgs(name, window, cwd string, argv []string) []string {
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
-	return append(args, argv...)
+	return append(args, windowCommand(argv)...)
+}
+
+// windowCommand renders argv as the one trailing argument tmux runs in the new
+// window. Passing a single argument matters: tmux runs a lone argument through
+// a shell and execs a multi-argument one directly, and only the shell form can
+// keep the pane alive past the command.
+//
+// Without it the pane's process is `claude attach` itself, so there is nothing
+// to fall back to. `claude attach --help` promises "Ctrl+Z drops back to your
+// shell", but Ctrl+Z ends the attach, which closes the pane, which closes the
+// window -- and a session the picker just created owns only that window, so the
+// whole session disappears with it. `exec`ing the login shell afterwards gives
+// Ctrl+Z somewhere to land, and keeps the same window reusable for the next
+// pick. It also makes a command that fails immediately readable: `tmux
+// new-window` does not surface the command's exit status, so before this the
+// error scrolled past with the closing window.
+//
+// Empty argv yields no argument at all, which is how tmux is asked for its
+// default shell -- the same place the wrapper would have landed anyway.
+func windowCommand(argv []string) []string {
+	if len(argv) == 0 {
+		return nil
+	}
+	quoted := make([]string, 0, len(argv))
+	for _, a := range argv {
+		quoted = append(quoted, shellQuote(a))
+	}
+	return []string{strings.Join(quoted, " ") + `; exec "${SHELL:-/bin/bash}"`}
+}
+
+// shellQuote renders s as a single literal word for a POSIX shell. argv reaches
+// here from the ledger (session ids, and cwd-derived values in the future), so
+// the values are data rather than anything this package chose; splicing them
+// into a command string unquoted would let a space or a quote in one of them
+// change what runs.
+//
+// Single quotes suspend every other form of expansion, so the only character
+// needing care is the single quote itself: it cannot be escaped inside single
+// quotes, and is instead spliced in as a backslash-escaped quote between two
+// quoted runs.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // windowName derives a window name from the command being run, so repeated
