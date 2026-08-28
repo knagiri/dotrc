@@ -192,7 +192,9 @@ uuid を `--resume` に渡してもエラーにはならず、その id で空�
 確認を欠いた resume は「成功したように見えて会話を失う」。
 
 flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` の `=` 接頭辞・末尾 `:`・`-S` による window
-再利用）は `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを参照
+再利用、pane を shell へ落とすためコマンドを単一引数の shell 文字列として渡すことと、その shell が
+`-S` の照合名を握り続けないよう終了時に window を改名すること）は
+`internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを参照
 （README.md は挙動レベルの説明に留め、flag レベルは書かない）。
 
 ### 終了済み row は view を広げず別クエリで拾う

@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+// wantCommand is what `claude attach abc` must reach tmux as: one shell
+// command, so the pane survives the command and drops back to a shell, having
+// first released the window name that -S dedupes on.
+const wantCommand = `'claude' 'attach' 'abc'; tmux rename-window -t "$TMUX_PANE" 'claude-attach-abc~exited'; exec "${SHELL:-/bin/bash}"`
+
 // The argv builders are exercised instead of OpenSession itself so the contract
 // is checked without starting a real tmux server.
 func TestNewSessionArgs(t *testing.T) {
@@ -23,7 +28,7 @@ func TestNewSessionArgs(t *testing.T) {
 			window: "claude-attach-abc",
 			cwd:    "/w/a",
 			argv:   []string{"claude", "attach", "abc"},
-			want:   []string{"new-session", "-d", "-s", "dotrc_wt", "-n", "claude-attach-abc", "-c", "/w/a", "claude", "attach", "abc"},
+			want:   []string{"new-session", "-d", "-s", "dotrc_wt", "-n", "claude-attach-abc", "-c", "/w/a", wantCommand},
 		},
 		{
 			name:   "without cwd",
@@ -31,7 +36,17 @@ func TestNewSessionArgs(t *testing.T) {
 			window: "claude-attach-abc",
 			cwd:    "",
 			argv:   []string{"claude", "attach", "abc"},
-			want:   []string{"new-session", "-d", "-s", "dotrc_wt", "-n", "claude-attach-abc", "claude", "attach", "abc"},
+			want:   []string{"new-session", "-d", "-s", "dotrc_wt", "-n", "claude-attach-abc", wantCommand},
+		},
+		{
+			// No command leaves tmux to start its default shell, which is
+			// where the wrapper would have landed anyway.
+			name:   "empty argv adds no command",
+			sess:   "dotrc_wt",
+			window: "cmd",
+			cwd:    "/w/a",
+			argv:   nil,
+			want:   []string{"new-session", "-d", "-s", "dotrc_wt", "-n", "cmd", "-c", "/w/a"},
 		},
 	}
 	for _, tt := range tests {
@@ -88,7 +103,7 @@ func TestNewWindowArgs(t *testing.T) {
 			argv:   []string{"claude", "attach", "abc"},
 			want: []string{
 				"new-window", "-S", "-n", "claude-attach-abc", "-t", "=dotrc:",
-				"-c", "/w/a", "claude", "attach", "abc",
+				"-c", "/w/a", wantCommand,
 			},
 		},
 		{
@@ -99,7 +114,17 @@ func TestNewWindowArgs(t *testing.T) {
 			argv:   []string{"claude", "attach", "abc"},
 			want: []string{
 				"new-window", "-S", "-n", "claude-attach-abc", "-t", "=dotrc:",
-				"claude", "attach", "abc",
+				wantCommand,
+			},
+		},
+		{
+			name:   "empty argv adds no command",
+			sess:   "dotrc",
+			window: "cmd",
+			cwd:    "",
+			argv:   nil,
+			want: []string{
+				"new-window", "-S", "-n", "cmd", "-t", "=dotrc:",
 			},
 		},
 	}
@@ -127,6 +152,148 @@ func TestNewWindowArgs(t *testing.T) {
 				t.Errorf("target = %q, must end with : to take the next free index", target)
 			}
 		})
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "ordinary word",
+			in:   "claude",
+			want: `'claude'`,
+		},
+		{
+			// Unquoted this would become two words and run the wrong command.
+			name: "spaces stay one word",
+			in:   "/w/my worktree",
+			want: `'/w/my worktree'`,
+		},
+		{
+			// The one character single quotes cannot escape: the run is
+			// closed, an escaped quote spliced in, and a new run opened.
+			name: "single quote is spliced",
+			in:   "it's",
+			want: `'it'\''s'`,
+		},
+		{
+			// $ and ` are inert inside single quotes, so they need no
+			// treatment of their own -- which is the reason for this form.
+			name: "expansions are inert",
+			in:   "$(rm -rf /)`x`",
+			want: "'$(rm -rf /)`x`'",
+		},
+		{
+			// A newline is an ordinary character inside single quotes, so it
+			// stays part of the word instead of ending the command.
+			name: "newline stays inside the word",
+			in:   "a\nb",
+			want: "'a\nb'",
+		},
+		{
+			name: "empty stays a word",
+			in:   "",
+			want: `''`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shellQuote(tt.in); got != tt.want {
+				t.Errorf("shellQuote(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWindowCommand(t *testing.T) {
+	t.Run("one argument, ending in an exec of the shell", func(t *testing.T) {
+		got := windowCommand("claude-attach-abc", []string{"claude", "attach", "abc"})
+		// A single argument is what makes tmux run the string through a
+		// shell; more than one would be exec'd directly and the exec tail
+		// would be read as a literal argument to claude.
+		if len(got) != 1 {
+			t.Fatalf("windowCommand(...) = %v, want exactly one argument", got)
+		}
+		if got[0] != wantCommand {
+			t.Errorf("windowCommand(...) = %q, want %q", got[0], wantCommand)
+		}
+	})
+
+	t.Run("every element is quoted", func(t *testing.T) {
+		got := windowCommand("w", []string{"claude", "--resume", "a b'c"})
+		want := `'claude' '--resume' 'a b'\''c'; tmux rename-window -t "$TMUX_PANE" 'w~exited'; exec "${SHELL:-/bin/bash}"`
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("windowCommand(...) = %v, want [%q]", got, want)
+		}
+	})
+
+	t.Run("empty argv yields no argument", func(t *testing.T) {
+		if got := windowCommand("cmd", nil); len(got) != 0 {
+			t.Errorf("windowCommand(%q, nil) = %v, want no argument so tmux starts its default shell", "cmd", got)
+		}
+	})
+}
+
+// TestWindowCommandReleasesTheDedupeName pins the repair for the regression the
+// shell wrap would otherwise introduce. -S selects an existing window of the
+// same name *instead of* running the command, so once the window outlives the
+// command, a second pick of the same target would drop the user into the
+// leftover shell and never re-run claude. The command therefore has to rename
+// the window out of the way before it execs the shell, and the name it releases
+// must be exactly the one -S looks for.
+func TestWindowCommandReleasesTheDedupeName(t *testing.T) {
+	argv := []string{"claude", "attach", "abc"}
+	window := windowName(argv)
+
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"new-session", newSessionArgs("dotrc_wt", window, "/w/a", argv)},
+		{"new-window", newWindowArgs("dotrc_wt", window, "/w/a", argv)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			named := tt.args[slices.Index(tt.args, "-n")+1]
+			command := tt.args[len(tt.args)-1]
+
+			wantRename := `tmux rename-window -t "$TMUX_PANE" ` + shellQuote(named+exitedSuffix)
+			if !strings.Contains(command, wantRename) {
+				t.Errorf("command = %q, must release the -n name %q via %q", command, named, wantRename)
+			}
+			// The rename has to happen before the exec, or the shell replaces
+			// the process and the rename never runs.
+			if strings.Index(command, wantRename) > strings.Index(command, "exec") {
+				t.Errorf("command = %q, renames after exec; the exec never returns so the rename would be dead", command)
+			}
+		})
+	}
+
+	// A released name must not be picked up by a later -S. windowName keeps
+	// only [A-Za-z0-9_-], so no argv -- not even one containing "~" itself --
+	// can produce a name that ends in the suffix.
+	for _, probe := range [][]string{argv, {"claude", "--resume", "u~exited"}, {"a.b", "c:d"}} {
+		if strings.HasSuffix(windowName(probe), exitedSuffix) {
+			t.Errorf("windowName(%v) = %q ends with %q; a live window could collide with a released one", probe, windowName(probe), exitedSuffix)
+		}
+	}
+}
+
+// TestWindowNameIgnoresShellWrap pins that the dedupe key stays derived from
+// the raw argv. Computing it from the wrapped command instead would fold the
+// "; exec ..." tail into every window name, changing what newWindowArgs' -S
+// matches on -- and the names of the two paths would drift apart the moment
+// only one of them wrapped.
+func TestWindowNameIgnoresShellWrap(t *testing.T) {
+	argv := []string{"claude", "attach", "abc"}
+
+	if got, want := windowName(argv), "claude-attach-abc"; got != want {
+		t.Errorf("windowName(%v) = %q, want %q", argv, got, want)
+	}
+	if wrapped := windowName(windowCommand(windowName(argv), argv)); wrapped == windowName(argv) {
+		t.Errorf("windowName of the wrapped command = %q, expected it to differ from the raw-argv name; the wrap must not feed windowName", wrapped)
 	}
 }
 
