@@ -36,7 +36,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 
 0. **自動レビューの待機と検出**: `gh-await-reviews <PR>` を実行する（内部で polling するので `sleep` は不要）。
    返る JSON の `expected` / `observed` / `missing` / `last_activity_at` を保持する。`last_activity_at` を
-   `LAST_SEEN` として記録する。`missing` が非空でも **merge をブロックしない**（bot が無効化されている repo で
+   `LAST_SEEN` として記録する（これはイテレーション 1 の分。以降は手順 2.a-0 で毎イテレーション更新する）。
+   `missing` が非空でも **merge をブロックしない**（bot が無効化されている repo で
    永久に止まるため）。報告に使うだけ。
    `expected` が空（= `expected_unknown: true`）でも **「レビュー bot 無し」と断定しない**。Copilot 等の
    pending review はこの repo の reviewRequests に一切現れないため、`expected` が空でも「bot が無効化
@@ -45,9 +46,29 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 1. `owner` / `repo` を取得: `gh repo view --json owner,name --jq '.owner.login + " " + .name'`。
 2. イテレーション `i` を 1..5 で回す:
 
+   a-0. **`LAST_SEEN` の更新**: イテレーション 2 以降は、判定役を dispatch する**前**に
+      `gh-await-reviews <PR>` を実行し、返る `last_activity_at` を `LAST_SEEN` に代入する
+      （`<DETECTION_REPORT>` も返ってきた最新の内容に差し替える）。イテレーション 1 は手順 0 が
+      この待機そのものなので、手順 0 で記録した値をそのまま使い、再実行はしない。
+      **更新はイテレーションの開始時に打つ。終了時ではない。** 終了時に打つと、判定役が読み終えた
+      後に届いたレビューまで「見た」ことにして飲み込み、手順 3.a が取りこぼす。開始時に打てば
+      `LAST_SEEN` は「判定役が見た地点」を指し、それ以降の activity だけが遅着として残る。
+      逆に手順 0 でしか打たないと、修正役の push が呼んだ bot の再レビューは必ず `LAST_SEEN` より
+      新しくなるので、判定役が既に読み終えたレビューに対して手順 3.a が毎回「遅着」と判定し、
+      5 回の上限を余計に 1 回消費する。
+      副次的に、bot が review を書いている最中に判定役を走らせない効果もある。コストは
+      activity の有無で分かれる: activity が既にあり quiet window（既定 30s、`GH_AWAIT_REVIEWS_QUIET`）
+      を過ぎていればほぼ即 return する。一方 activity が一度も無い場合（bot が無効化されている
+      repo 等、この skill が明示的に許容する状況）は、script 開始時刻から測る grace（既定 60s、
+      `GH_AWAIT_REVIEWS_GRACE`）と PR 作成時刻から測る floor（既定 90s、
+      `GH_AWAIT_REVIEWS_EXPECTED_FLOOR`）の両方を満たすまで settle しないため、イテレーション
+      あたり 60 秒前後ブロックする（`bin/gh-await-reviews` 参照）。許容範囲だが「即 return する」は
+      activity が有る場合に限った説明である。
+
    a-1. **判定**: `Task(subagent_type: "pr-judge", ...)` で fresh subagent を 1 つ dispatch する。
-      後述の「判定 subagent prompt」を、`<PR>` / `<owner>` / `<repo>` と step 0 の検出レポートを
-      埋めて渡す。判定役は最終メッセージに判定 verdict JSON だけを返す。
+      後述の「判定 subagent prompt」を、`<PR>` / `<owner>` / `<repo>` と手順 0 または a-0 時点の
+      検出レポート（イテレーション 1 は a-0 が走らないため手順 0 の値を使う）を埋めて渡す。
+      判定役は最終メッセージに判定 verdict JSON だけを返す。
 
    a-2. **修正**: 判定の `findings_to_fix` が**非空のときだけ** `Task(subagent_type: "pr-fix", ...)` で
       fresh subagent を 1 つ dispatch する。後述の「修正 subagent prompt」に `<PR>` と
@@ -74,10 +95,12 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
         回さず手順 4（停止・報告）へ抜け、判定役と修正役の食い違いを人間に引き渡す。
    d. 5 回終わっても抜けられない場合は **auto-merge を有効化せず**手順 4（停止・報告）へ。
 3. **遅着 review の再確認 → CI 確認 → auto-merge 有効化**:
-   a. もう一度 `gh-await-reviews <PR>` を実行する。既に静穏なら即 return する。返った `last_activity_at` が
-      `LAST_SEEN` より**新しければ、イテレーション後に新しい review が届いている**。`LAST_SEEN` を更新して
-      手順 2 に戻る（合計 5 イテレーションの上限は超えない）。同じなら b へ進む。
-      これがないと、イテレーション 1 が findings ゼロで抜けた場合に遅着 review を読まないまま先へ進んでしまう。
+   a. もう一度 `gh-await-reviews <PR>` を実行する（ブロック時間の条件分岐は 2.a-0 と同じ内部実装に
+      よるので繰り返さない。詳細は 2.a-0 参照）。返った `last_activity_at` が
+      `LAST_SEEN`（＝最後の判定役を dispatch した地点）より**新しければ、判定役が読んだ後に新しい
+      review が届いている**。手順 2 に戻る（合計 5 イテレーションの上限は超えない。`LAST_SEEN` は
+      戻り先のイテレーション先頭 = 手順 2.a-0 で更新される）。同じなら b へ進む。
+      これがないと、判定役の実行中に届いた review を読まないまま先へ進んでしまう。
    b. `gh-pr-checks <PR>` を実行する（raw `gh pr checks` は使わない。fine-grained PAT では
       必ず失敗する）。返る JSON の **`has_failure` が `true` なら auto-merge を有効化しない** → 手順 4 へ
       （`checks[]` の fail した項目を報告に使う）。**チェックの確定は待たない**（`pending_count` が
@@ -87,12 +110,12 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
    d. `gh pr view <PR> --json autoMergeRequest --jq '.autoMergeRequest'` が **非 null** であることを確認する。
       これがこの skill の終端状態。**`merged` は確認しない。** PR が実際に merge されるかは repo の
       branch protection が決めるので、merge されていなくても正常である。
-   e. **最終サマリ出力**: 全イテレーションの「指摘→対応」（判定役の仕分けと修正役の変更）、step 0 で検出した
-      自動レビュー（読んだもの／`missing` だったもの）、最終結果（auto-merge 有効化済み）を
+   e. **最終サマリ出力**: 全イテレーションの「指摘→対応」（判定役の仕分けと修正役の変更）、最後の検出
+      レポート（手順 0 または 2.a-0。読んだもの／`missing` だったもの）、最終結果（auto-merge 有効化済み）を
       **session の最終メッセージとして出力**する。PR には投稿しない。
 4. **停止・報告**（auto-merge を有効化しなかった場合）: 各イテレーションの 指摘→対応、gate に残した findings /
    修正役が直さなかった findings（`unfixed`）/ 議論待ち thread / CI の fail /
-   step 0 で `missing` だった reviewer / 停止理由・残課題を箇条書きで要約し、
+   最後の検出レポートで `missing` だった reviewer / 停止理由・残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿・thread への reply はしない（人間が引き取る）。
 
 ## 判定 subagent prompt（`<PR>`/`<owner>`/`<repo>` を埋めて `pr-judge` に渡す）
