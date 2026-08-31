@@ -56,9 +56,14 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       逆に手順 0 でしか打たないと、修正役の push が呼んだ bot の再レビューは必ず `LAST_SEEN` より
       新しくなるので、判定役が既に読み終えたレビューに対して手順 3.a が毎回「遅着」と判定し、
       5 回の上限を余計に 1 回消費する。
-      副次的に、bot が review を書いている最中に判定役を走らせない効果もある。既に静穏なら
-      `gh-await-reviews` は即 return する（quiet window を実際の投稿時刻から測るため）ので
-      コストは小さい。
+      副次的に、bot が review を書いている最中に判定役を走らせない効果もある。コストは
+      activity の有無で分かれる: activity が既にあり quiet window（既定 30s、`GH_AWAIT_REVIEWS_QUIET`）
+      を過ぎていればほぼ即 return する。一方 activity が一度も無い場合（bot が無効化されている
+      repo 等、この skill が明示的に許容する状況）は、script 開始時刻から測る grace（既定 60s、
+      `GH_AWAIT_REVIEWS_GRACE`）と PR 作成時刻から測る floor（既定 90s、
+      `GH_AWAIT_REVIEWS_EXPECTED_FLOOR`）の両方を満たすまで settle しないため、イテレーション
+      あたり 60 秒前後ブロックする（`bin/gh-await-reviews` 参照）。許容範囲だが「即 return する」は
+      activity が有る場合に限った説明である。
 
    a-1. **判定**: `Task(subagent_type: "pr-judge", ...)` で fresh subagent を 1 つ dispatch する。
       後述の「判定 subagent prompt」を、`<PR>` / `<owner>` / `<repo>` と a-0 時点の検出レポートを
