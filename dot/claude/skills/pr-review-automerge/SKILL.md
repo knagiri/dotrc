@@ -66,8 +66,9 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       activity が有る場合に限った説明である。
 
    a-1. **判定**: `Task(subagent_type: "pr-judge", ...)` で fresh subagent を 1 つ dispatch する。
-      後述の「判定 subagent prompt」を、`<PR>` / `<owner>` / `<repo>` と a-0 時点の検出レポートを
-      埋めて渡す。判定役は最終メッセージに判定 verdict JSON だけを返す。
+      後述の「判定 subagent prompt」を、`<PR>` / `<owner>` / `<repo>` と手順 0 または a-0 時点の
+      検出レポート（イテレーション 1 は a-0 が走らないため手順 0 の値を使う）を埋めて渡す。
+      判定役は最終メッセージに判定 verdict JSON だけを返す。
 
    a-2. **修正**: 判定の `findings_to_fix` が**非空のときだけ** `Task(subagent_type: "pr-fix", ...)` で
       fresh subagent を 1 つ dispatch する。後述の「修正 subagent prompt」に `<PR>` と
@@ -94,7 +95,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
         回さず手順 4（停止・報告）へ抜け、判定役と修正役の食い違いを人間に引き渡す。
    d. 5 回終わっても抜けられない場合は **auto-merge を有効化せず**手順 4（停止・報告）へ。
 3. **遅着 review の再確認 → CI 確認 → auto-merge 有効化**:
-   a. もう一度 `gh-await-reviews <PR>` を実行する。既に静穏なら即 return する。返った `last_activity_at` が
+   a. もう一度 `gh-await-reviews <PR>` を実行する（ブロック時間の条件分岐は 2.a-0 と同じ内部実装に
+      よるので繰り返さない。詳細は 2.a-0 参照）。返った `last_activity_at` が
       `LAST_SEEN`（＝最後の判定役を dispatch した地点）より**新しければ、判定役が読んだ後に新しい
       review が届いている**。手順 2 に戻る（合計 5 イテレーションの上限は超えない。`LAST_SEEN` は
       戻り先のイテレーション先頭 = 手順 2.a-0 で更新される）。同じなら b へ進む。
