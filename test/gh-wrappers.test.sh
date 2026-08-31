@@ -191,15 +191,17 @@ else echo "FAIL: gh-pr-checks Case D rc=$rc out=${out:0:200}"; fail=1; fi
 # the stale cancelled one used to pin has_failure to true forever. Shaped after
 # the measurement that prompted the fix, including the `Go Lint and Build` /
 # `Go Test` pair sharing run_numbers 5119/5120: run_number is per-workflow, so a
-# global comparison would be meaningless and the grouping by name is load-bearing.
+# global comparison would be meaningless and the grouping by workflow_id is
+# load-bearing (each same-named pair below shares one workflow_id, standing in
+# for "same workflow file").
 fx="$checksstub/e"
 checksfx "$fx" \
-  '{"workflow_runs":[{"name":"Packages Tests","status":"completed","conclusion":"cancelled","run_number":9525},
-                     {"name":"Packages Tests","status":"completed","conclusion":"success","run_number":9526},
-                     {"name":"Go Lint and Build","status":"completed","conclusion":"cancelled","run_number":5119},
-                     {"name":"Go Lint and Build","status":"completed","conclusion":"success","run_number":5120},
-                     {"name":"Go Test","status":"completed","conclusion":"success","run_number":5119},
-                     {"name":"Go Test","status":"completed","conclusion":"success","run_number":5120}]}' \
+  '{"workflow_runs":[{"name":"Packages Tests","status":"completed","conclusion":"cancelled","run_number":9525,"workflow_id":701},
+                     {"name":"Packages Tests","status":"completed","conclusion":"success","run_number":9526,"workflow_id":701},
+                     {"name":"Go Lint and Build","status":"completed","conclusion":"cancelled","run_number":5119,"workflow_id":702},
+                     {"name":"Go Lint and Build","status":"completed","conclusion":"success","run_number":5120,"workflow_id":702},
+                     {"name":"Go Test","status":"completed","conclusion":"success","run_number":5119,"workflow_id":703},
+                     {"name":"Go Test","status":"completed","conclusion":"success","run_number":5120,"workflow_id":703}]}' \
   '{"statuses":[]}'
 out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
@@ -214,11 +216,11 @@ else echo "FAIL: gh-pr-checks superseded rc=$rc out=$out"; fail=1; fi
 # looks exactly like this, and reading it as "passed" is the dangerous direction,
 # so the exemption in case E must not generalise into an unconditional dedup.
 # `Lint` carries a much higher run_number than the cancelled `E2E`: comparing
-# run_numbers without grouping by name would wrongly exonerate E2E here.
+# run_numbers without grouping by workflow_id would wrongly exonerate E2E here.
 fx="$checksstub/f"
 checksfx "$fx" \
-  '{"workflow_runs":[{"name":"E2E","status":"completed","conclusion":"cancelled","run_number":11},
-                     {"name":"Lint","status":"completed","conclusion":"success","run_number":99}]}' \
+  '{"workflow_runs":[{"name":"E2E","status":"completed","conclusion":"cancelled","run_number":11,"workflow_id":810},
+                     {"name":"Lint","status":"completed","conclusion":"success","run_number":99,"workflow_id":820}]}' \
   '{"statuses":[]}'
 out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
@@ -228,20 +230,20 @@ if [ "$rc" -eq 0 ] \
   echo "ok: gh-pr-checks still counts a lone cancelled run as a failure (no unconditional dedup)"
 else echo "FAIL: gh-pr-checks lone cancelled rc=$rc out=$out"; fail=1; fi
 
-# Case G: the three ways "newer completed run of the same name" can fail to hold.
-# All must resolve conservatively, i.e. the cancelled run keeps counting:
-# - Twin: the same-named run shares the run_number, so neither is newer.
+# Case G: the three ways "newer completed run of the same workflow" can fail to
+# hold. All must resolve conservatively, i.e. the cancelled run keeps counting:
+# - Twin: the same-workflow run shares the run_number, so neither is newer.
 # - NoKey: the cancelled run has no ordering key, so nothing can be shown newer.
 # - Racing: the replacement exists but has not completed, so it cannot yet
 #   vouch for anything -- the gate stays shut until it does.
 fx="$checksstub/g"
 checksfx "$fx" \
-  '{"workflow_runs":[{"name":"Twin","status":"completed","conclusion":"cancelled","run_number":7},
-                     {"name":"Twin","status":"completed","conclusion":"success","run_number":7},
-                     {"name":"NoKey","status":"completed","conclusion":"cancelled","run_number":null},
-                     {"name":"NoKey","status":"completed","conclusion":"success","run_number":8},
-                     {"name":"Racing","status":"completed","conclusion":"cancelled","run_number":3},
-                     {"name":"Racing","status":"in_progress","conclusion":null,"run_number":4}]}' \
+  '{"workflow_runs":[{"name":"Twin","status":"completed","conclusion":"cancelled","run_number":7,"workflow_id":831},
+                     {"name":"Twin","status":"completed","conclusion":"success","run_number":7,"workflow_id":831},
+                     {"name":"NoKey","status":"completed","conclusion":"cancelled","run_number":null,"workflow_id":832},
+                     {"name":"NoKey","status":"completed","conclusion":"success","run_number":8,"workflow_id":832},
+                     {"name":"Racing","status":"completed","conclusion":"cancelled","run_number":3,"workflow_id":833},
+                     {"name":"Racing","status":"in_progress","conclusion":null,"run_number":4,"workflow_id":833}]}' \
   '{"statuses":[]}'
 out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] \
@@ -250,6 +252,43 @@ if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | jq -e '[.checks[] | select(.conclusion == "cancelled")] | length == 3 and all(.superseded | not)' >/dev/null; then
   echo "ok: gh-pr-checks treats an equal run_number, a missing run_number and an unfinished replacement as not superseding"
 else echo "FAIL: gh-pr-checks superseded boundaries rc=$rc out=$out"; fail=1; fi
+
+# Case H: a run with no workflow_id (the "name" field this dedup used to group
+# by is nullable in GitHub's schema, and `--jq` turns any missing/nullable field
+# into JSON null) must not abort the wrapper. jq's object-index operator raises
+# a hard error ("Cannot index object with null") on a null key *before* the `//`
+# fallback ever runs, so a naive `$newest[.workflow_id]` crashes jq with exit
+# code 5 instead of falling through to -1. Regression check for that; run
+# against the pre-fix jq program to confirm this actually fails there.
+fx="$checksstub/h"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":null,"status":"completed","conclusion":"success","run_number":12,"workflow_id":null}]}' \
+  '{"statuses":[]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.has_failure == false and .pending_count == 0' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "1 checks: 1 success, 0 pending, 0 failure"' >/dev/null; then
+  echo "ok: gh-pr-checks does not abort on a run with a null grouping key"
+else echo "FAIL: gh-pr-checks null-key rc=$rc out=$out"; fail=1; fi
+
+# Case I: two distinct workflow *files* sharing the same name: run_number is
+# per-file, so file A's high run_number must not exonerate file B's cancelled
+# run just because jq grouped them by name. workflow_id (unique per file) is
+# the correct grouping key; name is not. This is the dangerous direction (a
+# real cancellation read as passed), unlike Case F's isolation by different
+# names -- here the names collide and only workflow_id keeps them apart.
+fx="$checksstub/i"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":"CI","status":"completed","conclusion":"cancelled","run_number":10,"workflow_id":901},
+                     {"name":"CI","status":"completed","conclusion":"success","run_number":900,"workflow_id":902}]}' \
+  '{"statuses":[]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.has_failure == true' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "2 checks: 1 success, 0 pending, 1 failure"' >/dev/null \
+  && printf '%s' "$out" | jq -e '[.checks[] | select(.conclusion == "cancelled")] | length == 1 and all(.superseded | not)' >/dev/null; then
+  echo "ok: gh-pr-checks does not let a same-named different-workflow_id run supersede a real cancellation"
+else echo "FAIL: gh-pr-checks same-name distinct-workflow_id rc=$rc out=$out"; fail=1; fi
 
 # gh-pr-checks: missing / non-numeric / extra-flag arg fail (no flag passthrough).
 PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" >/dev/null 2>&1; [ $? -ne 0 ] \
