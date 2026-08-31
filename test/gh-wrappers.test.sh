@@ -186,6 +186,71 @@ if [ "$rc" -eq 0 ] \
   echo "ok: gh-pr-checks handles a runs payload past MAX_ARG_STRLEN (128 KiB argv element cap)"
 else echo "FAIL: gh-pr-checks Case D rc=$rc out=${out:0:200}"; fail=1; fi
 
+# Case E: superseded runs -- `concurrency: cancel-in-progress` leaves the killed
+# run (cancelled) next to its replacement (success) under the same head SHA, and
+# the stale cancelled one used to pin has_failure to true forever. Shaped after
+# the measurement that prompted the fix, including the `Go Lint and Build` /
+# `Go Test` pair sharing run_numbers 5119/5120: run_number is per-workflow, so a
+# global comparison would be meaningless and the grouping by name is load-bearing.
+fx="$checksstub/e"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":"Packages Tests","status":"completed","conclusion":"cancelled","run_number":9525},
+                     {"name":"Packages Tests","status":"completed","conclusion":"success","run_number":9526},
+                     {"name":"Go Lint and Build","status":"completed","conclusion":"cancelled","run_number":5119},
+                     {"name":"Go Lint and Build","status":"completed","conclusion":"success","run_number":5120},
+                     {"name":"Go Test","status":"completed","conclusion":"success","run_number":5119},
+                     {"name":"Go Test","status":"completed","conclusion":"success","run_number":5120}]}' \
+  '{"statuses":[]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.has_failure == false and .pending_count == 0' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "6 checks: 6 success, 0 pending, 0 failure"' >/dev/null \
+  && printf '%s' "$out" | jq -e '[.checks[] | select(.conclusion == "cancelled")] | length == 2 and all(.superseded)' >/dev/null \
+  && printf '%s' "$out" | jq -e '[.checks[] | select(.run_number == 9526 or .run_number == 5120)] | all(.superseded | not)' >/dev/null; then
+  echo "ok: gh-pr-checks does not count a cancelled run superseded by a newer completed run of the same workflow"
+else echo "FAIL: gh-pr-checks superseded rc=$rc out=$out"; fail=1; fi
+
+# Case F: a lone cancelled run still fails. A human stop or a job-level timeout
+# looks exactly like this, and reading it as "passed" is the dangerous direction,
+# so the exemption in case E must not generalise into an unconditional dedup.
+# `Lint` carries a much higher run_number than the cancelled `E2E`: comparing
+# run_numbers without grouping by name would wrongly exonerate E2E here.
+fx="$checksstub/f"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":"E2E","status":"completed","conclusion":"cancelled","run_number":11},
+                     {"name":"Lint","status":"completed","conclusion":"success","run_number":99}]}' \
+  '{"statuses":[]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.has_failure == true' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "2 checks: 1 success, 0 pending, 1 failure"' >/dev/null \
+  && printf '%s' "$out" | jq -e '.checks | all(.superseded | not)' >/dev/null; then
+  echo "ok: gh-pr-checks still counts a lone cancelled run as a failure (no unconditional dedup)"
+else echo "FAIL: gh-pr-checks lone cancelled rc=$rc out=$out"; fail=1; fi
+
+# Case G: the three ways "newer completed run of the same name" can fail to hold.
+# All must resolve conservatively, i.e. the cancelled run keeps counting:
+# - Twin: the same-named run shares the run_number, so neither is newer.
+# - NoKey: the cancelled run has no ordering key, so nothing can be shown newer.
+# - Racing: the replacement exists but has not completed, so it cannot yet
+#   vouch for anything -- the gate stays shut until it does.
+fx="$checksstub/g"
+checksfx "$fx" \
+  '{"workflow_runs":[{"name":"Twin","status":"completed","conclusion":"cancelled","run_number":7},
+                     {"name":"Twin","status":"completed","conclusion":"success","run_number":7},
+                     {"name":"NoKey","status":"completed","conclusion":"cancelled","run_number":null},
+                     {"name":"NoKey","status":"completed","conclusion":"success","run_number":8},
+                     {"name":"Racing","status":"completed","conclusion":"cancelled","run_number":3},
+                     {"name":"Racing","status":"in_progress","conclusion":null,"run_number":4}]}' \
+  '{"statuses":[]}'
+out=$(checksenv "$fx" 537 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | jq -e '.has_failure == true and .pending_count == 1' >/dev/null \
+  && printf '%s' "$out" | jq -e '.summary == "6 checks: 2 success, 1 pending, 3 failure"' >/dev/null \
+  && printf '%s' "$out" | jq -e '[.checks[] | select(.conclusion == "cancelled")] | length == 3 and all(.superseded | not)' >/dev/null; then
+  echo "ok: gh-pr-checks treats an equal run_number, a missing run_number and an unfinished replacement as not superseding"
+else echo "FAIL: gh-pr-checks superseded boundaries rc=$rc out=$out"; fail=1; fi
+
 # gh-pr-checks: missing / non-numeric / extra-flag arg fail (no flag passthrough).
 PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-pr-checks missing arg fails" || { echo "FAIL: gh-pr-checks missing arg"; fail=1; }
