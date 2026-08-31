@@ -41,16 +41,28 @@ set -euo pipefail
 # failures.
 #
 # So a cancelled run is dropped from the failure count only when a *newer
-# completed run of the same workflow name* exists. Deliberately not a blanket
-# dedup down to the highest run_number per name: a lone cancelled run (human
+# completed run of the same workflow* exists. Deliberately not a blanket
+# dedup down to the highest run_number per workflow: a lone cancelled run (human
 # stop, job timeout) has to keep counting, and a config where push and
 # pull_request both fire on one SHA legitimately has two same-named runs, one of
 # which a blanket dedup would silently discard. run_number is the ordering key,
 # and it is per-workflow -- in the measurement `Go Lint and Build` and `Go Test`
-# both carried 5119/5120 -- so the comparison must be grouped by name and is
-# never global. A run with no run_number can neither be superseded nor supersede
-# anything, and commit statuses (source == "status") have no run_number at all,
-# so they are outside this entirely.
+# both carried 5119/5120 -- so the comparison must be grouped and is never
+# global.
+#
+# The grouping key is workflow_id, not name. GitHub lets two distinct workflow
+# *files* share the same `name:`, and run_number is a per-file counter, not a
+# per-name one -- so a same-named pair of files would let one file's high
+# run_number exonerate the other file's real cancellation, which is the
+# dangerous direction (a real failure read as passed). workflow_id uniquely
+# identifies the file and is a required field on every actions/runs entry, so
+# grouping by it costs nothing. A run (or commit status) whose grouping key is
+# null can neither be superseded nor supersede anything: `jq` aborts with
+# "Cannot index object with null" if an object is indexed by a null key rather
+# than falling through `//`, so both `newest_completed` and `is_superseded`
+# must guard the key before using it, symmetrically. A run with no run_number
+# is excluded the same way, and commit statuses (source == "status") have
+# neither run_number nor workflow_id, so they are outside this entirely.
 #
 # The two payloads reach jq on stdin rather than through --argjson. Linux caps a
 # *single* argv element at MAX_ARG_STRLEN (128 KiB), independently of the much
@@ -97,10 +109,12 @@ fi
 # way `gh run list --limit N` can lose it. --jq drops every field the report
 # below never reads, while keeping the response shape ({workflow_runs: [...]},
 # {statuses: [...]}) that the program still indexes into. run_number is kept
-# because it is the ordering key the superseded-run rule above needs; without it
-# a projected run carries no way to tell which of two same-named runs is newer.
+# because it is the ordering key the superseded-run rule above needs, and
+# workflow_id because it is that rule's grouping key -- without both, a
+# projected run carries no way to tell which of two runs of the same workflow
+# is newer.
 runs=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" \
-  --jq '{workflow_runs: [(.workflow_runs // [])[] | {name, status, conclusion, run_number}]}')
+  --jq '{workflow_runs: [(.workflow_runs // [])[] | {name, status, conclusion, run_number, workflow_id}]}')
 # Commit statuses catch external CI that never creates an Actions run.
 statuses=$(gh api "repos/$repo/commits/$sha/status" \
   --jq '{statuses: [(.statuses // [])[] | {context, state}]}')
@@ -108,20 +122,25 @@ statuses=$(gh api "repos/$repo/commits/$sha/status" \
 # skipped / neutral are not failures: a skipped job is the normal outcome of a
 # paths-filter, so treating it as a failure would block merges on unrelated PRs.
 printf '%s\n%s\n' "$runs" "$statuses" | jq -n --argjson pr "$pr" --arg sha "$sha" '
-  # $newest maps a workflow name to the highest run_number it has among
-  # *completed* runs. A still-running replacement therefore does not yet
-  # exonerate the run it cancelled -- the gate stays shut until it finishes,
-  # which is the conservative direction.
+  # $newest maps a workflow_id (as a string -- jq object keys must be strings)
+  # to the highest run_number it has among *completed* runs. A still-running
+  # replacement therefore does not yet exonerate the run it cancelled -- the
+  # gate stays shut until it finishes, which is the conservative direction.
   def newest_completed:
     reduce (.[]
             | select(.source == "actions" and .status == "completed"
-                     and .name != null and .run_number != null))
-      as $r ({}; .[$r.name] = ([(.[$r.name] // -1), $r.run_number] | max));
-  # Strictly greater, so two same-named runs sharing a run_number supersede
-  # neither each other nor themselves.
+                     and .workflow_id != null and .run_number != null))
+      as $r ({}; .[($r.workflow_id|tostring)] =
+               ([(.[($r.workflow_id|tostring)] // -1), $r.run_number] | max));
+  # Strictly greater, so two runs of the same workflow sharing a run_number
+  # supersede neither each other nor themselves. The workflow_id != null guard
+  # mirrors the one in newest_completed: indexing $newest with a null key is a
+  # jq hard error ("Cannot index object with null"), raised before the `//`
+  # fallback ever runs, so the guard has to come first rather than relying on
+  # `//` alone.
   def is_superseded($newest):
-    .source == "actions" and .run_number != null
-    and (($newest[.name] // -1) > .run_number);
+    .source == "actions" and .workflow_id != null and .run_number != null
+    and (($newest[(.workflow_id|tostring)] // -1) > .run_number);
 
   def is_failure:
     if .source == "actions"
@@ -150,12 +169,12 @@ printf '%s\n%s\n' "$runs" "$statuses" | jq -n --argjson pr "$pr" --arg sha "$sha
   | (input) as $statuses
   | [ ($runs.workflow_runs // [])[]
     | {name: .name, source: "actions", status: .status, conclusion: .conclusion,
-       run_number: .run_number} ]
+       run_number: .run_number, workflow_id: .workflow_id} ]
   + [ ($statuses.statuses // [])[]
     | {name: .context, source: "status",
        status: (if .state == "pending" then "pending" else "completed" end),
        conclusion: (if .state == "pending" then null else .state end),
-       run_number: null} ]
+       run_number: null, workflow_id: null} ]
   | . as $raw
   | (($raw | newest_completed) as $newest
      | [ $raw[] | . + {superseded: is_superseded($newest)} ]) as $checks
