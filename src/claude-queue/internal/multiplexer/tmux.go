@@ -167,11 +167,16 @@ func shellQuote(s string) string {
 // different width rules, would make the -n / -S / rename spellings disagree.
 //
 // "." and ":" are the window.pane and session:window separators in -t targets.
-// "~" is reserved for exitedSuffix. A leading "-" would be read as an option by
-// tmux's argument parser, and a trailing one is just a dangling separator.
-// Empty falls back to "cmd", so tmux is never handed an unnamed window.
+// "~" is reserved for exitedSuffix. "#" is tmux's format-expansion marker for
+// the very argument this feeds -- rename-window and new-window -n both expand
+// "#S"/"#T"/"#D"/"#W"/"#{...}" in the name they are given (confirmed against
+// tmux 3.6b), so a "#" left in would make the name tmux stores diverge from
+// the one -S/-n/rename-window agreed on. A leading "-" would be read as an
+// option by tmux's argument parser, and a trailing one is just a dangling
+// separator. Empty falls back to "cmd", so tmux is never handed an unnamed
+// window.
 func sanitizeWindowName(name string) string {
-	name = strings.Trim(strings.NewReplacer(".", "-", ":", "-", "~", "-").Replace(name), "-")
+	name = strings.Trim(strings.NewReplacer(".", "-", ":", "-", "~", "-", "#", "-").Replace(name), "-")
 	if name == "" {
 		return "cmd"
 	}

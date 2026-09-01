@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/knagiri/dotrc/src/claude-queue/internal/label"
 )
 
 // wantCommand is what `claude attach abc` must reach tmux as: one shell
@@ -370,6 +372,18 @@ func TestSanitizeWindowName(t *testing.T) {
 			want: "u-exited",
 		},
 		{
+			// "#" is tmux's format-expansion marker (rename-window and
+			// new-window -n both expand it), so a name carrying it would be
+			// stored under a different string than the one -S looks for.
+			// See sanitizeWindowName's doc comment for the observed
+			// substitutions (e.g. "#S" -> the session name). Unlike
+			// label.Sanitize, this backstop does not collapse runs of "-",
+			// so the input here is chosen free of adjacent separators.
+			name: "hash is replaced",
+			in:   "issue#123",
+			want: "issue-123",
+		},
+		{
 			// tmux would read a leading "-" as an option to rename-window.
 			name: "edge dashes are trimmed",
 			in:   "-mid-dle-",
@@ -402,6 +416,30 @@ func TestSanitizeWindowNameDoesNotTruncate(t *testing.T) {
 	long := strings.Repeat("a", 200)
 	if got := sanitizeWindowName(long); got != long {
 		t.Errorf("sanitizeWindowName truncated a %d-char name to %d chars", len(long), len(got))
+	}
+}
+
+// TestSanitizeWindowNameIsAFixedPointOfLabelSanitize pins the invariant the
+// package design depends on but never asserted directly: sanitizeWindowName
+// must be a no-op on whatever label.Sanitize already produced. If the two
+// characters lists ever drift apart -- e.g. a future separator gets added to
+// one but not the other -- the name -n/-S installed and the one this backstop
+// would produce for the *same* input diverge, and the -S dedupe in OpenSession
+// silently stops matching. "#" is exactly this failure mode's history: it was
+// missing from both.
+func TestSanitizeWindowNameIsAFixedPointOfLabelSanitize(t *testing.T) {
+	for _, in := range []string{
+		"a.b:c~d",
+		"fix-#67",
+		"x##y",
+		"fix-#{session_na",
+		"ロググループ管理",
+		"Vercel log drain",
+	} {
+		sanitized := label.Sanitize(in)
+		if got := sanitizeWindowName(sanitized); got != sanitized {
+			t.Errorf("sanitizeWindowName(label.Sanitize(%q)) = %q, want the fixed point %q", in, got, sanitized)
+		}
 	}
 }
 
