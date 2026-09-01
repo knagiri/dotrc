@@ -27,7 +27,7 @@ func (tmuxImpl) Switch(target string) error {
 // needs the session, not just the window: a background session belongs to a
 // worktree, and opening its window wherever the popup happened to be invoked
 // from would scatter unrelated worktrees across one session.
-func (tmuxImpl) OpenSession(name, cwd string, argv []string) error {
+func (tmuxImpl) OpenSession(name, cwd, window string, argv []string) error {
 	if name == "" {
 		return errors.New("no session name")
 	}
@@ -37,7 +37,10 @@ func (tmuxImpl) OpenSession(name, cwd string, argv []string) error {
 	// tmux invocation below must see the same sanitized name has-session
 	// checks, so this has to run before any of them.
 	name = sanitizeSessionName(name)
-	window := windowName(argv)
+	// Same reasoning for the window name, and the same "before every use"
+	// requirement: -n, -S and the rename inside windowCommand all have to
+	// agree on one spelling or the dedupe stops matching.
+	window = sanitizeWindowName(window)
 	if err := exec.Command("tmux", "has-session", "-t="+name).Run(); err != nil {
 		// A new session must be created detached. The picker runs inside
 		// `display-popup -E`, and an attaching new-session would try to take
@@ -56,8 +59,8 @@ func (tmuxImpl) OpenSession(name, cwd string, argv []string) error {
 // newSessionArgs builds the tmux argv for creating the session. Split out from
 // OpenSession so the contract can be asserted without starting a tmux server.
 //
-// -n names the initial window explicitly with the same windowName(argv) used
-// by newWindowArgs below. Without it tmux auto-names the window from the
+// -n names the initial window explicitly with the same window name passed to
+// newWindowArgs below. Without it tmux auto-names the window from the
 // shell command, which does not match the name newWindowArgs' -S looks for,
 // so a session created via this path would never dedupe on a second pick of
 // the same target (a second window would stack instead of -S selecting the
@@ -88,9 +91,9 @@ func newWindowArgs(name, window, cwd string, argv []string) []string {
 }
 
 // exitedSuffix marks a window whose command has finished and which now holds
-// nothing but the fallback shell. windowName never emits "~" (it keeps only
-// [A-Za-z0-9_-]), so a renamed window can never collide with the name a later
-// pick asks -S for -- which is the whole point of the rename, see windowCommand.
+// nothing but the fallback shell. sanitizeWindowName never emits "~", so a
+// renamed window can never collide with the name a later pick asks -S for --
+// which is the whole point of the rename, see windowCommand.
 const exitedSuffix = "~exited"
 
 // windowCommand renders argv as the one trailing argument tmux runs in the new
@@ -157,30 +160,92 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// windowName derives a window name from the command being run, so repeated
-// picks of the same target collapse onto one window (see -S above) while two
-// different sessions opened in the same tmux session stay apart. Anything
-// outside [A-Za-z0-9_-] becomes "_": tmux reads "." and ":" as the
-// window.pane and session:window separators in -t targets.
-func windowName(argv []string) string {
-	if len(argv) == 0 {
+// sanitizeWindowName is the last gate before a caller-supplied name reaches
+// tmux. internal/label already produces names in this shape, so this is a
+// backstop rather than the formatting step -- which is why it substitutes and
+// trims but deliberately does not truncate: shortening a name twice, under two
+// different width rules, would make the -n / -S / rename spellings disagree.
+//
+// "." and ":" are the window.pane and session:window separators in -t targets.
+// "~" is reserved for exitedSuffix. A leading "-" would be read as an option by
+// tmux's argument parser, and a trailing one is just a dangling separator.
+// Empty falls back to "cmd", so tmux is never handed an unnamed window.
+func sanitizeWindowName(name string) string {
+	name = strings.Trim(strings.NewReplacer(".", "-", ":", "-", "~", "-").Replace(name), "-")
+	if name == "" {
 		return "cmd"
 	}
-	var b strings.Builder
-	for i, a := range argv {
-		if i > 0 {
-			b.WriteByte('-')
-		}
-		for _, r := range a {
-			switch {
-			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
-				b.WriteRune(r)
-			default:
-				b.WriteByte('_')
-			}
+	return name
+}
+
+// RenameWindow renames the window pane belongs to. Passing a pane id where
+// tmux expects a target-window is deliberate and supported: tmux resolves it
+// to the window that contains the pane, which is what lets a hook rename "its"
+// window while knowing only $TMUX_PANE.
+func (tmuxImpl) RenameWindow(pane, name string) error {
+	return exec.Command("tmux", renameWindowArgs(pane, sanitizeWindowName(name))...).Run()
+}
+
+func renameWindowArgs(pane, name string) []string {
+	return []string{"rename-window", "-t", pane, name}
+}
+
+// SetAutomaticRename hands the window's name back to tmux (or takes it away).
+// tmux disables automatic-rename for a window as soon as anything names it
+// explicitly -- `new-window -n`, `rename-window` -- and never re-enables it on
+// its own, so without this the last name a session set would outlive it and
+// sit on top of the shell that takes the pane over.
+func (tmuxImpl) SetAutomaticRename(pane string, on bool) error {
+	return exec.Command("tmux", automaticRenameArgs(pane, on)...).Run()
+}
+
+func automaticRenameArgs(pane string, on bool) []string {
+	value := "off"
+	if on {
+		value = "on"
+	}
+	return []string{"setw", "-t", pane, "automatic-rename", value}
+}
+
+// WindowName returns the name of the window pane belongs to.
+func (tmuxImpl) WindowName(pane string) (string, bool) {
+	out, err := exec.Command("tmux", windowNameArgs(pane)...).Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimRight(string(out), "\n"), true
+}
+
+func windowNameArgs(pane string) []string {
+	return []string{"display", "-p", "-t", pane, "#{window_name}"}
+}
+
+// WindowPaneCount counts the panes sharing pane's window.
+func (tmuxImpl) WindowPaneCount(pane string) (int, bool) {
+	out, err := exec.Command("tmux", windowPanesArgs(pane)...).Output()
+	if err != nil {
+		return 0, false
+	}
+	return countLines(string(out)), true
+}
+
+func windowPanesArgs(pane string) []string {
+	return []string{"list-panes", "-t", pane, "-F", "#{pane_id}"}
+}
+
+// countLines counts the non-empty lines of a tmux -F listing. Blank lines are
+// skipped rather than counted, so the trailing newline does not inflate the
+// count into a second pane that is not there -- which for the rename guard
+// would be the expensive direction to be wrong in (it would silently stop
+// renaming every window).
+func countLines(out string) int {
+	n := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
 		}
 	}
-	return b.String()
+	return n
 }
 
 // sanitizeSessionName makes a worktree directory name usable as a tmux target.
