@@ -18,9 +18,29 @@ type Multiplexer interface {
 	Switch(target string) error
 	// OpenSession opens argv in a window of the multiplexer session named
 	// name, creating that session if it does not exist, and moves the client
-	// there. cwd is the window's working directory. Returns an error when
-	// there is no multiplexer to open a session in.
-	OpenSession(name, cwd string, argv []string) error
+	// there. cwd is the window's working directory. window is the name to
+	// give that window, which callers derive from the session's content (see
+	// internal/label) -- the implementation only sanitizes it, it never
+	// invents one. Returns an error when there is no multiplexer to open a
+	// session in.
+	OpenSession(name, cwd, window string, argv []string) error
+	// RenameWindow renames the window holding pane. Used to keep a window's
+	// name following the conversation running in it, so it is best-effort:
+	// callers ignore the error rather than fail the operation they were in.
+	RenameWindow(pane, name string) error
+	// SetAutomaticRename re-enables (or disables) the multiplexer's own
+	// window naming for the window holding pane. Renaming a window turns
+	// tmux's automatic-rename off permanently, so a session that named its
+	// window has to hand the name back when it ends.
+	SetAutomaticRename(pane string, on bool) error
+	// WindowName returns the current name of the window holding pane.
+	// Reports false when it cannot be asked, which callers must not read as
+	// "the name is empty".
+	WindowName(pane string) (string, bool)
+	// WindowPaneCount returns how many panes share pane's window, so a caller
+	// can tell whether renaming that window speaks for pane alone. Reports
+	// false when it cannot be asked.
+	WindowPaneCount(pane string) (int, bool)
 	// FindPane returns the pane pid is running in, walking up the process
 	// tree until a pane matches, so a process started deeper than the pane's
 	// own shell is still located. Reports false when there is no such pane --
@@ -58,9 +78,20 @@ func (noopImpl) Switch(target string) error { return nil }
 // OpenSession cannot succeed without a multiplexer, and callers need to know:
 // unlike Switch, there is no silent degradation that still gets the user to
 // their session. The error is what makes the caller print a manual fallback.
-func (noopImpl) OpenSession(name, cwd string, argv []string) error {
+func (noopImpl) OpenSession(name, cwd, window string, argv []string) error {
 	return errors.New("no multiplexer detected")
 }
+
+// RenameWindow and SetAutomaticRename succeed silently for the same reason
+// Switch does: window naming is cosmetic, and a hook running outside tmux must
+// not report a failure over it.
+func (noopImpl) RenameWindow(pane, name string) error          { return nil }
+func (noopImpl) SetAutomaticRename(pane string, on bool) error { return nil }
+
+// WindowName and WindowPaneCount have no window to describe. The false is what
+// keeps a caller from acting on the zero values as if they were answers.
+func (noopImpl) WindowName(pane string) (string, bool)   { return "", false }
+func (noopImpl) WindowPaneCount(pane string) (int, bool) { return 0, false }
 
 // FindPane has no panes to search without a multiplexer. Unlike OpenSession this
 // needs no error: "not found" is already the answer the caller acts on.

@@ -73,7 +73,7 @@ func TestNewSessionArgs(t *testing.T) {
 // would only hold when the session already existed, never on first creation.
 func TestNewSessionArgsWindowNameMatchesNewWindow(t *testing.T) {
 	argv := []string{"claude", "attach", "abc"}
-	window := windowName(argv)
+	window := "claude-attach-abc"
 
 	sessionArgs := newSessionArgs("dotrc_wt", window, "/w/a", argv)
 	windowArgs := newWindowArgs("dotrc_wt", window, "/w/a", argv)
@@ -246,7 +246,7 @@ func TestWindowCommand(t *testing.T) {
 // must be exactly the one -S looks for.
 func TestWindowCommandReleasesTheDedupeName(t *testing.T) {
 	argv := []string{"claude", "attach", "abc"}
-	window := windowName(argv)
+	window := "claude-attach-abc"
 
 	for _, tt := range []struct {
 		name string
@@ -271,29 +271,34 @@ func TestWindowCommandReleasesTheDedupeName(t *testing.T) {
 		})
 	}
 
-	// A released name must not be picked up by a later -S. windowName keeps
-	// only [A-Za-z0-9_-], so no argv -- not even one containing "~" itself --
-	// can produce a name that ends in the suffix.
-	for _, probe := range [][]string{argv, {"claude", "--resume", "u~exited"}, {"a.b", "c:d"}} {
-		if strings.HasSuffix(windowName(probe), exitedSuffix) {
-			t.Errorf("windowName(%v) = %q ends with %q; a live window could collide with a released one", probe, windowName(probe), exitedSuffix)
+	// A released name must not be picked up by a later -S. sanitizeWindowName
+	// strips "~", so no caller-supplied name -- not even one that already ends
+	// in the suffix -- can reach tmux still carrying it.
+	for _, probe := range []string{"claude-attach-abc", "u~exited", "a.b:c", "~exited"} {
+		if strings.HasSuffix(sanitizeWindowName(probe), exitedSuffix) {
+			t.Errorf("sanitizeWindowName(%q) = %q ends with %q; a live window could collide with a released one", probe, sanitizeWindowName(probe), exitedSuffix)
 		}
 	}
 }
 
-// TestWindowNameIgnoresShellWrap pins that the dedupe key stays derived from
-// the raw argv. Computing it from the wrapped command instead would fold the
-// "; exec ..." tail into every window name, changing what newWindowArgs' -S
-// matches on -- and the names of the two paths would drift apart the moment
-// only one of them wrapped.
-func TestWindowNameIgnoresShellWrap(t *testing.T) {
-	argv := []string{"claude", "attach", "abc"}
+// TestWindowCommandUsesTheGivenName pins that the name the window is created
+// under and the name its exit rename releases are the same string the caller
+// handed in. The wrap around the command must not leak into either: if the
+// two ever diverge, -S stops matching and repeat picks stack windows.
+func TestWindowCommandUsesTheGivenName(t *testing.T) {
+	const window = "AWS-ログ調査-6773febd"
 
-	if got, want := windowName(argv), "claude-attach-abc"; got != want {
-		t.Errorf("windowName(%v) = %q, want %q", argv, got, want)
+	got := windowCommand(window, []string{"claude", "attach", "abc"})
+	if len(got) != 1 {
+		t.Fatalf("windowCommand(...) = %v, want exactly one argument", got)
 	}
-	if wrapped := windowName(windowCommand(windowName(argv), argv)); wrapped == windowName(argv) {
-		t.Errorf("windowName of the wrapped command = %q, expected it to differ from the raw-argv name; the wrap must not feed windowName", wrapped)
+	if !strings.Contains(got[0], shellQuote(window+exitedSuffix)) {
+		t.Errorf("windowCommand(...) = %q, must release exactly %q", got[0], window+exitedSuffix)
+	}
+	// The caller's name is what -n installs, unchanged.
+	args := newWindowArgs("dotrc_wt", window, "/w/a", []string{"claude", "attach", "abc"})
+	if named := args[slices.Index(args, "-n")+1]; named != window {
+		t.Errorf("newWindowArgs named the window %q, want the caller's %q", named, window)
 	}
 }
 
@@ -336,36 +341,67 @@ func TestSanitizeSessionName(t *testing.T) {
 	}
 }
 
-func TestWindowName(t *testing.T) {
+func TestSanitizeWindowName(t *testing.T) {
 	tests := []struct {
 		name string
-		argv []string
+		in   string
 		want string
 	}{
 		{
-			name: "claude attach",
-			argv: []string{"claude", "attach", "61c846eb"},
-			want: "claude-attach-61c846eb",
+			// The common case: internal/label already produced a tmux-safe
+			// name, so this must be a pass-through -- including the Japanese
+			// most titles are written in.
+			name: "an already-safe label is untouched",
+			in:   "ロググループの管理-0837e774",
+			want: "ロググループの管理-0837e774",
 		},
 		{
 			// "." and ":" are the window.pane and session:window separators
 			// in tmux -t targets, so they cannot survive in a window name.
 			name: "separators are replaced",
-			argv: []string{"a.b", "c:d"},
-			want: "a_b-c_d",
+			in:   "a.b:c",
+			want: "a-b-c",
 		},
 		{
-			name: "empty argv",
-			argv: nil,
+			// "~" belongs to exitedSuffix; a name carrying it could collide
+			// with a released one and swallow the next pick.
+			name: "tilde is replaced",
+			in:   "u~exited",
+			want: "u-exited",
+		},
+		{
+			// tmux would read a leading "-" as an option to rename-window.
+			name: "edge dashes are trimmed",
+			in:   "-mid-dle-",
+			want: "mid-dle",
+		},
+		{
+			name: "empty falls back",
+			in:   "",
+			want: "cmd",
+		},
+		{
+			name: "all-separator input falls back",
+			in:   "...",
 			want: "cmd",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := windowName(tt.argv); got != tt.want {
-				t.Errorf("windowName(%v) = %q, want %q", tt.argv, got, tt.want)
+			if got := sanitizeWindowName(tt.in); got != tt.want {
+				t.Errorf("sanitizeWindowName(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// sanitizeWindowName is a backstop, not the formatter: internal/label owns the
+// width budget, and a second truncation here under a different rule would make
+// -n, -S and the exit rename disagree about the same window.
+func TestSanitizeWindowNameDoesNotTruncate(t *testing.T) {
+	long := strings.Repeat("a", 200)
+	if got := sanitizeWindowName(long); got != long {
+		t.Errorf("sanitizeWindowName truncated a %d-char name to %d chars", len(long), len(got))
 	}
 }
 
@@ -451,5 +487,70 @@ func TestParsePanes(t *testing.T) {
 	// the walk could then match against.
 	if got := parsePanes("junk\n\nnotapid %1\n42 %2\n"); len(got) != 1 || got[42] != "%2" {
 		t.Errorf("parsePanes with junk lines = %v, want only 42:%%2", got)
+	}
+}
+
+// The window-naming commands are asserted as argv, for the same reason the
+// session builders are: the contract is the argument list, and checking it
+// needs no tmux server.
+func TestWindowNamingArgs(t *testing.T) {
+	// A pane id where tmux documents a target-window is deliberate: tmux
+	// resolves it to the window holding the pane, which is the only handle a
+	// hook has ($TMUX_PANE).
+	if got, want := renameWindowArgs("%5", "topic-6773febd"),
+		[]string{"rename-window", "-t", "%5", "topic-6773febd"}; !slices.Equal(got, want) {
+		t.Errorf("renameWindowArgs = %v, want %v", got, want)
+	}
+	if got, want := automaticRenameArgs("%5", true),
+		[]string{"setw", "-t", "%5", "automatic-rename", "on"}; !slices.Equal(got, want) {
+		t.Errorf("automaticRenameArgs(on) = %v, want %v", got, want)
+	}
+	if got, want := automaticRenameArgs("%5", false),
+		[]string{"setw", "-t", "%5", "automatic-rename", "off"}; !slices.Equal(got, want) {
+		t.Errorf("automaticRenameArgs(off) = %v, want %v", got, want)
+	}
+	if got, want := windowNameArgs("%5"),
+		[]string{"display", "-p", "-t", "%5", "#{window_name}"}; !slices.Equal(got, want) {
+		t.Errorf("windowNameArgs = %v, want %v", got, want)
+	}
+	// -F over the window's panes: the count is the number of lines, so the
+	// format has to be one field per pane and nothing else.
+	if got, want := windowPanesArgs("%5"),
+		[]string{"list-panes", "-t", "%5", "-F", "#{pane_id}"}; !slices.Equal(got, want) {
+		t.Errorf("windowPanesArgs = %v, want %v", got, want)
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want int
+	}{
+		{
+			// The single-pane answer is what the hook's rename guard turns on,
+			// and tmux always ends its listing with a newline: counting that
+			// as a second pane would stop every rename.
+			name: "one pane with a trailing newline",
+			out:  "%5\n",
+			want: 1,
+		},
+		{
+			name: "a split window",
+			out:  "%5\n%6\n",
+			want: 2,
+		},
+		{
+			name: "no output at all",
+			out:  "",
+			want: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countLines(tt.out); got != tt.want {
+				t.Errorf("countLines(%q) = %d, want %d", tt.out, got, tt.want)
+			}
+		})
 	}
 }

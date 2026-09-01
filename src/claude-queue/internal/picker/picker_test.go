@@ -3,6 +3,8 @@ package picker
 import (
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -562,10 +564,17 @@ type fakeMux struct {
 	serverPID int             // ServerPID; 0 means "no server"
 }
 
-func (f *fakeMux) PaneID() string                                 { return "" }
-func (f *fakeMux) RefreshStatus()                                 {}
-func (f *fakeMux) Switch(target string) error                     { return nil }
-func (f *fakeMux) OpenSession(name, cwd string, a []string) error { return nil }
+func (f *fakeMux) PaneID() string                                         { return "" }
+func (f *fakeMux) RefreshStatus()                                         {}
+func (f *fakeMux) Switch(target string) error                             { return nil }
+func (f *fakeMux) OpenSession(name, cwd, window string, a []string) error { return nil }
+
+// The window-naming methods are equally unused here: picker.Run drives them,
+// and Run is the exec boundary these tests stay on the near side of.
+func (f *fakeMux) RenameWindow(pane, name string) error          { return nil }
+func (f *fakeMux) SetAutomaticRename(pane string, on bool) error { return nil }
+func (f *fakeMux) WindowName(pane string) (string, bool)         { return "", false }
+func (f *fakeMux) WindowPaneCount(pane string) (int, bool)       { return 0, false }
 func (f *fakeMux) FindPane(pid int) (string, bool) {
 	pane, ok := f.find[pid]
 	return pane, ok
@@ -763,6 +772,34 @@ func TestWaitGone(t *testing.T) {
 		other := []roster.Agent{{SessionID: "t", PID: 2}}
 		if !waitGone("s", func() ([]roster.Agent, error) { return other, nil }, func() {}, 2) {
 			t.Error("waitGone = false when only another session is listed, want true")
+		}
+	})
+}
+
+func TestWindowNameFor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	line := `{"type":"ai-title","aiTitle":"GitHub App PR 作成","sessionId":"6773febd"}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	const sessionID = "6773febd-ce31-4e22-8354-5bc0d72c18a1"
+
+	t.Run("named after the conversation", func(t *testing.T) {
+		if got, want := windowNameFor(path, sessionID, "attach"), "GitHub-App-PR-作-6773febd"; got != want {
+			t.Errorf("windowNameFor = %q, want %q", got, want)
+		}
+	})
+
+	// The fallback keeps the one virtue the old argv-derived name had: it is
+	// unique per session, so new-window -S still collapses repeat picks of the
+	// same row onto one window.
+	t.Run("falls back per action kind", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "absent.jsonl")
+		if got, want := windowNameFor(missing, sessionID, "attach"), "attach-6773febd"; got != want {
+			t.Errorf("windowNameFor = %q, want %q", got, want)
+		}
+		if got, want := windowNameFor(missing, sessionID, "resume"), "resume-6773febd"; got != want {
+			t.Errorf("windowNameFor = %q, want %q", got, want)
 		}
 	})
 }
