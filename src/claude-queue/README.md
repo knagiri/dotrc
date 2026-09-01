@@ -92,6 +92,13 @@ make install
 session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同じ慣習）。popup を開いた
 時点の current session には作らない。
 
+window 名は session の transcript にある ai-title から `<タイトル 16 桁>-<session id 8 桁>` を
+組む（取れなければ `attach-<id8>` / `resume-<id8>`）。picker 経由で開く window だけでなく、
+pane を持つ追跡中の session の window も hook（`UserPromptSubmit` / `Stop`）が同じ名前へ
+改名する。ただし改名するのは pane が window 唯一の pane のときだけで、`SessionEnd` では
+自分が付けた名前のときに限り tmux の automatic-rename を戻す。設計上の理由は
+[docs/design/claude-tmux-worktree.md](../../docs/design/claude-tmux-worktree.md) を参照。
+
 window を開く attach / resume の経路では、`claude` をそのまま pane のプロセスにせず shell 経由で
 走らせ、終了後は shell へ置き換える。`claude attach` は `C-z` で「shell へ戻る」と言うが、戻る先の
 shell が無ければ pane ごと閉じ、その window しか持たない session は道連れに消える。shell を挟めば
