@@ -30,7 +30,7 @@ func TestDetect_NoMultiplexer(t *testing.T) {
 	}
 	// Unlike Switch, OpenSession must return an error: the picker's attach path
 	// relies on this to decide whether to print a manual-fallback hint.
-	if err := m.OpenSession("dotrc_wt", "/w/a", []string{"claude", "attach", "abc"}); err == nil {
+	if err := m.OpenSession("dotrc_wt", "/w/a", "some-window", []string{"claude", "attach", "abc"}); err == nil {
 		t.Errorf("noop OpenSession err = nil, want non-nil")
 	}
 	// With no server there is no pane to confirm and no server pid to compare
@@ -44,6 +44,21 @@ func TestDetect_NoMultiplexer(t *testing.T) {
 	}
 	if _, ok := m.ServerPID(); ok {
 		t.Error("noop ServerPID reported a server, want none")
+	}
+	// Window naming is cosmetic, so its writes stay silent like Switch; its
+	// two reads report false, which is what keeps the hook's rename guard
+	// from acting on a zero value it never actually measured.
+	if err := m.RenameWindow("%1", "x"); err != nil {
+		t.Errorf("noop RenameWindow err = %v, want nil", err)
+	}
+	if err := m.SetAutomaticRename("%1", true); err != nil {
+		t.Errorf("noop SetAutomaticRename err = %v, want nil", err)
+	}
+	if _, ok := m.WindowName("%1"); ok {
+		t.Error("noop WindowName reported a name, want none")
+	}
+	if _, ok := m.WindowPaneCount("%1"); ok {
+		t.Error("noop WindowPaneCount reported a count, want none")
 	}
 }
 
