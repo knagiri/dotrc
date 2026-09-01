@@ -34,6 +34,14 @@ func TestSanitize(t *testing.T) {
 			want: "a-b-c-d",
 		},
 		{
+			// "#" triggers tmux's format expansion in a window name (e.g.
+			// "#S" substitutes the session name), which would make the name
+			// tmux actually stores diverge from what Resolve computed.
+			name: "hash is replaced",
+			in:   "fix-#67",
+			want: "fix-67",
+		},
+		{
 			name: "runs of separators collapse and edges are trimmed",
 			in:   "  a   ..b  ",
 			want: "a-b",
@@ -200,6 +208,74 @@ func TestResolveFallsBackToAFullScan(t *testing.T) {
 	}
 	if got, want := Resolve(path, sessionID), "early-topic-6773febd"; got != want {
 		t.Errorf("Resolve = %q, want %q", got, want)
+	}
+}
+
+// TestResolveTailAloneAnswers covers the tail read's ordinary job: the sole
+// ai-title sits within the last tailScanBytes of the transcript, with nothing
+// answering before it. Unlike every other Resolve test above (which puts its
+// title within the first tailScanBytes and so never actually exercises the
+// tail window), this one only comes out right if the tail window is read from
+// somewhere past the head.
+func TestResolveTailAloneAnswers(t *testing.T) {
+	// Padding that parses cleanly but names nothing, so a wrong answer here
+	// can only come from the scan, never from the filler.
+	filler := `{"type":"assistant","message":{"role":"assistant","content":"` + strings.Repeat("x", 900) + `"}}`
+	var lines []string
+	for total := 0; total < 2*tailScanBytes; total += len(filler) + 1 {
+		lines = append(lines, filler)
+	}
+	lines = append(lines, aiTitleLine("tail only"))
+	path := writeTranscript(t, lines...)
+
+	if fi, err := os.Stat(path); err != nil || fi.Size() <= tailScanBytes {
+		t.Fatalf("fixture must exceed the tail window: size err=%v", err)
+	}
+	if got, want := Resolve(path, sessionID), "tail-only-6773febd"; got != want {
+		t.Errorf("Resolve = %q, want %q", got, want)
+	}
+}
+
+// TestResolveTailTitleBeatsHeadTitle pins the tail window's offset arithmetic
+// (fi.Size()-tailScanBytes in rawTitle), not just that a title is eventually
+// found. The head and the tail each carry a different ai-title; a correctly
+// placed tail window sees only the tail one and returns it directly. A wrong
+// offset (0, say -- reading the head instead of the tail) would see the
+// head's title instead, return it immediately as a non-empty match, and never
+// reach the fallback full scan that would otherwise have caught the mistake.
+// TestResolveFallsBackToAFullScan cannot tell these two code paths apart
+// because it only ever has one title in the whole transcript.
+func TestResolveTailTitleBeatsHeadTitle(t *testing.T) {
+	lines := []string{aiTitleLine("head topic")}
+	filler := `{"type":"assistant","message":{"role":"assistant","content":"` + strings.Repeat("x", 900) + `"}}`
+	for total := 0; total < 2*tailScanBytes; total += len(filler) + 1 {
+		lines = append(lines, filler)
+	}
+	lines = append(lines, aiTitleLine("tail topic"))
+	path := writeTranscript(t, lines...)
+
+	if fi, err := os.Stat(path); err != nil || fi.Size() <= tailScanBytes {
+		t.Fatalf("fixture must exceed the tail window: size err=%v", err)
+	}
+	if got, want := Resolve(path, sessionID), "tail-topic-6773febd"; got != want {
+		t.Errorf("Resolve = %q, want %q", got, want)
+	}
+}
+
+// TestScanReassemblesAMultiChunkLine covers eachLine's acc reassembly path: a
+// line longer than readBufBytes (64 KiB) but well under maxLineBytes (1 MiB),
+// which forces multiple ReadSlice passes to be stitched back into one line
+// before it can be unmarshalled. None of the other fixtures in this file
+// exercise it -- they are all short, or (TestScanSkipsOversizedLines) long
+// enough to take the drop path instead. A pasted user prompt or a long
+// ai-title both land in exactly this band, so the path is real, not
+// hypothetical.
+func TestScanReassemblesAMultiChunkLine(t *testing.T) {
+	const size = 200 << 10 // between readBufBytes and maxLineBytes
+	long := strings.Repeat("z", size)
+	title, _ := scan(strings.NewReader(aiTitleLine(long) + "\n"))
+	if len(title) != size || title != long {
+		t.Errorf("scan lost or corrupted a %d-byte line spanning multiple read buffers (got len=%d)", size, len(title))
 	}
 }
 

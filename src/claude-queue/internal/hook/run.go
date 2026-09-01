@@ -37,7 +37,11 @@ func Run(event string) {
 	d := &Deps{DB: conn, Pane: pane}
 	if err := Dispatch(d, event, in); err != nil {
 		logDebug("dispatch %s: %v", event, err)
-		return
+		// Falls through rather than returning: applyWindowName touches only
+		// the terminal, never d.DB, so a Dispatch failure (SQLITE_BUSY is a
+		// real one) has nothing to do with whether the window can still be
+		// renamed. Returning here would make the two failures wrongly
+		// entangled in this one direction, contradicting the comment below.
 	}
 	// Deliberately outside Dispatch: the ledger transition is this hook's job,
 	// the window name is a side effect on the terminal, and a failure of one

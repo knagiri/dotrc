@@ -81,9 +81,13 @@ func shortID(sessionID string) string {
 // session:window separators in -t targets. "~" cannot survive either, because
 // the picker renames a window to "<name>~exited" once its command finishes and
 // relies on no live window ever ending in that suffix (see multiplexer's
-// windowCommand). Whitespace becomes "-" so the name stays one shell word.
-// Everything else -- Japanese in particular, which most titles here are --
-// is kept as is.
+// windowCommand). "#" cannot survive either: tmux format-expands window names
+// passed to `rename-window` and `new-window -n` (confirmed against tmux 3.6b),
+// so "#S"/"#T"/"#D"/"#W" substitute the session/pane/window, and an
+// unterminated "#{" swallows the rest of the name -- silently producing a
+// window that no longer matches what Resolve computed. Whitespace becomes "-"
+// so the name stays one shell word. Everything else -- Japanese in
+// particular, which most titles here are -- is kept as is.
 func Sanitize(s string) string {
 	// One line only: a title is a phrase, but a user prompt (the fallback
 	// source) is often a whole paragraph.
@@ -93,7 +97,7 @@ func Sanitize(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch {
-		case r == '.' || r == ':' || r == '~' || unicode.IsSpace(r):
+		case r == '.' || r == ':' || r == '~' || r == '#' || unicode.IsSpace(r):
 			b.WriteByte('-')
 		case unicode.IsControl(r):
 			// Dropped rather than substituted: a control character is not a

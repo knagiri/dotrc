@@ -15,14 +15,15 @@ type windowMux interface {
 }
 
 // applyWindowName keeps the tmux window a session runs in named after what the
-// session is about.
+// session is about, and hands the name back once the session ends.
 //
-// It is wired to UserPromptSubmit and Stop, and nothing else. UserPromptSubmit
-// is the moment the topic can change; Stop is the moment right after the first
+// Renaming is wired to UserPromptSubmit and Stop only. UserPromptSubmit is the
+// moment the topic can change; Stop is the moment right after the first
 // answer, which is when Claude Code first writes an ai-title -- without it a
 // session would carry its fallback name until the user typed a second prompt.
-// The other events add nothing: they fire many times per turn and would only
-// re-derive the same name.
+// Every other event that could reach here would only re-derive the same name,
+// except SessionEnd below, which does not rename at all: it releases the name
+// this session installed so automatic-rename can take the window back.
 //
 // Everything here is best-effort and silent. Run swallows hook errors on
 // purpose (a hook must never be why a session misbehaves), and a window name is
