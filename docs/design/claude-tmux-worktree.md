@@ -129,6 +129,26 @@ worktree dir の basename はそのまま tmux session 名になる。tmux の�
 `_` は tmux ターゲット・session 名どちらでも安全。`git wa` と `claude-worktree` の双方を
 `_` に統一した。
 
+### window 名は transcript の ai-title 由来（session 名は据え置き）
+
+session 名は上のとおり worktree dir basename のままだが、**window 名は中身で決める**。
+Claude Code は transcript jsonl に LLM 生成のタイトル（`{"type":"ai-title",...}`）を書いており、
+これが「その session が何をしているか」を知る唯一の安価な情報源になる。`claude agents --json` の
+roster 名は使わない — interactive では cwd basename + 2 桁 hex にしかならず session id 以上の
+情報が無いうえ、実測 0.54s で hook から毎回叩けない。
+
+最終形は `<ai-title を 16 桁に切ったもの>-<session id 8 桁>`。id 接尾辞を残すのは、同じ話題の
+window が複数ありうる一方で `new-window -S` の重複畳み込みは session 単位で効いてほしいため。
+採用するのは**最後の** ai-title で、話題が変わって付け直されると `-S` が旧名と一致せず window が
+1 枚増えるが、その window のコマンドが終われば `~exited` へ改名されて自然に解消するので許容する。
+
+名前を張るのは (a) picker の attach / resume 経路（ai-title が取れなければ `attach-<id8>` /
+`resume-<id8>` へフォールバック）と、(b) hook の `UserPromptSubmit` / `Stop`。`Stop` も張るのは
+初回応答直後に ai-title が付くためで、これが無いと 2 度目の prompt まで既定名のまま残る。
+hook 側は **pane が window 唯一の pane のときだけ**改名する（split して 2 session が並ぶと
+名前を奪い合うため）。`rename-window` は tmux の automatic-rename を恒久 off にするので、
+`SessionEnd` では自分が付けた名前と一致するときに限り automatic-rename を戻す。
+
 ### ④の既定は `claude --bg`（tmux session を作らない）
 
 素朴に `claude -p` をバックグラウンド（`setsid`）で起動すると、環境変数を継承するため

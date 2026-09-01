@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/label"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
@@ -277,6 +278,21 @@ func resumeBlocked(t Target) string {
 	return ""
 }
 
+// windowNameFor names the window a pick opens after what the session is
+// actually about, falling back to "<kind>-<short id>" when its transcript
+// cannot say (a session that ended before being titled, a transcript that has
+// since been removed).
+//
+// The fallback keeps the old machine name's one virtue -- it is unique per
+// session, so `new-window -S` still collapses repeat picks of the same row --
+// while dropping the argv noise that made every window read the same.
+func windowNameFor(transcript, sessionID, kind string) string {
+	if name := label.Resolve(transcript, sessionID); name != "" {
+		return name
+	}
+	return kind + "-" + shortID(sessionID)
+}
+
 // shortID truncates a session id to the 8 chars `claude attach` takes, and the
 // form every message about a session uses.
 func shortID(sessionID string) string {
@@ -505,7 +521,7 @@ func Run(args []string) {
 		// Do NOT terminate the session on failure the way the pane path does:
 		// a failed window open says nothing about whether the session is alive,
 		// and the manual command still works.
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, []string{"claude", "attach", act.Short}); err != nil {
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), []string{"claude", "attach", act.Short}); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: claude attach %s\n", err, act.Short)
 		}
 	case "resume":
@@ -519,7 +535,7 @@ func Run(args []string) {
 				return
 			}
 		}
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, []string{"claude", "--resume", act.Resume}); err != nil {
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), []string{"claude", "--resume", act.Resume}); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && claude --resume %s\n", err, act.Cwd, act.Resume)
 		}
 	default:
