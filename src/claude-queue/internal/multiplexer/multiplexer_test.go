@@ -12,6 +12,13 @@ func TestDetect_TmuxEnv(t *testing.T) {
 	if got := m.PaneID(); got != "%42" {
 		t.Errorf("PaneID = %q, want %q", got, "%42")
 	}
+	// Inside a pane the two agree, and CurrentPane must take the env var rather
+	// than paying for a subprocess. Where they differ -- the picker's popup, with
+	// no TMUX_PANE to inherit -- there is no tmux server to ask in a unit test,
+	// so that branch is covered through currentPane's injected ask instead.
+	if got := m.CurrentPane(); got != "%42" {
+		t.Errorf("CurrentPane = %q, want %q", got, "%42")
+	}
 }
 
 func TestDetect_NoMultiplexer(t *testing.T) {
@@ -23,6 +30,9 @@ func TestDetect_NoMultiplexer(t *testing.T) {
 	if got := m.PaneID(); got != "" {
 		t.Errorf("PaneID = %q, want empty", got)
 	}
+	if got := m.CurrentPane(); got != "" {
+		t.Errorf("CurrentPane = %q, want empty", got)
+	}
 	// noop methods must not panic.
 	m.RefreshStatus()
 	if err := m.Switch("anything"); err != nil {
@@ -30,7 +40,7 @@ func TestDetect_NoMultiplexer(t *testing.T) {
 	}
 	// Unlike Switch, OpenSession must return an error: the picker's attach path
 	// relies on this to decide whether to print a manual-fallback hint.
-	if err := m.OpenSession("dotrc_wt", "/w/a", "some-window", []string{"claude", "attach", "abc"}); err == nil {
+	if err := m.OpenSession("dotrc_wt", "/w/a", "some-window", "%3", []string{"claude", "attach", "abc"}); err == nil {
 		t.Errorf("noop OpenSession err = nil, want non-nil")
 	}
 	// With no server there is no pane to confirm and no server pid to compare
