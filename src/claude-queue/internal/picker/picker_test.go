@@ -5,10 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/mattn/go-runewidth"
+
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/label"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
@@ -25,36 +29,198 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"pnpm prisma migrate"}}`, Valid: true},
 		CreatedAt:      nowMinus(120),
 	}
-	got := FormatLine(row, "everysteel-api", nowUnix(), false)
+	got := FormatLine(row, "prisma migration", "everysteel-api", nowUnix(), false)
 	fields := strings.Split(got, "\t")
-	if len(fields) != 8 {
-		t.Fatalf("want 8 tab-separated fields, got %d: %q", len(fields), got)
+	if len(fields) != colCount {
+		t.Fatalf("want %d tab-separated fields, got %d: %q", colCount, len(fields), got)
 	}
-	if fields[0] != "⏳" {
-		t.Errorf("icon = %q, want ⏳", fields[0])
+	if fields[colIcon] != "⏳" {
+		t.Errorf("icon = %q, want ⏳", fields[colIcon])
 	}
-	if fields[1] != "everysteel-api" {
-		t.Errorf("worktree = %q, want everysteel-api", fields[1])
+	// The title column is padded, so it is compared trimmed here; the padding
+	// itself is what TestFormatLine_ColumnWidths is about.
+	if got := strings.TrimSpace(fields[colTitle]); got != "prisma migration" {
+		t.Errorf("title = %q, want prisma migration", got)
 	}
-	if !strings.Contains(fields[2], "Bash: pnpm prisma migrate") {
-		t.Errorf("summary = %q", fields[2])
+	if got := strings.TrimSpace(fields[colWorktree]); got != "everysteel-api" {
+		t.Errorf("worktree = %q, want everysteel-api", got)
 	}
-	if fields[3] != "2m" {
-		t.Errorf("age = %q, want 2m", fields[3])
+	if fields[colAge] != "2m" {
+		t.Errorf("age = %q, want 2m", fields[colAge])
 	}
-	if fields[4] != "s1" {
-		t.Errorf("hidden session id = %q, want s1", fields[4])
+	if !strings.Contains(fields[colSummary], "Bash: pnpm prisma migrate") {
+		t.Errorf("summary = %q", fields[colSummary])
 	}
-	if fields[5] != "%1" {
-		t.Errorf("hidden tmux_pane = %q, want %%1", fields[5])
+	if fields[colSessionID] != "s1" {
+		t.Errorf("hidden session id = %q, want s1", fields[colSessionID])
 	}
-	if fields[6] != "/home/x/projects/everysteel-api" {
-		t.Errorf("hidden cwd = %q, want the full path", fields[6])
+	if fields[colPane] != "%1" {
+		t.Errorf("hidden tmux_pane = %q, want %%1", fields[colPane])
+	}
+	if fields[colCwd] != "/home/x/projects/everysteel-api" {
+		t.Errorf("hidden cwd = %q, want the full path", fields[colCwd])
 	}
 	// The resume path refuses to run without a transcript, so the path has to
 	// reach the pick through this hidden column.
-	if fields[7] != "/home/x/.claude/projects/enc/s1.jsonl" {
-		t.Errorf("hidden transcript_path = %q, want the full path", fields[7])
+	if fields[colTranscript] != "/home/x/.claude/projects/enc/s1.jsonl" {
+		t.Errorf("hidden transcript_path = %q, want the full path", fields[colTranscript])
+	}
+}
+
+// The column order itself, asserted once so a reshuffle has to come here
+// before it reaches the hidden columns: the summary moved behind the age and
+// the title was inserted in front of the worktree, which shifted every hidden
+// index by one.
+func TestFormatLine_ColumnOrder(t *testing.T) {
+	row := db.Row{
+		SessionID:      "sid",
+		TmuxPane:       sql.NullString{String: "%4", Valid: true},
+		Cwd:            sql.NullString{String: "/w/a", Valid: true},
+		TranscriptPath: sql.NullString{String: "/t/a.jsonl", Valid: true},
+		EffectiveState: "working",
+		CreatedAt:      nowMinus(60),
+	}
+	fields := strings.Split(FormatLine(row, "title", "wt", nowUnix(), true), "\t")
+	want := []string{"[*]", "title", "wt", "60s", "working", "sid", "%4", "/w/a", "/t/a.jsonl"}
+	if len(fields) != len(want) {
+		t.Fatalf("got %d columns, want %d", len(fields), len(want))
+	}
+	for i, w := range want {
+		if got := strings.TrimSpace(fields[i]); got != w {
+			t.Errorf("column %d = %q, want %q", i+1, got, w)
+		}
+	}
+}
+
+// The two padded columns exist so the eye can run down them, which only works
+// if every row spends the same number of terminal columns on each -- including
+// the rows that have nothing to put there.
+func TestFormatLine_ColumnWidths(t *testing.T) {
+	row := db.Row{SessionID: "s", EffectiveState: "working", CreatedAt: nowMinus(10)}
+
+	cases := []struct {
+		name            string
+		title, worktree string
+	}{{
+		name:  "ascii fits",
+		title: "picker title column", worktree: "dotrc_queue-picker-title-column",
+	}, {
+		// Japanese is the common case and every rune of it is two columns, so
+		// a byte-counting pad (fmt's "%-40s") would leave these rows short by
+		// roughly their own length again.
+		name:  "japanese counts double",
+		title: "picker の ai-title 列", worktree: "案件_日本語ワークツリー",
+	}, {
+		// Truncate stops a column short rather than split a double-width rune,
+		// so an over-long Japanese title needs the pad measured after the cut.
+		name:  "japanese overflows",
+		title: strings.Repeat("あ", 40), worktree: strings.Repeat("い", 40),
+	}, {
+		name:  "ascii overflows",
+		title: strings.Repeat("x", 80), worktree: strings.Repeat("y", 80),
+	}, {
+		// A transcript that could not be titled still holds the column open,
+		// or the worktree beside it would start in a different place.
+		name:  "empty title still holds its column",
+		title: "", worktree: "wt",
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fields := strings.Split(FormatLine(row, c.title, c.worktree, nowUnix(), true), "\t")
+			if w := runewidth.StringWidth(fields[colTitle]); w != titleWidth {
+				t.Errorf("title column is %d wide, want %d: %q", w, titleWidth, fields[colTitle])
+			}
+			if w := runewidth.StringWidth(fields[colWorktree]); w != worktreeWidth {
+				t.Errorf("worktree column is %d wide, want %d: %q", w, worktreeWidth, fields[colWorktree])
+			}
+		})
+	}
+}
+
+// A tab or a newline in a title would shift every hidden column of that row,
+// and the pick would then attach to another session or open a window in
+// another worktree's directory. label.DisplayTitle strips them at the source;
+// this is the picker's own end of that contract, since it is the one that
+// depends on it.
+func TestFormatLine_TitleCannotBreakTheRow(t *testing.T) {
+	row := db.Row{
+		SessionID:      "sid",
+		Cwd:            sql.NullString{String: "/w/a", Valid: true},
+		TranscriptPath: sql.NullString{String: "/t/a.jsonl", Valid: true},
+		EffectiveState: "working",
+		CreatedAt:      nowMinus(10),
+	}
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	line := `{"type":"ai-title","aiTitle":"col1\tcol2\rcol3"}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	fields := strings.Split(FormatLine(row, label.DisplayTitle(path, titleWidth), "wt", nowUnix(), true), "\t")
+	if len(fields) != colCount {
+		t.Fatalf("a title with a tab in it produced %d columns, want %d", len(fields), colCount)
+	}
+	sel, ok := parseSelection(strings.Join(fields, "\t"))
+	if !ok || sel.SessionID != "sid" || sel.Cwd != "/w/a" {
+		t.Errorf("hidden columns shifted: %+v (ok=%v)", sel, ok)
+	}
+}
+
+// The hidden columns are addressed by index and every value in them looks
+// valid to the code downstream, so a shifted index does not fail -- it acts on
+// another session. The round trip through a line FormatLine actually rendered
+// is what catches that.
+func TestParseSelection(t *testing.T) {
+	row := db.Row{
+		SessionID:      testUUID,
+		TmuxPane:       sql.NullString{String: "%12", Valid: true},
+		Cwd:            sql.NullString{String: "/home/x/ghq/dotrc_wt", Valid: true},
+		TranscriptPath: sql.NullString{String: "/home/x/.claude/projects/enc/s.jsonl", Valid: true},
+		EffectiveState: "awaiting_approval",
+		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"go test ./..."}}`, Valid: true},
+		CreatedAt:      nowMinus(30),
+	}
+	line := FormatLine(row, "ai タイトル", "dotrc_wt", nowUnix(), false)
+
+	sel, ok := parseSelection(line)
+	if !ok {
+		t.Fatalf("parseSelection rejected a line FormatLine rendered: %q", line)
+	}
+	want := selection{
+		SessionID:  testUUID,
+		Pane:       "%12",
+		Cwd:        "/home/x/ghq/dotrc_wt",
+		Transcript: "/home/x/.claude/projects/enc/s.jsonl",
+	}
+	if sel != want {
+		t.Errorf("parseSelection = %+v, want %+v", sel, want)
+	}
+
+	// fzf can return an empty selection, and a line from anywhere else is not
+	// one the hidden columns can be read off at all.
+	if _, ok := parseSelection(""); ok {
+		t.Error("parseSelection(\"\") reported success")
+	}
+	if _, ok := parseSelection("a\tb\tc"); ok {
+		t.Error("parseSelection accepted a short line")
+	}
+}
+
+// --with-nth addresses columns by 1-based position, so inserting a column
+// ahead of the hidden ones has to move it too. Getting this wrong does not
+// fail either -- it renders the session id and the full cwd as visible text.
+func TestFzfShowsExactlyTheVisibleColumns(t *testing.T) {
+	if got, want := visibleColumns(), "1,2,3,4,5"; got != want {
+		t.Errorf("visibleColumns = %q, want %q", got, want)
+	}
+	if !slices.Contains(fzfArgs(), "--with-nth=1,2,3,4,5") {
+		t.Errorf("fzfArgs = %v, want it to carry --with-nth=1,2,3,4,5", fzfArgs())
+	}
+	// The list has to stop before the first hidden column, whose contents are
+	// paths and ids no one wants in the popup.
+	if colSummary+1 != colSessionID {
+		t.Errorf("the visible run ends at column %d but the hidden ones start at %d", colSummary+1, colSessionID+1)
 	}
 }
 
@@ -62,12 +228,12 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 // which is what resumeBlocked reads as "nothing to resume".
 func TestFormatLine_NoTranscript(t *testing.T) {
 	row := db.Row{SessionID: "s3", EffectiveState: "idle_done", CreatedAt: nowMinus(10)}
-	fields := strings.Split(FormatLine(row, "wt", nowUnix(), false), "\t")
-	if len(fields) != 8 {
-		t.Fatalf("want 8 fields, got %d", len(fields))
+	fields := strings.Split(FormatLine(row, "", "wt", nowUnix(), false), "\t")
+	if len(fields) != colCount {
+		t.Fatalf("want %d fields, got %d", colCount, len(fields))
 	}
-	if fields[7] != "" {
-		t.Errorf("hidden transcript_path = %q, want empty", fields[7])
+	if fields[colTranscript] != "" {
+		t.Errorf("hidden transcript_path = %q, want empty", fields[colTranscript])
 	}
 }
 
@@ -83,18 +249,18 @@ func TestFormatLine_DeepCwdShowsWorktree(t *testing.T) {
 		EffectiveState: "idle_done",
 		CreatedAt:      nowMinus(30),
 	}
-	fields := strings.Split(FormatLine(row, "dotrc_queue-picker", nowUnix(), false), "\t")
-	if fields[1] != "dotrc_queue-picker" {
-		t.Errorf("worktree = %q, want dotrc_queue-picker", fields[1])
+	fields := strings.Split(FormatLine(row, "", "dotrc_queue-picker", nowUnix(), false), "\t")
+	if got := strings.TrimSpace(fields[colWorktree]); got != "dotrc_queue-picker" {
+		t.Errorf("worktree = %q, want dotrc_queue-picker", got)
 	}
 	// The full cwd still rides along hidden: the attach path opens the window
 	// in the directory the session actually ran in.
-	if fields[6] != cwd {
-		t.Errorf("hidden cwd = %q, want %q", fields[6], cwd)
+	if fields[colCwd] != cwd {
+		t.Errorf("hidden cwd = %q, want %q", fields[colCwd], cwd)
 	}
 }
 
-// A resumable row is rendered from the same eight columns as a live one, but
+// A resumable row is rendered from the same nine columns as a live one, but
 // its state is not one any hook writes, so both icon maps and the summary have
 // to know it -- an unmapped state renders as an empty icon and a bare
 // "resumable", which is the failure this asserts against.
@@ -111,34 +277,34 @@ func TestFormatLine_Resumable(t *testing.T) {
 		CreatedAt:      nowMinus(7200),
 	}
 
-	fields := strings.Split(FormatLine(row, "dotrc_wt", nowUnix(), false), "\t")
-	if len(fields) != 8 {
-		t.Fatalf("want 8 fields, got %d", len(fields))
+	fields := strings.Split(FormatLine(row, "", "dotrc_wt", nowUnix(), false), "\t")
+	if len(fields) != colCount {
+		t.Fatalf("want %d fields, got %d", colCount, len(fields))
 	}
-	if fields[0] != emoji[db.StateResumable] || fields[0] == "" {
-		t.Errorf("emoji icon = %q, want %q", fields[0], emoji[db.StateResumable])
+	if fields[colIcon] != emoji[db.StateResumable] || fields[colIcon] == "" {
+		t.Errorf("emoji icon = %q, want %q", fields[colIcon], emoji[db.StateResumable])
 	}
-	if !strings.Contains(fields[2], "resumable") {
-		t.Errorf("summary = %q, want it to say the row is resumable", fields[2])
+	if !strings.Contains(fields[colSummary], "resumable") {
+		t.Errorf("summary = %q, want it to say the row is resumable", fields[colSummary])
 	}
 	// What the session was doing when it was cut off is the only thing telling
 	// these rows apart, so it has to survive into the summary.
-	if !strings.Contains(fields[2], "working") {
-		t.Errorf("summary = %q, want it to name the prior state", fields[2])
+	if !strings.Contains(fields[colSummary], "working") {
+		t.Errorf("summary = %q, want it to name the prior state", fields[colSummary])
 	}
-	if fields[3] != "2h" {
-		t.Errorf("age = %q, want 2h", fields[3])
+	if fields[colAge] != "2h" {
+		t.Errorf("age = %q, want 2h", fields[colAge])
 	}
 	// The resume path needs both of these off the picked line.
-	if fields[6] != "/home/x/ghq/dotrc_wt" || fields[7] != "/home/x/.claude/projects/enc/s9.jsonl" {
-		t.Errorf("hidden cwd/transcript = %q/%q", fields[6], fields[7])
+	if fields[colCwd] != "/home/x/ghq/dotrc_wt" || fields[colTranscript] != "/home/x/.claude/projects/enc/s9.jsonl" {
+		t.Errorf("hidden cwd/transcript = %q/%q", fields[colCwd], fields[colTranscript])
 	}
 
-	asciiIcon := strings.Split(FormatLine(row, "dotrc_wt", nowUnix(), true), "\t")[0]
+	asciiIcon := strings.Split(FormatLine(row, "", "dotrc_wt", nowUnix(), true), "\t")[colIcon]
 	if asciiIcon == "" {
 		t.Error("ascii icon is empty: CLAUDE_QUEUE_ASCII=1 would render the column blank")
 	}
-	if asciiIcon == fields[0] {
+	if asciiIcon == fields[colIcon] {
 		t.Errorf("ascii icon = %q, same as the emoji one", asciiIcon)
 	}
 }
@@ -225,16 +391,19 @@ func TestResumableRowRoutesToResume(t *testing.T) {
 		PriorState:     sql.NullString{String: "working", Valid: true},
 		CreatedAt:      nowMinus(60),
 	}
-	fields := strings.Split(FormatLine(row, "wt", nowUnix(), false), "\t")
+	sel, ok := parseSelection(FormatLine(row, "", "wt", nowUnix(), false))
+	if !ok {
+		t.Fatal("parseSelection rejected a line FormatLine rendered")
+	}
 	mux := &fakeMux{panes: map[string]bool{"%1": true}}
 
 	// The roster was read and does not list the session: the host it ran on went
 	// down, so there is no process to displace.
 	tgt := Target{
-		SessionID:        fields[4],
-		Pane:             reachablePane(mux, nil, fields[4], fields[5], true),
-		Cwd:              fields[6],
-		TranscriptPath:   fields[7],
+		SessionID:        sel.SessionID,
+		Pane:             reachablePane(mux, nil, sel.SessionID, sel.Pane, true),
+		Cwd:              sel.Cwd,
+		TranscriptPath:   sel.Transcript,
 		RosterOK:         true,
 		TranscriptExists: true,
 		CwdExists:        true,
@@ -274,14 +443,17 @@ func TestResumableRowCarriesNoPaneForTheRosterFallback(t *testing.T) {
 		RawState:       "ended",
 		CreatedAt:      nowMinus(60),
 	}
-	fields := strings.Split(FormatLine(row, "wt", nowUnix(), false), "\t")
-	if fields[5] != "" {
-		t.Fatalf("hidden tmux_pane = %q, want empty for a resumable row", fields[5])
+	sel, ok := parseSelection(FormatLine(row, "", "wt", nowUnix(), false))
+	if !ok {
+		t.Fatal("parseSelection rejected a line FormatLine rendered")
+	}
+	if sel.Pane != "" {
+		t.Fatalf("hidden tmux_pane = %q, want empty for a resumable row", sel.Pane)
 	}
 
 	// %0 and %1 exist on the rebooted server, belonging to unrelated sessions.
 	mux := &fakeMux{panes: map[string]bool{"%0": true, "%1": true}}
-	if got := reachablePane(mux, nil, fields[4], fields[5], false); got != "" {
+	if got := reachablePane(mux, nil, sel.SessionID, sel.Pane, false); got != "" {
 		t.Errorf("reachablePane with an unreadable roster = %q, want empty", got)
 	}
 }
