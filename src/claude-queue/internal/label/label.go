@@ -65,6 +65,42 @@ func Resolve(transcriptPath, sessionID string) string {
 	return lbl
 }
 
+// DisplayTitle returns the conversation title for the picker's title column,
+// trimmed to cols terminal columns, or "" when the transcript offers none.
+//
+// Deliberately not Resolve: a window name has to survive tmux's -t target
+// syntax and its FORMATS expansion, which is why Resolve substitutes "." ":"
+// "~" "#" and spends its budget on a 16-column title plus a session id suffix.
+// An fzf row is read rather than handed to tmux, so none of that applies, and
+// all of it makes the title harder to read -- the suffix in particular repeats
+// a column the row already carries hidden.
+//
+// The one thing it must still strip is the column separators. The picker's
+// rows are tab-delimited and carry the session id, pane, cwd and transcript
+// path in hidden columns behind the visible ones, so a tab or a newline in a
+// title would shift those four and the pick would act on another session.
+func DisplayTitle(transcriptPath string, cols int) string {
+	return runewidth.Truncate(flatten(rawTitle(transcriptPath)), cols, "")
+}
+
+// flatten replaces the characters that would break a tab-delimited row with a
+// space, and drops the remaining control characters the way Sanitize does: a
+// control character is not a word boundary, so substituting one would invent a
+// space that was never in the title.
+func flatten(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r':
+			b.WriteByte(' ')
+		case unicode.IsControl(r):
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // shortID truncates a session id to the 8 chars every user-facing form of a
 // session id uses (it is also the only form `claude attach` takes).
 func shortID(sessionID string) string {
