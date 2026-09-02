@@ -305,9 +305,10 @@ func TestWindowCommandBranchesOnExitStatus(t *testing.T) {
 }
 
 // TestWindowCommandWithoutOriginPane covers the case where the picker could not
-// name a pane to go back to. The clause is omitted rather than emitted with an
-// empty target, which tmux rejects -- and a broken trailing command would be
-// run on exactly the path that is supposed to be the clean one.
+// name a pane to go back to. tmux would not reject an empty -t -- it resolves
+// one to the current target, which here is the window about to close -- so the
+// clause has to be left out rather than emitted empty, or the clean path would
+// end in a self-switch that means nothing.
 func TestWindowCommandWithoutOriginPane(t *testing.T) {
 	got := windowCommand("claude-attach-abc", "", []string{"claude", "attach", "abc"})
 	if len(got) != 1 {

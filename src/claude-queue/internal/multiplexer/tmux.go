@@ -77,6 +77,13 @@ func (tmuxImpl) Switch(target string) error {
 // originPane is where the client is sent back to once argv finishes cleanly;
 // see windowCommand. "" disables the return, which is what happens when there
 // is no client pane to name.
+//
+// The window's command starts running at new-window/new-session time, so an argv
+// that exits 0 immediately can close the window -- and a just-created session
+// with it -- before the switch-client below runs, making that switch fail and
+// the caller print a fallback hint for a session that did exactly what it was
+// asked. Reaching this needs a clean exit before a single tmux round trip, which
+// the commands the picker opens do not do.
 func (tmuxImpl) OpenSession(name, cwd, window, originPane string, argv []string) error {
 	if name == "" {
 		return errors.New("no session name")
@@ -181,9 +188,20 @@ const exitedSuffix = "~exited"
 // up. A tmux that cannot be reached here just leaves the name in place; the ";"
 // chain still reaches exec.
 //
-// An empty originPane omits the switch-client clause rather than emitting an
-// empty -t target, which tmux would reject. The pane still exits and the window
-// still closes; only the return is skipped.
+// An empty originPane omits the switch-client clause. Not because tmux would
+// reject an empty -t: it resolves one to the *current* target (confirmed against
+// tmux 3.6b -- `list-windows -t ""` lists the current window and exits 0), which
+// here would be the window that is about to close, so the clause would be a
+// meaningless self-switch. There is nothing to return to in this case; the pane
+// still exits and the window still closes, only the return is skipped.
+//
+// Two limits of splicing the pane into the command string, neither of which the
+// switch itself can fix. A window reused by -S keeps the origin pane of the pick
+// that created it, so a later pick from a different pane still returns to the
+// first one. And if the origin pane has closed by the time the command exits,
+// the switch is a no-op and the client is left with no session to be in -- the
+// picker's single-window session goes with the pane, so the client detaches back
+// to the terminal. Both are better than the alternative of not returning at all.
 //
 // Empty argv yields no argument at all, which is how tmux is asked for the
 // default-command (an empty one, the default, starts default-shell as a login
@@ -210,8 +228,15 @@ func windowCommand(window, originPane string, argv []string) []string {
 		shellQuote(window+exitedSuffix) +
 		`; exec "${SHELL:-/bin/bash}"; fi`
 	if originPane != "" {
-		// 2>/dev/null: with no client attached, or an origin pane that has since
-		// closed, there is nothing to return and nothing to report either.
+		// 2>/dev/null: a pane that has since closed, or no client at all, leaves
+		// nothing to return and nothing worth reporting into a closing pane.
+		//
+		// No -c, so tmux picks the client itself. With none attached that is the
+		// no-op above, but tmux falls back to the last active client rather than
+		// only considering ones on this session, so a client that has since moved
+		// elsewhere can be the one pulled back here. claude-worktree's --tmux
+		// wrapper has always had this shape; naming the client would mean
+		// capturing it at pick time.
 		cmd += `; tmux switch-client -t ` + shellQuote(originPane) + ` 2>/dev/null`
 	}
 	return []string{cmd}
