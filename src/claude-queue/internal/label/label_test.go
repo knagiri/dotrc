@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mattn/go-runewidth"
 )
 
 func TestSanitize(t *testing.T) {
@@ -302,4 +304,59 @@ func TestScanIgnoresAPartialFirstLine(t *testing.T) {
 	if prompt != "" {
 		t.Errorf("scan prompt = %q, want empty: a half line is not a prompt", prompt)
 	}
+}
+
+// DisplayTitle is the picker's title column, and the picker is the reason it
+// is not Resolve: the row is read rather than handed to tmux, so the target
+// syntax that Resolve exists to survive only gets in the way there.
+func TestDisplayTitle(t *testing.T) {
+	t.Run("keeps what a window name has to give up", func(t *testing.T) {
+		// A window name substitutes "." ":" "~" "#" and every space, and
+		// appends the session id; none of that helps someone reading a row.
+		path := writeTranscript(t, aiTitleLine("fix v1.2: picker ~ #cols"))
+		if got, want := DisplayTitle(path, 40), "fix v1.2: picker ~ #cols"; got != want {
+			t.Errorf("DisplayTitle = %q, want %q", got, want)
+		}
+		// The same title through Resolve, for contrast: this is what the
+		// column would have read if the window name had been reused.
+		if got := Resolve(path, sessionID); got == DisplayTitle(path, 40) {
+			t.Errorf("Resolve and DisplayTitle agree (%q): the window-name rules leaked into the row", got)
+		}
+	})
+
+	t.Run("cuts on terminal width, not runes", func(t *testing.T) {
+		// Japanese is the common case here and every rune of it is two
+		// columns, so a 20-character title is already a full 40-column cell.
+		path := writeTranscript(t, aiTitleLine(strings.Repeat("あ", 30)))
+		got := DisplayTitle(path, 40)
+		if w := runewidth.StringWidth(got); w != 40 {
+			t.Errorf("DisplayTitle is %d columns wide, want 40: %q", w, got)
+		}
+	})
+
+	t.Run("row separators cannot survive", func(t *testing.T) {
+		// The picker's hidden columns sit behind this one, so a tab or a
+		// newline in a title would shift the session id, pane, cwd and
+		// transcript path of that row and the pick would act on another
+		// session.
+		path := writeTranscript(t, aiTitleLine("col1\tcol2\rrest"))
+		got := DisplayTitle(path, 40)
+		if strings.ContainsAny(got, "\t\n\r") {
+			t.Errorf("DisplayTitle carries a row separator: %q", got)
+		}
+		if want := "col1 col2 rest"; got != want {
+			t.Errorf("DisplayTitle = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("nothing to title it with", func(t *testing.T) {
+		// "" is what leaves the column empty rather than padded with a name
+		// the transcript never offered.
+		if got := DisplayTitle(filepath.Join(t.TempDir(), "absent.jsonl"), 40); got != "" {
+			t.Errorf("DisplayTitle = %q, want empty", got)
+		}
+		if got := DisplayTitle("", 40); got != "" {
+			t.Errorf(`DisplayTitle("") = %q, want empty`, got)
+		}
+	})
 }

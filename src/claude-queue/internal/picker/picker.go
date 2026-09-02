@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/label"
@@ -34,21 +37,64 @@ var ascii = map[string]string{
 	db.StateResumable:   "[~]",
 }
 
-// FormatLine renders one queue row as a tab-delimited line for fzf.
-// Visible columns (--with-nth=1,2,3,4): icon, worktree, summary, age.
-// The worktree name comes right after the icon so it starts at a fixed
-// position and stays scannable; the variable-width summary is demoted behind
-// it and left untruncated.
-// Hidden columns: session_id (5), tmux_pane (6), full cwd (7),
-// transcript_path (8). The full cwd is carried separately from the worktree
-// name because a background session is opened in a window that needs a real
-// working directory; the transcript path rides along because the resume path
-// must not run without confirming the conversation file is actually on disk.
+// Column positions in a rendered row, in the order FormatLine writes them.
+// The first five are shown (see fzfArgs); the last four ride along hidden
+// because the pick needs them and the eye does not.
 //
-// worktree is passed in rather than derived here: resolving it needs git (see
-// worktreeName), and keeping FormatLine pure is what lets the column contract
-// be asserted without a repository on disk.
-func FormatLine(row db.Row, worktree string, nowSec int64, asciiMode bool) string {
+// FormatLine writes these positions and parseSelection reads them back off the
+// line fzf returns, so the two have to agree: the hidden columns are addressed
+// by index, and an off-by-one there hands the pick another session's id, pane,
+// cwd or transcript path rather than failing.
+const (
+	colIcon = iota
+	colTitle
+	colWorktree
+	colAge
+	colSummary
+	colSessionID
+	colPane
+	colCwd
+	colTranscript
+	colCount
+)
+
+// The widths of the two padded columns, in terminal columns.
+//
+// The popup is 80% of the client width -- ~290 columns on the host these were
+// measured on -- and the old layout spent barely a third of that, so there is
+// room to make both scannable columns line up and still leave the summary the
+// rest of the row.
+//
+// 40 for the title because most titles here are Japanese, where 40 columns is
+// 20 characters: enough to recognise a conversation rather than merely tell two
+// apart. 56 for the worktree because the longest session name measured across
+// this host's live tmux sessions was 53, and a name that fits uncut is the
+// whole point of a fixed column.
+const (
+	titleWidth    = 40
+	worktreeWidth = 56
+)
+
+// FormatLine renders one queue row as a tab-delimited line for fzf.
+//
+// Visible columns: icon, ai-title, worktree, age, summary. The title and the
+// worktree are padded to fixed widths so both start at the same offset on
+// every row; the summary is last and unpadded so it can run to the end of the
+// row. Ordering them this way puts what a session is *about* (its title) ahead
+// of what it is *blocked on* (its summary), which is the distinction the old
+// layout lost: several sessions in one repo share a worktree name and all read
+// "working", and the title is the only column that tells them apart.
+//
+// Hidden columns: session_id, tmux_pane, full cwd, transcript_path. The full
+// cwd is carried separately from the worktree name because a background
+// session is opened in a window that needs a real working directory; the
+// transcript path rides along because the resume path must not run without
+// confirming the conversation file is actually on disk.
+//
+// title and worktree are passed in rather than derived here: one needs the
+// transcript off disk and the other needs git (see worktreeName), and keeping
+// FormatLine pure is what lets the column contract be asserted without either.
+func FormatLine(row db.Row, title, worktree string, nowSec int64, asciiMode bool) string {
 	icons := emoji
 	if asciiMode {
 		icons = ascii
@@ -69,10 +115,65 @@ func FormatLine(row db.Row, worktree string, nowSec int64, asciiMode bool) strin
 		pane = row.TmuxPane.String
 	}
 
-	return strings.Join([]string{
-		icon, worktree, sum, age,
-		row.SessionID, pane, rowCwd(row), rowTranscript(row),
-	}, "\t")
+	fields := make([]string, colCount)
+	fields[colIcon] = icon
+	// A row whose transcript could not be titled still pads its column, so the
+	// worktree beside it stays on the same offset as every other row.
+	fields[colTitle] = padWidth(title, titleWidth)
+	fields[colWorktree] = padWidth(worktree, worktreeWidth)
+	fields[colAge] = age
+	fields[colSummary] = sum
+	fields[colSessionID] = row.SessionID
+	fields[colPane] = pane
+	fields[colCwd] = rowCwd(row)
+	fields[colTranscript] = rowTranscript(row)
+	return strings.Join(fields, "\t")
+}
+
+// padWidth trims s to cols terminal columns and pads it back out to exactly
+// that many, so the column after it begins at the same offset on every row.
+//
+// Terminal width rather than bytes throughout: most titles here are Japanese,
+// where every rune is three bytes and two columns, so fmt's "%-40s" would
+// measure the wrong quantity twice over and leave the column ragged. The pad is
+// measured after the cut rather than computed from cols because Truncate stops
+// a column short rather than split a double-width rune in half.
+func padWidth(s string, cols int) string {
+	s = runewidth.Truncate(s, cols, "")
+	if pad := cols - runewidth.StringWidth(s); pad > 0 {
+		s += strings.Repeat(" ", pad)
+	}
+	return s
+}
+
+// selection is what a picked line is read for: the four hidden columns the
+// routing needs, with the padding the visible columns carry stripped off.
+type selection struct {
+	SessionID  string
+	Pane       string
+	Cwd        string
+	Transcript string
+}
+
+// parseSelection reads the hidden columns back off the line fzf printed, or
+// reports false when the line is not one FormatLine rendered.
+//
+// Split out of Run so the indices can be asserted against a line FormatLine
+// actually produced. They are positional and silent when wrong -- a shifted
+// index yields another row's session id and cwd, both of which look perfectly
+// valid to everything downstream -- so the round trip is the only thing that
+// can catch a column inserted ahead of them.
+func parseSelection(line string) (selection, bool) {
+	fields := strings.Split(line, "\t")
+	if len(fields) < colCount {
+		return selection{}, false
+	}
+	return selection{
+		SessionID:  strings.TrimSpace(fields[colSessionID]),
+		Pane:       strings.TrimSpace(fields[colPane]),
+		Cwd:        strings.TrimSpace(fields[colCwd]),
+		Transcript: strings.TrimSpace(fields[colTranscript]),
+	}, true
 }
 
 // rowCwd unwraps the nullable cwd column into the "" that the rest of the
@@ -480,7 +581,12 @@ func Run(args []string) {
 	asciiMode := os.Getenv("CLAUDE_QUEUE_ASCII") == "1"
 	names := worktreeCache{}
 	for _, r := range rows {
-		buf.WriteString(FormatLine(r, names.name(rowCwd(r)), now, asciiMode))
+		// The title is read here rather than inside FormatLine for the same
+		// reason the worktree name is -- it needs the filesystem. It costs one
+		// bounded tail read per row (see label's tailScanBytes), which the
+		// picker can afford: it is user-driven and lists a handful of rows.
+		title := label.DisplayTitle(rowTranscript(r), titleWidth)
+		buf.WriteString(FormatLine(r, title, names.name(rowCwd(r)), now, asciiMode))
 		buf.WriteByte('\n')
 	}
 
@@ -489,18 +595,15 @@ func Run(args []string) {
 		return
 	}
 
-	fields := strings.Split(selected, "\t")
-	if len(fields) < 8 {
+	sel, ok := parseSelection(selected)
+	if !ok {
 		return
 	}
-	sessionID := strings.TrimSpace(fields[4])
-	ledgerPane := strings.TrimSpace(fields[5])
-	cwd := strings.TrimSpace(fields[6])
-	transcript := strings.TrimSpace(fields[7])
+	sessionID, transcript := sel.SessionID, sel.Transcript
 
 	mux := multiplexer.Detect()
 
-	switch act := DecideAction(describeTarget(mux, sessionID, ledgerPane, cwd, transcript)); act.Kind {
+	switch act := DecideAction(describeTarget(mux, sessionID, sel.Pane, sel.Cwd, transcript)); act.Kind {
 	case "switch":
 		// A failed switch does not terminate the row. Every pane that reaches
 		// here was confirmed present in this server's pane table moments ago
@@ -603,14 +706,32 @@ func isDir(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-func runFzf(input string) (string, error) {
-	cmd := exec.Command("fzf",
+// fzfArgs is the fzf invocation, split out of runFzf so the visible-column
+// list can be asserted without running fzf.
+func fzfArgs() []string {
+	return []string{
 		"--delimiter=\t",
-		"--with-nth=1,2,3,4",
+		"--with-nth=" + visibleColumns(),
 		"--no-sort",
 		"--reverse",
 		"--height=100%",
-	)
+	}
+}
+
+// visibleColumns renders the 1-based positions --with-nth takes, derived from
+// the layout constants rather than written out. --with-nth addresses columns by
+// position, so a column inserted ahead of the hidden ones has to move it too;
+// deriving the list is what keeps that from being a separate thing to remember.
+func visibleColumns() string {
+	parts := make([]string, 0, colSummary+1)
+	for i := colIcon; i <= colSummary; i++ {
+		parts = append(parts, strconv.Itoa(i+1))
+	}
+	return strings.Join(parts, ",")
+}
+
+func runFzf(input string) (string, error) {
+	cmd := exec.Command("fzf", fzfArgs()...)
 	cmd.Stdin = strings.NewReader(input)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
