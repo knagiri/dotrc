@@ -9,8 +9,15 @@ import (
 // v0.1 implements tmux only; other implementations can be added without
 // touching hook / picker callers.
 type Multiplexer interface {
-	// PaneID returns a stable identifier for the current pane, or "".
+	// PaneID returns a stable identifier for the pane this process runs in, or
+	// "". Callers that want the pane the *client* is looking at want
+	// CurrentPane instead; this one must keep answering only about its own
+	// process, since that is what a hook records as the session's pane.
 	PaneID() string
+	// CurrentPane returns the pane the client currently has focused, or "".
+	// Unlike PaneID this may be answered by asking the multiplexer, so it works
+	// from a context that is not itself a pane -- which is the picker's case.
+	CurrentPane() string
 	// RefreshStatus asks the multiplexer to redraw its status bar.
 	RefreshStatus()
 	// Switch focuses the pane/target identified by the string returned
@@ -21,9 +28,10 @@ type Multiplexer interface {
 	// there. cwd is the window's working directory. window is the name to
 	// give that window, which callers derive from the session's content (see
 	// internal/label) -- the implementation only sanitizes it, it never
-	// invents one. Returns an error when there is no multiplexer to open a
-	// session in.
-	OpenSession(name, cwd, window string, argv []string) error
+	// invents one. originPane is the pane the client is returned to once argv
+	// finishes cleanly, from a prior CurrentPane() call; "" skips the return.
+	// Returns an error when there is no multiplexer to open a session in.
+	OpenSession(name, cwd, window, originPane string, argv []string) error
 	// RenameWindow renames the window holding pane. Used to keep a window's
 	// name following the conversation running in it, so it is best-effort:
 	// callers ignore the error rather than fail the operation they were in.
@@ -72,13 +80,14 @@ func Detect() Multiplexer {
 type noopImpl struct{}
 
 func (noopImpl) PaneID() string             { return "" }
+func (noopImpl) CurrentPane() string        { return "" }
 func (noopImpl) RefreshStatus()             {}
 func (noopImpl) Switch(target string) error { return nil }
 
 // OpenSession cannot succeed without a multiplexer, and callers need to know:
 // unlike Switch, there is no silent degradation that still gets the user to
 // their session. The error is what makes the caller print a manual fallback.
-func (noopImpl) OpenSession(name, cwd, window string, argv []string) error {
+func (noopImpl) OpenSession(name, cwd, window, originPane string, argv []string) error {
 	return errors.New("no multiplexer detected")
 }
 

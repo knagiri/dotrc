@@ -14,6 +14,52 @@ func (tmuxImpl) PaneID() string {
 	return os.Getenv("TMUX_PANE")
 }
 
+// CurrentPane answers "which pane is the client sitting in right now", which is
+// a different question from PaneID's "which pane is this process running in" --
+// and the difference is why this is a separate method rather than a fallback
+// added to PaneID. The hook uses PaneID to record its own claude process's pane;
+// falling back to display-message there would record whichever pane the client
+// happened to have current, i.e. another process's pane.
+//
+// The picker needs this one because it runs inside `display-popup -E`, where
+// TMUX_PANE is empty (observed against tmux 3.6b) -- the popup is not a pane, so
+// there is no pane id to inherit. Asking the server for the client's current
+// pane gets the real pane the popup was opened over, which is the pane the user
+// wants to be returned to.
+func (tmuxImpl) CurrentPane() string {
+	return currentPane(os.Getenv("TMUX_PANE"), displayMessagePane)
+}
+
+// currentPane is the env-then-ask decision, with the ask injected so both
+// branches are testable without a tmux server.
+//
+// The env var wins when set: inside a pane it is exactly the pane in question,
+// and it costs no subprocess. Empty means either "not a pane" (the popup case)
+// or "no tmux at all", and only the server can tell those apart -- so the ask is
+// allowed to fail, and its failure is the "" that makes windowCommand omit the
+// switch-client clause entirely.
+func currentPane(envPane string, ask func() (string, bool)) string {
+	if envPane != "" {
+		return envPane
+	}
+	if out, ok := ask(); ok {
+		return strings.TrimSpace(out)
+	}
+	return ""
+}
+
+func displayMessagePane() (string, bool) {
+	out, err := exec.Command("tmux", currentPaneArgs()...).Output()
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
+}
+
+func currentPaneArgs() []string {
+	return []string{"display-message", "-p", "#{pane_id}"}
+}
+
 func (tmuxImpl) RefreshStatus() {
 	_ = exec.Command("tmux", "refresh-client", "-S").Run()
 }
@@ -27,7 +73,11 @@ func (tmuxImpl) Switch(target string) error {
 // needs the session, not just the window: a background session belongs to a
 // worktree, and opening its window wherever the popup happened to be invoked
 // from would scatter unrelated worktrees across one session.
-func (tmuxImpl) OpenSession(name, cwd, window string, argv []string) error {
+//
+// originPane is where the client is sent back to once argv finishes cleanly;
+// see windowCommand. "" disables the return, which is what happens when there
+// is no client pane to name.
+func (tmuxImpl) OpenSession(name, cwd, window, originPane string, argv []string) error {
 	if name == "" {
 		return errors.New("no session name")
 	}
@@ -47,10 +97,10 @@ func (tmuxImpl) OpenSession(name, cwd, window string, argv []string) error {
 		// over that popup's terminal; switch-client below moves the client
 		// deliberately instead. This is why -d is right here and wrong for
 		// new-window, where it would leave the pick looking like a no-op.
-		if err := exec.Command("tmux", newSessionArgs(name, window, cwd, argv)...).Run(); err != nil {
+		if err := exec.Command("tmux", newSessionArgs(name, window, cwd, originPane, argv)...).Run(); err != nil {
 			return err
 		}
-	} else if err := exec.Command("tmux", newWindowArgs(name, window, cwd, argv)...).Run(); err != nil {
+	} else if err := exec.Command("tmux", newWindowArgs(name, window, cwd, originPane, argv)...).Run(); err != nil {
 		return err
 	}
 	return exec.Command("tmux", "switch-client", "-t="+name).Run()
@@ -66,12 +116,12 @@ func (tmuxImpl) OpenSession(name, cwd, window string, argv []string) error {
 // the same target (a second window would stack instead of -S selecting the
 // first one). Naming it here also disables tmux's automatic-rename for the
 // window, so the name -S depends on cannot drift later.
-func newSessionArgs(name, window, cwd string, argv []string) []string {
+func newSessionArgs(name, window, cwd, originPane string, argv []string) []string {
 	args := []string{"new-session", "-d", "-s", name, "-n", window}
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
-	return append(args, windowCommand(window, argv)...)
+	return append(args, windowCommand(window, originPane, argv)...)
 }
 
 // newWindowArgs builds the tmux argv for adding a window to an existing
@@ -82,50 +132,65 @@ func newSessionArgs(name, window, cwd string, argv []string) []string {
 // unused index -- naming an index instead would error out once it is taken.
 // -S selects an existing window of the same name rather than stacking another,
 // so picking the same session twice is idempotent.
-func newWindowArgs(name, window, cwd string, argv []string) []string {
+func newWindowArgs(name, window, cwd, originPane string, argv []string) []string {
 	args := []string{"new-window", "-S", "-n", window, "-t", "=" + name + ":"}
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
-	return append(args, windowCommand(window, argv)...)
+	return append(args, windowCommand(window, originPane, argv)...)
 }
 
-// exitedSuffix marks a window whose command has finished and which now holds
-// nothing but the fallback shell. sanitizeWindowName never emits "~", so a
-// renamed window can never collide with the name a later pick asks -S for --
-// which is the whole point of the rename, see windowCommand.
+// exitedSuffix marks a window whose command failed and which now holds nothing
+// but the fallback shell. sanitizeWindowName never emits "~", so a renamed
+// window can never collide with the name a later pick asks -S for -- which is
+// the whole point of the rename, see windowCommand.
 const exitedSuffix = "~exited"
 
 // windowCommand renders argv as the one trailing argument tmux runs in the new
-// window. Passing a single argument matters: tmux runs a lone argument through
-// a shell and execs a multi-argument one directly, and only the shell form can
-// keep the pane alive past the command.
+// window, wrapped so that a clean exit returns the client to originPane and a
+// failure leaves the window open to be read.
 //
-// Without it the pane's process is `claude attach` itself, so there is nothing
-// to fall back to. `claude attach --help` promises "Ctrl+Z drops back to your
-// shell", but Ctrl+Z ends the attach, which closes the pane, which closes the
-// window -- and a session the picker just created owns only that window, so the
-// whole session disappears with it. `exec`ing a shell afterwards gives Ctrl+Z
-// somewhere to land. It also makes a command that fails immediately readable:
-// `tmux new-window` does not surface the command's exit status, so before this
-// the error scrolled past with the closing window.
+// Passing a single argument is what makes the wrap possible at all: tmux runs a
+// lone argument through a shell and execs a multi-argument one directly, so only
+// the shell form can put anything after the command.
 //
-// The rename in between is what keeps that surviving window from swallowing the
+// The split is on argv's exit status, because for `claude attach` every way of
+// leaving on purpose exits 0 (observed: an outside `claude stop`, `/exit` then
+// Esc out of the agent view, and Ctrl+Z all exit 0), while the failures -- a
+// short id that matches no job, say -- do not. So:
+//
+//   - exit 0: switch-client moves the attached client back to the pane the
+//     picker was invoked from, and the shell string ends. The pane's process
+//     exits, so the window closes, and the session closes with it when that was
+//     its only window. The client is already elsewhere by then, which is what
+//     makes the vanishing session harmless. Returning the client is the point:
+//     a window left behind is one the user has to close by hand, and the pane
+//     they were working in is where they wanted to end up.
+//   - non-zero: exec a shell so the pane stays open with the error still on it.
+//     `tmux new-window` does not surface the command's exit status, so without
+//     this the reason scrolls past with the closing window.
+//
+// The rename before that exec keeps the surviving window from swallowing the
 // next pick. newWindowArgs' -S selects an existing window of the same name
-// *instead of* running the command, which was harmless while the window died
-// with the command: -S never found a stale one. Once the window outlives the
-// command, picking the same target again would land the user in the leftover
-// shell and never re-run `claude attach`. Renaming on the way out releases the
-// name, so -S still collapses repeat picks while claude is actually running
-// there, and a pick after it exited gets a fresh window. A tmux that cannot be
-// reached here just leaves the name in place; the ";" chain still reaches exec.
+// *instead of* running the command, so a failed window sitting under the name a
+// retry asks for would make the retry a no-op -- the user would land in the
+// leftover shell and claude would never re-run. Renaming releases the name, so
+// -S still collapses repeat picks while claude is actually running there. It is
+// only on the failure branch because the success branch closes the window, and
+// a closed window holds no name; that also stops "~exited" windows from piling
+// up. A tmux that cannot be reached here just leaves the name in place; the ";"
+// chain still reaches exec.
+//
+// An empty originPane omits the switch-client clause rather than emitting an
+// empty -t target, which tmux would reject. The pane still exits and the window
+// still closes; only the return is skipped.
 //
 // Empty argv yields no argument at all, which is how tmux is asked for the
 // default-command (an empty one, the default, starts default-shell as a login
 // shell). The wrapper below is not that: it execs $SHELL without -l, so the
 // fallback is interactive but not a login shell. Nothing here depends on the
 // difference -- the pane only has to stay open and read a shell's rc.
-func windowCommand(window string, argv []string) []string {
+func windowCommand(window, originPane string, argv []string) []string {
 	if len(argv) == 0 {
 		return nil
 	}
@@ -133,11 +198,23 @@ func windowCommand(window string, argv []string) []string {
 	for _, a := range argv {
 		quoted = append(quoted, shellQuote(a))
 	}
-	// -t "$TMUX_PANE" addresses the pane this command runs in, rather than
-	// whichever window the client happens to have current by then.
-	return []string{strings.Join(quoted, " ") +
-		`; tmux rename-window -t "$TMUX_PANE" ` + shellQuote(window+exitedSuffix) +
-		`; exec "${SHELL:-/bin/bash}"`}
+	// rc is captured immediately: every command after this point overwrites $?,
+	// including the `[` test itself.
+	//
+	// -t "$TMUX_PANE" on the rename addresses the pane this command runs in,
+	// rather than whichever window the client happens to have current by then.
+	// The switch-client target is the opposite -- a pane from outside this
+	// window -- so it is spliced in as a quoted literal.
+	cmd := strings.Join(quoted, " ") +
+		`; rc=$?; if [ "$rc" -ne 0 ]; then tmux rename-window -t "$TMUX_PANE" ` +
+		shellQuote(window+exitedSuffix) +
+		`; exec "${SHELL:-/bin/bash}"; fi`
+	if originPane != "" {
+		// 2>/dev/null: with no client attached, or an origin pane that has since
+		// closed, there is nothing to return and nothing to report either.
+		cmd += `; tmux switch-client -t ` + shellQuote(originPane) + ` 2>/dev/null`
+	}
+	return []string{cmd}
 }
 
 // shellQuote renders s as a single literal word for a POSIX shell. argv reaches

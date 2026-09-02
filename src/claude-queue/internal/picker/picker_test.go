@@ -736,10 +736,12 @@ type fakeMux struct {
 	serverPID int             // ServerPID; 0 means "no server"
 }
 
-func (f *fakeMux) PaneID() string                                         { return "" }
-func (f *fakeMux) RefreshStatus()                                         {}
-func (f *fakeMux) Switch(target string) error                             { return nil }
-func (f *fakeMux) OpenSession(name, cwd, window string, a []string) error { return nil }
+func (f *fakeMux) PaneID() string             { return "" }
+func (f *fakeMux) CurrentPane() string        { return "" }
+func (f *fakeMux) RefreshStatus()             {}
+func (f *fakeMux) Switch(target string) error { return nil }
+
+func (f *fakeMux) OpenSession(name, cwd, window, originPane string, a []string) error { return nil }
 
 // The window-naming methods are equally unused here: picker.Run drives them,
 // and Run is the exec boundary these tests stay on the near side of.
