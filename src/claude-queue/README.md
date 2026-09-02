@@ -52,6 +52,32 @@ make install
 | `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X] [~]` に切替 |
 | `CLAUDE_QUEUE_DEBUG=1` | エラーを `~/.claude/session-queue.log` に追記 |
 
+### picker の行
+
+行は tab 区切りで、fzf に見せるのは前半 5 列だけ（`--with-nth`）。
+
+| 列 | 中身 | 幅 |
+|---|---|---|
+| 1 | state アイコン | 可変（1〜2 桁） |
+| 2 | ai-title（transcript 由来） | 40 桁 padding + truncate |
+| 3 | worktree 名 | 56 桁 padding + truncate |
+| 4 | age | 可変（短い） |
+| 5 | summary（何で止まっているか） | padding なし。行末まで |
+| 6〜9 | session_id / tmux_pane / cwd / transcript_path | 非表示 |
+
+ai-title を worktree 名より前に置くのは、同じ repo に複数 session が並ぶと worktree 名は全部
+同じで summary も全部 `working` になり、「何の作業か」を言えるのが title だけになるため。
+padding と truncate は表示幅（全角 2 桁）で数える — 日本語タイトルが多数派なので、バイト数
+基準の `%-40s` では列が揃わない。popup は client 幅の 80%（実測 ~290 桁）あり、前半 3 列で
+100 桁弱しか使わないので、残りは summary が使う。
+
+ai-title は window 名と同じ transcript から取るが、**別関数**（`label.DisplayTitle`）で作る。
+window 名側の 16 桁切りと `-<id8>` 付与、`.` `:` `~` `#` の置換は tmux の `-t` target 構文と
+FORMATS 展開のための処理で、読むだけの行には要らない。ただし `\t` `\n` `\r` だけは title 側でも
+summary 側でも必ず潰す — 混ざると 6〜9 列目がずれ、picker が別 session の id / pane / cwd /
+transcript を掴む。tab を含む Bash コマンド（`awk -F'<tab>'`）は承認待ちで普通に出るので、
+これは机上の話ではない。
+
 ### picker の到達手段
 
 選択された session への到達手段を次の順で決める。
@@ -215,7 +241,9 @@ PR 作成時に description に貼って確認：
 - [ ] 拒否時は `PermissionDenied` で `⚙️1` に戻る
 - [ ] `C-q q` で popup、Enter で目的 pane にジャンプ、popup 自動閉
 - [ ] `claude --bg` で起動した background session（tmux_pane が NULL）を picker から選択、その worktree の tmux session に window が開いて `claude attach` される（popup を開いた session には増えない）
-- [ ] worktree のサブディレクトリで起動した session が、picker の 2 列目に worktree 名で並ぶ
+- [ ] worktree のサブディレクトリで起動した session が、picker の 3 列目に worktree 名で並ぶ
+- [ ] 同じ repo の複数 session が、picker の 2 列目の ai-title で見分けられる（title の無い row は空欄のまま 3 列目の開始位置が揃う）
+- [ ] tab を含む Bash コマンド（`awk -F'<tab>'`）の承認待ち row を picker から選ぶと、意図した session へ到達する（列がずれない）
 - [ ] `tmux_pane` が NULL の interactive session（他 pane の同 tmux server 上に存在するもの）を picker から選ぶと、`claude attach` ではなく再解決した pane へ直接 switch される
 - [ ] `tmux_pane` が「socket を別 server に明け渡した tmux server」の pane を指す interactive session を picker から選ぶと、SIGTERM 後に `claude --resume` で同じ session id のまま会話が復元される
 - [ ] 別 socket（`tmux -L other`）で稼働中の server 上の interactive session を picker から選ぶと、kill されず理由が出る
