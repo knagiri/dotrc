@@ -603,6 +603,14 @@ func Run(args []string) {
 
 	mux := multiplexer.Detect()
 
+	// Read the origin pane before anything below can move the client: the
+	// window openers below end with a switch-client of their own, and a pane
+	// read after that would name the window we just opened instead of the pane
+	// the user came from. Reading it here also keeps it out of the popup's own
+	// lifetime question -- the value is captured while the popup is still up,
+	// and only spliced into a command that runs after it is gone.
+	originPane := mux.CurrentPane()
+
 	switch act := DecideAction(describeTarget(mux, sessionID, sel.Pane, sel.Cwd, transcript)); act.Kind {
 	case "switch":
 		// A failed switch does not terminate the row. Every pane that reaches
@@ -624,7 +632,7 @@ func Run(args []string) {
 		// Do NOT terminate the session on failure the way the pane path does:
 		// a failed window open says nothing about whether the session is alive,
 		// and the manual command still works.
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), []string{"claude", "attach", act.Short}); err != nil {
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), originPane, []string{"claude", "attach", act.Short}); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: claude attach %s\n", err, act.Short)
 		}
 	case "resume":
@@ -638,7 +646,7 @@ func Run(args []string) {
 				return
 			}
 		}
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), []string{"claude", "--resume", act.Resume}); err != nil {
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), originPane, []string{"claude", "--resume", act.Resume}); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && claude --resume %s\n", err, act.Cwd, act.Resume)
 		}
 	default:

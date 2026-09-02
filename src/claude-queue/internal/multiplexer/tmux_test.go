@@ -8,10 +8,14 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/label"
 )
 
-// wantCommand is what `claude attach abc` must reach tmux as: one shell
-// command, so the pane survives the command and drops back to a shell, having
-// first released the window name that -S dedupes on.
-const wantCommand = `'claude' 'attach' 'abc'; tmux rename-window -t "$TMUX_PANE" 'claude-attach-abc~exited'; exec "${SHELL:-/bin/bash}"`
+// originPane stands in for the pane the picker was invoked from, in the shape
+// tmux reports pane ids ("%" plus an index).
+const originPane = "%3"
+
+// wantCommand is what `claude attach abc` must reach tmux as: one shell command
+// that returns the client to the origin pane when the command exits cleanly, and
+// only on failure keeps the pane alive under a released window name.
+const wantCommand = `'claude' 'attach' 'abc'; rc=$?; if [ "$rc" -ne 0 ]; then tmux rename-window -t "$TMUX_PANE" 'claude-attach-abc~exited'; exec "${SHELL:-/bin/bash}"; fi; tmux switch-client -t '%3' 2>/dev/null`
 
 // The argv builders are exercised instead of OpenSession itself so the contract
 // is checked without starting a real tmux server.
@@ -53,7 +57,7 @@ func TestNewSessionArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := newSessionArgs(tt.sess, tt.window, tt.cwd, tt.argv)
+			got := newSessionArgs(tt.sess, tt.window, tt.cwd, originPane, tt.argv)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("newSessionArgs(%q, %q, %q, %v) = %v, want %v", tt.sess, tt.window, tt.cwd, tt.argv, got, tt.want)
 			}
@@ -77,8 +81,8 @@ func TestNewSessionArgsWindowNameMatchesNewWindow(t *testing.T) {
 	argv := []string{"claude", "attach", "abc"}
 	window := "claude-attach-abc"
 
-	sessionArgs := newSessionArgs("dotrc_wt", window, "/w/a", argv)
-	windowArgs := newWindowArgs("dotrc_wt", window, "/w/a", argv)
+	sessionArgs := newSessionArgs("dotrc_wt", window, "/w/a", originPane, argv)
+	windowArgs := newWindowArgs("dotrc_wt", window, "/w/a", originPane, argv)
 
 	sessionWindowName := sessionArgs[slices.Index(sessionArgs, "-n")+1]
 	targetWindowName := windowArgs[slices.Index(windowArgs, "-n")+1]
@@ -132,7 +136,7 @@ func TestNewWindowArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := newWindowArgs(tt.sess, tt.window, tt.cwd, tt.argv)
+			got := newWindowArgs(tt.sess, tt.window, tt.cwd, originPane, tt.argv)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("newWindowArgs(...) = %v, want %v", got, tt.want)
 			}
@@ -196,6 +200,16 @@ func TestShellQuote(t *testing.T) {
 			want: "'a\nb'",
 		},
 		{
+			// The origin pane reaches windowCommand as a switch-client target.
+			// "%" is inert inside single quotes, but the quoting still has to be
+			// there: an unquoted target would be at the mercy of whatever else
+			// the value carried, and the value comes from tmux rather than from
+			// this package.
+			name: "a pane id stays one word",
+			in:   "%3",
+			want: `'%3'`,
+		},
+		{
 			name: "empty stays a word",
 			in:   "",
 			want: `''`,
@@ -211,11 +225,11 @@ func TestShellQuote(t *testing.T) {
 }
 
 func TestWindowCommand(t *testing.T) {
-	t.Run("one argument, ending in an exec of the shell", func(t *testing.T) {
-		got := windowCommand("claude-attach-abc", []string{"claude", "attach", "abc"})
+	t.Run("one argument carrying both branches", func(t *testing.T) {
+		got := windowCommand("claude-attach-abc", originPane, []string{"claude", "attach", "abc"})
 		// A single argument is what makes tmux run the string through a
-		// shell; more than one would be exec'd directly and the exec tail
-		// would be read as a literal argument to claude.
+		// shell; more than one would be exec'd directly and the tail would
+		// be read as literal arguments to claude.
 		if len(got) != 1 {
 			t.Fatalf("windowCommand(...) = %v, want exactly one argument", got)
 		}
@@ -225,27 +239,102 @@ func TestWindowCommand(t *testing.T) {
 	})
 
 	t.Run("every element is quoted", func(t *testing.T) {
-		got := windowCommand("w", []string{"claude", "--resume", "a b'c"})
-		want := `'claude' '--resume' 'a b'\''c'; tmux rename-window -t "$TMUX_PANE" 'w~exited'; exec "${SHELL:-/bin/bash}"`
+		got := windowCommand("w", "%7", []string{"claude", "--resume", "a b'c"})
+		want := `'claude' '--resume' 'a b'\''c'; rc=$?; if [ "$rc" -ne 0 ]; then tmux rename-window -t "$TMUX_PANE" 'w~exited'; exec "${SHELL:-/bin/bash}"; fi; tmux switch-client -t '%7' 2>/dev/null`
 		if len(got) != 1 || got[0] != want {
 			t.Errorf("windowCommand(...) = %v, want [%q]", got, want)
 		}
 	})
 
 	t.Run("empty argv yields no argument", func(t *testing.T) {
-		if got := windowCommand("cmd", nil); len(got) != 0 {
-			t.Errorf("windowCommand(%q, nil) = %v, want no argument so tmux starts its default shell", "cmd", got)
+		if got := windowCommand("cmd", originPane, nil); len(got) != 0 {
+			t.Errorf("windowCommand(%q, %q, nil) = %v, want no argument so tmux starts its default shell", "cmd", originPane, got)
 		}
 	})
 }
 
+// TestWindowCommandBranchesOnExitStatus pins the split this change is about.
+// Every deliberate way of leaving `claude attach` exits 0, so exit status is
+// what separates "the user is done here" from "this never started".
+//
+//   - clean: the client goes back to the origin pane and the shell string ends,
+//     so the pane exits and the window closes with it. This is the requirement --
+//     a window left open is one the user has to close by hand.
+//   - failed: the pane is kept by an exec'd shell so the error stays readable,
+//     under a released window name so a retry is not swallowed by -S.
+func TestWindowCommandBranchesOnExitStatus(t *testing.T) {
+	const window = "claude-attach-abc"
+	got := windowCommand(window, originPane, []string{"claude", "attach", "abc"})
+	if len(got) != 1 {
+		t.Fatalf("windowCommand(...) = %v, want exactly one argument", got)
+	}
+	cmd := got[0]
+
+	// The status has to be captured before anything else can overwrite $?, the
+	// `[` test included.
+	wantCapture := `; rc=$?; if [ "$rc" -ne 0 ]; then `
+	if !strings.Contains(cmd, wantCapture) {
+		t.Errorf("command = %q, must capture the exit status and branch on it via %q", cmd, wantCapture)
+	}
+
+	// The keep-alive belongs to the failure branch only. Were it unconditional
+	// -- as it was before this change -- the clean exit would leave a stranded
+	// window behind and never reach switch-client.
+	execAt := strings.Index(cmd, `exec "${SHELL:-/bin/bash}"`)
+	if execAt < 0 {
+		t.Fatalf("command = %q, must exec a fallback shell so a failure stays readable", cmd)
+	}
+	fiAt := strings.Index(cmd, "; fi")
+	if fiAt < 0 {
+		t.Fatalf("command = %q, must close the failure branch with fi", cmd)
+	}
+	if execAt > fiAt {
+		t.Errorf("command = %q, execs the fallback shell outside the failure branch; a clean exit would keep the window open", cmd)
+	}
+
+	// switch-client is the last thing in the string, and outside the branch: it
+	// is only reached when the command exited 0, because the failure branch
+	// execs and never returns.
+	wantSwitch := `tmux switch-client -t ` + shellQuote(originPane) + ` 2>/dev/null`
+	if !strings.HasSuffix(cmd, wantSwitch) {
+		t.Errorf("command = %q, must end with %q so a clean exit returns the client to the origin pane", cmd, wantSwitch)
+	}
+	if strings.Index(cmd, wantSwitch) < fiAt {
+		t.Errorf("command = %q, returns the client inside the failure branch, where the exec would have consumed the process first", cmd)
+	}
+}
+
+// TestWindowCommandWithoutOriginPane covers the case where the picker could not
+// name a pane to go back to. tmux would not reject an empty -t -- it resolves
+// one to the current target, which here is the window about to close -- so the
+// clause has to be left out rather than emitted empty, or the clean path would
+// end in a self-switch that means nothing.
+func TestWindowCommandWithoutOriginPane(t *testing.T) {
+	got := windowCommand("claude-attach-abc", "", []string{"claude", "attach", "abc"})
+	if len(got) != 1 {
+		t.Fatalf("windowCommand(...) = %v, want exactly one argument", got)
+	}
+	cmd := got[0]
+	if strings.Contains(cmd, "switch-client") {
+		t.Errorf("command = %q, must not switch-client with no origin pane to name", cmd)
+	}
+	if !strings.HasSuffix(cmd, "; fi") {
+		t.Errorf("command = %q, want it to end at the closed failure branch", cmd)
+	}
+	// The failure branch is unaffected by the missing pane: an error still has
+	// to be readable, and the name still has to be released.
+	if !strings.Contains(cmd, shellQuote("claude-attach-abc"+exitedSuffix)) {
+		t.Errorf("command = %q, must still release the window name on failure", cmd)
+	}
+}
+
 // TestWindowCommandReleasesTheDedupeName pins the repair for the regression the
-// shell wrap would otherwise introduce. -S selects an existing window of the
-// same name *instead of* running the command, so once the window outlives the
-// command, a second pick of the same target would drop the user into the
-// leftover shell and never re-run claude. The command therefore has to rename
-// the window out of the way before it execs the shell, and the name it releases
-// must be exactly the one -S looks for.
+// keep-alive shell would otherwise introduce. -S selects an existing window of
+// the same name *instead of* running the command, so a failed window sitting
+// under that name would make a retry drop the user into the leftover shell and
+// never re-run claude. The command therefore has to rename the window out of the
+// way before it execs the shell, and the name it releases must be exactly the
+// one -S looks for.
 func TestWindowCommandReleasesTheDedupeName(t *testing.T) {
 	argv := []string{"claude", "attach", "abc"}
 	window := "claude-attach-abc"
@@ -254,8 +343,8 @@ func TestWindowCommandReleasesTheDedupeName(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"new-session", newSessionArgs("dotrc_wt", window, "/w/a", argv)},
-		{"new-window", newWindowArgs("dotrc_wt", window, "/w/a", argv)},
+		{"new-session", newSessionArgs("dotrc_wt", window, "/w/a", originPane, argv)},
+		{"new-window", newWindowArgs("dotrc_wt", window, "/w/a", originPane, argv)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			named := tt.args[slices.Index(tt.args, "-n")+1]
@@ -290,7 +379,7 @@ func TestWindowCommandReleasesTheDedupeName(t *testing.T) {
 func TestWindowCommandUsesTheGivenName(t *testing.T) {
 	const window = "AWS-ログ調査-6773febd"
 
-	got := windowCommand(window, []string{"claude", "attach", "abc"})
+	got := windowCommand(window, originPane, []string{"claude", "attach", "abc"})
 	if len(got) != 1 {
 		t.Fatalf("windowCommand(...) = %v, want exactly one argument", got)
 	}
@@ -298,7 +387,7 @@ func TestWindowCommandUsesTheGivenName(t *testing.T) {
 		t.Errorf("windowCommand(...) = %q, must release exactly %q", got[0], window+exitedSuffix)
 	}
 	// The caller's name is what -n installs, unchanged.
-	args := newWindowArgs("dotrc_wt", window, "/w/a", []string{"claude", "attach", "abc"})
+	args := newWindowArgs("dotrc_wt", window, "/w/a", originPane, []string{"claude", "attach", "abc"})
 	if named := args[slices.Index(args, "-n")+1]; named != window {
 		t.Errorf("newWindowArgs named the window %q, want the caller's %q", named, window)
 	}
@@ -547,6 +636,13 @@ func TestWindowNamingArgs(t *testing.T) {
 		[]string{"setw", "-t", "%5", "automatic-rename", "off"}; !slices.Equal(got, want) {
 		t.Errorf("automaticRenameArgs(off) = %v, want %v", got, want)
 	}
+	// The picker asks for the client's current pane in the one place TMUX_PANE
+	// is empty, so the format has to be the pane id and nothing else -- the
+	// output is trimmed and spliced straight into a switch-client target.
+	if got, want := currentPaneArgs(),
+		[]string{"display-message", "-p", "#{pane_id}"}; !slices.Equal(got, want) {
+		t.Errorf("currentPaneArgs = %v, want %v", got, want)
+	}
 	if got, want := windowNameArgs("%5"),
 		[]string{"display", "-p", "-t", "%5", "#{window_name}"}; !slices.Equal(got, want) {
 		t.Errorf("windowNameArgs = %v, want %v", got, want)
@@ -557,6 +653,42 @@ func TestWindowNamingArgs(t *testing.T) {
 		[]string{"list-panes", "-t", "%5", "-F", "#{pane_id}"}; !slices.Equal(got, want) {
 		t.Errorf("windowPanesArgs = %v, want %v", got, want)
 	}
+}
+
+// currentPane is exercised through its injected ask so both branches are
+// covered without a tmux server. The fallback exists for one situation: the
+// picker runs inside `display-popup -E`, where TMUX_PANE is empty because the
+// popup is not a pane, and only the server knows which pane the client is on.
+func TestCurrentPane(t *testing.T) {
+	never := func() (string, bool) {
+		t.Helper()
+		t.Error("currentPane asked tmux even though TMUX_PANE was set")
+		return "", false
+	}
+
+	t.Run("the env var wins when set", func(t *testing.T) {
+		if got := currentPane("%12", never); got != "%12" {
+			t.Errorf("currentPane = %q, want %q", got, "%12")
+		}
+	})
+
+	t.Run("an empty env var falls back to asking tmux", func(t *testing.T) {
+		// display-message ends its output with a newline, which has to come off
+		// before the value becomes a switch-client target.
+		ask := func() (string, bool) { return "%7\n", true }
+		if got := currentPane("", ask); got != "%7" {
+			t.Errorf("currentPane = %q, want %q", got, "%7")
+		}
+	})
+
+	t.Run("no pane at all is empty, not an error", func(t *testing.T) {
+		// Outside tmux there is no pane and no server. "" is the answer
+		// windowCommand reads as "omit the return", so this must not invent one.
+		ask := func() (string, bool) { return "", false }
+		if got := currentPane("", ask); got != "" {
+			t.Errorf("currentPane = %q, want empty", got)
+		}
+	})
 }
 
 func TestCountLines(t *testing.T) {

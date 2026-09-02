@@ -140,7 +140,8 @@ roster 名は使わない — interactive では cwd basename + 2 桁 hex にし
 最終形は `<ai-title を 16 桁に切ったもの>-<session id 8 桁>`。id 接尾辞を残すのは、同じ話題の
 window が複数ありうる一方で `new-window -S` の重複畳み込みは session 単位で効いてほしいため。
 採用するのは**最後の** ai-title で、話題が変わって付け直されると `-S` が旧名と一致せず window が
-1 枚増えるが、その window のコマンドが終われば `~exited` へ改名されて自然に解消するので許容する。
+1 枚増えるが、その window は中のコマンドが終われば閉じる（失敗して残る場合は `~exited` へ
+改名される）ので、名前を握り続けることはなく許容する。
 
 名前を張るのは (a) picker の attach / resume 経路（ai-title が取れなければ `attach-<id8>` /
 `resume-<id8>` へフォールバック）と、(b) hook の `UserPromptSubmit` / `Stop`。`Stop` も張るのは
@@ -211,9 +212,22 @@ resume が pane への switch と決定的に違うのは、**元プロセスを
 uuid を `--resume` に渡してもエラーにはならず、その id で空の新規 session が立ってしまうため、
 確認を欠いた resume は「成功したように見えて会話を失う」。
 
+picker が開いた window の終わり方は、**コマンドの exit status で分ける**。`claude attach` を意図して
+抜ける手段はどれも exit 0 で終わり、失敗系だけが非 0 になるので、exit status がこの 2 つを分ける
+唯一の信号になる（内訳は README.md 側）。正常終了なら起動元 pane へ戻して window を閉じる — 残った
+window はユーザーが手で閉じることになり、戻りたい先は元々作業していた pane だから。失敗したときだけ
+pane を残してエラーを読ませる。`bin/claude-worktree` の `--tmux` 経路も終了時に起動元 pane へ戻すが、
+あちらは exit status で分岐せず無条件に戻す（interactive claude の異常終了を読ませる必要が無く、
+起動元が pane なので `$TMUX_PANE` をそのまま渡せる）。
+
+戻り先の pane を取るのに、pane の記録に使っている既存の経路を流用せず別のものを立てた。picker は
+`display-popup -E` の中で走り、popup は pane ではないので `TMUX_PANE` を継承しない（実測: popup 内では
+空）ため、環境変数だけでは足りず multiplexer へ問い合わせる必要がある。一方 hook 側が要るのは
+「この claude プロセス自身の pane」で、そこを問い合わせに落とすと別プロセスの pane を記録してしまう。
+同じ「pane を 1 つ返す」でも答えるべき問いが違うので、分けてある。
+
 flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` の `=` 接頭辞・末尾 `:`・`-S` による window
-再利用、pane を shell へ落とすためコマンドを単一引数の shell 文字列として渡すことと、その shell が
-`-S` の照合名を握り続けないよう終了時に window を改名すること）は
+再利用、上の分岐をコマンドの単一引数 shell 文字列として組む形とその限界）は
 `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを参照
 （README.md は挙動レベルの説明に留め、flag レベルは書かない）。
 
