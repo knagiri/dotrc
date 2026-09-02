@@ -212,22 +212,22 @@ resume が pane への switch と決定的に違うのは、**元プロセスを
 uuid を `--resume` に渡してもエラーにはならず、その id で空の新規 session が立ってしまうため、
 確認を欠いた resume は「成功したように見えて会話を失う」。
 
-picker が開いた window の終わり方は、コマンドの exit status で分ける。`claude attach` を意図して
-抜ける手段はどれも exit 0 で終わり（外からの `claude stop`、UI で `/exit` してから agent view を
-`Esc` で抜ける、`C-z`）、失敗系だけが非 0 になるので、exit status がこの 2 つを分ける唯一の
-信号になる。正常終了なら起動元 pane へ `switch-client` して window を閉じる — 残った window は
-ユーザーが手で閉じることになり、戻りたい先は元々作業していた pane だから。失敗したときだけ
-shell を残してエラーを読ませ、`-S` の照合名を握り続けないよう window を改名する。`bin/claude-worktree`
-の `--tmux` 経路も同じ「終わったら起動元 pane へ戻す」形で、picker はそれに揃えている。
+picker が開いた window の終わり方は、**コマンドの exit status で分ける**。`claude attach` を意図して
+抜ける手段はどれも exit 0 で終わり、失敗系だけが非 0 になるので、exit status がこの 2 つを分ける
+唯一の信号になる（内訳は README.md 側）。正常終了なら起動元 pane へ戻して window を閉じる — 残った
+window はユーザーが手で閉じることになり、戻りたい先は元々作業していた pane だから。失敗したときだけ
+pane を残してエラーを読ませる。`bin/claude-worktree` の `--tmux` 経路も終了時に起動元 pane へ戻すが、
+あちらは exit status で分岐せず無条件に戻す（interactive claude の異常終了を読ませる必要が無く、
+起動元が pane なので `$TMUX_PANE` をそのまま渡せる）。
 
-戻り先の pane は `PaneID()` とは別の `CurrentPane()` で取る。picker は `display-popup -E` の中で
-走り、popup は pane ではないので `TMUX_PANE` を継承しない（実測: popup 内では空）。そこで
-`tmux display-message -p "#{pane_id}"` へ落として client の現在 pane を訊く。`PaneID()` 側に
-fallback を足さないのは用途が違うため — あれは hook が「この claude プロセス自身の pane」を
-記録するのに使っており、fallback すると別プロセスの pane を記録してしまう。
+戻り先の pane を取るのに、pane の記録に使っている既存の経路を流用せず別のものを立てた。picker は
+`display-popup -E` の中で走り、popup は pane ではないので `TMUX_PANE` を継承しない（実測: popup 内では
+空）ため、環境変数だけでは足りず multiplexer へ問い合わせる必要がある。一方 hook 側が要るのは
+「この claude プロセス自身の pane」で、そこを問い合わせに落とすと別プロセスの pane を記録してしまう。
+同じ「pane を 1 つ返す」でも答えるべき問いが違うので、分けてある。
 
 flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` の `=` 接頭辞・末尾 `:`・`-S` による window
-再利用、上の分岐をコマンドの単一引数 shell 文字列として組む形）は
+再利用、上の分岐をコマンドの単一引数 shell 文字列として組む形とその限界）は
 `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを参照
 （README.md は挙動レベルの説明に留め、flag レベルは書かない）。
 

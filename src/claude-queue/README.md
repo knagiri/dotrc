@@ -138,7 +138,9 @@ window を開く attach / resume の経路では、`claude` をそのまま pane
 
 UI の中で `/exit` しても `claude attach` は終わらず、agent view（`claude agents` と同じ session
 一覧）へ戻る。そこから `Esc` で抜けると exit 0 で終了し、window が閉じて起動元 pane に戻る。
-これは claude 側の挙動で、こちらからは変えられない。
+
+戻り先の pane が既に閉じていた場合は戻らず、window と（それしか持たない）session が消えるので
+client は端末へ detach される。
 
 失敗して残った window は `<元の名前>~exited` へ改名する。同じ対象を選び直したときの window
 再利用は名前の一致で決まるので、改名しないと「claude が居ない shell だけの window」が名前を
