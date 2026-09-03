@@ -107,28 +107,33 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       非 0 のまま先へ進んでよい。auto-merge が待つ）。このラッパーは required かどうかを判定しない
       ので、required check の充足判定は auto-merge（branch protection）に委ねる。
    c. `has_failure` が `false` なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`）。
-   d. `gh pr view <PR> --json autoMergeRequest,state` を実行し、**`autoMergeRequest` が非 null**
-      （auto-merge が有効化されて required check を待っている）**または `state` が `MERGED`**
-      （その場で merge が成立した）のどちらかを満たすことを確認する。どちらかを満たせば終端に達している。
-      2 択にするのは、required check の無い repo では `--auto` が即時 merge を成立させ、成立した時点で
-      `autoMergeRequest` が null に戻るため。非 null だけを終端条件にすると、**最も順当に終わった
-      happy path を失敗と判定してしまう**。実測（この skill のループ自身が merge した PR）:
+   d. 次を実行し、**終端種別を機械的に判定できる文字列**（`MERGED` / `AUTO_MERGE_PENDING` /
+      `NOT_TERMINAL`）を得る（散文での判定ではなく、コマンド自体が判定値を返す形にする）。
+
+      ```
+      gh pr view <PR> --json autoMergeRequest,state --jq 'if .state == "MERGED" then "MERGED" elif .autoMergeRequest != null then "AUTO_MERGE_PENDING" else "NOT_TERMINAL" end'
+      ```
+
+      `MERGED`（その場で merge が成立した）または `AUTO_MERGE_PENDING`（auto-merge が有効化されて
+      required check を待っている）なら終端に達している（手順 3.e はこの値で書き分ける）。
+      `NOT_TERMINAL` なら auto-merge が有効化できていないので、手順 4（停止・報告）へ抜ける。
+      3 分岐にするのは、required check の無い repo では `--auto` が即時 merge を成立させ、成立した時点で
+      `autoMergeRequest` が null に戻るため。`autoMergeRequest` の非 null だけを終端条件にすると、
+      **最も順当に終わった happy path を失敗と判定してしまう**。実測（この skill のループ自身が
+      merge した PR）:
 
       ```
       $ gh pr view 70 --json autoMergeRequest,state,mergedAt
       {"autoMergeRequest":null,"mergedAt":"2026-09-03T07:57:46Z","state":"MERGED"}
       ```
 
-      **merge されていないこと（`state` が `OPEN` のまま auto-merge が待っている状態）は異常ではない。**
-      これは「merge 状態を観測するな」という意味ではない — 上のとおり `state` は引いて終端判定に使う。
-      異常視しないのは「まだ merge されていない」という結果のほうであって、merge 状態を見ること自体ではない。
-      どちらも満たさない場合は auto-merge が有効化できていないので、手順 4（停止・報告）へ抜ける。
+      `state` を引くのは終端判定のためで、`state` が `OPEN`（`AUTO_MERGE_PENDING`）でも異常ではない。
    e. **最終サマリ出力**: 全イテレーションの「指摘→対応」（判定役の仕分けと修正役の変更）、最後の検出
       レポート（手順 0 または 2.a-0。読んだもの／`missing` だったもの）、最終結果を **session の最終
-      メッセージとして出力**する。PR には投稿しない。最終結果は手順 3.d で**どちらの終端に達したか**で
-      書き分ける — **auto-merge を有効化して待機中**（`autoMergeRequest` 非 null）か、**その場で merge が
-      成立した**（`state` が `MERGED`）か。「有効化済み」と決め打ちで書くと、後者に達した場合に報告文が
-      実際の結果を表せない。
+      メッセージとして出力**する。PR には投稿しない。最終結果は手順 3.d の**終端種別**で書き分ける —
+      **auto-merge を有効化して待機中**（`AUTO_MERGE_PENDING`）か、**その場で merge が成立した**
+      （`MERGED`）か。「有効化済み」と決め打ちで書くと、後者に達した場合に報告文が実際の結果を
+      表せない。
 4. **停止・報告**（auto-merge を有効化しなかった場合）: 各イテレーションの 指摘→対応、gate に残した findings /
    修正役が直さなかった findings（`unfixed`）/ 議論待ち thread / CI の fail /
    最後の検出レポートで `missing` だった reviewer / 停止理由・残課題を箇条書きで要約し、
