@@ -31,9 +31,16 @@ const (
 	// started outside a multiplexer altogether. Not an orphan -- there is a
 	// terminal somewhere that owns it.
 	originOutside
-	// originCurrent means the process belongs to this very tmux server. Its
-	// pane should have been found by FindPane; seeing this alongside an
-	// unreachable pane means the pane closed while the process lived on.
+	// originCurrent means the process belongs to this very tmux server. For an
+	// interactive session, its pane should have been found by FindPane, so
+	// seeing this alongside an unreachable pane means the pane closed while
+	// the process lived on. That implication does not hold for a background
+	// session: paneForSession skips background entries outright (see its
+	// comment), so an unreachable pane there proves nothing about the pane
+	// ever having closed -- it was never looked up. describeTarget calls
+	// originOf regardless of kind, but DecideAction routes background
+	// sessions to `claude attach` before origin is ever consulted, so this
+	// gap is inert in practice.
 	originCurrent
 	// originOrphan means the process belongs to a tmux server that no longer
 	// owns the socket it was started on: either the socket is gone, or another

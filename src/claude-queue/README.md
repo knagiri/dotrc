@@ -84,7 +84,11 @@ transcript を掴む。tab を含む Bash コマンド（`awk -F'<tab>'`）は�
 
 1. **到達できる pane があれば `tmux switch-client`**。roster に該当 session があれば
    `claude agents --json` の pid からプロセス祖先を辿って pane を解決する（identity 込みの
-   確認）。ledger の `tmux_pane` を最後の手段として見るのは **roster を読めなかったときだけ**
+   確認）。ただしこの祖先辿りは interactive な roster entry にだけ適用する。background agent は
+   ホスト共有の `claude daemon run` が fork するため、daemon が pane の中から起きていると配下の
+   全 background が無関係なその pane に解決されてしまう。よって background は pane を解決せず、
+   必ず手順 2 の `claude attach` に落とす。ledger の `tmux_pane` を最後の手段として見るのは
+   **roster を読めなかったときだけ**
    （roster は読めたが該当 session が無い場合は含まない — それはプロセス終了の証拠なので
    使わない）。pane id は server 単位のカウンタで新しい server は `%0` から振り直すため、
    実在するだけでは同一 session の pane だと確認したことにならない。switch が失敗しても row は
