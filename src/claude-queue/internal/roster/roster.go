@@ -13,12 +13,21 @@ import (
 	"os/exec"
 )
 
+// The two values Agent.Kind takes. They are named because the distinction
+// decides how a session is reached -- an interactive session runs in a tmux
+// pane, a background one does not -- so callers branch on it rather than just
+// display it.
+const (
+	KindInteractive = "interactive"
+	KindBackground  = "background"
+)
+
 // Agent is one entry of the roster. The json tags are the contract with
 // `claude agents --json`; fields the callers do not use are left out.
 type Agent struct {
 	SessionID string `json:"sessionId"`
 	PID       int    `json:"pid"`
-	Kind      string `json:"kind"` // "interactive" | "background"
+	Kind      string `json:"kind"` // KindInteractive | KindBackground
 	Cwd       string `json:"cwd"`
 }
 

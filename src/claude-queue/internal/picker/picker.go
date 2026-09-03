@@ -265,7 +265,7 @@ type Target struct {
 	// one transcript.
 	RosterOK bool
 	InRoster bool
-	Kind     string // roster kind: "interactive" | "background"
+	Kind     string // roster kind: roster.KindInteractive | roster.KindBackground
 	PID      int
 	Origin   serverOrigin
 
@@ -340,7 +340,7 @@ func DecideAction(t Target) Action {
 			shortID(t.SessionID), t.RosterMatches, t.DuplicatePIDs)}
 	}
 	if t.InRoster {
-		if t.Kind == "background" {
+		if t.Kind == roster.KindBackground {
 			return Action{Kind: "attach", Short: shortID(t.SessionID), Cwd: t.Cwd}
 		}
 		if t.Origin != originOrphan {
@@ -443,16 +443,29 @@ func reachablePane(mux multiplexer.Multiplexer, agents []roster.Agent, sessionID
 // agents --json` has been observed to list the same session id twice (see
 // Target.RosterMatches), and stopping at the first entry risks missing the
 // one pid that actually resolves to a pane.
+//
+// Background agents are skipped rather than looked up, because the ancestry
+// walk is only meaningful for a process that was started inside a pane. A
+// background agent is not: it is forked by the host-shared `claude daemon run`
+// singleton, and that daemon is itself a descendant of whichever process first
+// needed it. When that happened to be inside a pane, every background agent
+// under the daemon walks up into that pane -- and since the daemon is shared
+// across worktrees, unrelated sessions resolve to the same one. Selecting such
+// a row would switch to a third session's window with no error. Skipping keeps
+// DecideAction's premise that a background session has no pane.
 func paneForSession(agents []roster.Agent, sessionID string, find func(int) (string, bool)) string {
 	for _, a := range agentsFor(agents, sessionID) {
+		if a.Kind == roster.KindBackground {
+			continue
+		}
 		if pane, found := find(a.PID); found {
 			return pane
 		}
 	}
-	// The session is live but outside this tmux server (a session that
-	// outlived the server it started in, or a background agent that never had
-	// a pane). Which of the two it is decides whether the session may be
-	// killed and resumed, and that is originOf's question, not this one's.
+	// The session is live but has no pane of ours: an interactive session that
+	// outlived the server it started in, or a background agent, which never had
+	// one. Which of the two it is decides whether the session may be killed and
+	// resumed, and that is originOf's question, not this one's.
 	return ""
 }
 

@@ -3,6 +3,8 @@ package picker
 import (
 	"strings"
 	"testing"
+
+	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
 // environ builds the NUL-separated block /proc/<pid>/environ hands back.
@@ -144,7 +146,7 @@ func TestClassifyOrigin(t *testing.T) {
 func TestOnlyOrphanIsKillable(t *testing.T) {
 	for _, o := range []serverOrigin{originUnknown, originOutside, originCurrent, originForeignLive} {
 		tgt := resumable()
-		tgt.InRoster, tgt.Kind, tgt.PID, tgt.Origin = true, "interactive", 4242, o
+		tgt.InRoster, tgt.Kind, tgt.PID, tgt.Origin = true, roster.KindInteractive, 4242, o
 		if act := DecideAction(tgt); act.KillPID != 0 {
 			t.Errorf("origin %v: KillPID = %d, want 0", o, act.KillPID)
 		}
