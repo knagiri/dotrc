@@ -463,12 +463,12 @@ func TestResumableRowCarriesNoPaneForTheRosterFallback(t *testing.T) {
 // -- falls back to the existing routing instead of resuming onto a live
 // process. Resumable rows add no branch of their own to DecideAction.
 func TestResumableRowInRosterFallsBackToExistingRouting(t *testing.T) {
-	agents := []roster.Agent{{SessionID: testUUID, PID: 100, Kind: "background"}}
+	agents := []roster.Agent{{SessionID: testUUID, PID: 100, Kind: roster.KindBackground}}
 	mux := &fakeMux{}
 
 	tgt := resumable()
 	tgt.Pane = reachablePane(mux, agents, testUUID, "%1", true)
-	tgt.InRoster, tgt.Kind, tgt.PID = true, "background", 100
+	tgt.InRoster, tgt.Kind, tgt.PID = true, roster.KindBackground, 100
 
 	if act := DecideAction(tgt); act.Kind != "attach" || act.Short != "61c846eb" {
 		t.Errorf("DecideAction = %+v, want attach by short id", act)
@@ -539,7 +539,7 @@ func TestDecideAction(t *testing.T) {
 		// back reachable, nothing may be killed.
 		name: "reachable pane beats an orphan process",
 		target: withPane(func(tg *Target) {
-			tg.Pane, tg.InRoster, tg.Kind, tg.PID, tg.Origin = "%12", true, "interactive", 4242, originOrphan
+			tg.Pane, tg.InRoster, tg.Kind, tg.PID, tg.Origin = "%12", true, roster.KindInteractive, 4242, originOrphan
 		}),
 		kind: "switch",
 		pane: "%12",
@@ -558,7 +558,7 @@ func TestDecideAction(t *testing.T) {
 		// fails with "No job matching".
 		name: "background session attaches by short id",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID = true, "background", 100
+			tg.InRoster, tg.Kind, tg.PID = true, roster.KindBackground, 100
 		}),
 		kind:  "attach",
 		short: "61c846eb",
@@ -566,7 +566,7 @@ func TestDecideAction(t *testing.T) {
 		// Short ids that are already <= 8 chars must not be sliced out of range.
 		name: "short session id is not truncated",
 		target: withPane(func(tg *Target) {
-			tg.SessionID, tg.InRoster, tg.Kind, tg.PID = "abc", true, "background", 100
+			tg.SessionID, tg.InRoster, tg.Kind, tg.PID = "abc", true, roster.KindBackground, 100
 		}),
 		kind:  "attach",
 		short: "abc",
@@ -577,7 +577,7 @@ func TestDecideAction(t *testing.T) {
 		// so this refuses rather than kill one of the two arbitrarily.
 		name: "duplicate roster entries are not touched",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOrphan
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, roster.KindInteractive, 4242, originOrphan
 			tg.RosterMatches, tg.DuplicatePIDs = 2, []int{4242, 5252}
 		}),
 		kind: "none",
@@ -586,7 +586,7 @@ func TestDecideAction(t *testing.T) {
 		// server no client of ours can reach.
 		name: "orphan interactive session is ended then resumed",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOrphan
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, roster.KindInteractive, 4242, originOrphan
 		}),
 		kind:    "resume",
 		resume:  testUUID,
@@ -594,7 +594,7 @@ func TestDecideAction(t *testing.T) {
 	}, {
 		name: "session started outside tmux is left alone",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOutside
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, roster.KindInteractive, 4242, originOutside
 		}),
 		kind: "none",
 	}, {
@@ -603,7 +603,7 @@ func TestDecideAction(t *testing.T) {
 		// terminal (a different socket entirely), so it must not be killed.
 		name: "interactive session on a still-running foreign server is left alone",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originForeignLive
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, roster.KindInteractive, 4242, originForeignLive
 		}),
 		kind: "none",
 	}, {
@@ -611,19 +611,19 @@ func TestDecideAction(t *testing.T) {
 		// safe answer is the same as for a session in use elsewhere.
 		name: "unknown origin is left alone",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originUnknown
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, roster.KindInteractive, 4242, originUnknown
 		}),
 		kind: "none",
 	}, {
 		name: "same-server session with a closed pane is left alone",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originCurrent
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, roster.KindInteractive, 4242, originCurrent
 		}),
 		kind: "none",
 	}, {
 		name: "orphan with no pid cannot be ended, so is left alone",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 0, originOrphan
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, roster.KindInteractive, 0, originOrphan
 		}),
 		kind: "none",
 	}, {
@@ -657,7 +657,7 @@ func TestDecideAction(t *testing.T) {
 		// is gone must not be killed for a resume that cannot happen.
 		name: "orphan with no transcript is not killed",
 		target: withPane(func(tg *Target) {
-			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, "interactive", 4242, originOrphan
+			tg.InRoster, tg.Kind, tg.PID, tg.Origin = true, roster.KindInteractive, 4242, originOrphan
 			tg.TranscriptExists = false
 		}),
 		kind: "none",
@@ -699,12 +699,19 @@ func TestDecideAction(t *testing.T) {
 // jobs and would silently close a fresh window for an interactive session.
 func TestPaneForSession(t *testing.T) {
 	agents := []roster.Agent{
-		{SessionID: "bg", PID: 100, Kind: "background"},
-		{SessionID: "live", PID: 200, Kind: "interactive"},
+		{SessionID: "bg", PID: 100, Kind: roster.KindBackground},
+		{SessionID: "live", PID: 200, Kind: roster.KindInteractive},
 	}
-	// Only pid 200 sits under a pane; 100 is a background agent with none.
+	// The background pid resolves to a pane, because in the field it does: a
+	// background agent is forked by the host-shared `claude daemon run`
+	// singleton, and when that daemon was itself started from inside a pane the
+	// ancestry walk reaches it. The pane is not the session's, so the lookup
+	// must not be attempted at all.
 	find := func(pid int) (string, bool) {
-		if pid == 200 {
+		switch pid {
+		case 100:
+			return "%320", true
+		case 200:
 			return "%7", true
 		}
 		return "", false
@@ -713,8 +720,9 @@ func TestPaneForSession(t *testing.T) {
 	if got := paneForSession(agents, "live", find); got != "%7" {
 		t.Errorf("paneForSession(live) = %q, want %%7", got)
 	}
-	// A live agent with no pane must stay empty so DecideAction routes it to
-	// attach, which is the correct path for a background session.
+	// A background session must stay empty so DecideAction routes it to attach,
+	// which is the only path that reaches it -- switching would land on the
+	// daemon's ancestor pane, an unrelated session's window.
 	if got := paneForSession(agents, "bg", find); got != "" {
 		t.Errorf("paneForSession(bg) = %q, want empty", got)
 	}
@@ -724,6 +732,26 @@ func TestPaneForSession(t *testing.T) {
 	}
 	if got := paneForSession(nil, "live", find); got != "" {
 		t.Errorf("paneForSession over an empty roster = %q, want empty", got)
+	}
+}
+
+// The observed symptom, in the shape it was measured: two unrelated background
+// sessions in different worktrees, both under one shared daemon, resolved to
+// the same pane %320 -- which belonged to a third session's `claude attach`
+// window. Both rows would have switched there instead of attaching, with no
+// error. Neither may resolve to a pane.
+func TestPaneForSessionSharedDaemonPane(t *testing.T) {
+	agents := []roster.Agent{
+		{SessionID: "6f3093ad", PID: 3843635, Kind: roster.KindBackground},
+		{SessionID: "b1baa690", PID: 3118555, Kind: roster.KindBackground},
+	}
+	// Both pids walk up into the one pane the shared daemon was started from.
+	find := func(int) (string, bool) { return "%320", true }
+
+	for _, id := range []string{"6f3093ad", "b1baa690"} {
+		if got := paneForSession(agents, id, find); got != "" {
+			t.Errorf("paneForSession(%s) = %q, want empty: that pane belongs to the daemon's ancestor, not this session", id, got)
+		}
 	}
 }
 
@@ -768,11 +796,12 @@ func (f *fakeMux) ServerPID() (int, bool)        { return f.serverPID, f.serverP
 // the session: that absence is evidence the process ended, not a reason to
 // trust a stale id.
 func TestReachablePane(t *testing.T) {
-	live := []roster.Agent{{SessionID: "live", PID: 200, Kind: "interactive"}}
+	live := []roster.Agent{{SessionID: "live", PID: 200, Kind: roster.KindInteractive}}
 	dup := []roster.Agent{
-		{SessionID: "dup", PID: 200, Kind: "interactive"},
-		{SessionID: "dup", PID: 201, Kind: "interactive"},
+		{SessionID: "dup", PID: 200, Kind: roster.KindInteractive},
+		{SessionID: "dup", PID: 201, Kind: roster.KindInteractive},
 	}
+	bg := []roster.Agent{{SessionID: "bg", PID: 100, Kind: roster.KindBackground}}
 
 	cases := []struct {
 		name       string
@@ -863,6 +892,17 @@ func TestReachablePane(t *testing.T) {
 		rosterOK:  true,
 		want:      "%8",
 	}, {
+		// A background agent's ancestry does reach a pane -- the shared `claude
+		// daemon run` that forked it was started from one -- but that pane is
+		// not the session's. It must be reported unreachable so the pick
+		// attaches instead of switching into an unrelated window.
+		name:      "background agent's ancestor pane is not its own",
+		agents:    bg,
+		mux:       &fakeMux{find: map[int]string{100: "%320"}},
+		sessionID: "bg",
+		rosterOK:  true,
+		want:      "",
+	}, {
 		// Nothing to look the process up by, and an empty pane column: the row
 		// is not reachable by any pane.
 		name:       "no session id and no ledger pane",
@@ -886,11 +926,11 @@ func TestReachablePane(t *testing.T) {
 // ledger, so the pick lands on the switch path rather than on a resume that
 // would kill a session whose pane is right here.
 func TestReachablePaneRoutesToSwitch(t *testing.T) {
-	agents := []roster.Agent{{SessionID: testUUID, PID: 200, Kind: "interactive"}}
+	agents := []roster.Agent{{SessionID: testUUID, PID: 200, Kind: roster.KindInteractive}}
 	mux := &fakeMux{find: map[int]string{200: "%7"}}
 
 	tgt := resumable()
-	tgt.InRoster, tgt.Kind, tgt.PID, tgt.Origin = true, "interactive", 200, originOrphan
+	tgt.InRoster, tgt.Kind, tgt.PID, tgt.Origin = true, roster.KindInteractive, 200, originOrphan
 	tgt.Pane = reachablePane(mux, agents, testUUID, "%stale", true)
 
 	if act := DecideAction(tgt); act.Kind != "switch" || act.Pane != "%7" {
