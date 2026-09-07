@@ -62,14 +62,16 @@ make install
 | 2 | ai-title（transcript 由来） | 40 桁 padding + truncate |
 | 3 | worktree 名 | 56 桁 padding + truncate |
 | 4 | age | 可変（短い） |
-| 5 | summary（何で止まっているか） | padding なし。行末まで |
+| 5 | summary（何で止まっているか） | padding なし。payload 由来は 150 桁で truncate |
 | 6〜9 | session_id / tmux_pane / cwd / transcript_path | 非表示 |
 
 ai-title を worktree 名より前に置くのは、同じ repo に複数 session が並ぶと worktree 名は全部
 同じで summary も全部 `working` になり、「何の作業か」を言えるのが title だけになるため。
 padding と truncate は表示幅（全角 2 桁）で数える — 日本語タイトルが多数派なので、バイト数
-基準の `%-40s` では列が揃わない。popup は client 幅の 80%（実測 ~290 桁）あり、前半 3 列で
-100 桁弱しか使わないので、残りは summary が使う。
+基準の `%-40s` では列が揃わない。行は tab 区切りのまま fzf に渡り、fzf 既定の `--tabstop=8` で
+展開されるので、2〜4 列目は 8 / 56 / 120 桁から始まる（padding 幅の 1+40+56 ではなく、各列の
+末尾で次の 8 の倍数まで送られるため）。popup は client 幅の 80%（実測 ~290 桁）あるので、
+summary が 150 桁使ってもなお収まる。
 
 ai-title は window 名と同じ transcript から取るが、**別関数**（`label.DisplayTitle`）で作る。
 window 名側の 16 桁切りと `-<id8>` 付与、`.` `:` `~` `#` の置換は tmux の `-t` target 構文と
