@@ -100,7 +100,7 @@ claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 - `-b` 省略時はブランチ名 = `<name>`。解決順はローカルブランチ → `origin/<branch>` を追跡 checkout →
   どちらにも無ければ新規作成（fetch はしない）
 - プロンプト無し: worktree 追加のみ。stdout にパスのみ出力（`git wa` の置き換え）
-- プロンプト有り（既定）: **worktree dir で `claude --bg`（background agent, `acceptEdits`）を起動**。
+- プロンプト有り（既定）: **worktree dir で `claude --bg`（background agent, permission mode `auto`）を起動**。
   tmux session は作らない。捕捉した short session id を `attach: claude attach <short-id>` として
   stdout に出す
 - プロンプト有り + `--tmux`: **detached tmux session（名前 = worktree basename）を作り、その pane の

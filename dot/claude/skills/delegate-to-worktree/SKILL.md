@@ -1,13 +1,13 @@
 ---
 name: delegate-to-worktree
-description: WHAT と HOW（設計）が固まった作業を別 workspace の自律 agent に委譲する。claude-worktree を session 起動形式（-- 付き）で呼び、background agent（claude --bg, acceptEdits）を起こして implement-and-review skill に着手させる。「claude-worktree で作業して」「claude-worktree で worktree 作成から」「別 worktree / workspace でやらせて」「これを別 agent に任せて」「delegate して」系の依頼で使う。worktree を作るだけ（初期タスクを伴わない）の要求のときだけ add-only で呼ぶ。
+description: WHAT と HOW（設計）が固まった作業を別 workspace の自律 agent に委譲する。claude-worktree を session 起動形式（-- 付き）で呼び、background agent（claude --bg, permission mode auto）を起こして implement-and-review skill に着手させる。「claude-worktree で作業して」「claude-worktree で worktree 作成から」「別 worktree / workspace でやらせて」「これを別 agent に任せて」「delegate して」系の依頼で使う。worktree を作るだけ（初期タスクを伴わない）の要求のときだけ add-only で呼ぶ。
 allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktree list), Bash(git rev-parse *), Read, Glob, Grep, SendMessage
 ---
 
 # delegate-to-worktree
 
 固まった作業（WHAT + HOW）を、別 workspace の自律 claude に委譲する。`bin/claude-worktree` を
-**session 起動形式**（`--` 付き）で呼び、background agent（`claude --bg`, acceptEdits）を
+**session 起動形式**（`--` 付き）で呼び、background agent（`claude --bg`, permission mode `auto`）を
 起こす。起動先は `implement-and-review` skill で**確定済みの設計を実行し**、merge する。
 
 運用ポリシーは `dot/claude/rules/worktree-scope.md` を参照。作業スコープを worktree に閉じる
