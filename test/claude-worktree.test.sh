@@ -115,6 +115,79 @@ if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] \
   echo "ok: repeated --seed and directory seeds replace rather than nest on reseed"
 else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
 
+# --- .delegate/ return channel -------------------------------------------------
+# `.delegate/` is where a delegate leaves files it wants to hand back. It has to
+# be readable from the worktree by relative path AND invisible to git, or an
+# untracked directory would make `git-reap-gone` skip the worktree as unclean.
+# The exclude entry is what buys the second half.
+#
+# The entry belongs in the repo-wide `.git/info/exclude` (the common dir's),
+# which is what --git-path returns from inside a linked worktree AND the only
+# copy git reads: the same pattern in `.git/worktrees/<name>/info/exclude`
+# leaves the path un-ignored (git 2.43.0). Asserting the resolved location, not
+# just the entry, is what would catch a "fix" that moves the write to the
+# per-worktree path -- where it would stop working without failing.
+(cd "$cwdrepo" && "$wt" delegatewt) >/dev/null 2>&1; rc=$?
+ex="$(git -C "${cwdrepo}_delegatewt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$ex" = "$cwdrepo/.git/info/exclude" ] && grep -qxF '/.delegate/' "$ex"; then
+  echo "ok: worktree creation adds /.delegate/ to the repo-wide exclude"
+else echo "FAIL: exclude entry missing rc=$rc path=${ex:-<unresolved>}"; fail=1; fi
+
+# The point of the entry: a file dropped in .delegate/ leaves `status --porcelain`
+# empty, which is exactly the predicate git-reap-gone gates on. Guard on the file
+# existing so this cannot pass vacuously.
+mkdir -p "${cwdrepo}_delegatewt/.delegate"
+echo "pr body draft" >"${cwdrepo}_delegatewt/.delegate/pr-body.md"
+st="$(git -C "${cwdrepo}_delegatewt" status --porcelain 2>/dev/null)"
+if [ -f "${cwdrepo}_delegatewt/.delegate/pr-body.md" ] && [ -z "$st" ]; then
+  echo "ok: files under .delegate/ stay invisible to git status"
+else echo "FAIL: .delegate/ is visible to git: ${st:-<file missing>}"; fail=1; fi
+
+# ...and the worktree is still removable without --force, which is the other half
+# of what git-reap-gone needs.
+git -C "$cwdrepo" worktree remove "${cwdrepo}_delegatewt" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "ok: a worktree holding .delegate/ files is removable without --force"
+else echo "FAIL: worktree remove refused a .delegate/-holding worktree rc=$rc"; fail=1; fi
+
+# Re-running over an existing worktree dir must not append a second copy of the
+# entry (the script reuses the dir rather than recreating it).
+(cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1
+(cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1; rc=$?
+ex="$(git -C "${cwdrepo}_dupwt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
+n="$(grep -cxF '/.delegate/' "$ex" 2>/dev/null || echo 0)"
+if [ "$rc" -eq 0 ] && [ "$n" -eq 1 ]; then
+  echo "ok: a repeat run leaves exactly one /.delegate/ entry"
+else echo "FAIL: exclude entry count=$n rc=$rc"; fail=1; fi
+
+# An exclude the repo already wrote must survive: the script appends, never
+# rewrites. Losing a user's pattern would be a silent regression.
+printf '/scratch/\n' >>"$ex"
+(cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1
+if grep -qxF '/scratch/' "$ex" && [ "$(grep -cxF '/.delegate/' "$ex")" -eq 1 ]; then
+  echo "ok: an existing exclude entry is preserved"
+else echo "FAIL: existing exclude entry clobbered"; fail=1; fi
+
+# A pre-existing exclude with NO trailing newline is a distinct case from the one
+# above (that file already ends in "\n" from the earlier append). A hand-written
+# `.git/info/exclude` commonly lacks a final newline, and appending straight onto
+# that glues our pattern onto the last line -- e.g. `/scratch/` becomes
+# `/scratch//.delegate/`, which is neither the original entry nor a working
+# `/.delegate/` line. Use a dedicated repo so the accumulated exclude state from
+# the tests above (which already has a trailing newline) can't mask this.
+noeolrepo="$tmp/noeolrepo"
+mkdir -p "$noeolrepo"
+git -C "$noeolrepo" init -q
+git -C "$noeolrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mkdir -p "$noeolrepo/.git/info"
+printf '/scratch/' >"$noeolrepo/.git/info/exclude" # deliberately no trailing newline
+
+(cd "$noeolrepo" && "$wt" noeolwt) >/dev/null 2>&1; rc=$?
+ex2="$noeolrepo/.git/info/exclude"
+if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/scratch/' "$ex2")" -eq 1 ] && grep -qxF '/.delegate/' "$ex2"; then
+  echo "ok: appending to a non-newline-terminated exclude preserves the existing entry"
+else echo "FAIL: exclude corrupted: $(cat "$ex2" 2>/dev/null)"; fail=1; fi
+
 # --- default seeds declared in .claude/worktree-seed ---------------------------
 # A repo names the gitignored files a delegate cannot work without (the config
 # supplying its GitHub token, a local .env) in .claude/worktree-seed, and they

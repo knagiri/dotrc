@@ -179,9 +179,27 @@ claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-
 
 seed したファイルは gitignore 済みなら worktree 内でも untracked のままなので、委譲先の commit には載らない。
 
+##### 戻り方向も同じ — 委譲先が返す成果物は `.delegate/` に置く
+
+上の 2 つの理由（伝播しない・承認で固まる）は、委譲先が**返す**ファイルにもそのまま当てはまる。委譲元が読めるのは worktree 内のファイルだけで、外に置かれたものは絶対パス Read の承認で固まるか、そもそも到達できない。
+
+したがって委譲先が中断・完了報告に添えるファイル（PR 本文ドラフト、調査結果、生成物）は、**worktree 内の `.delegate/` に置き、報告には相対パスで書く**。
+
+- `$CLAUDE_JOB_DIR` に置かない。job の削除で消えるので、報告を読む頃には無いことがある
+- `/tmp` に置かない。寿命が不定で、並行する別 job と名前が衝突しうる
+- `.delegate/` は `claude-worktree` が worktree 作成時に repo の exclude（`git rev-parse --git-path info/exclude` が返す `.git/info/exclude`）へ登録するので、置いたままでも `git status --porcelain` は空のままになる。§7 の `git-reap-gone` は worktree が clean であることを reap の条件にしており、`git worktree remove` も `--force` 無しで通る。つまり成果物を残したまま後片付けできる
+
+`.delegate/` を untracked のまま worktree 内に置く（exclude に入れない）と、この clean 判定が塞がって reap が skip される。逆に worktree の外へ出すと委譲元が読めない。exclude 済みの worktree 内、というのがその両方を同時に満たす唯一の場所である。
+
 <!-- 文脈: main checkout の gitignore 済み spec を絶対パスで参照する委譲プロンプトを渡したところ、
      委譲先が worktree 外 Read の permission prompt で最初の一歩から動けなくなった incident。
-     根本: 委譲先が承認なしに読めるのは新 worktree 内のファイルだけ。 -->
+     根本: 委譲先が承認なしに読めるのは新 worktree 内のファイルだけ。
+     戻り方向の節の由来: 同じ「置き場所」の問題が返す側で 2 回別々に事故になった。1 回目は
+     $CLAUDE_JOB_DIR/tmp に PR 本文ドラフトを置き、job 削除で消えるうえ委譲元からは worktree 外
+     Read の承認になった。2 回目は worktree 内に untracked で置き、git-reap-gone が
+     「worktree not clean」で skip した。exclude 登録を claude-worktree 側へ入れて両方を塞いだ。
+     なお per-worktree の exclude（.git/worktrees/<name>/info/exclude）は git 2.43.0 では
+     読まれない（check-ignore が not ignored を返す）ので、登録先は repo 共通の方になる。 -->
 
 連携の全体像（git worktree を土台に、既定の background 起動（`claude --bg`）と `--tmux` の tmux セッションへ分岐し、どちらも claude-queue が追跡するという層構成と、`claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
 

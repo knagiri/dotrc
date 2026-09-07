@@ -51,6 +51,26 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    自身が起こす headless pane の stdout を tee するだけで、委譲先の interactive セッションから
    呼ばれた skill の出力は載らない）。
 
+   **外部ツールの予約文字・エスケープ・quoting も同じ扱いにする**: 裏取りの対象は repo 内の
+   実装に限らない。plan が外部ツールへ渡す文字列の仕様に踏み込んでいたら（「この文字を
+   置換すればよい」「この形で quote する」等）、そのツールの一次情報（man / 公式リファレンス）を
+   引いてから書く。
+
+   ただし**範囲は限定する**。「外部ツールの挙動全般」まで広げると毎回 man を引くことになり、
+   コストが釣り合わない。絞る先は**間違えると黙って壊れるクラス** — エラーにならず、別のものと
+   して解釈されて通ってしまうものである。具体的には予約文字・エスケープ・quoting 規則・format
+   展開がこれに当たる。存在しない flag を渡すような誤りは即座にエラーで返ってくるので、この
+   裏取りの対象ではない（実行すれば分かる）。黙って別解釈されるものだけが、テストも gate も
+   すり抜けて後から発覚するため、書く前の確認に見合う。
+
+   由来: PR #67 のレビューで発覚した tmux window 名の実バグ。委譲プロンプトが置換対象として
+   挙げていた `.` `:` `~` をそのまま書き写し、tmux の FORMATS を一次情報で確認しなかった。
+   実際には `#` も予約されていて、`rename-window` / `new-window -n` に渡した名前は format 展開
+   される。結果 `#S` `#T` `#D` `#W` が session / pane / window に置換され、閉じない `#{` は
+   以降を丸ごと飲み込む。表示崩れに留まらず、`new-window -S` の dedupe が名前の不一致で破れ、
+   automatic-rename が永久に off になった。どれもエラーは出ず、名前が「通って」しまうのが
+   このクラスの怖さである。
+
    **委譲の上限**: Opus 5 は放っておくと過剰に委譲する（促進する指示が要ったのは 4.8 までで、
    5 では逆に上限が要る。出典: Anthropic 公式 Prompting Claude Opus 5「Controlling subagent
    spawning」節 <https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5#controlling-subagent-spawning>）。
