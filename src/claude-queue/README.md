@@ -244,7 +244,18 @@ prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`Q` �
 
 ## Manual verification checklist
 
-PR 作成時に description に貼って確認：
+自動で回る gate は `.github/workflows/ci.yml` の 3 job（go / bash / shellcheck）。
+Go 側は手元でも同じものを回せる：
+
+```
+make -C src/claude-queue test vet fmt-check
+```
+
+`fmt-check` は `gofmt -l .` の出力が非空なら落ちる。`go vet` は整形崩れを見ないので、
+これが無いと未整形の Go が全 gate を通る。崩れたファイル名が出るので `gofmt -w` を当てる。
+残る 2 job は repo root の `test/*.test.sh` と `bin/` の shellcheck で、対象は workflow が持つ。
+
+以下は自動化できない、手で確かめる項目。PR 作成時に description に貼って確認：
 
 - [ ] `make install` で `bin/claude-queue` 生成、`claude-queue --version` が期待値
 - [ ] `claude-queue reset --force` で DB 削除、次 hook で再生成
