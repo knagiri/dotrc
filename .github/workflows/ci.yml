@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
 
+# Every job here only checks out and runs read-only test/lint commands, so pin
+# GITHUB_TOKEN to read-only rather than inheriting the repo/org default (which
+# can be write).
+permissions:
+  contents: read
+
 jobs:
   go:
     runs-on: ubuntu-latest
