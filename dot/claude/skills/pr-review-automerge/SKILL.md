@@ -108,9 +108,9 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       ので、required check の充足判定は auto-merge（branch protection）に委ねる。
    c. `has_failure` が `false` なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`。
       clean 拒否のときだけ `gh pr merge --merge` へ fallback する）。
-   d. `gh pr view <PR> --json autoMergeRequest,merged` の `autoMergeRequest` が **非 null**、
-      **または `merged` が true**（c の fallback で直接 merge された場合）であることを確認する。
-      これがこの skill の終端状態。**auto-merge を有効化できたなら `merged` は確認しない。**
+   d. `gh pr view <PR> --json autoMergeRequest,state` の `autoMergeRequest` が **非 null**、
+      **または `state` が `MERGED`**（c の fallback で直接 merge された場合）であることを確認する。
+      これがこの skill の終端状態。**auto-merge を有効化できたなら merge 済みかは確認しない。**
       PR が実際に merge されるかは repo の branch protection が決めるので、merge されて
       いなくても正常である。
    e. **最終サマリ出力**: 全イテレーションの「指摘→対応」（判定役の仕分けと修正役の変更）、最後の検出
