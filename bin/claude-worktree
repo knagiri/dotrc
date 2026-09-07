@@ -11,9 +11,23 @@ set -euo pipefail
 # inside another worktree.
 #
 # When a prompt is given, the default is a BACKGROUND agent (`claude --bg`,
-# acceptEdits) started with the worktree as its cwd. Tool calls that need
-# approval block and wait rather than degrading silently. Reach it with
+# permission mode `auto`) started with the worktree as its cwd. Reach it with
 # `claude attach <short-id>` (the id is printed at launch).
+#
+# The two modes deliberately run different permission modes: background is
+# `auto`, --tmux is `acceptEdits`. A background delegation is fire-and-forget
+# with nobody watching, so under acceptEdits every command outside the allowlist
+# (compound commands with variable expansion or loops, `git -c`, a tool's
+# unfamiliar subcommand) raised a prompt no one could approve and the session sat
+# frozen -- observed 10+ times. In `auto` mode a classifier vets those instead,
+# so the delegate keeps moving without the allowlist having to grow a hole per
+# incident. Existing allow/deny rules still win: the classifier only judges what
+# no rule matched, and it blocks work that widens permissions beyond the request,
+# targets unfamiliar infrastructure, or is driven by adversarial content; three
+# consecutive (or twenty total) blocks drop the session back to normal prompts.
+# --tmux keeps acceptEdits because a human is sitting with that session: their
+# judgment is the one wanted there, and the prompts are no obstacle when someone
+# is present to answer them.
 #
 # A delegate does NOT exit when its task completes: it stays at `status: idle`
 # waiting for further input (a different state from `status: waiting` /
@@ -52,6 +66,9 @@ set -euo pipefail
 #                  INTERACTIVE claude instead of a background agent. Use when a
 #                  human is meant to sit with it (working a design out together);
 #                  the session stays at the REPL and is reached with `gts`.
+#                  Runs with `acceptEdits`, not the background mode's `auto`:
+#                  someone is present to answer prompts, and their judgment
+#                  beats a classifier's in that setting.
 #   --model <alias>
 #                  pass --model <alias> to the launched claude (e.g. opus), so the
 #                  caller picks the model for the role it is delegating. Omitted
@@ -73,10 +90,11 @@ set -euo pipefail
 #                  local branch, else origin/<branch> (tracked, no fetch), else
 #                  created fresh from the current HEAD.
 #   -- <prompt>    everything after `--` is the initial prompt. By default the
-#                  delegate is started with `claude --bg` (acceptEdits) and is
-#                  reached with `claude attach <short-id>`; it stays alive once
-#                  the task completes, so the delegator closes it with
-#                  `claude-stop-bg`. With --tmux, see above.
+#                  delegate is started with `claude --bg` (permission mode
+#                  `auto`, since nobody is there to approve prompts -- see the
+#                  header) and is reached with `claude attach <short-id>`; it
+#                  stays alive once the task completes, so the delegator closes
+#                  it with `claude-stop-bg`. With --tmux, see above.
 
 usage() {
   # Print the first contiguous "# " comment block (the description), skipping the
@@ -313,8 +331,10 @@ fi
 if [ "$use_tmux" = 0 ]; then
   # Background agent (default). It does NOT exit on its own when the task
   # completes -- see the header for that. It's preferred over an interactive
-  # session because it doesn't occupy a tmux session/pane and blocks on
-  # approval-requiring tool calls instead of degrading silently. The id is
+  # session because it doesn't occupy a tmux session/pane. Permission mode is
+  # `auto` (NOT acceptEdits, which --tmux keeps): nobody is attached to answer a
+  # prompt, so a classifier vets what the allowlist doesn't cover -- see the
+  # header for why and for what the classifier still refuses. The id is
   # assigned by --bg (it ignores --session-id), so the only way to learn it is
   # to read the launch banner back.
   #
@@ -330,7 +350,7 @@ if [ "$use_tmux" = 0 ]; then
   # would read back 0 even though claude failed. Falling through to `else`
   # keeps `$?` as claude's real exit code.
   if [ -n "$model" ]; then
-    if launch_out="$(cd "$wt_path" && claude --bg --permission-mode acceptEdits --model "$model" "$prompt" 2>&1)"; then
+    if launch_out="$(cd "$wt_path" && claude --bg --permission-mode auto --model "$model" "$prompt" 2>&1)"; then
       :
     else
       rc=$?
@@ -339,7 +359,7 @@ if [ "$use_tmux" = 0 ]; then
       exit "$rc"
     fi
   else
-    if launch_out="$(cd "$wt_path" && claude --bg --permission-mode acceptEdits "$prompt" 2>&1)"; then
+    if launch_out="$(cd "$wt_path" && claude --bg --permission-mode auto "$prompt" 2>&1)"; then
       :
     else
       rc=$?
@@ -357,7 +377,7 @@ if [ "$use_tmux" = 0 ]; then
   echo "worktree : $wt_path"
   echo "branch   : $branch"
   if [ -n "$short" ]; then
-    echo "session  : $short (background; acceptEdits)"
+    echo "session  : $short (background; auto)"
   else
     # The session IS running -- only the id is unknown. Surfacing the raw banner
     # beats printing a report with a silently empty field.
@@ -384,6 +404,11 @@ fi
 # Start claude INSIDE a fresh detached tmux session in the worktree. Passing the
 # prompt as a separate argv element keeps spaces/quotes intact (tmux preserves
 # argv). Interactive (no -p) so it stays at the REPL after the first prompt.
+#
+# Permission mode stays `acceptEdits` here -- the background launch above uses
+# `auto`, and that difference is intentional: this mode exists for a human to sit
+# with the session, so approval prompts cost nothing and their judgment is
+# preferred over the classifier's (see the header).
 #
 # When launched from inside tmux, wrap the launch in `bash -c` so that when
 # claude exits we chain `switch-client -t <origin_pane>`, returning the attached
