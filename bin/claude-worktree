@@ -25,6 +25,13 @@ set -euo pipefail
 # no rule matched, and it blocks work that widens permissions beyond the request,
 # targets unfamiliar infrastructure, or is driven by adversarial content; three
 # consecutive (or twenty total) blocks drop the session back to normal prompts.
+# That escalation is not a fix -- it reintroduces the frozen-prompt problem
+# `auto` mode exists to avoid: once escalated, an unattended delegate again
+# needs a human to run `claude attach <short-id>` and answer the prompt before
+# it can continue. Escalation only lowers how often that happens, and exactly
+# how a detached, unattended session behaves while sitting on a post-escalation
+# prompt is unverified against docs or a real run, so this is stated narrowly
+# rather than assumed safe.
 # --tmux keeps acceptEdits because a human is sitting with that session: their
 # judgment is the one wanted there, and the prompts are no obstacle when someone
 # is present to answer them.
