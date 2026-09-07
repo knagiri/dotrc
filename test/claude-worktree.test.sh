@@ -287,6 +287,12 @@ prompt='say "hi" it'\''s here'
 # Inside tmux ($TMUX set): launch is wrapped in `bash -c` so claude's exit is
 # chained to `switch-client -t <origin_pane>`, returning the client to the pane
 # we launched from. Assert the chain is wired and quoting is intact.
+#
+# --tmux keeps `acceptEdits` while the background launch moved to `auto`: a human
+# sits with this session, so their judgment is preferred over the classifier's.
+# Here the flag lives inside the `bash -c` command STRING (one log line, several
+# tokens), so the mode is matched as the `--permission-mode <mode>` phrase rather
+# than as a whole line.
 log="$tmp/ns-in"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
@@ -294,15 +300,19 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
 if [ "$rc" -eq 0 ] \
    && grep -q 'switch-client' "$log" \
    && grep -Fxq '%9' "$log" \
+   && grep -Fq -- '--permission-mode acceptEdits' "$log" \
+   && ! grep -Fq -- '--permission-mode auto' "$log" \
    && grep -Fxq "$prompt" "$log" \
    && grep -q 'attach   : gts' <<<"$out"; then
-  echo "ok: \$TMUX set wires switch-client back to origin pane, prompt intact"
+  echo "ok: \$TMUX set wires switch-client back to origin pane, prompt intact, acceptEdits kept"
 else
   echo "FAIL: in-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
 
 # Outside tmux ($TMUX unset): no client to return, so claude runs directly (no
 # wrapper, no switch-client) and the attach hint falls back to `tmux attach`.
+# claude is exec'd directly here, so the mode is its own argv element (one per
+# log line) -- assert acceptEdits present and the background mode's auto absent.
 log="$tmp/ns-out"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
@@ -310,9 +320,11 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
 if [ "$rc" -eq 0 ] \
    && ! grep -q 'switch-client' "$log" \
    && grep -Fxq 'claude' "$log" \
+   && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'acceptEdits' \
+   && ! grep -Fxq -- 'auto' "$log" \
    && grep -Fxq "$prompt" "$log" \
    && grep -q 'attach   : tmux attach -t' <<<"$out"; then
-  echo "ok: no \$TMUX launches claude directly, no pane-return chain"
+  echo "ok: no \$TMUX launches claude directly, no pane-return chain, acceptEdits kept"
 else
   echo "FAIL: out-of-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
@@ -367,9 +379,11 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   "$wt" --tmux --model sonnet modelout -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -A1 -Fx -- '--model' "$log" | grep -Fxq 'sonnet' \
+   && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'acceptEdits' \
+   && ! grep -Fxq -- 'auto' "$log" \
    && grep -Fxq "$prompt" "$log" \
    && grep -q 'model    : sonnet' <<<"$out"; then
-  echo "ok: --model reaches the out-of-tmux launch and is reported"
+  echo "ok: --model reaches the out-of-tmux launch, which keeps acceptEdits, and is reported"
 else
   echo "FAIL: out-of-tmux --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
@@ -501,19 +515,23 @@ chmod +x "$stubbin/claude"
 emptyroster="$tmp/roster-empty.json"
 echo '[]' >"$emptyroster"
 
-# Default (no --tmux): claude --bg is launched with acceptEdits, the short id is
-# lifted out of the banner, and the report tells the user how to attach.
+# Default (no --tmux): claude --bg is launched in permission mode `auto` (NOT
+# acceptEdits -- nobody is attached to answer a prompt; see the script header),
+# the short id is lifted out of the banner, and the report tells the user how to
+# attach. The mode is asserted as the element right after --permission-mode, and
+# acceptEdits asserted absent, so a partial rename can't pass.
 log="$tmp/bg-default"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$emptyroster"
   "$wt" bgdefault -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -Fxq -- '--bg' "$log" \
-   && grep -Fxq -- 'acceptEdits' "$log" \
+   && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'auto' \
+   && ! grep -Fxq -- 'acceptEdits' "$log" \
    && grep -Fxq "$prompt" "$log" \
-   && grep -q 'session  : abcd1234 (background' <<<"$out" \
+   && grep -Fq 'session  : abcd1234 (background; auto)' <<<"$out" \
    && grep -q 'attach   : claude attach abcd1234' <<<"$out"; then
-  echo "ok: default launch uses claude --bg and reports the short id"
+  echo "ok: default launch uses claude --bg in auto mode and reports the short id"
 else
   echo "FAIL: bg default rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; echo "$out"; fail=1
 fi
@@ -537,7 +555,9 @@ if [ "$rc" -eq 0 ] && [ "$(cat "$cwdlog" 2>/dev/null)" = "${cwdrepo}_bgcwd" ]; t
   echo "ok: bg launch runs with the worktree as cwd"
 else echo "FAIL: bg cwd rc=$rc got=$(cat "$cwdlog" 2>/dev/null) want=${cwdrepo}_bgcwd"; fail=1; fi
 
-# --model rides through to the bg launch as two adjacent argv elements.
+# --model rides through to the bg launch as two adjacent argv elements. The
+# launch has a separate branch per --model, so the mode is re-asserted here:
+# otherwise one branch could keep acceptEdits unnoticed.
 log="$tmp/bg-model"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_CWDLOG="$tmp/x" \
@@ -545,8 +565,10 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   "$wt" --model opus bgmodel -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -A1 -Fx -- '--model' "$log" | grep -Fxq 'opus' \
+   && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'auto' \
+   && ! grep -Fxq -- 'acceptEdits' "$log" \
    && grep -q 'model    : opus' <<<"$out"; then
-  echo "ok: --model reaches the bg launch and is reported"
+  echo "ok: --model reaches the bg launch, which stays in auto mode, and is reported"
 else echo "FAIL: bg --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1; fi
 
 # Omitting --model must not synthesise `--model ""` (claude rejects it).
