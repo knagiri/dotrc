@@ -36,6 +36,59 @@ PATH="$stubdir:$PATH" "$bindir/gh-automerge" 1a >/dev/null 2>&1; [ $? -ne 0 ] \
 PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 --admin >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-automerge rejects extra flag arg" || { echo "FAIL: gh-automerge extra flag"; fail=1; }
 
+# gh-automerge clean-status fallback. A second stub, kept under $stubdir so the
+# existing trap cleans it up: it appends (rather than truncates) so both gh
+# calls of one run are visible in one argv log, and fails the `--auto` call with
+# whatever GH_AUTO_FAIL_MSG says. GitHub refuses enablePullRequestAutoMerge on a
+# CLEAN pull request ("Pull request is in clean status"), which a repo with no
+# CI workflows hits almost immediately -- so that one refusal, and only it, must
+# fall through to a direct merge.
+amdir="$stubdir/am"; mkdir -p "$amdir"
+cat >"$amdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
+case "$*" in
+  *--auto*)
+    [ -n "${GH_AUTO_FAIL_MSG:-}" ] || exit 0
+    echo "$GH_AUTO_FAIL_MSG" >&2
+    exit "${GH_AUTO_FAIL_RC:-1}" ;;
+esac
+exit 0
+STUB
+chmod +x "$amdir/gh"
+
+amrun() {  # $1 = --auto failure message ("" = succeed), $2 = its exit code
+  : >"$amdir/args"
+  env GH_ARGS_FILE="$amdir/args" GH_AUTO_FAIL_MSG="$1" GH_AUTO_FAIL_RC="${2:-1}" \
+    PATH="$amdir:$PATH" "$bindir/gh-automerge" 42
+}
+amcount() { grep -cxF "$1" "$amdir/args"; }  # occurrences of one argv element
+
+# Case A: the clean refusal falls back to a plain `gh pr merge --merge <PR>`
+# (two --merge, one --auto), still without --admin.
+amrun 'X GraphQL: Pull request is in clean status (enablePullRequestAutoMerge)' 1 >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] \
+  && [ "$(amcount '[--auto]')" -eq 1 ] && [ "$(amcount '[--merge]')" -eq 2 ] \
+  && [ "$(amcount '[42]')" -eq 2 ] \
+  && ! grep -qxF '[--admin]' "$amdir/args"; then
+  echo "ok: gh-automerge falls back to a direct merge when auto-merge is refused for clean status"
+else echo "FAIL: gh-automerge clean fallback rc=$rc args=$(cat "$amdir/args" 2>/dev/null)"; fail=1; fi
+
+# Case B: any other refusal (unmet required check, conflict, ...) must NOT fall
+# back -- the failure is the caller's to handle, and its exit code is preserved.
+amrun 'X GraphQL: Required status check "build" is expected (enablePullRequestAutoMerge)' 2 >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ] \
+  && [ "$(amcount '[--auto]')" -eq 1 ] && [ "$(amcount '[--merge]')" -eq 1 ]; then
+  echo "ok: gh-automerge does not fall back on a non-clean-status failure and preserves its exit code"
+else echo "FAIL: gh-automerge non-clean failure rc=$rc args=$(cat "$amdir/args" 2>/dev/null)"; fail=1; fi
+
+# Case C: when auto-merge is enabled successfully, no direct merge is issued.
+amrun '' >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] \
+  && [ "$(amcount '[--auto]')" -eq 1 ] && [ "$(amcount '[--merge]')" -eq 1 ]; then
+  echo "ok: gh-automerge issues no direct merge once auto-merge is enabled"
+else echo "FAIL: gh-automerge success path rc=$rc args=$(cat "$amdir/args" 2>/dev/null)"; fail=1; fi
+
 # gh-resolve-thread: valid id issues resolveReviewThread mutation with threadId.
 GH_ARGS_FILE="$stubdir/args" PATH="$stubdir:$PATH" "$bindir/gh-resolve-thread" 'PRRT_kwABC-_=' >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ] \
