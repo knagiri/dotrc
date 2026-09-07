@@ -168,6 +168,26 @@ if grep -qxF '/scratch/' "$ex" && [ "$(grep -cxF '/.delegate/' "$ex")" -eq 1 ]; 
   echo "ok: an existing exclude entry is preserved"
 else echo "FAIL: existing exclude entry clobbered"; fail=1; fi
 
+# A pre-existing exclude with NO trailing newline is a distinct case from the one
+# above (that file already ends in "\n" from the earlier append). A hand-written
+# `.git/info/exclude` commonly lacks a final newline, and appending straight onto
+# that glues our pattern onto the last line -- e.g. `/scratch/` becomes
+# `/scratch//.delegate/`, which is neither the original entry nor a working
+# `/.delegate/` line. Use a dedicated repo so the accumulated exclude state from
+# the tests above (which already has a trailing newline) can't mask this.
+noeolrepo="$tmp/noeolrepo"
+mkdir -p "$noeolrepo"
+git -C "$noeolrepo" init -q
+git -C "$noeolrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mkdir -p "$noeolrepo/.git/info"
+printf '/scratch/' >"$noeolrepo/.git/info/exclude" # deliberately no trailing newline
+
+(cd "$noeolrepo" && "$wt" noeolwt) >/dev/null 2>&1; rc=$?
+ex2="$noeolrepo/.git/info/exclude"
+if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/scratch/' "$ex2")" -eq 1 ] && grep -qxF '/.delegate/' "$ex2"; then
+  echo "ok: appending to a non-newline-terminated exclude preserves the existing entry"
+else echo "FAIL: exclude corrupted: $(cat "$ex2" 2>/dev/null)"; fail=1; fi
+
 # --- default seeds declared in .claude/worktree-seed ---------------------------
 # A repo names the gitignored files a delegate cannot work without (the config
 # supplying its GitHub token, a local .env) in .claude/worktree-seed, and they
