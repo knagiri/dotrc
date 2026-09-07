@@ -529,7 +529,7 @@ if [ "$rc" -eq 0 ] \
    && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'auto' \
    && ! grep -Fxq -- 'acceptEdits' "$log" \
    && grep -Fxq "$prompt" "$log" \
-   && grep -q 'session  : abcd1234 (background' <<<"$out" \
+   && grep -Fq 'session  : abcd1234 (background; auto)' <<<"$out" \
    && grep -q 'attach   : claude attach abcd1234' <<<"$out"; then
   echo "ok: default launch uses claude --bg in auto mode and reports the short id"
 else
