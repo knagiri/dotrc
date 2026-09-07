@@ -5,7 +5,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 
 # implement-and-review
 
-別 workspace（background agent, acceptEdits）に委譲されたタスクを、
+別 workspace（background agent, permission mode auto）に委譲されたタスクを、
 実装 → verification → merge まで完遂する。`delegate-to-worktree` が渡した
 プロンプト先頭の明示命令でこの skill に入る。
 
