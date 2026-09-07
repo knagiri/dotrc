@@ -60,9 +60,10 @@ set -euo pipefail
 # attached / origin pane gone both degrade to a silent no-op.
 #
 # A new worktree only checks out the branch: gitignored / uncommitted files of the
-# invoking checkout do NOT propagate, and a delegated session cannot read outside
-# its worktree without a permission prompt nobody is there to approve. `--seed`
-# copies such files in, so the delegated prompt can reference them relatively.
+# invoking checkout do NOT propagate, and reading outside the worktree still has
+# no guarantee of passing the classifier described above (or, under --tmux, of
+# getting an answer promptly). `--seed` copies such files in, so the delegated
+# prompt can reference them relatively.
 #
 # Usage:
 #   claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
