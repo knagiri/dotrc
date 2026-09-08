@@ -60,10 +60,16 @@ make install
 |---|---|---|
 | 1 | state アイコン | 可変（1〜2 桁） |
 | 2 | ai-title（transcript 由来） | 40 桁 padding + truncate |
-| 3 | worktree 名 | 56 桁 padding + truncate |
+| 3 | worktree 名（`<main-repo-basename>_<name>`。メイン checkout は `<repo>` のみ） | 56 桁 padding + truncate |
 | 4 | age | 可変（短い） |
 | 5 | summary（何で止まっているか） | padding なし。行末まで |
 | 6〜9 | session_id / tmux_pane / cwd / transcript_path | 非表示 |
+
+3 列目は cwd の git toplevel basename そのままではなく、`--git-common-dir`（絶対）の親を
+メイン toplevel として `<main-repo-basename>_<name>` を合成する。worktree は
+`<repo>/.worktrees/<name>` にあり dir basename が `<name>` だけなので、そのままでは repo 名が
+落ちるため。メイン checkout（common-dir の親 == 自分の toplevel）は接尾辞を付けず `<repo>` だけ。
+git が引けない cwd は cwd の basename に落ちる。
 
 ai-title を worktree 名より前に置くのは、同じ repo に複数 session が並ぶと worktree 名は全部
 同じで summary も全部 `working` になり、「何の作業か」を言えるのが title だけになるため。
@@ -119,8 +125,8 @@ transcript を掴む。tab を含む Bash コマンド（`awk -F'<tab>'`）は�
    書かないので `transcript_path` があってもファイルが無いことがあり、reap 済み worktree の
    session は cwd 側が消えている。どちらが欠けたかを stderr に出して終わる
 
-session 名 = worktree ディレクトリ名（`gts` / `claude-worktree` と同じ慣習）。popup を開いた
-時点の current session には作らない。
+session 名 = `<main-repo-basename>_<name>`（正準規約。`claude-worktree --tmux` と共有する）。
+popup を開いた時点の current session には作らない。
 
 window 名は session の transcript にある ai-title から `<タイトル 16 桁>-<session id 8 桁>` を
 組む（取れなければ `attach-<id8>` / `resume-<id8>`）。picker 経由で開く window だけでなく、
@@ -221,12 +227,17 @@ events を削除。
 ```tmux
 set -g status-interval 5
 set -g status-right '#(claude-queue status) | %H:%M'
-bind-key q display-popup -E -w 80% -h 60% "claude-queue picker"
+bind-key q display-popup -E -d "#{pane_current_path}" -w 80% -h 60% "claude-queue picker --repo-scope"
 bind-key Q display-popup -E -w 80% -h 60% "claude-queue picker --show-working --show-stale --show-resumable"
 ```
 
-prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`Q` は絞り込みを外した全部入り
-（working / stale / resumable も出す）。
+prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`q` は `--repo-scope` 付きで、
+**popup を開いた pane と同じ repo の session だけ**に絞る（メイン checkout と その
+`.worktrees/*` は `--git-common-dir` を共有するので 1 グループになる）。`-d
+"#{pane_current_path}"` を明示するのは、この絞り込みが popup 自身の cwd を起点にするため。
+repo の外で `q` を押したときは一覧を出さず `not in a git repo; use prefix Q for all sessions`
+を stderr へ出して終わる。`Q` は絞り込みを外した全部入り（別 repo の session も、working /
+stale / resumable も出す）。
 
 `dot/tmux.conf` は `bin/deploy.sh` の symlink 経由なので pull した時点で反映されるが、
 `bin/claude-queue` は `.gitignore` 対象で `make install` でしか更新されない。flag が増えた
@@ -254,7 +265,10 @@ PR 作成時に description に貼って確認：
 - [ ] 拒否時は `PermissionDenied` で `⚙️1` に戻る
 - [ ] `C-q q` で popup、Enter で目的 pane にジャンプ、popup 自動閉
 - [ ] `claude --bg` で起動した background session（tmux_pane が NULL）を picker から選択、その worktree の tmux session に window が開いて `claude attach` される（popup を開いた session には増えない）
-- [ ] worktree のサブディレクトリで起動した session が、picker の 3 列目に worktree 名で並ぶ
+- [ ] `<repo>/.worktrees/<name>` のサブディレクトリで起動した session が、picker の 3 列目に `<repo>_<name>` で並ぶ（メイン checkout の session は `<repo>` だけ）
+- [ ] `C-q q` が別 repo の session を出さず、現在 repo のメイン checkout + その `.worktrees/*` だけを並べる（`C-q Q` では別 repo の session も出る）
+- [ ] repo の外の pane で `C-q q` を押すと `not in a git repo; use prefix Q for all sessions` が出る（`display-popup -E` は command の exit で閉じるので、読むにはシェルから直接起動する）
+- [ ] worktree 内から `git wa x` すると `<repo>/.worktrees/x` に作られる（worktree の中で実行してもネストしない）
 - [ ] 同じ repo の複数 session が、picker の 2 列目の ai-title で見分けられる（title の無い row は空欄のまま 3 列目の開始位置が揃う）
 - [ ] tab を含む Bash コマンド（`awk -F'<tab>'`）の承認待ち row を picker から選ぶと、意図した session へ到達する（列がずれない）
 - [ ] `tmux_pane` が NULL の interactive session（他 pane の同 tmux server 上に存在するもの）を picker から選ぶと、`claude attach` ではなく再解決した pane へ直接 switch される
