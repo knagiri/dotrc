@@ -5,3 +5,7 @@ myscripts
 mysecrets
 
 **/.claude/settings.local.json
+
+# git worktrees created by bin/claude-worktree live inside the main checkout at
+# <repo>/.worktrees/<name>; keep them out of the main working tree's status.
+.worktrees/

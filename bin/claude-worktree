@@ -4,11 +4,13 @@ set -euo pipefail
 # claude-worktree -- create a git worktree and (optionally) start a claude
 # session living in that worktree.
 #
-# Worktree path is a sibling of the repository named <toplevel>_<name> so the
-# tmux window is easy to search. The underscore separator is tmux-safe (a dot
-# would be misparsed as a window.pane delimiter in `tmux -t` targets). It anchors
-# to the MAIN repository toplevel so names stay flat even when invoked from
-# inside another worktree.
+# Worktree path is <main-repo-toplevel>/.worktrees/<name>, a hidden subdirectory
+# of the main checkout (globally gitignored via ~/.config/git/ignore). Living
+# inside the checkout keeps worktrees out of `ghq list` -- so `gts` only offers
+# repositories -- and lets mise walk up into the checkout's own already-trusted
+# config instead of needing one seeded per worktree. It anchors to the MAIN
+# repository toplevel so the layout stays flat even when invoked from inside
+# another worktree.
 #
 # When a prompt is given, the default is a BACKGROUND agent (`claude --bg`,
 # permission mode `auto`) started with the worktree as its cwd. Reach it with
@@ -161,7 +163,7 @@ if [ "$self" = 1 ]; then
 fi
 common_git="$(git -C "$repo_dir" rev-parse --path-format=absolute --git-common-dir)"
 main_top="$(dirname "$common_git")"
-wt_path="${main_top}_${name}"
+wt_path="${main_top}/.worktrees/${name}"
 
 # Seed sources are always resolved against cwd's checkout (the one holding the
 # uncommitted files), even under --self. Resolved leniently because --self is
@@ -399,9 +401,12 @@ if [ "$use_tmux" = 0 ]; then
 fi
 
 # --tmux: detached tmux session running an interactive claude.
-# Session name = worktree basename, matching the `gts` convention (it derives the
-# session name from the dir basename), so gts won't create a duplicate.
-session="$(basename "$wt_path")"
+# Session name = <main repo basename>_<name> (canonical convention, see
+# docs/design/claude-tmux-worktree.md). The worktree dir basename is just <name>
+# now that worktrees live under <repo>/.worktrees/, so the repo half is composed
+# back in here; both halves are tmux-safe (a dot would be misparsed as a
+# window.pane delimiter in `tmux -t` targets).
+session="$(basename "$main_top")_${name}"
 
 if tmux has-session -t "=$session" 2>/dev/null; then
   echo "claude-worktree: tmux session '$session' already exists; not launching a" >&2
