@@ -6,15 +6,25 @@ import (
 	"strings"
 )
 
-// worktreeName returns the name of the git worktree directory containing cwd.
+// worktreeName returns the canonical tmux session name for the worktree that
+// contains cwd: "<main-repo-basename>_<worktree-dir-name>" for a linked
+// worktree, and just "<repo-basename>" for that repo's main checkout.
 //
 // A recorded cwd is not necessarily a worktree root: sessions are routinely
 // started in a subdirectory, so filepath.Base(cwd) alone shows "claude-queue"
-// where the worktree is "dotrc_queue-picker-worktree-session". A worktree's git
-// toplevel is the worktree directory itself, which is the unit both the picker
-// column and the tmux session name are after.
+// where the worktree is "foo". Two git facts pin the real name.
+// --show-toplevel is the working tree's own root. --git-common-dir (absolute)
+// is "<repo>/.git" for EVERY working tree of a repo -- the main checkout and
+// all its linked worktrees alike -- so its parent is the main repo's toplevel
+// in every case. When that parent equals the working tree's own toplevel, cwd
+// is the main checkout and no "_<name>" suffix is added; the picker column and
+// the tmux session then read just "<repo>".
 //
-// The name is returned raw -- the on-disk directory name is what the column
+// Both calls are best-effort: a non-repo cwd (or no git) falls back to the
+// cwd's own basename, and a repo too old for --path-format=absolute (pre-2.31)
+// falls back to the worktree dir basename -- the pre-canonicalization name.
+//
+// The name is returned raw -- the on-disk directory names are what the column
 // should show. Escaping for a multiplexer target (tmux's "." / ":" rewrite,
 // e.g.) is that multiplexer implementation's own job, applied only where a
 // target is actually built; this package stays multiplexer-agnostic per the
@@ -23,23 +33,34 @@ func worktreeName(cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	// A non-repo cwd (or no git at all) is not an error worth reporting: the
-	// cwd's own basename is still the best name available.
 	toplevel, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		toplevel = nil
 	}
-	return worktreeNameFrom(cwd, string(toplevel))
+	commonDir, err := exec.Command("git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		commonDir = nil
+	}
+	return worktreeNameFrom(cwd, string(toplevel), string(commonDir))
 }
 
-// worktreeNameFrom picks the name given a cwd and the git toplevel resolved
-// for it, if any. Split from worktreeName so the fallback rule is testable
-// without a git repository.
-func worktreeNameFrom(cwd, toplevel string) string {
-	if t := strings.TrimSpace(toplevel); t != "" {
-		return dirName(t)
+// worktreeNameFrom applies the naming rule to a cwd and the two git strings
+// resolved for it. Split from worktreeName so the rule -- including both
+// fallbacks and the main-checkout case -- is testable without a repository.
+func worktreeNameFrom(cwd, toplevel, commonDir string) string {
+	top := strings.TrimSpace(toplevel)
+	if top == "" {
+		return dirName(cwd)
 	}
-	return dirName(cwd)
+	common := strings.TrimSpace(commonDir)
+	if common == "" {
+		return dirName(top)
+	}
+	mainTop := filepath.Dir(common) // parent of "<repo>/.git"
+	if filepath.Clean(mainTop) == filepath.Clean(top) {
+		return dirName(top)
+	}
+	return dirName(mainTop) + "_" + dirName(top)
 }
 
 // dirName is filepath.Base with the degenerate results ("." for an empty path,
