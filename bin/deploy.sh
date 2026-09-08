@@ -1,4 +1,4 @@
-#/usr/bin/env sh
+#!/usr/bin/env bash
 
 # path/to/repo
 REPO_DIR=$(realpath $(dirname $(dirname $0)))
