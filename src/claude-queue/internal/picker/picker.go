@@ -539,6 +539,7 @@ func Run(args []string) {
 	showWorking := fs.Bool("show-working", false, "include working sessions")
 	showStale := fs.Bool("show-stale", false, "include stale sessions")
 	showResumable := fs.Bool("show-resumable", false, "include ended sessions a resume could reopen")
+	repoScope := fs.Bool("repo-scope", false, "only sessions whose cwd is in the same git repo as the picker's cwd")
 	_ = fs.Parse(args)
 
 	conn, err := db.Open(db.DefaultPath())
@@ -582,6 +583,26 @@ func Run(args []string) {
 		// every one the queue view assigns, so concatenation is already the
 		// global order and fzf is run with --no-sort.
 		rows = append(rows, resumable...)
+	}
+
+	// --repo-scope (prefix q): keep only rows in the same repo as the pane the
+	// popup was opened from. The popup's cwd is that pane's cwd (tmux.conf
+	// passes -d "#{pane_current_path}"), and every working tree of a repo
+	// shares one --git-common-dir, so main checkout + all its .worktrees/*
+	// collapse to one group. A picker cwd outside any repo cannot scope, so
+	// say so and stop rather than silently listing everything.
+	if *repoScope {
+		wd, _ := os.Getwd()
+		wantKey := repoKey(wd)
+		if wantKey == "" {
+			fmt.Fprintln(os.Stderr, "not in a git repo; use prefix Q for all sessions")
+			return
+		}
+		rows = filterSameRepo(rows, wantKey, repoKeyCache{}.key)
+		if len(rows) == 0 {
+			fmt.Fprintln(os.Stderr, "no active sessions in this repo (prefix Q lists all)")
+			return
+		}
 	}
 
 	if len(rows) == 0 {
