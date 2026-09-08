@@ -1,4 +1,4 @@
-.PHONY: build install test clean fmt vet
+.PHONY: build install test clean fmt fmt-check vet
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
 BIN := $(REPO_ROOT)/bin/claude-queue
@@ -20,6 +20,17 @@ clean:
 
 fmt:
 	go fmt ./...
+
+# `gofmt -l` exits 0 even when it lists unformatted files, so the gate is the
+# emptiness of its output, not its exit status. Names the offending files so the
+# fix is `gofmt -w` on exactly those.
+fmt-check:
+	@out="$$(gofmt -l .)"; \
+	if [ -n "$$out" ]; then \
+		echo "gofmt would rewrite these files:" >&2; \
+		echo "$$out" >&2; \
+		exit 1; \
+	fi
 
 vet:
 	go vet ./...
