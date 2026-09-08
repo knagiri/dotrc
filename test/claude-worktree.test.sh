@@ -129,7 +129,7 @@ else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}/.work
 # just the entry, is what would catch a "fix" that moves the write to the
 # per-worktree path -- where it would stop working without failing.
 (cd "$cwdrepo" && "$wt" delegatewt) >/dev/null 2>&1; rc=$?
-ex="$(git -C "${cwdrepo}_delegatewt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
+ex="$(git -C "${cwdrepo}/.worktrees/delegatewt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
 if [ "$rc" -eq 0 ] && [ "$ex" = "$cwdrepo/.git/info/exclude" ] && grep -qxF '/.delegate/' "$ex"; then
   echo "ok: worktree creation adds /.delegate/ to the repo-wide exclude"
 else echo "FAIL: exclude entry missing rc=$rc path=${ex:-<unresolved>}"; fail=1; fi
@@ -137,16 +137,16 @@ else echo "FAIL: exclude entry missing rc=$rc path=${ex:-<unresolved>}"; fail=1;
 # The point of the entry: a file dropped in .delegate/ leaves `status --porcelain`
 # empty, which is exactly the predicate git-reap-gone gates on. Guard on the file
 # existing so this cannot pass vacuously.
-mkdir -p "${cwdrepo}_delegatewt/.delegate"
-echo "pr body draft" >"${cwdrepo}_delegatewt/.delegate/pr-body.md"
-st="$(git -C "${cwdrepo}_delegatewt" status --porcelain 2>/dev/null)"
-if [ -f "${cwdrepo}_delegatewt/.delegate/pr-body.md" ] && [ -z "$st" ]; then
+mkdir -p "${cwdrepo}/.worktrees/delegatewt/.delegate"
+echo "pr body draft" >"${cwdrepo}/.worktrees/delegatewt/.delegate/pr-body.md"
+st="$(git -C "${cwdrepo}/.worktrees/delegatewt" status --porcelain 2>/dev/null)"
+if [ -f "${cwdrepo}/.worktrees/delegatewt/.delegate/pr-body.md" ] && [ -z "$st" ]; then
   echo "ok: files under .delegate/ stay invisible to git status"
 else echo "FAIL: .delegate/ is visible to git: ${st:-<file missing>}"; fail=1; fi
 
 # ...and the worktree is still removable without --force, which is the other half
 # of what git-reap-gone needs.
-git -C "$cwdrepo" worktree remove "${cwdrepo}_delegatewt" >/dev/null 2>&1; rc=$?
+git -C "$cwdrepo" worktree remove "${cwdrepo}/.worktrees/delegatewt" >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ]; then
   echo "ok: a worktree holding .delegate/ files is removable without --force"
 else echo "FAIL: worktree remove refused a .delegate/-holding worktree rc=$rc"; fail=1; fi
@@ -155,7 +155,7 @@ else echo "FAIL: worktree remove refused a .delegate/-holding worktree rc=$rc"; 
 # entry (the script reuses the dir rather than recreating it).
 (cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1
 (cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1; rc=$?
-ex="$(git -C "${cwdrepo}_dupwt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
+ex="$(git -C "${cwdrepo}/.worktrees/dupwt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
 n="$(grep -cxF '/.delegate/' "$ex" 2>/dev/null || echo 0)"
 if [ "$rc" -eq 0 ] && [ "$n" -eq 1 ]; then
   echo "ok: a repeat run leaves exactly one /.delegate/ entry"
