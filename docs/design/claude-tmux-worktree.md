@@ -294,8 +294,6 @@ worktree の中から `claude-worktree` を実行しても `dotrc/.worktrees/a/.
 
 ## 既知の差分・今後の論点
 
-- **anchor の不一致**: 解消済み。`git wa` も `claude-worktree` と同じ `--git-common-dir` 基準に
-  揃えた（どちらも `<メイン toplevel>/.worktrees/<name>`）。
 - **`git clean -ffx` は `.worktrees/` を消す**: メイン checkout で `git clean -ffx` を撃つと配下の
   worktree ごと消える。実測（git 2.54.0）では 2 段の防御が効いている。`-f` 一段では linked worktree の
   `.git` が**ファイル**であることから「別 repo」とみなされ `Would skip repository .worktrees/foo` に
