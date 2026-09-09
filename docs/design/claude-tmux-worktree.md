@@ -26,7 +26,7 @@
   (dir / branch)  │             (short session id)  (tmux_pane = NULL)
                   │
                   └─(--tmux)──→ ② tmux session ──→ ③ claude-queue
-                                (session=basename)  ($TMUX_PANE)
+                                (session=repo_name) ($TMUX_PANE)
 ```
 
 ①の worktree 作成はどちらの経路でも必ず走る。分岐するのは「その worktree で何を起こすか」
@@ -36,17 +36,20 @@
 | 層 | ツール | 担当 | 識別キー |
 |---|---|---|---|
 | ① ファイル/ブランチ | `git w*` alias | worktree の作成・一覧・削除 | ディレクトリパス / ブランチ |
-| ② tmux セッション | `gts`(`ghq-tmux-session`) | worktree dir ごとに tmux session を作って attach/switch | session 名 = dir basename |
+| ② tmux セッション | `gts`(`ghq-tmux-session`) | repo dir ごとに tmux session を作って attach/switch | session 名 = dir basename |
 | ③ Claude 可視化 | `claude-queue` | 全 pane の Claude 状態を SQLite 化、status-right 表示 + fzf popup で pane へジャンプ | `$TMUX_PANE`（②を経ない既定経路では NULL。short session id で識別） |
 | ④ 分岐起動 | `claude-worktree` | ①の worktree 追加を常に行い、既定は⑤の起動、`--tmux` 指定時のみ②のセットアップ（③はどちらの経路でも追跡する） | worktree dir / short session id（`--tmux` 時は tmux session） |
 | ⑤ background 起動 | `claude --bg` | 人間不在の委譲先を起こす。完遂後も `idle` で残るので委譲元が閉じる | short session id（8 桁） |
 
-**鍵となる連結（②を作る経路に限る）:** worktree dir の basename = tmux session 名。区切り文字を
-`_` に統一してあるため、`①の dir 名 dotrc_foo` → `②の session 名 dotrc_foo` が自動的に一致し、
-`gts` も `claude-worktree --tmux` も同じ session を指す（二重作成が起きない）。既定経路
-（`claude --bg`）は②を作らないのでこの連結は働かず、到達は `claude attach <short-id>` になる。
-既定経路で作った worktree dir に人間が後から `gts` を叩く場合も、同じ命名規約により basename
-と同名の session が立つ（先行 session が無いので、やはり二重作成にはならない）。
+**鍵となる連結（②を作る経路に限る）:** worktree は `dotrc/.worktrees/foo` に置かれ、そこから
+導かれる**正準 session 名**が `<basename(メイン toplevel)>_<name>` = `dotrc_foo` になる。dir
+basename の丸写しではなく合成だが、④（`claude-worktree --tmux`）と③（`picker.worktreeName`）が
+同じ規約を通すため、両者は同じ session を指す（二重作成が起きない）。既定経路（`claude --bg`）は
+②を作らないのでこの連結は働かず、到達は `claude attach <short-id>` になる。
+
+`gts` はこの連結の外に出た。worktree は `.worktrees/` 配下にあり `ghq list` に載らないため、`gts`
+の候補は repo 本体だけになり、worktree へ直接飛ぶ経路は `C-q q`（③picker）か
+`claude attach <short-id>` に一本化される。
 
 ## 各層の詳細
 
@@ -57,11 +60,12 @@
 | `git w` | `worktree` | 素の worktree コマンド |
 | `git wl` | `w list` | worktree 一覧 |
 | `git wls` | `wl \| awk '{print $1}' \| fzf -1` | worktree パスを fzf 選択 |
-| `git wa <name> [branch]` | `w add "$(git rpst)_<name>" [-b branch]` | worktree 追加 |
+| `git wa <name> [branch]` | `w add "<メイン toplevel>/.worktrees/<name>" [branch]` | worktree 追加 |
 | `git wd` | `w remove $(git wls)` | fzf で選んで削除 |
 | `git rpst` | `rev-parse --show-toplevel` | （現在の）worktree toplevel |
 
-`git wa` は **現在の** worktree toplevel（`rpst`）基準でパスを作る。
+`git wa` も④と同じく `--git-common-dir` の親（= メイン working tree の toplevel）基準でパスを
+作るので、worktree の中から実行してもネストしない。`rpst` は他用途のために残してある。
 
 ### ② tmux セッション（`bin/ghq-tmux-session`, alias `gts`）
 
@@ -70,7 +74,9 @@
 - `gts <name>`: 指定名の session を作成（既存なら再利用）→ switch/attach
 - session 切替は `$TMUX` 有無で `switch-client` / `attach-session` を自動選択
 
-worktree dir は ghq 配下の兄弟ディレクトリとして `ghq list` に載るため、fzf 候補に出る。
+worktree は `<repo>/.worktrees/<name>` にあり、ghq が repo として列挙する `<host>/<user>/<repo>`
+の深度に並ばないため `ghq list` に載らない。したがって `gts` の候補は **repo 本体だけ**になる
+（これが `.worktrees/` 化の狙いの一つ）。worktree 内の session へ飛ぶには③の picker を使う。
 
 実コマンドは `ghq-tmux-session`（PATH 上）。nvim の `<leader>gq`（snacks.lua）も実名で呼ぶ。
 対話シェルでは `alias gts='ghq-tmux-session'`（`rc/aliases`）で短縮。
@@ -81,8 +87,10 @@ worktree dir は ghq 配下の兄弟ディレクトリとして `ghq list` に�
   `$TMUX_PANE` をキーに状態を SQLite（`~/.claude/session-queue.db`）へ記録
 - tmux `status-right` に `claude-queue status`（working/awaiting_approval/idle_done のカウント）
 - `C-q q` で popup → fzf picker → 選択 session へ到達（pane への `tmux switch-client` / `claude attach` /
-  `claude --resume` を後述の順で選ぶ）。`C-q Q` は絞り込みを外し、working / stale と、終了済みだが
-  resume で拾い直せる row（`--show-resumable`）も出す
+  `claude --resume` を後述の順で選ぶ）。`q` は `--repo-scope` 付きで、popup を開いた pane と
+  `--git-common-dir` を共有する session だけに絞る（メイン checkout + その `.worktrees/*` が 1 グループ
+  になる）。`C-q Q` は絞り込みを外し、working / stale と、終了済みだが resume で拾い直せる row
+  （`--show-resumable`）も出す
 - **L3 自己修復**: 新規 `SessionStart` 時、同一 `$TMUX_PANE` 上の生存 session を `ForcedEnd`
   （`/exit`・`/clear` で `SessionEnd` が飛ばないバグの後始末）
 
@@ -95,7 +103,8 @@ worktree dir は ghq 配下の兄弟ディレクトリとして `ghq list` に�
 claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 ```
 
-- worktree を `<メインリポジトリ toplevel>_<name>` に作成
+- worktree を `<メインリポジトリ toplevel>/.worktrees/<name>` に作成（メイン checkout の内側の
+  隠しディレクトリ。`~/.config/git/ignore` = global excludesFile で `.worktrees/` を無視する）
 - `name` は `[A-Za-z0-9_-]+` のみ許可（`.`/`:` は tmux ターゲット構文と衝突するため拒否）
 - `-b` 省略時はブランチ名 = `<name>`。解決順はローカルブランチ → `origin/<branch>` を追跡 checkout →
   どちらにも無ければ新規作成（fetch はしない）
@@ -103,8 +112,9 @@ claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 - プロンプト有り（既定）: **worktree dir で `claude --bg`（background agent, permission mode `auto`）を起動**。
   tmux session は作らない。捕捉した short session id を `attach: claude attach <short-id>` として
   stdout に出す
-- プロンプト有り + `--tmux`: **detached tmux session（名前 = worktree basename）を作り、その pane の
-  中で interactive claude（`acceptEdits`）を起動**。人間が同席する委譲に使う
+- プロンプト有り + `--tmux`: **detached tmux session（名前 = `<basename(メイン toplevel)>_<name>` =
+  正準規約）を作り、その pane の中で interactive claude（`acceptEdits`）を起動**。人間が同席する
+  委譲に使う
 - `settings.json` で `claude-worktree` / `claude-worktree *` を allow 済み（承認不要）
 
 ## エンドツーエンドの流れ（作業を分岐する）
@@ -122,18 +132,21 @@ claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 
 ### 区切り文字は `_`（`.` 不可・`@` 不採用）
 
-worktree dir の basename はそのまま tmux session 名になる。tmux のターゲット指定は
+tmux session 名は `<basename(メイン toplevel)>_<name>` として**合成**される（`.worktrees/` 化で
+worktree dir の basename が `<name>` だけになり、repo 名が落ちたため）。合成の両辺がそれぞれ
+tmux-safe である必要がある。tmux のターゲット指定は
 `session:window.pane` 構文で `.` を **pane 区切り**として解釈し、さらに session 名では
 `.`→`_` に変換する。そのため `dotrc.foo` を `switch-client -t dotrc.foo` すると
 「session `dotrc` の pane `foo`」と誤解釈され `can't find pane: foo` で落ちる。
 
 `@` は tmux 上は無害（旧 `git wa` の `dotrc@chore` は動作した）が、可読性の観点で不採用。
-`_` は tmux ターゲット・session 名どちらでも安全。`git wa` と `claude-worktree` の双方を
-`_` に統一した。
+`_` は tmux ターゲット・session 名どちらでも安全。名前の合成側（`claude-worktree --tmux` と③の
+`picker.worktreeName`）を `_` 連結に統一してある。`<name>` を `[A-Za-z0-9_-]+` に限る制約は、この
+合成の右辺を tmux-safe に保つためのもので変わらない。
 
 ### window 名は transcript の ai-title 由来（session 名は据え置き）
 
-session 名は上のとおり worktree dir basename のままだが、**window 名は中身で決める**。
+session 名は上のとおり `<repo>_<name>` の合成のままだが、**window 名は中身で決める**。
 Claude Code は transcript jsonl に LLM 生成のタイトル（`{"type":"ai-title",...}`）を書いており、
 これが「その session が何をしているか」を知る唯一の安価な情報源になる。`claude agents --json` の
 roster 名は使わない — interactive では cwd basename + 2 桁 hex にしかならず session id 以上の
@@ -275,11 +288,16 @@ ledger の pane を信用する（roster が読めないことは session の死
 ### ④は **メイン** toplevel 基準でパスを作る
 
 `git rev-parse --git-common-dir` の親（= メイン working tree の toplevel）を基準にするため、
-worktree の中から `claude-worktree` を実行しても `dotrc_a_b` のようにネストしない。
+worktree の中から `claude-worktree` を実行しても `dotrc/.worktrees/a/.worktrees/b` のようには
+ネストせず、常に `dotrc/.worktrees/<name>` のフラットな一段になる。`.worktrees/` を挟むように
+なってもこの性質は変わらない。①の `git wa` も同じ基準に揃えた。
 
 ## 既知の差分・今後の論点
 
-- **anchor の不一致**: `git wa` は現在 toplevel（`rpst`）基準、`claude-worktree` はメイン
-  toplevel 基準。worktree 内から `git wa` するとパスがネストし得る。揃えるなら `git wa` も
-  `--git-common-dir` 基準にする。
+- **`git clean -ffx` は `.worktrees/` を消す**: メイン checkout で `git clean -ffx` を撃つと配下の
+  worktree ごと消える。実測（git 2.54.0）では 2 段の防御が効いている。`-f` 一段では linked worktree の
+  `.git` が**ファイル**であることから「別 repo」とみなされ `Would skip repository .worktrees/foo` に
+  なる。`-ff` にすると再帰削除に進むが、`.worktrees/` は ignore 済み（`claude-worktree` が repo の
+  `info/exclude` へ、`dot/git/ignore` が global excludesFile へ入れる）なので `git clean -ndff` は
+  何も出さない。ignore を無視する `-x` を足した `git clean -ffx` で初めて消える。
 - **alias のスコープ**: `gts` は対話シェル限定（非対話/スクリプトでは実名 `ghq-tmux-session`）。
