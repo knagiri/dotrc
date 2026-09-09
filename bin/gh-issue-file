@@ -140,4 +140,19 @@ if [ -n "$candidates" ]; then
   fi
 fi
 
-exit 0
+# --- create -----------------------------------------------------------------
+# Labels are fixed here rather than accepted from the caller. status/triage in
+# particular is not the caller's to choose: promoting an issue to status/ready
+# is the human gate that makes it delegatable (see
+# dot/claude/rules/issue-workflow.md).
+#
+# If these labels do not exist yet in the repo, gh fails right here. That is
+# intentional -- the wrapper does not create labels (that would widen what this
+# grant can do); run the one-time setup in
+# docs/design/agent-issue-workflow.md first.
+exec gh issue create \
+  --title "$title" \
+  --body-file "$body_file" \
+  --label agent-task \
+  --label "kind/$kind" \
+  --label status/triage
