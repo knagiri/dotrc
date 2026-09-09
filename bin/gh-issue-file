@@ -19,6 +19,7 @@ set -euo pipefail
 # Usage: gh-issue-file --kind <harness|bug|task> --title <title>
 #                      --body-file <path> [--not-dup-of N[,N...]]
 # Exit:  0 created / 1 bad input / 2 dedup gate (candidates printed to stderr)
+#        / 128 called outside a git repo (git itself fails `set -e` below)
 
 usage() {
   cat >&2 <<'EOF'

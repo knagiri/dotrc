@@ -52,11 +52,17 @@ run() {  # run gh-issue-file with a fresh argv log; echoes nothing, sets $rc
   rc=$?
 }
 
-# Case G: an unknown --kind is rejected before anything else happens.
+# Case G: an unknown --kind is rejected before anything else happens. The
+# message is asserted (not just rc/no-gh-call) because rc=1-without-a-gh-call
+# is also what an unrelated failure path yields (e.g. the whitelist itself
+# missing) -- asserting the wrapper's own text is what actually pins the
+# whitelist check down to this case (it is not just falling through to the
+# template-file-not-found branch, which also ends at rc=1 with no gh call).
 run --kind nope --title t --body-file "$full_body"
-if [ "$rc" -eq 1 ] && ! grep -q '^\[issue\]$' "$tmp/args"; then
+if [ "$rc" -eq 1 ] && ! grep -q '^\[issue\]$' "$tmp/args" \
+  && grep -q 'must be harness, bug or task' "$tmp/err"; then
   echo "ok: unknown --kind exits 1 without calling gh"
-else echo "FAIL: unknown --kind rc=$rc"; fail=1; fi
+else echo "FAIL: unknown --kind rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 
 # Case F: an unknown flag is rejected rather than passed through to gh.
 run --kind task --title t --body-file "$full_body" --label foo
@@ -223,5 +229,21 @@ GH_LIST_TSV="$list_tsv_limit" run --kind task --title t --body-file "$full_body"
 if [ "$rc" -eq 0 ] && grep -q '上限' "$tmp/err"; then
   echo "ok: candidate list at the limit warns about possible truncation"
 else echo "FAIL: limit warning rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+# Case M: --not-dup-of membership is tested on a comma-fenced string
+# (`case ",$not_dup_of," in *",$n,"*)`) precisely so that naming candidate #12
+# does not also count #1 and #2 as reviewed by substring accident (unfenced,
+# "1" and "2" are both substrings of "12"). Candidates 1, 2 and 12 with only
+# 12 named must still gate -- #1 and #2 remain unreviewed -- and must never
+# reach `gh issue create`.
+list_tsv_fence="$(printf '%s\t%s\t%s\t%s\n' \
+  1  OPEN kind/task 't1' \
+  2  OPEN kind/task 't2' \
+  12 OPEN kind/task 't12')"
+GH_LIST_TSV="$list_tsv_fence" run --kind task --title t --body-file "$full_body" \
+  --not-dup-of 12
+if [ "$rc" -eq 2 ] && ! grep -qxF '[create]' "$tmp/args"; then
+  echo "ok: --not-dup-of 12 does not also cover candidates 1 and 2 by substring"
+else echo "FAIL: comma-fencing rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
 exit "$fail"
