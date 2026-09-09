@@ -8,7 +8,8 @@ import (
 
 // worktreeName returns the canonical tmux session name for the worktree that
 // contains cwd: "<main-repo-basename>_<worktree-dir-name>" for a linked
-// worktree, and just "<repo-basename>" for that repo's main checkout.
+// worktree under <main-repo>/.worktrees/, and just "<dir-basename>" for that
+// repo's main checkout or for a linked worktree that sits anywhere else.
 //
 // A recorded cwd is not necessarily a worktree root: sessions are routinely
 // started in a subdirectory, so filepath.Base(cwd) alone shows "claude-queue"
@@ -19,6 +20,19 @@ import (
 // in every case. When that parent equals the working tree's own toplevel, cwd
 // is the main checkout and no "_<name>" suffix is added; the picker column and
 // the tmux session then read just "<repo>".
+//
+// The "<repo>_<name>" composition is deliberately restricted to worktrees
+// directly under "<main-repo>/.worktrees/", the layout bin/claude-worktree
+// creates -- there it reproduces that script's own session name exactly
+// (session="$(basename "$main_top")_${name}", and the worktree dir basename is
+// that same <name>). Every other linked worktree keeps its own dir basename.
+// Composing unconditionally would rename the worktrees of the legacy sibling
+// layout ("<parent>/dotrc_foo", still on disk from before this repo moved to
+// the subdirectory layout) to "dotrc_dotrc_foo", and since OpenSession creates
+// a session when has-session misses, that spawns a SECOND tmux session
+// alongside the existing "dotrc_foo" one -- breaking the 1 worktree = 1 session
+// invariant the picker relies on. The basename fallback also matches a
+// hand-made "git worktree add ../scratch".
 //
 // Both calls are best-effort: a non-repo cwd (or no git) falls back to the
 // cwd's own basename, and a repo too old for --path-format=absolute (pre-2.31)
@@ -46,7 +60,8 @@ func worktreeName(cwd string) string {
 
 // worktreeNameFrom applies the naming rule to a cwd and the two git strings
 // resolved for it. Split from worktreeName so the rule -- including both
-// fallbacks and the main-checkout case -- is testable without a repository.
+// fallbacks, the main-checkout case and the .worktrees/-only composition -- is
+// testable without a repository.
 func worktreeNameFrom(cwd, toplevel, commonDir string) string {
 	top := strings.TrimSpace(toplevel)
 	if top == "" {
@@ -56,8 +71,13 @@ func worktreeNameFrom(cwd, toplevel, commonDir string) string {
 	if common == "" {
 		return dirName(top)
 	}
-	mainTop := filepath.Dir(common) // parent of "<repo>/.git"
-	if filepath.Clean(mainTop) == filepath.Clean(top) {
+	mainTop := filepath.Clean(filepath.Dir(common)) // parent of "<repo>/.git"
+	if mainTop == filepath.Clean(top) {
+		return dirName(top) // the main checkout: no worktree half to append
+	}
+	// Compose only for "<mainTop>/.worktrees/<name>"; see worktreeName's doc
+	// comment for why every other linked worktree keeps its bare basename.
+	if filepath.Dir(filepath.Clean(top)) != filepath.Join(mainTop, ".worktrees") {
 		return dirName(top)
 	}
 	return dirName(mainTop) + "_" + dirName(top)
