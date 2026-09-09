@@ -296,7 +296,10 @@ worktree の中から `claude-worktree` を実行しても `dotrc/.worktrees/a/.
 
 - **anchor の不一致**: 解消済み。`git wa` も `claude-worktree` と同じ `--git-common-dir` 基準に
   揃えた（どちらも `<メイン toplevel>/.worktrees/<name>`）。
-- **`git clean -ff` は `.worktrees/` を消す**: メイン checkout で `git clean -ff` を撃つと配下の
-  worktree ごと消える。linked worktree は `.git` を**ファイル**として持ち、通常の `git clean -f` は
-  「別 repo」とみなしてスキップするため、`-f` 一段では起きない。
+- **`git clean -ffx` は `.worktrees/` を消す**: メイン checkout で `git clean -ffx` を撃つと配下の
+  worktree ごと消える。実測（git 2.54.0）では 2 段の防御が効いている。`-f` 一段では linked worktree の
+  `.git` が**ファイル**であることから「別 repo」とみなされ `Would skip repository .worktrees/foo` に
+  なる。`-ff` にすると再帰削除に進むが、`.worktrees/` は ignore 済み（`claude-worktree` が repo の
+  `info/exclude` へ、`dot/git/ignore` が global excludesFile へ入れる）なので `git clean -ndff` は
+  何も出さない。ignore を無視する `-x` を足した `git clean -ffx` で初めて消える。
 - **alias のスコープ**: `gts` は対話シェル限定（非対話/スクリプトでは実名 `ghq-tmux-session`）。
