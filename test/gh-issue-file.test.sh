@@ -119,11 +119,18 @@ if [ "$rc" -eq 2 ] && ! grep -qxF '[create]' "$tmp/args"; then
   echo "ok: partial --not-dup-of still exits 2"
 else echo "FAIL: partial --not-dup-of rc=$rc"; fail=1; fi
 
-# Case C: --not-dup-of covering every candidate passes the gate.
-GH_LIST_TSV="$list_tsv" run --kind task --title t --body-file "$full_body" --not-dup-of 7,9,12
-if [ "$rc" -eq 0 ]; then
-  echo "ok: full --not-dup-of passes the gate"
-else echo "FAIL: full --not-dup-of rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+# Case C: --not-dup-of covering every candidate passes the gate and files the
+# issue with exactly the three fixed labels -- nothing more, nothing less.
+GH_LIST_TSV="$list_tsv" run --kind harness --title "t" --body-file "$full_body" --not-dup-of 7,9,12
+if [ "$rc" -eq 0 ] \
+  && grep -qxF '[create]' "$tmp/args" \
+  && grep -qxF '[agent-task]' "$tmp/args" \
+  && grep -qxF '[kind/harness]' "$tmp/args" \
+  && grep -qxF '[status/triage]' "$tmp/args" \
+  && ! grep -qxF '[status/ready]' "$tmp/args" \
+  && grep -q 'issues/1' "$tmp/out"; then
+  echo "ok: full --not-dup-of files the issue with the three fixed labels"
+else echo "FAIL: create rc=$rc args=$(cat "$tmp/args") out=$(cat "$tmp/out")"; fail=1; fi
 
 # Case E: with no existing agent task there is nothing to compare against, so
 # gating would be an assertion about an absence -- it would pass vacuously on the
