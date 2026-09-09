@@ -28,8 +28,13 @@ gh-issue-file --kind <harness|bug|task> --title <title> --body-file <path> [--no
 | code | 意味 | 対応 |
 |---|---|---|
 | 0 | 起票した | stdout の URL を報告する |
-| 1 | 引数か body の不備 | stderr が欠落見出しを名指しするので直して再実行 |
+| 1 | 引数か body の不備、または `gh issue create` 自体の失敗（label 未作成・認証など） | stderr を読んで切り分ける |
 | 2 | dedup ゲート | 下記のとおり候補を**読んでから**判断する |
+
+code 1 は `bin/gh-issue-file` 自身の検証だけでなく、末尾で `exec gh issue create` した先の gh の
+失敗もそのまま返る。stderr が欠落見出しを名指ししていれば body 側の不備なので直して再実行、
+そうでなければ gh 側の失敗（label 未作成・認証エラー・ネットワークエラー等）なので body を
+直さず原因を潰してから再実行する。
 
 exit 2 のときは既存 agent task の一覧が stderr に出る。候補の title を読み、
 

@@ -140,4 +140,88 @@ if [ "$rc" -eq 0 ]; then
   echo "ok: empty candidate list does not gate"
 else echo "FAIL: empty list rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 
+# Case H: a body whose heading lines carry trailing whitespace still passes.
+# The wrapper strips trailing whitespace off body lines before comparing
+# against the template's headings (`sed -e 's/[ \t]*$//'`); without that strip
+# a stray trailing space would be misread as a missing section.
+trailing_ws_body="$tmp/trailing_ws.md"
+sed 's/^## .*/&  /' "$full_body" >"$trailing_ws_body"
+run --kind task --title t --body-file "$trailing_ws_body"
+if [ "$rc" -eq 0 ]; then
+  echo "ok: trailing whitespace on body heading lines does not fail validation"
+else echo "FAIL: trailing ws body rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+# Case I: same guard, but on the *template* side. required_headings() strips
+# trailing whitespace off template heading lines with `sub(/[ \t]+$/, "")`
+# before printing them; without that strip a trailing space baked into the
+# template would make every real body -- which naturally has none -- look like
+# it is missing that heading. This needs its own throwaway git repo, since the
+# wrapper locates the template via `git rev-parse --show-toplevel` run from the
+# caller's cwd (same convention as the fixture repos in git-reap-gone.test.sh).
+tmpl_repo="$tmp/tmplrepo"
+mkdir -p "$tmpl_repo/.github/ISSUE_TEMPLATE"
+git init -q "$tmpl_repo"
+cat >"$tmpl_repo/.github/ISSUE_TEMPLATE/task.md" <<'TMPL'
+---
+name: task
+---
+## やること（WHAT）
+body
+TMPL
+sed -i 's/^## .*/&  /' "$tmpl_repo/.github/ISSUE_TEMPLATE/task.md"
+tmpl_body="$tmp/tmpl_body.md"
+cat >"$tmpl_body" <<'BODY'
+## やること（WHAT）
+something
+BODY
+: >"$tmp/args"
+( cd "$tmpl_repo" && env GH_ARGS_FILE="$tmp/args" GH_LIST_TSV='' \
+    PATH="$stubdir:$PATH" "$bindir/gh-issue-file" --kind task --title t \
+    --body-file "$tmpl_body" >"$tmp/out" 2>"$tmp/err" )
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "ok: trailing whitespace on template heading lines does not fail validation"
+else echo "FAIL: trailing ws template rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+# Case J: a malformed --not-dup-of is rejected before gh is called at all
+# (neither `issue list` nor `issue create` -- the format check runs ahead of
+# the dedup gate).
+run --kind task --title t --body-file "$full_body" --not-dup-of abc
+if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
+  echo "ok: non-numeric --not-dup-of exits 1 without calling gh"
+else echo "FAIL: non-numeric --not-dup-of rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+run --kind task --title t --body-file "$full_body" --not-dup-of '7,'
+if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
+  echo "ok: trailing-comma --not-dup-of exits 1 without calling gh"
+else echo "FAIL: trailing-comma --not-dup-of rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# Case K: a --body-file that does not exist is rejected without calling gh.
+# The message is asserted (not just rc/no-gh-call) because dropping the `[ -r
+# "$body_file" ]` guard still yields rc=1 with no gh call by accident -- the
+# unreadable file then makes every heading in required_headings() look
+# "missing" via a failing `sed` inside the comparison loop, which is a much
+# noisier and less useful failure than the wrapper's own message.
+run --kind task --title t --body-file "$tmp/does-not-exist.md"
+if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ] \
+  && grep -q 'cannot read body file' "$tmp/err"; then
+  echo "ok: missing --body-file exits 1 with its own message and no gh call"
+else echo "FAIL: missing --body-file rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
+
+# Case L: candidates at the --limit cap warn that the list may be truncated,
+# even when --not-dup-of covers every number gh actually returned -- a full
+# CSV over a truncated list still cannot rule out candidates gh never showed.
+limit=200
+rows=()
+for i in $(seq 1 "$limit"); do
+  rows+=("$(printf '%s\t%s\t%s\t%s' "$i" OPEN kind/task "t$i")")
+done
+list_tsv_limit="$(printf '%s\n' "${rows[@]}")"
+csv_limit="$(seq -s, 1 "$limit")"
+GH_LIST_TSV="$list_tsv_limit" run --kind task --title t --body-file "$full_body" \
+  --not-dup-of "$csv_limit"
+if [ "$rc" -eq 0 ] && grep -q '上限' "$tmp/err"; then
+  echo "ok: candidate list at the limit warns about possible truncation"
+else echo "FAIL: limit warning rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
 exit "$fail"
