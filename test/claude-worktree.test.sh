@@ -562,14 +562,124 @@ else
   fail=1
 fi
 
-# Case 3: branch absent from both local and origin -> unchanged behavior, a new
-# branch created from the clone's current HEAD.
+# Case 3: branch absent from both local and origin -> created fresh. This clone
+# has not diverged from origin, so its HEAD and origin's default are the same
+# commit; which of the two the base came from is pinned down by the stale-clone
+# section further below, where they differ.
 out="$(cd "$clone2" && "$wt" newbranchtest -b brandnew 2>/dev/null)"; rc=$?
 wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
 if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$clone_head_sha" ]; then
-  echo "ok: branch absent from both local and origin is created fresh from current HEAD"
+  echo "ok: branch absent from both local and origin is created fresh"
 else
   echo "FAIL: new-branch fallback rc=$rc sha=$wt_sha want=$clone_head_sha"; fail=1
+fi
+
+# --- new-branch base + fetch --------------------------------------------------
+# A new branch must be based on origin's default branch, NOT on cwd's HEAD.
+# cwd is routinely a long-lived linked worktree that has not pulled in days, and
+# a delegate branched off it reads the repo's own files -- the ones a prompt
+# names as the reference implementation -- at whatever version that stale base
+# carried. Measured at 822 commits behind, on all three delegations out of one
+# session. A dedicated bare origin + clone is used so the clone can be left
+# deliberately stale without disturbing the repos above.
+stalebare="$tmp/stale-origin.git"
+git init -q --bare "$stalebare"
+stalesrc="$tmp/stalesrc"
+mkdir -p "$stalesrc"
+git -C "$stalesrc" init -q
+git -C "$stalesrc" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$stalesrc" branch -q -M main       # init.defaultBranch varies by environment
+git -C "$stalesrc" push -q "$stalebare" HEAD:refs/heads/main
+git -C "$stalebare" symbolic-ref HEAD refs/heads/main
+
+staleclone="$tmp/staleclone"
+git clone -q "$stalebare" "$staleclone"
+stale_head="$(git -C "$staleclone" rev-parse HEAD)"
+
+# origin moves AFTER the clone, and the clone never pulls.
+echo "upstream moved on" >"$stalesrc/moved.txt"
+git -C "$stalesrc" add moved.txt
+git -C "$stalesrc" -c user.email=t@t -c user.name=t commit -q -m "commit the stale clone never saw"
+git -C "$stalesrc" push -q "$stalebare" main
+fresh_head="$(git -C "$stalesrc" rev-parse main)"
+
+if [ "$stale_head" = "$fresh_head" ] \
+   || [ "$(git -C "$staleclone" rev-parse origin/main)" != "$stale_head" ]; then
+  echo "FAIL: test setup did not produce a stale clone, the assertions below would be vacuous"; fail=1
+fi
+
+# The case itself: branch created from origin's default, not from the stale HEAD.
+# This needs BOTH halves of the change -- the leading fetch (or origin/main is as
+# stale as HEAD) and taking the base from origin/HEAD.
+out="$(cd "$staleclone" && "$wt" freshbase 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$fresh_head" ]; then
+  echo "ok: a new branch is based on origin's default even when cwd's HEAD is stale"
+else
+  echo "FAIL: new-branch base rc=$rc sha=$wt_sha want=$fresh_head (cwd HEAD is $stale_head)"; fail=1
+fi
+
+# An EXISTING local branch must keep its own commit: the base only applies where
+# a branch is being created. Rebasing a delegator's chosen branch onto origin
+# would silently discard whatever it was pointed at.
+git -C "$staleclone" branch -q keepme "$stale_head"
+out="$(cd "$staleclone" && "$wt" keepmewt -b keepme 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$stale_head" ]; then
+  echo "ok: an existing local branch is checked out as-is, not re-based on origin"
+else
+  echo "FAIL: local branch re-based rc=$rc sha=$wt_sha want=$stale_head"; fail=1
+fi
+
+# The chosen base is reported. A base decided silently is how the staleness above
+# went unnoticed across three delegations, so the report is part of the fix.
+log="$tmp/base-report"
+out="$(cd "$staleclone" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log"
+  "$wt" basereport -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -Fq 'base     : origin/main (new branch)' <<<"$out"; then
+  echo "ok: the report names the base a new branch was created from"
+else echo "FAIL: base not reported rc=$rc out=$out"; fail=1; fi
+
+# The leading fetch also fixes the neighbouring miss: a branch that exists on
+# origin but was never fetched used to fall through to "create new", quietly
+# ignoring the branch the delegation was told to work on. Push it only now, so
+# it is still unfetched in the clone (the `wt` runs above each fetch) -- and
+# assert that absence, or this case would pass without testing anything.
+git -C "$stalesrc" checkout -q -b unfetched
+echo "only on origin" >"$stalesrc/unfetched.txt"
+git -C "$stalesrc" add unfetched.txt
+git -C "$stalesrc" -c user.email=t@t -c user.name=t commit -q -m "branch pushed after the clone last fetched"
+unfetched_sha="$(git -C "$stalesrc" rev-parse unfetched)"
+git -C "$stalesrc" push -q "$stalebare" unfetched
+git -C "$stalesrc" checkout -q main
+if [ -n "$(git -C "$staleclone" rev-parse --verify --quiet origin/unfetched)" ]; then
+  echo "FAIL: origin/unfetched already present in the clone, the assertion below would be vacuous"; fail=1
+fi
+
+out="$(cd "$staleclone" && "$wt" unfetchedwt -b unfetched 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+wt_upstream="$(git -C "$out" rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$unfetched_sha" ] && [ "$wt_upstream" = "origin/unfetched" ]; then
+  echo "ok: a branch pushed since the last fetch is picked up instead of created fresh"
+else
+  echo "FAIL: unfetched branch rc=$rc sha=$wt_sha want=$unfetched_sha upstream=$wt_upstream"; fail=1
+fi
+
+# A failing fetch must not abort the launch -- offline, or a checkout with no
+# `origin` at all, is not a reason to refuse a delegation. It degrades to the
+# previous behavior (cwd's HEAD as the base) and says so, since in add-only mode
+# the report above is not printed and this is the one case worth noticing.
+# cwdrepo has no remote, so `git fetch origin` fails outright.
+err="$tmp/nofetch-err"
+out="$(cd "$cwdrepo" && "$wt" nofetch 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}_nofetch" ] \
+   && grep -q 'git fetch origin failed' "$err" \
+   && grep -q "no origin/HEAD or origin/main" "$err" \
+   && [ "$(git -C "$out" rev-parse HEAD 2>/dev/null)" = "$(git -C "$cwdrepo" rev-parse HEAD)" ]; then
+  echo "ok: a failing fetch warns and falls back to cwd's HEAD instead of aborting"
+else
+  echo "FAIL: fetch-failure fallback rc=$rc out=$out"; sed 's/^/  err| /' "$err" 2>/dev/null; fail=1
 fi
 
 # --- background launch mode (default when a prompt is given) ------------------
