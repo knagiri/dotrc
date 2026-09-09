@@ -115,6 +115,79 @@ if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] \
   echo "ok: repeated --seed and directory seeds replace rather than nest on reseed"
 else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
 
+# --- .delegate/ return channel -------------------------------------------------
+# `.delegate/` is where a delegate leaves files it wants to hand back. It has to
+# be readable from the worktree by relative path AND invisible to git, or an
+# untracked directory would make `git-reap-gone` skip the worktree as unclean.
+# The exclude entry is what buys the second half.
+#
+# The entry belongs in the repo-wide `.git/info/exclude` (the common dir's),
+# which is what --git-path returns from inside a linked worktree AND the only
+# copy git reads: the same pattern in `.git/worktrees/<name>/info/exclude`
+# leaves the path un-ignored (git 2.43.0). Asserting the resolved location, not
+# just the entry, is what would catch a "fix" that moves the write to the
+# per-worktree path -- where it would stop working without failing.
+(cd "$cwdrepo" && "$wt" delegatewt) >/dev/null 2>&1; rc=$?
+ex="$(git -C "${cwdrepo}_delegatewt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$ex" = "$cwdrepo/.git/info/exclude" ] && grep -qxF '/.delegate/' "$ex"; then
+  echo "ok: worktree creation adds /.delegate/ to the repo-wide exclude"
+else echo "FAIL: exclude entry missing rc=$rc path=${ex:-<unresolved>}"; fail=1; fi
+
+# The point of the entry: a file dropped in .delegate/ leaves `status --porcelain`
+# empty, which is exactly the predicate git-reap-gone gates on. Guard on the file
+# existing so this cannot pass vacuously.
+mkdir -p "${cwdrepo}_delegatewt/.delegate"
+echo "pr body draft" >"${cwdrepo}_delegatewt/.delegate/pr-body.md"
+st="$(git -C "${cwdrepo}_delegatewt" status --porcelain 2>/dev/null)"
+if [ -f "${cwdrepo}_delegatewt/.delegate/pr-body.md" ] && [ -z "$st" ]; then
+  echo "ok: files under .delegate/ stay invisible to git status"
+else echo "FAIL: .delegate/ is visible to git: ${st:-<file missing>}"; fail=1; fi
+
+# ...and the worktree is still removable without --force, which is the other half
+# of what git-reap-gone needs.
+git -C "$cwdrepo" worktree remove "${cwdrepo}_delegatewt" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "ok: a worktree holding .delegate/ files is removable without --force"
+else echo "FAIL: worktree remove refused a .delegate/-holding worktree rc=$rc"; fail=1; fi
+
+# Re-running over an existing worktree dir must not append a second copy of the
+# entry (the script reuses the dir rather than recreating it).
+(cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1
+(cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1; rc=$?
+ex="$(git -C "${cwdrepo}_dupwt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
+n="$(grep -cxF '/.delegate/' "$ex" 2>/dev/null || echo 0)"
+if [ "$rc" -eq 0 ] && [ "$n" -eq 1 ]; then
+  echo "ok: a repeat run leaves exactly one /.delegate/ entry"
+else echo "FAIL: exclude entry count=$n rc=$rc"; fail=1; fi
+
+# An exclude the repo already wrote must survive: the script appends, never
+# rewrites. Losing a user's pattern would be a silent regression.
+printf '/scratch/\n' >>"$ex"
+(cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1
+if grep -qxF '/scratch/' "$ex" && [ "$(grep -cxF '/.delegate/' "$ex")" -eq 1 ]; then
+  echo "ok: an existing exclude entry is preserved"
+else echo "FAIL: existing exclude entry clobbered"; fail=1; fi
+
+# A pre-existing exclude with NO trailing newline is a distinct case from the one
+# above (that file already ends in "\n" from the earlier append). A hand-written
+# `.git/info/exclude` commonly lacks a final newline, and appending straight onto
+# that glues our pattern onto the last line -- e.g. `/scratch/` becomes
+# `/scratch//.delegate/`, which is neither the original entry nor a working
+# `/.delegate/` line. Use a dedicated repo so the accumulated exclude state from
+# the tests above (which already has a trailing newline) can't mask this.
+noeolrepo="$tmp/noeolrepo"
+mkdir -p "$noeolrepo"
+git -C "$noeolrepo" init -q
+git -C "$noeolrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mkdir -p "$noeolrepo/.git/info"
+printf '/scratch/' >"$noeolrepo/.git/info/exclude" # deliberately no trailing newline
+
+(cd "$noeolrepo" && "$wt" noeolwt) >/dev/null 2>&1; rc=$?
+ex2="$noeolrepo/.git/info/exclude"
+if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/scratch/' "$ex2")" -eq 1 ] && grep -qxF '/.delegate/' "$ex2"; then
+  echo "ok: appending to a non-newline-terminated exclude preserves the existing entry"
+else echo "FAIL: exclude corrupted: $(cat "$ex2" 2>/dev/null)"; fail=1; fi
+
 # --- default seeds declared in .claude/worktree-seed ---------------------------
 # A repo names the gitignored files a delegate cannot work without (the config
 # supplying its GitHub token, a local .env) in .claude/worktree-seed, and they
@@ -287,6 +360,12 @@ prompt='say "hi" it'\''s here'
 # Inside tmux ($TMUX set): launch is wrapped in `bash -c` so claude's exit is
 # chained to `switch-client -t <origin_pane>`, returning the client to the pane
 # we launched from. Assert the chain is wired and quoting is intact.
+#
+# --tmux keeps `acceptEdits` while the background launch moved to `auto`: a human
+# sits with this session, so their judgment is preferred over the classifier's.
+# Here the flag lives inside the `bash -c` command STRING (one log line, several
+# tokens), so the mode is matched as the `--permission-mode <mode>` phrase rather
+# than as a whole line.
 log="$tmp/ns-in"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
@@ -294,15 +373,19 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
 if [ "$rc" -eq 0 ] \
    && grep -q 'switch-client' "$log" \
    && grep -Fxq '%9' "$log" \
+   && grep -Fq -- '--permission-mode acceptEdits' "$log" \
+   && ! grep -Fq -- '--permission-mode auto' "$log" \
    && grep -Fxq "$prompt" "$log" \
    && grep -q 'attach   : gts' <<<"$out"; then
-  echo "ok: \$TMUX set wires switch-client back to origin pane, prompt intact"
+  echo "ok: \$TMUX set wires switch-client back to origin pane, prompt intact, acceptEdits kept"
 else
   echo "FAIL: in-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
 
 # Outside tmux ($TMUX unset): no client to return, so claude runs directly (no
 # wrapper, no switch-client) and the attach hint falls back to `tmux attach`.
+# claude is exec'd directly here, so the mode is its own argv element (one per
+# log line) -- assert acceptEdits present and the background mode's auto absent.
 log="$tmp/ns-out"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
@@ -310,9 +393,11 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
 if [ "$rc" -eq 0 ] \
    && ! grep -q 'switch-client' "$log" \
    && grep -Fxq 'claude' "$log" \
+   && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'acceptEdits' \
+   && ! grep -Fxq -- 'auto' "$log" \
    && grep -Fxq "$prompt" "$log" \
    && grep -q 'attach   : tmux attach -t' <<<"$out"; then
-  echo "ok: no \$TMUX launches claude directly, no pane-return chain"
+  echo "ok: no \$TMUX launches claude directly, no pane-return chain, acceptEdits kept"
 else
   echo "FAIL: out-of-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
@@ -367,9 +452,11 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   "$wt" --tmux --model sonnet modelout -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -A1 -Fx -- '--model' "$log" | grep -Fxq 'sonnet' \
+   && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'acceptEdits' \
+   && ! grep -Fxq -- 'auto' "$log" \
    && grep -Fxq "$prompt" "$log" \
    && grep -q 'model    : sonnet' <<<"$out"; then
-  echo "ok: --model reaches the out-of-tmux launch and is reported"
+  echo "ok: --model reaches the out-of-tmux launch, which keeps acceptEdits, and is reported"
 else
   echo "FAIL: out-of-tmux --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
@@ -501,19 +588,23 @@ chmod +x "$stubbin/claude"
 emptyroster="$tmp/roster-empty.json"
 echo '[]' >"$emptyroster"
 
-# Default (no --tmux): claude --bg is launched with acceptEdits, the short id is
-# lifted out of the banner, and the report tells the user how to attach.
+# Default (no --tmux): claude --bg is launched in permission mode `auto` (NOT
+# acceptEdits -- nobody is attached to answer a prompt; see the script header),
+# the short id is lifted out of the banner, and the report tells the user how to
+# attach. The mode is asserted as the element right after --permission-mode, and
+# acceptEdits asserted absent, so a partial rename can't pass.
 log="$tmp/bg-default"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$emptyroster"
   "$wt" bgdefault -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -Fxq -- '--bg' "$log" \
-   && grep -Fxq -- 'acceptEdits' "$log" \
+   && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'auto' \
+   && ! grep -Fxq -- 'acceptEdits' "$log" \
    && grep -Fxq "$prompt" "$log" \
-   && grep -q 'session  : abcd1234 (background' <<<"$out" \
+   && grep -Fq 'session  : abcd1234 (background; auto)' <<<"$out" \
    && grep -q 'attach   : claude attach abcd1234' <<<"$out"; then
-  echo "ok: default launch uses claude --bg and reports the short id"
+  echo "ok: default launch uses claude --bg in auto mode and reports the short id"
 else
   echo "FAIL: bg default rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; echo "$out"; fail=1
 fi
@@ -537,7 +628,9 @@ if [ "$rc" -eq 0 ] && [ "$(cat "$cwdlog" 2>/dev/null)" = "${cwdrepo}_bgcwd" ]; t
   echo "ok: bg launch runs with the worktree as cwd"
 else echo "FAIL: bg cwd rc=$rc got=$(cat "$cwdlog" 2>/dev/null) want=${cwdrepo}_bgcwd"; fail=1; fi
 
-# --model rides through to the bg launch as two adjacent argv elements.
+# --model rides through to the bg launch as two adjacent argv elements. The
+# launch has a separate branch per --model, so the mode is re-asserted here:
+# otherwise one branch could keep acceptEdits unnoticed.
 log="$tmp/bg-model"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_CWDLOG="$tmp/x" \
@@ -545,8 +638,10 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   "$wt" --model opus bgmodel -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -A1 -Fx -- '--model' "$log" | grep -Fxq 'opus' \
+   && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'auto' \
+   && ! grep -Fxq -- 'acceptEdits' "$log" \
    && grep -q 'model    : opus' <<<"$out"; then
-  echo "ok: --model reaches the bg launch and is reported"
+  echo "ok: --model reaches the bg launch, which stays in auto mode, and is reported"
 else echo "FAIL: bg --model rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1; fi
 
 # Omitting --model must not synthesise `--model ""` (claude rejects it).
