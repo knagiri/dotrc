@@ -34,7 +34,11 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    **参照実装を読む前に base の追随を済ませる**: 委譲プロンプトが repo 内のファイルを参照実装
    として名指ししているなら（「`X` の先行実装に合わせる」「`Y` と同じ形にする」等）、それを
    読む前に `git fetch origin` して base を追随させる。ローカル commit がまだ無ければ
-   `git merge --ff-only origin/main` で足りる。
+   `git merge --ff-only "$(git rev-parse --abbrev-ref origin/HEAD)"` で足りる
+   （`origin/HEAD` が未設定な checkout では `origin/main` にフォールバックする）。
+   既定ブランチを `origin/main` に決め打ちしないのは、手順 3・手順 4 と同じ理由（既定
+   ブランチが `master`/`trunk` の repo でも成り立たせるため）で、`bin/claude-worktree` の
+   新規ブランチ base 解決（origin/HEAD → origin/main の ladder）とも揃える。
 
    手順 3 の base 確認とは役割が違うので、両方置く。あちらは PR を出す前の conflict 回避で、
    参照実装を読むのはその遥か前である。参照先が古ければ、気づいた時には既に書き写した後で

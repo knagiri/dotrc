@@ -287,7 +287,16 @@ fi
 # stdout is redirected to stderr so add-only mode's path-only stdout stays
 # scriptable (git writes progress to stderr already, but not every transport
 # does).
-if ! git -C "$repo_dir" fetch origin >&2; then
+#
+# GIT_TERMINAL_PROMPT=0 forces that "failure is a warning, never fatal" path
+# for missing HTTPS credentials too. Without it, a credential helper with
+# nothing cached makes git prompt for username/password on the controlling
+# terminal instead of failing -- worse than failure, since this runs inside an
+# unattended `claude --bg` delegation with nobody there to answer. It hangs
+# forever rather than falling through to "use whatever refs are already
+# present". BatchMode=yes closes the same hole for SSH remotes (passphrase /
+# host-key prompts).
+if ! GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" git -C "$repo_dir" fetch origin >&2; then
   echo "claude-worktree: git fetch origin failed; using the refs already present" >&2
 fi
 
