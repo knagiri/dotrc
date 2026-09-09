@@ -93,4 +93,51 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+# --- dedup gate -------------------------------------------------------------
+# Scope is every agent task, not just this kind: the duplication being prevented
+# is two sessions filing the same idea under different kinds. gh's built-in --jq
+# is used so no system jq is required.
+candidates="$(gh issue list --state all --label agent-task --limit 200 \
+  --json number,title,state,labels \
+  --jq '.[] | [(.number|tostring), .state,
+               ((.labels // []) | map(.name) | map(select(startswith("kind/"))) | first // "kind/?"),
+               .title] | @tsv')"
+
+if [ -n "$candidates" ]; then
+  numbers="$(printf '%s\n' "$candidates" | cut -f1 | sort -n)"
+  csv="$(printf '%s\n' "$numbers" | paste -sd, -)"
+
+  # Anything the caller has not named is still unreviewed -- including issues
+  # opened after they last read the list. Membership is tested by substring on a
+  # comma-fenced list rather than with comm, because the candidate numbers are
+  # sorted numerically (7,9,12) while comm requires lexical order (12,7,9) and
+  # would silently mis-pair them.
+  unreviewed=""
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    case ",$not_dup_of," in
+      *",$n,"*) ;;
+      *) unreviewed="$unreviewed$n "  ;;
+    esac
+  done <<<"$numbers"
+
+  if [ -n "$unreviewed" ]; then
+    {
+      count="$(printf '%s\n' "$numbers" | grep -c .)"
+      echo "gh-issue-file: 既存の agent task が ${count} 件あります。重複していないか確認してください。"
+      echo
+      printf '%s\n' "$candidates" | sort -t"$(printf '\t')" -k3,3 -k1,1n \
+        | awk -F'\t' '
+            $3 != last { if (NR > 1) print ""; print $3; last = $3 }
+                       { printf "  #%-4s [%s] %s\n", $1, $2, $4 }
+          '
+      echo
+      echo "重複でなければ次を付けて再実行してください:"
+      echo "  --not-dup-of $csv"
+      echo "重複していれば起票せず、既存 issue の番号を報告してください。"
+    } >&2
+    exit 2
+  fi
+fi
+
 exit 0
