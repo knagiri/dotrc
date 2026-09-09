@@ -17,8 +17,9 @@
 
 harness（permission mode `auto` 等）が「file ops は Bash でやれ。`cat` / `sed` / heredoc を
 使え」と指示してくることがある。この表と衝突したときは、user 指示 > skill > 既定挙動 という
-既に確立した優先順位（`using-superpowers` の "User instructions take precedence over skills,
-which in turn override default behavior"）に従い、この rule を優先する。新しい規範ではなく、
+既に確立した優先順位（`superpowers:using-superpowers` の "User instructions (CLAUDE.md,
+AGENTS.md, GEMINI.md, etc, direct requests) take precedence over skills, which in turn
+override default behavior"）に従い、この rule を優先する。新しい規範ではなく、
 その原則をコマンド選択の文脈へ落としているだけである。
 
 由来: 委譲先が auto mode の Bash 指示とこの表の板挟みで判断に迷った実例から。結果的に
