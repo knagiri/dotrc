@@ -146,10 +146,17 @@ else echo "FAIL: /.worktrees/ exclude entry missing rc=$rc"; fail=1; fi
 
 # The point of that entry, measured on the MAIN checkout (not the worktree):
 # status stays empty even though .worktrees/delegatewt exists on disk. Guard on
-# the directory existing so this cannot pass vacuously. GIT_CONFIG_GLOBAL is
+# the directory existing so this cannot pass vacuously. `core.excludesFile` is
 # emptied so the host's own ~/.config/git/ignore -- which on a deployed machine
-# already carries `.worktrees/` -- cannot be what makes this pass.
-mainst="$(GIT_CONFIG_GLOBAL=/dev/null git -C "$cwdrepo" status --porcelain 2>/dev/null)"
+# already carries `/.worktrees/` -- cannot be what makes this pass.
+#
+# It has to be `core.excludesFile`, not GIT_CONFIG_GLOBAL: when the option is
+# unset git falls back to `$XDG_CONFIG_HOME/git/ignore`, and that default is
+# resolved independently of the global *config* file. Emptying GIT_CONFIG_GLOBAL
+# only drops the setting, so the XDG ignore stays in force and this assertion
+# would pass on a deployed machine even with the exclude write removed entirely
+# (measured on git 2.54.0).
+mainst="$(git -c core.excludesFile=/dev/null -C "$cwdrepo" status --porcelain 2>/dev/null)"
 if [ -d "${cwdrepo}/.worktrees/delegatewt" ] && [ -z "$mainst" ]; then
   echo "ok: .worktrees/ stays invisible to the main checkout's git status"
 else echo "FAIL: .worktrees/ visible in the main checkout: ${mainst:-<worktree missing>}"; fail=1; fi

@@ -69,6 +69,10 @@ make install
 メイン toplevel として `<main-repo-basename>_<name>` を合成する。worktree は
 `<repo>/.worktrees/<name>` にあり dir basename が `<name>` だけなので、そのままでは repo 名が
 落ちるため。メイン checkout（common-dir の親 == 自分の toplevel）は接尾辞を付けず `<repo>` だけ。
+合成するのは `<メイン toplevel>/.worktrees/<name>` 直下の worktree だけで、それ以外の場所に
+ある linked worktree（sibling layout の `<parent>/dotrc_foo` や手製の `../scratch`）は自分の
+dir basename のまま。無条件に合成すると前者が `dotrc_dotrc_foo` になり、picker が
+has-session を外して二重に session を作るため（1 worktree = 1 session が壊れる）。
 git が引けない cwd は cwd の basename に落ちる。
 
 ai-title を worktree 名より前に置くのは、同じ repo に複数 session が並ぶと worktree 名は全部
