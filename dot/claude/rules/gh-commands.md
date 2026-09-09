@@ -96,7 +96,7 @@ prompt injection / 権限バイパスの経路になる。
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
 | CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
-| merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>` のみ | `Bash(gh-automerge *)` |
+| merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>`、clean 拒否のときだけ `gh pr merge --merge <PR>` へ fallback | `Bash(gh-automerge *)` |
 
 - ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
   フラグを付けられない。auto-merge 有効化前に skill 自身が `gh-pr-checks` で
@@ -114,5 +114,12 @@ prompt injection / 権限バイパスの経路になる。
 - raw `gh api graphql *` / `gh pr merge *` は **allow しない**（§4 のとおり）。thread resolve は
   reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。
-- ラッパーは **repo 単位**で、特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）。`--auto` は branch protection / required checks を尊重するため未通過 PR を強制 merge はできないが、「PR 限定ではない」点は把握しておく。
-- `gh-automerge`（= `gh pr merge --auto`）は **repo で auto-merge が有効**である必要がある。無効な repo では失敗するため、`pr-review-automerge` の merge ステップが完了しない（skill は report して停止する）。
+- ラッパーは **repo 単位**で、特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）。`--auto` は branch protection / required checks を尊重するため未通過 PR を強制 merge はできないが、「PR 限定ではない」点は把握しておく。fallback の直接 merge（`gh pr merge --merge`）も同じで、ゲートを掛けるのは GitHub 側の branch protection であり、ラッパーは `--admin` 等のバイパスフラグを一切付けない。したがって fallback 経路に落ちても required checks / required approvals は変わらず強制される。
+- `gh-automerge` の fallback は **clean 拒否 1 種類にだけ**効く。`gh pr merge --auto` の失敗の
+  stderr に `clean status` が含まれるとき（= 待つものが何も無い PR に auto-merge は張れない、と
+  GitHub が拒否したとき）だけ `gh pr merge --merge <PR>` へ落ちる。CI workflow を持たない repo は
+  PR 作成直後にこの状態へ入るので、fallback が無いと auto-merge が構造的に届かなかったため
+  （PR #73）。それ以外の失敗（required check 未達、conflict、**repo で auto-merge が無効**、など）は
+  fallback せず終了コードごと呼び出し元へ返す。したがって auto-merge が無効な repo では
+  引き続き merge ステップが完了せず、`pr-review-automerge` は report して停止する
+  （fallback はこのケースを救わない）。
