@@ -1,13 +1,13 @@
 ---
 name: delegate-to-worktree
-description: WHAT と HOW（設計）が固まった作業を別 workspace の自律 agent に委譲する。claude-worktree を session 起動形式（-- 付き）で呼び、background agent（claude --bg, acceptEdits）を起こして implement-and-review skill に着手させる。「claude-worktree で作業して」「claude-worktree で worktree 作成から」「別 worktree / workspace でやらせて」「これを別 agent に任せて」「delegate して」系の依頼で使う。worktree を作るだけ（初期タスクを伴わない）の要求のときだけ add-only で呼ぶ。
+description: WHAT と HOW（設計）が固まった作業を別 workspace の自律 agent に委譲する。claude-worktree を session 起動形式（-- 付き）で呼び、background agent（claude --bg, permission mode auto）を起こして implement-and-review skill に着手させる。「claude-worktree で作業して」「claude-worktree で worktree 作成から」「別 worktree / workspace でやらせて」「これを別 agent に任せて」「delegate して」系の依頼で使う。worktree を作るだけ（初期タスクを伴わない）の要求のときだけ add-only で呼ぶ。
 allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktree list), Bash(git rev-parse *), Read, Glob, Grep, SendMessage
 ---
 
 # delegate-to-worktree
 
 固まった作業（WHAT + HOW）を、別 workspace の自律 claude に委譲する。`bin/claude-worktree` を
-**session 起動形式**（`--` 付き）で呼び、background agent（`claude --bg`, acceptEdits）を
+**session 起動形式**（`--` 付き）で呼び、background agent（`claude --bg`, permission mode `auto`）を
 起こす。起動先は `implement-and-review` skill で**確定済みの設計を実行し**、merge する。
 
 運用ポリシーは `dot/claude/rules/worktree-scope.md` を参照。作業スコープを worktree に閉じる
@@ -78,11 +78,12 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    着手できるよう、目的・背景・制約・関連ファイル・期待成果物に加え、**確定した設計（HOW）**を
    畳み込む。先頭に `implement-and-review` の明示起動命令を置く。
 
-   自己完結は**ファイルシステム的にも**要る。委譲先が承認なしに読めるのは新 worktree 内の
-   ファイルだけで、worktree 外の絶対パス Read は permission prompt を出し、人間不在の委譲先は
-   そこで固まる。commit 済みファイルは worktree に既に在るので相対パスで参照させる。gitignore
-   済み・未 commit で委譲先が要るファイル（spec / 実装計画等）は `--seed <path>` で worktree 内へ
-   入れ、相対パスで参照させる（詳細は `worktree-scope.md` §6）。フォーマット:
+   自己完結は**ファイルシステム的にも**要る。新 worktree は指定 branch を checkout するだけなので、
+   起動元 checkout の gitignore 済み・未 commit ファイルは伝播しない（理由と、承認待ちに落ちた
+   場合に fire-and-forget の委譲先が固まる点の詳細は `worktree-scope.md` §6「委譲プロンプトは
+   ファイルシステム的に自己完結させる」）。commit 済みファイルは worktree に既に在るので相対パス
+   で参照させ、gitignore 済み・未 commit で委譲先が要るファイル（spec / 実装計画等）は
+   `--seed <path>` で worktree 内へ入れて相対パスで参照させる。フォーマット:
 
    ```
    implement-and-review を使って以下のタスクを進めてください。

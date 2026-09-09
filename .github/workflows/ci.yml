@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Every job here only checks out and runs read-only test/lint commands, so pin
+# GITHUB_TOKEN to read-only rather than inheriting the repo/org default (which
+# can be write).
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          # Track the toolchain the module declares instead of pinning a second
+          # version here that would drift from go.mod.
+          go-version-file: src/claude-queue/go.mod
+      - run: make -C src/claude-queue test vet fmt-check
+
+  bash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: run bin/ script tests
+        run: |
+          for t in test/*.test.sh; do bash "$t" || exit 1; done
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Files are listed one by one rather than globbed, for two reasons.
+      # `bin/claude-queue` is a build artifact (a gitignored Go binary), so
+      # `bin/*` would hand shellcheck something it cannot parse. And three legacy
+      # scripts -- bin/deploy.sh, bin/list-install.sh, bin/ghq-tmux-session --
+      # still carry warnings; cleaning those up is separate work, so the gate
+      # covers only what is already at zero. Adding a script means adding a line
+      # here.
+      - name: shellcheck
+        run: |
+          shellcheck -S warning \
+            bin/claude-reap-bg \
+            bin/claude-review \
+            bin/claude-stop-bg \
+            bin/claude-worktree \
+            bin/gh-automerge \
+            bin/gh-await-reviews \
+            bin/gh-list-threads \
+            bin/gh-pr-checks \
+            bin/gh-pr-comments \
+            bin/gh-resolve-thread \
+            bin/git-reap-gone \
+            bin/git-set-commit-sign \
+            test/claude-reap-bg.test.sh \
+            test/claude-review.test.sh \
+            test/claude-stop-bg.test.sh \
+            test/claude-worktree.test.sh \
+            test/gh-wrappers.test.sh \
+            test/git-reap-gone.test.sh

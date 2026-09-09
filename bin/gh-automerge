@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# gh-automerge <PR#> -- enable auto-merge (merge commit) on a pull request.
+# gh-automerge <PR#> -- merge a pull request, preferring auto-merge.
 #
 # Runs EXACTLY `gh pr merge --auto --merge <PR>` with no flag passthrough, so a
 # caller (incl. a prompt-injected reviewer agent) cannot append --admin or other
 # protection-bypassing flags. This lets the merge grant be allowlisted narrowly
 # as `Bash(gh-automerge *)` instead of the broad `gh pr merge *`.
+#
+# Clean-status fallback: GitHub's enablePullRequestAutoMerge refuses a PR whose
+# mergeStateStatus is CLEAN with "Pull request is in clean status" -- there is
+# nothing left to wait for, so there is no auto-merge to enable. A repo without
+# CI workflows lands in that state almost immediately, which made auto-merge
+# structurally unreachable (measured on knagiri/dotrc#60 and #61). On exactly
+# that refusal we fall back to `gh pr merge --merge <PR>`, a direct merge that
+# GitHub still gates on branch protection (required checks / approvals); this
+# wrapper bypasses nothing, and --admin remains unreachable. Any other failure
+# (unmet required check, conflict, ...) is passed back to the caller untouched.
 #
 # Usage: gh-automerge <PR-number>
 
@@ -20,4 +30,20 @@ if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-exec gh pr merge --auto --merge "$pr"
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+
+rc=0
+gh pr merge --auto --merge "$pr" 2>"$err" || rc=$?
+cat "$err" >&2
+if [ "$rc" -eq 0 ]; then
+  echo "gh-automerge: enabled auto-merge on #$pr" >&2
+  exit 0
+fi
+
+if ! grep -qi 'clean status' "$err"; then
+  exit "$rc"
+fi
+
+echo "gh-automerge: auto-merge refused (#$pr is in clean status); merging directly" >&2
+gh pr merge --merge "$pr"

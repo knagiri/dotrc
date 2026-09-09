@@ -14,8 +14,17 @@ src="$here/../bin/claude-reap-bg"
 bindir="$here/../bin"
 fail=0
 
+# A missing tool degrades to SKIP locally, where the alternative is a confusing
+# failure on a machine that simply lacks jq. In CI that same SKIP would report
+# success while asserting nothing, so there a missing tool is a failure instead.
+# GitHub Actions always sets CI=true in the default environment, so arming this
+# needs no workflow change.
 for tool in jq sqlite3; do
   command -v "$tool" >/dev/null 2>&1 || {
+    if [ -n "${CI:-}" ]; then
+      echo "FAIL: $tool is required; CI does not treat a missing tool as a skip" >&2
+      exit 1
+    fi
     echo "SKIP: $tool is required to run these tests"
     exit 0
   }
