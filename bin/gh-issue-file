@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-issue-file -- the single path an agent uses to open an issue in this repo.
+#
+# Two things it enforces that a bare `gh issue create` cannot:
+#   1. Structure. `gh issue create --title X --body Y` never applies an issue
+#      template (-T/--template is starting text for the interactive/editor
+#      path), and YAML issue forms are unreachable non-interactively. So the
+#      body is checked here, against the very same .github/ISSUE_TEMPLATE file
+#      the web UI serves -- one source of truth, no second skeleton to drift.
+#   2. Deduplication. Multiple sessions independently propose the same task,
+#      so the caller is shown every existing agent task and must name them all
+#      via --not-dup-of before a new one is created.
+#
+# Allowlist as `Bash(gh-issue-file *)`. No flag pass-through: labels are fixed
+# and unknown flags are refused rather than handed to gh.
+#
+# Usage: gh-issue-file --kind <harness|bug|task> --title <title>
+#                      --body-file <path> [--not-dup-of N[,N...]]
+# Exit:  0 created / 1 bad input / 2 dedup gate (candidates printed to stderr)
+
+usage() {
+  cat >&2 <<'EOF'
+usage: gh-issue-file --kind <harness|bug|task> --title <title>
+                     --body-file <path> [--not-dup-of N[,N...]]
+EOF
+  exit "${1:-1}"
+}
+
+kind=""; title=""; body_file=""; not_dup_of=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)     usage 0 ;;
+    --kind)        [ $# -ge 2 ] || usage 1; kind="$2"; shift 2 ;;
+    --title)       [ $# -ge 2 ] || usage 1; title="$2"; shift 2 ;;
+    --body-file)   [ $# -ge 2 ] || usage 1; body_file="$2"; shift 2 ;;
+    --not-dup-of)  [ $# -ge 2 ] || usage 1; not_dup_of="$2"; shift 2 ;;
+    *)
+      # No pass-through: an unrecognised flag is a caller bug, not something to
+      # forward to gh, where it could add labels or assignees behind our back.
+      echo "gh-issue-file: unknown argument: $1" >&2
+      usage 1 ;;
+  esac
+done
+
+case "$kind" in
+  harness|bug|task) ;;
+  "") echo "gh-issue-file: --kind is required" >&2; usage 1 ;;
+  *)  echo "gh-issue-file: --kind must be harness, bug or task (got: $kind)" >&2; exit 1 ;;
+esac
+[ -n "$title" ] || { echo "gh-issue-file: --title is required" >&2; usage 1; }
+[ -n "$body_file" ] || { echo "gh-issue-file: --body-file is required" >&2; usage 1; }
+[ -r "$body_file" ] || { echo "gh-issue-file: cannot read body file: $body_file" >&2; exit 1; }
+if [ -n "$not_dup_of" ] && [[ ! "$not_dup_of" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  echo "gh-issue-file: --not-dup-of must be comma-separated issue numbers (got: $not_dup_of)" >&2
+  exit 1
+fi
+
+root="$(git rev-parse --show-toplevel)"
+template="$root/.github/ISSUE_TEMPLATE/$kind.md"
+if [ ! -r "$template" ]; then
+  echo "gh-issue-file: no template at $template" >&2
+  echo "  This repo has no agent-task scaffolding. See docs/design/agent-issue-workflow.md." >&2
+  exit 1
+fi
+
+# Required headings = the `## ` lines of the template, minus its YAML front
+# matter. Read at run time so the template stays the only place the skeleton is
+# written down.
+required_headings() {
+  awk '
+    NR == 1 && $0 == "---" { in_fm = 1; next }
+    in_fm && $0 == "---"   { in_fm = 0; next }
+    in_fm                  { next }
+    /^## /                 { sub(/[ \t]+$/, ""); print }
+  ' "$1"
+}
+
+missing=""
+while IFS= read -r heading; do
+  [ -n "$heading" ] || continue
+  # Compare with trailing whitespace stripped on both sides, so a stray space at
+  # the end of a heading line in the body is not treated as a missing section.
+  if ! sed -e 's/[ \t]*$//' "$body_file" | grep -qxF "$heading"; then
+    missing="$missing$heading"$'\n'
+  fi
+done < <(required_headings "$template")
+
+if [ -n "$missing" ]; then
+  echo "gh-issue-file: body is missing required headings from $kind.md:" >&2
+  printf '%s' "$missing" | sed 's/^/  /' >&2
+  exit 1
+fi
+
+exit 0
