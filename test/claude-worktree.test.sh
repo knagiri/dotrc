@@ -134,6 +134,26 @@ if [ "$rc" -eq 0 ] && [ "$ex" = "$cwdrepo/.git/info/exclude" ] && grep -qxF '/.d
   echo "ok: worktree creation adds /.delegate/ to the repo-wide exclude"
 else echo "FAIL: exclude entry missing rc=$rc path=${ex:-<unresolved>}"; fail=1; fi
 
+# `/.worktrees/` rides the same write, for the reason the layout change created:
+# worktrees now sit INSIDE the main checkout, so without this the main checkout
+# sees `.worktrees/` as untracked -- and `git add -A` there stages the worktree
+# as an embedded gitlink. The global excludesFile (dot/git/ignore) only covers
+# machines that ran bin/deploy.sh, so the repo-local entry is what makes this
+# hold on a fresh clone or a CI runner.
+if [ "$rc" -eq 0 ] && grep -qxF '/.worktrees/' "$ex"; then
+  echo "ok: worktree creation adds /.worktrees/ to the repo-wide exclude"
+else echo "FAIL: /.worktrees/ exclude entry missing rc=$rc"; fail=1; fi
+
+# The point of that entry, measured on the MAIN checkout (not the worktree):
+# status stays empty even though .worktrees/delegatewt exists on disk. Guard on
+# the directory existing so this cannot pass vacuously. GIT_CONFIG_GLOBAL is
+# emptied so the host's own ~/.config/git/ignore -- which on a deployed machine
+# already carries `.worktrees/` -- cannot be what makes this pass.
+mainst="$(GIT_CONFIG_GLOBAL=/dev/null git -C "$cwdrepo" status --porcelain 2>/dev/null)"
+if [ -d "${cwdrepo}/.worktrees/delegatewt" ] && [ -z "$mainst" ]; then
+  echo "ok: .worktrees/ stays invisible to the main checkout's git status"
+else echo "FAIL: .worktrees/ visible in the main checkout: ${mainst:-<worktree missing>}"; fail=1; fi
+
 # The point of the entry: a file dropped in .delegate/ leaves `status --porcelain`
 # empty, which is exactly the predicate git-reap-gone gates on. Guard on the file
 # existing so this cannot pass vacuously.
@@ -157,15 +177,17 @@ else echo "FAIL: worktree remove refused a .delegate/-holding worktree rc=$rc"; 
 (cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1; rc=$?
 ex="$(git -C "${cwdrepo}/.worktrees/dupwt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
 n="$(grep -cxF '/.delegate/' "$ex" 2>/dev/null || echo 0)"
-if [ "$rc" -eq 0 ] && [ "$n" -eq 1 ]; then
-  echo "ok: a repeat run leaves exactly one /.delegate/ entry"
-else echo "FAIL: exclude entry count=$n rc=$rc"; fail=1; fi
+nw="$(grep -cxF '/.worktrees/' "$ex" 2>/dev/null || echo 0)"
+if [ "$rc" -eq 0 ] && [ "$n" -eq 1 ] && [ "$nw" -eq 1 ]; then
+  echo "ok: a repeat run leaves exactly one of each exclude entry"
+else echo "FAIL: exclude entry counts delegate=$n worktrees=$nw rc=$rc"; fail=1; fi
 
 # An exclude the repo already wrote must survive: the script appends, never
 # rewrites. Losing a user's pattern would be a silent regression.
 printf '/scratch/\n' >>"$ex"
 (cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1
-if grep -qxF '/scratch/' "$ex" && [ "$(grep -cxF '/.delegate/' "$ex")" -eq 1 ]; then
+if grep -qxF '/scratch/' "$ex" && [ "$(grep -cxF '/.delegate/' "$ex")" -eq 1 ] \
+   && [ "$(grep -cxF '/.worktrees/' "$ex")" -eq 1 ]; then
   echo "ok: an existing exclude entry is preserved"
 else echo "FAIL: existing exclude entry clobbered"; fail=1; fi
 
@@ -185,9 +207,27 @@ printf '/scratch/' >"$noeolrepo/.git/info/exclude" # deliberately no trailing ne
 
 (cd "$noeolrepo" && "$wt" noeolwt) >/dev/null 2>&1; rc=$?
 ex2="$noeolrepo/.git/info/exclude"
-if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/scratch/' "$ex2")" -eq 1 ] && grep -qxF '/.delegate/' "$ex2"; then
+if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/scratch/' "$ex2")" -eq 1 ] \
+   && grep -qxF '/.delegate/' "$ex2" && grep -qxF '/.worktrees/' "$ex2"; then
   echo "ok: appending to a non-newline-terminated exclude preserves the existing entry"
 else echo "FAIL: exclude corrupted: $(cat "$ex2" 2>/dev/null)"; fail=1; fi
+
+# The append loop writes two patterns in one run, so the SECOND one lands on a
+# file the first just extended. An empty exclude is the other end of that range
+# (no last line to glue onto, and `[ -s ]` skips the newline fixup): both
+# patterns must still come out as their own lines.
+emptyrepo="$tmp/emptyexcluderepo"
+mkdir -p "$emptyrepo"
+git -C "$emptyrepo" init -q
+git -C "$emptyrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mkdir -p "$emptyrepo/.git/info"
+: >"$emptyrepo/.git/info/exclude" # exists but empty
+(cd "$emptyrepo" && "$wt" emptywt) >/dev/null 2>&1; rc=$?
+ex3="$emptyrepo/.git/info/exclude"
+if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/.delegate/' "$ex3")" -eq 1 ] \
+   && [ "$(grep -cxF '/.worktrees/' "$ex3")" -eq 1 ]; then
+  echo "ok: both patterns land as their own lines in an empty exclude"
+else echo "FAIL: empty-exclude append: $(cat "$ex3" 2>/dev/null)"; fail=1; fi
 
 # --- default seeds declared in .claude/worktree-seed ---------------------------
 # A repo names the gitignored files a delegate cannot work without (the config

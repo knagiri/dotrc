@@ -49,7 +49,10 @@ set -euo pipefail
 # way; `git-reap-gone` reaps them.
 #
 # `--tmux` selects the other mode: claude is launched INSIDE a fresh detached
-# tmux session (session name = worktree basename, matching the `gts` convention).
+# tmux session (session name = <main repo basename>_<name>, the canonical
+# convention -- see docs/design/claude-tmux-worktree.md; the worktree dir's own
+# basename is just <name> under the .worktrees/ layout, so the repo half is
+# composed back in).
 # Running it in its own pane means its $TMUX_PANE is that new pane -- so
 # claude-queue tracks it correctly instead of colliding with the launching pane.
 # Attach any time (`gts <session>` / `tmux attach -t <session>`); it is
@@ -295,48 +298,66 @@ fi
 # and it must not block cleanup, since a delegate that stopped short leaves the
 # directory behind for `git-reap-gone`.
 #
-# An exclude entry is what reconciles those two. `git-reap-gone` refuses a
-# worktree whose `git status --porcelain` is non-empty, so an untracked
-# `.delegate/` would make the branch un-reapable; excluded, status stays empty
-# and `git worktree remove` succeeds without --force. Doing it here rather than
-# in .gitignore keeps the convention out of every branch's committed tree -- it
-# is a property of delegation, not of the code.
+# `/.worktrees/` rides the same mechanism, for a different reason: worktrees
+# now live INSIDE the main checkout (see the header), so a plain `git status`
+# or `git add -A` run in the main checkout would otherwise see `.worktrees/<name>`
+# as an untracked embedded repo -- `git add -A` even stages it as a gitlink
+# (confirmed by reproduction: `warning: adding embedded git repository:
+# .worktrees/foo`). `~/.config/git/ignore` (this repo's `dot/git/ignore`)
+# already covers checkouts that ran `bin/deploy.sh`, but that symlink is
+# machine-local (see dotrc-deploy.md) -- a fresh clone, a CI runner, or another
+# contributor's machine has no such global ignore. Adding it here too closes
+# that gap for every checkout regardless of deploy state; `dot/git/ignore` stays
+# as defense in depth, not as the only layer.
 #
-# The entry lands in the REPO-WIDE exclude, not a per-worktree one. `git
+# An exclude entry is what reconciles the `.delegate/` half of this:
+# `git-reap-gone` refuses a worktree whose `git status --porcelain` is
+# non-empty, so an untracked `.delegate/` would make the branch un-reapable;
+# excluded, status stays empty and `git worktree remove` succeeds without
+# --force. Doing it here
+# rather than in .gitignore keeps the convention out of every branch's
+# committed tree -- it is a property of delegation, not of the code. `/.worktrees/`
+# has no such removability concern (nothing ever sits inside another worktree's
+# own worktree dir), but sharing the mechanism means one exclude write covers
+# both patterns with the same repeat-run and no-trailing-newline handling below.
+#
+# The entries land in the REPO-WIDE exclude, not a per-worktree one. `git
 # rev-parse --git-path info/exclude` resolves to the common dir's
 # `.git/info/exclude` even when asked from inside a linked worktree, and that is
 # the only location git reads: writing the same pattern to
 # `.git/worktrees/<name>/info/exclude` leaves `check-ignore` reporting the path
-# as not ignored (measured on git 2.43.0). So the pattern is shared by every
-# checkout of the repo -- harmless, since `.delegate/` is a delegation-only
-# directory the delegator wants ignored on its side too.
+# as not ignored (measured on git 2.43.0). So the patterns are shared by every
+# checkout of the repo -- harmless, since both are delegation/worktree-only
+# paths every checkout wants ignored on its own side too.
 #
 # The path is still asked of git rather than assembled by hand: a linked
 # worktree's `.git` is a FILE, so a hand-built path does not resolve and would
 # fail while looking merely absent.
 #
-# Best-effort throughout: appending only when the entry is absent keeps a repeat
+# Best-effort throughout: appending only when an entry is absent keeps a repeat
 # run from duplicating it (it accumulates in shared repo state otherwise), and
 # any failure here degrades to a warning rather than losing an otherwise-good
 # worktree.
 if exclude_path="$(git -C "$wt_path" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)" \
    && [ -n "$exclude_path" ] \
    && mkdir -p "$(dirname "$exclude_path")" 2>/dev/null; then
-  if ! { [ -f "$exclude_path" ] && grep -qxF '/.delegate/' "$exclude_path"; }; then
-    # If the file already has content and its last byte isn't a newline,
-    # appending directly would glue our pattern onto the existing last line
-    # (e.g. an existing `/scratch/` with no trailing newline becomes
-    # `/scratch//.delegate/`), silently corrupting that entry and never
-    # registering ours. Insert the missing newline first so the append always
-    # lands as its own line.
-    if [ -s "$exclude_path" ] && [ "$(tail -c1 "$exclude_path" | wc -l)" -eq 0 ]; then
-      printf '\n' >>"$exclude_path"
+  for pattern in '/.delegate/' '/.worktrees/'; do
+    if ! { [ -f "$exclude_path" ] && grep -qxF "$pattern" "$exclude_path"; }; then
+      # If the file already has content and its last byte isn't a newline,
+      # appending directly would glue our pattern onto the existing last line
+      # (e.g. an existing `/scratch/` with no trailing newline becomes
+      # `/scratch//.delegate/`), silently corrupting that entry and never
+      # registering ours. Insert the missing newline first so the append always
+      # lands as its own line.
+      if [ -s "$exclude_path" ] && [ "$(tail -c1 "$exclude_path" | wc -l)" -eq 0 ]; then
+        printf '\n' >>"$exclude_path"
+      fi
+      printf '%s\n' "$pattern" >>"$exclude_path" \
+        || echo "claude-worktree: could not add $pattern to $exclude_path" >&2
     fi
-    printf '/.delegate/\n' >>"$exclude_path" \
-      || echo "claude-worktree: could not add /.delegate/ to $exclude_path" >&2
-  fi
+  done
 else
-  echo "claude-worktree: could not resolve the repo exclude; /.delegate/ not ignored" >&2
+  echo "claude-worktree: could not resolve the repo exclude; /.delegate/ and /.worktrees/ not ignored" >&2
 fi
 
 # Seed the worktree. Copies stay untracked when the source is gitignored, so they
