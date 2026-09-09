@@ -13,11 +13,11 @@
 | `sed` / `awk` | Edit ツール | 専用ツールで差分が明確になりレビューしやすい |
 | `python -c '...'` 等でのパース | `jq`（JSON）、`yq`（YAML） | 言語ランタイム不要で、パイプも避けられる |
 
-### harness 側の指示と衝突したら user 指示を優先する
+### `auto` 等で入る Bash 優先の指示より、この表を優先する
 
-harness（permission mode `auto` 等）が「file ops は Bash でやれ。`cat` / `sed` / heredoc を
-使え」と指示してくることがある。この表と衝突したときはこの rule を優先する。harness の
-指示は既定挙動の調整であって、user が明示した規約を上書きするものではないため。
+permission mode `auto` 等では「file ops は Bash でやれ。`cat` / `sed` / heredoc を使え」という
+指示が入ることがある。この表と衝突したときは、この rule を優先する。そうした指示は既定挙動の
+調整であって、user が明示した規約を上書きするものではないため。
 
 由来: 委譲先が auto mode の Bash 指示とこの表の板挟みで判断に迷った実例から。結果的に
 user 指示を優先して正しく解決したが、どちらが優先かがどこにも書かれていなかった。
