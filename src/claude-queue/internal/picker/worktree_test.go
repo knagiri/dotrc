@@ -36,6 +36,27 @@ func TestWorktreeNameFrom(t *testing.T) {
 			want:      "dotrc_foo",
 		},
 		{
+			// A legacy sibling-layout worktree ("<parent>/dotrc_foo", the
+			// shape claude-worktree created before the .worktrees/ move, and
+			// what a hand-made "git worktree add" produces): composing here
+			// would yield "dotrc_dotrc_foo" and make OpenSession spawn a
+			// second tmux session next to the existing "dotrc_foo" one.
+			name:      "linked worktree outside .worktrees/ keeps its own basename",
+			cwd:       "/home/x/ghq/github.com/knagiri/dotrc_foo",
+			toplevel:  "/home/x/ghq/github.com/knagiri/dotrc_foo\n",
+			commonDir: "/home/x/ghq/github.com/knagiri/dotrc/.git\n",
+			want:      "dotrc_foo",
+		},
+		{
+			// Neither under .worktrees/ nor a sibling: the same fallback rule
+			// applies wherever the worktree was placed.
+			name:      "linked worktree at an unrelated path keeps its own basename",
+			cwd:       "/tmp/scratch",
+			toplevel:  "/tmp/scratch\n",
+			commonDir: "/home/x/repo/.git\n",
+			want:      "scratch",
+		},
+		{
 			// The main checkout's own toplevel is the parent of the common
 			// dir, so there is no worktree half to append.
 			name:      "main checkout: toplevel == parent of common-dir, no suffix",
