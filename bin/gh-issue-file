@@ -97,7 +97,8 @@ fi
 # Scope is every agent task, not just this kind: the duplication being prevented
 # is two sessions filing the same idea under different kinds. gh's built-in --jq
 # is used so no system jq is required.
-candidates="$(gh issue list --state all --label agent-task --limit 200 \
+limit=200
+candidates="$(gh issue list --state all --label agent-task --limit "$limit" \
   --json number,title,state,labels \
   --jq '.[] | [(.number|tostring), .state,
                ((.labels // []) | map(.name) | map(select(startswith("kind/"))) | first // "kind/?"),
@@ -106,6 +107,16 @@ candidates="$(gh issue list --state all --label agent-task --limit 200 \
 if [ -n "$candidates" ]; then
   numbers="$(printf '%s\n' "$candidates" | cut -f1 | sort -n)"
   csv="$(printf '%s\n' "$numbers" | paste -sd, -)"
+  count="$(printf '%s\n' "$numbers" | grep -c .)"
+
+  # gh's --limit silently truncates rather than erroring, so a count at the cap
+  # means the list may be cut off -- there could be more candidates beyond what
+  # was shown. Warn regardless of whether the gate below fires: even a
+  # --not-dup-of that covers every printed number does not cover issues gh
+  # never returned. See docs/design/agent-issue-workflow.md 既知の限界.
+  if [ "$count" -ge "$limit" ]; then
+    echo "gh-issue-file: 候補が上限 ${limit} 件に達しています。一覧が切れている可能性があるため、この起票は dedup を保証しません。docs/design/agent-issue-workflow.md の既知の限界に従い絞り込みへ移行してください。" >&2
+  fi
 
   # Anything the caller has not named is still unreviewed -- including issues
   # opened after they last read the list. Membership is tested by substring on a
@@ -123,7 +134,6 @@ if [ -n "$candidates" ]; then
 
   if [ -n "$unreviewed" ]; then
     {
-      count="$(printf '%s\n' "$numbers" | grep -c .)"
       echo "gh-issue-file: 既存の agent task が ${count} 件あります。重複していないか確認してください。"
       echo
       printf '%s\n' "$candidates" | sort -t"$(printf '\t')" -k3,3 -k1,1n \
