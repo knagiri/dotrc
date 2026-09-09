@@ -30,11 +30,14 @@ gh-issue-file --kind <harness|bug|task> --title <title> --body-file <path> [--no
 | 0 | 起票した | stdout の URL を報告する |
 | 1 | 引数か body の不備、または `gh issue create` 自体の失敗（label 未作成・認証など） | stderr を読んで切り分ける |
 | 2 | dedup ゲート | 下記のとおり候補を**読んでから**判断する |
+| 128 | git repo 外から呼んだ（`root="$(git rev-parse --show-toplevel)"` が `set -e` 下で素通しする git 自体の失敗） | stderr に `fatal: not a git repository ...` が出る。cwd を repo 内へ移して再実行する |
 
 code 1 は `bin/gh-issue-file` 自身の検証だけでなく、末尾で `exec gh issue create` した先の gh の
-失敗もそのまま返る。stderr が欠落見出しを名指ししていれば body 側の不備なので直して再実行、
-そうでなければ gh 側の失敗（label 未作成・認証エラー・ネットワークエラー等）なので body を
-直さず原因を潰してから再実行する。
+失敗もそのまま返る。dedup ゲート手前で叩く `gh issue list` の失敗も同様で、非 0 で返れば
+`set -e` によりそのまま code 1 として終わる。stderr が欠落見出しを名指ししていれば body 側の
+不備なので直して再実行、そうでなければ gh 側の失敗（label 未作成・認証エラー・ネットワーク
+エラー等、`gh issue list` / `gh issue create` のどちらでも起こりうる）なので body を直さず原因を
+潰してから再実行する。
 
 exit 2 のときは既存 agent task の一覧が stderr に出る。候補の title を読み、
 
