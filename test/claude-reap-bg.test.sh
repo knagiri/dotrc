@@ -163,12 +163,32 @@ INSERT INTO events(session_id, event_type, state, created_at) VALUES
   ('ffffffff-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400);
 SQL
 
+# The removal command claude-reap-bg prints for a stale job record (see the
+# stale-record subtests below) is text to read, not an action. A `rm` stub
+# ahead of the real one on PATH records every invocation instead of
+# forwarding to the real rm: the hint names a path under the caller's real
+# $HOME, so a regression (or a mutation run against this test) would
+# otherwise delete it for real. claude-reap-bg never calls rm, so swallowing
+# the call costs nothing. This lives here, ahead of run() below, so every
+# subtest that goes through run() is protected -- not just the ones that
+# exercise stale records -- since a mutation could just as easily land on a
+# code path a different subtest happens to hit.
+rmlog="$tmp/rm.log"
+rmstub="$tmp/rmstub"
+mkdir -p "$rmstub"
+cat >"$rmstub/rm" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$CLAUDE_STUB_RMLOG"
+EOF
+chmod +x "$rmstub/rm"
+
 stoplog="$tmp/stop.log"
 run() {
   : >"$stoplog"
-  PATH="$stubbin:$bindir:$PATH" \
+  : >"$rmlog"
+  PATH="$rmstub:$stubbin:$bindir:$PATH" \
     CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" \
-    CLAUDE_QUEUE_DB="$db" "$src" "$@"
+    CLAUDE_STUB_RMLOG="$rmlog" CLAUDE_QUEUE_DB="$db" "$src" "$@"
 }
 stopped() { grep -qF "$1" "$stoplog"; }
 
@@ -280,18 +300,7 @@ else echo "FAIL: unreadable roster swept rc=$rc out=$out"; fail=1; fi
 # is gone but ~/.claude/jobs/<id>/state.json keeps it listed. It has no
 # `status`, so no gate above can ever see it; it must surface in its own
 # section, with `state` as a diagnostic, and be left strictly alone.
-: >"$stoplog"
-rmlog="$tmp/rm.log"
-: >"$rmlog"
-rmstub="$tmp/rmstub"
-mkdir -p "$rmstub"
-cat >"$rmstub/rm" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$CLAUDE_STUB_RMLOG"
-EOF
-chmod +x "$rmstub/rm"
-out="$(PATH="$rmstub:$stubbin:$bindir:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" \
-  CLAUDE_STUB_RMLOG="$rmlog" CLAUDE_QUEUE_DB="$db" "$src" 2>&1)"; rc=$?
+out="$(run 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -q 'stale job records (2)' <<<"$out" \
    && grep -q '11111111  no process (state: blocked)' <<<"$out" \
@@ -305,12 +314,8 @@ if ! stopped 11111111 && ! stopped 22222222; then
   echo "ok: no stop is attempted for a stale job record"
 else echo "FAIL: stop attempted for a stale record stoplog=$(cat "$stoplog")"; fail=1; fi
 
-# The removal command is text to read, not an action. A `rm` stub ahead of the
-# real one on PATH records every invocation, so an accidental deletion of the
-# job directory would show up here. The stub deliberately does NOT forward to
-# the real rm: the hint names a path under the caller's real $HOME, so a
-# regression (or a mutation run against this test) would otherwise delete it
-# for real. claude-reap-bg never calls rm, so swallowing the call costs nothing.
+# The rm stub (defined above run(), so it guards every subtest) never forwards
+# to the real rm -- see the comment there for why.
 if [ ! -s "$rmlog" ]; then
   echo "ok: the suggested rm is printed, never executed"
 else echo "FAIL: rm was executed: $(cat "$rmlog")"; fail=1; fi
