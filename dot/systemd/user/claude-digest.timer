@@ -1,0 +1,22 @@
+# Fire just after the 05:00 JST day boundary, so the digest covers a day that
+# has actually closed. 05:10 rather than 05:00 leaves room for work finishing
+# in the 04:00 hour to be written out.
+#
+# Persistent=true backfills a run missed while the machine was off. That is
+# safe because `claude-digest --generate` is idempotent: it reuses whatever
+# intermediate summaries it already wrote, and any past day can be rebuilt.
+#
+# Enable with:
+#   loginctl enable-linger "$USER"
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-digest.timer
+
+[Unit]
+Description=Daily Claude Code digest at 05:10
+
+[Timer]
+OnCalendar=*-*-* 05:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
