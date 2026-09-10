@@ -29,6 +29,17 @@ set -euo pipefail
 # wrapper's guard (refuse anything not kind=="background", refuse ambiguous
 # ids) still applies on top of the checks here.
 #
+# Separately, the roster also reports jobs whose process is already gone: an
+# entry with no `pid`. Its source is ~/.claude/jobs/<id>/state.json, and a job
+# left at state `blocked` never transitions to `stopped`, so the entry outlives
+# the process forever. Such an entry has no `status` either, so the gates above
+# can never see it -- it is a stale record, not a session. Those are REPORTED
+# in a third section and nothing else: there is no process to stop, and the job
+# directory routinely holds artifacts (PR drafts, backups), so removing it is
+# the human's call. The detection is `pid == null` alone; `state` is printed as
+# a diagnostic but never used to decide, since it is claude's own internal
+# vocabulary and free to change.
+#
 # Manual, best-effort: exits 0 even when candidates are skipped. There is no
 # cron/daemon on purpose -- an unattended killer of sessions is exactly what
 # the conservative predicates above are trying to avoid becoming.
@@ -40,7 +51,7 @@ set -euo pipefail
 #   --idle-minutes <n>  age the idle_done event must reach (default 15)
 #   <short-id>...       restrict the sweep to these 8-hex-char ids (still fully
 #                       gated; ids that are not live idle background sessions
-#                       are reported skipped)
+#                       are reported skipped, or listed as stale job records)
 
 usage() {
   awk '/^#!/ {next} /^#/ {sub(/^# ?/, ""); print; seen=1; next} seen {exit}' "$0"
@@ -152,13 +163,32 @@ done < <(jq -r '.[] | select(.kind == "background" and .status == "idle") | .ses
 declare -a shorts=()
 for sid in "${candidates[@]}"; do shorts+=("${sid:0:8}"); done
 
+# Stale job records: roster entries with no `pid`, i.e. the process behind the
+# job is already gone. `pid == null` alone decides this -- `state` comes along
+# only to be printed. These are reported, never acted on, so they are collected
+# apart from the reap accumulators. Each entry is "<job-id>\t<state>".
+declare -a stale=()
+while IFS=$'\t' read -r job_id job_state; do
+  [ -n "$job_id" ] || continue
+  if [ "${#filters[@]}" -gt 0 ] && ! in_list "$job_id" "${filters[@]}"; then
+    continue
+  fi
+  stale+=("$job_id"$'\t'"$job_state")
+done < <(jq -r '.[] | select(.pid == null)
+                    | [ ((.id // .sessionId // "") | .[0:8]), (.state // "") ] | @tsv' <<<"$roster")
+
+declare -a stale_ids=()
+for e in "${stale[@]}"; do stale_ids+=("${e%%$'\t'*}"); done
+
 # Requested ids that are not candidates get a skip line, so a caller who named
-# an id learns why nothing happened to it.
+# an id learns why nothing happened to it. An id that turned out to be a stale
+# job record is left out: the stale section below already explains it, and
+# "not a live idle background session" would be a misleading second answer.
 if [ "${#filters[@]}" -gt 0 ]; then
   for f in "${filters[@]}"; do
-    if [ "${#shorts[@]}" -eq 0 ] || ! in_list "$f" "${shorts[@]}"; then
-      reap_skip "$f" "not a live idle background session"
-    fi
+    if [ "${#shorts[@]}" -gt 0 ] && in_list "$f" "${shorts[@]}"; then continue; fi
+    if [ "${#stale_ids[@]}" -gt 0 ] && in_list "$f" "${stale_ids[@]}"; then continue; fi
+    reap_skip "$f" "not a live idle background session"
   done
 fi
 
@@ -233,4 +263,21 @@ fi
 if [ "${#skipped[@]}" -gt 0 ]; then
   echo "skipped (${#skipped[@]}):"
   for e in "${skipped[@]}"; do printf '  %s\n' "${e/$'\t'/  -- }"; done
+fi
+
+# Third section, printed only when there is something in it: unlike reaped, an
+# empty one carries no information, and this tool never touched these anyway.
+# The removal command is text for the human to read; nothing here runs it.
+if [ "${#stale[@]}" -gt 0 ]; then
+  echo "stale job records (${#stale[@]}):"
+  for e in "${stale[@]}"; do
+    job_id="${e%%$'\t'*}"
+    job_state="${e#*$'\t'}"
+    if [ -n "$job_state" ]; then
+      printf '  %s  no process (state: %s)\n' "$job_id" "$job_state"
+    else
+      printf '  %s  no process\n' "$job_id"
+    fi
+    printf '    → rm -rf ~/.claude/jobs/%s\n' "$job_id"
+  done
 fi
