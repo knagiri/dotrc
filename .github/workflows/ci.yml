@@ -64,6 +64,7 @@ jobs:
             test/claude-review.test.sh \
             test/claude-stop-bg.test.sh \
             test/claude-worktree.test.sh \
+            test/deploy.test.sh \
             test/gh-issue-file.test.sh \
             test/gh-wrappers.test.sh \
             test/git-reap-gone.test.sh
