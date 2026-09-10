@@ -373,14 +373,14 @@ session をキーにした 1 本のリスト。優先度順に並べ、「残り
 ## 確認すべき session（優先度順）
 
 ### f13a218f  site_a svc-gateway RTSP停止        [LIVE]
-着地  #6885 fix(svc-gateway): 上流の切断を検知して… (commit 5)
-      #6844 ci(svc-gateway): イメージの push 先を修正… (13)
-残り  agent/fix/svc-gateway-fix が ahead=4 で未統合
+着地  work-backend #6885 fix(svc-gateway): 上流の切断を検知して… (commit 5)
+      work-backend #6844 ci(svc-gateway): イメージの push 先を修正… (13)
+残り  work-backend agent/fix/svc-gateway-fix が ahead=4 で未統合
       委譲先が「ADR は follow-up に分離」と報告、未着手
 
 ### f2a48cfd  feature-x access control          [RESUMABLE]
 着地  なし
-残り  agent/feature/feature-x が ahead=7 で未統合
+残り  work-backend agent/feature/feature-x が ahead=7 で未統合
 → claude --resume f2a48cfd-…  (cwd: …/.worktrees/feature-x)
 
 ## 紐付かなかった着地
@@ -499,7 +499,7 @@ command not found になるだけで判別にならない）。
 | ブランチ tip の author フィルタを外す | a branch whose tip is somebody else's is dropped |
 | `author_pattern` から数値 ID 導出を外す | a noreply address yields the numeric-id author pattern |
 | `blocked` の +4 を外す | a blocked session sorts to the top |
-| 着地 ∩ 言及の交差をやめる | a landed PR nobody mentioned goes to the unlinked list |
+| 着地 ∩ 言及の交差をやめる | a landed PR nobody mentioned goes to the unlinked list, named with its repo |
 | 段1 の中間サマリ再利用をやめる | re-running a day reuses the intermediates and only redoes the reduce |
 
 `-F` の判別には BRE 前提の fixture が要る。手元の git は `grep.patternType` 未設定で
