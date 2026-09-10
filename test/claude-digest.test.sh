@@ -116,6 +116,16 @@ git -C "$repo_a" switch -q -c feature/op
 git -C "$repo_a" commit -q --allow-empty -m 'prefix of feature/open'
 git -C "$repo_a" switch -q main
 
+# A branch one session records from two different working directories: the
+# repo itself and a subdirectory of it. Both cwds fold onto repo_a, so the
+# session collects the same repo\001branch key twice -- and s_branch_keys is a
+# newline-joined string, not a set, so without a dedupe guard the session's
+# OPEN_BRANCH line is printed twice and stage 2 is handed the same fact twice.
+git -C "$repo_a" switch -q -c feature/dupe
+git -C "$repo_a" commit -q --allow-empty -m 'recorded from two cwds'
+git -C "$repo_a" switch -q main
+mkdir -p "$repo_a/sub"
+
 # repo_b: the plain-address fallback, and the home of the -F check. Its author
 # pattern is the address itself, "." included.
 repo_b="$sandbox/repo_b"
@@ -207,6 +217,23 @@ prefix=77777777-7777-7777-7777-777777777777
 { title_entry 'prefix session'
   entry '2026-03-01T06:30:00.400Z' "$repo_a" 'feature/op'
 } >"$projects/-proj-a/$prefix.jsonl"
+
+# DUPE_CWDS: one session, one branch, two cwds that both resolve to repo_a --
+# see the feature/dupe branch fixture above.
+dupe_cwds=99999999-9999-9999-9999-999999999999
+{ title_entry 'two cwds one branch'
+  entry '2026-03-01T04:00:00.100Z' "$repo_a" 'feature/dupe'
+  entry '2026-03-01T04:01:00.100Z' "$repo_a/sub" 'feature/dupe'
+} >"$projects/-proj-a/$dupe_cwds.jsonl"
+
+# SUBDIR: the same subdirectory as its only cwd. It is what keeps DUPE_CWDS
+# above from passing vacuously: if a subdirectory did not resolve to repo_a,
+# that session would collect one key rather than two and would report a single
+# OPEN_BRANCH line even with the guard removed.
+subdir=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+{ title_entry 'subdirectory session'
+  entry '2026-03-01T04:02:00.100Z' "$repo_a/sub" 'feature/dupe'
+} >"$projects/-proj-a/$subdir.jsonl"
 
 # LATE: 20:30Z is JST 05:30, past the boundary, so it belongs to 2026-03-02.
 late=22222222-2222-2222-2222-222222222222
@@ -389,6 +416,17 @@ check "a branch name that is a prefix of another OPEN branch is not attributed h
      then echo 0; else echo 1; fi)"
 check "...but it is still correctly reported for its own session" \
   "$(if grep -qF "OPEN_BRANCH: $repo_a feature/op " <<<"$(extract_session "$d1" "$prefix")"
+     then echo 0; else echo 1; fi)"
+# One session, one branch, two cwds. The key is collected once per cwd, so
+# without the dedupe guard on s_branch_keys the same OPEN_BRANCH line is
+# emitted twice.
+check "a branch recorded from two cwds of one repo yields exactly one OPEN_BRANCH line" \
+  "$(if [ "$(grep -cF "OPEN_BRANCH: $repo_a feature/dupe " \
+              <<<"$(extract_session "$d1" "$dupe_cwds")")" -eq 1 ]
+     then echo 0; else echo 1; fi)"
+check "...and a subdirectory cwd on its own really does resolve to that repo" \
+  "$(if grep -qF "OPEN_BRANCH: $repo_a feature/dupe " \
+       <<<"$(extract_session "$d1" "$subdir")"
      then echo 0; else echo 1; fi)"
 check "the base branch itself is never a leftover" \
   "$(if ! grep -qE '^OPEN_BRANCH: [^ ]+ main ' <<<"$d1"; then echo 0; else echo 1; fi)"
