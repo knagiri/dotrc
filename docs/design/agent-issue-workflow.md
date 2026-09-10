@@ -114,9 +114,14 @@ Bash(gh issue list *)
 
 ## 委譲との接続
 
-`status/ready` が委譲可の唯一の条件である。起票は必ず `status/triage` で入り、
+`status/ready` が委譲可の条件である。起票は必ず `status/triage` で入り、
 `triage → ready` の遷移は人間が行う。これが重複を潰す人間ゲートであり、同時に
 `delegate-to-worktree` の「WHAT + HOW 確定」不変条件を label で表現したものでもある。
+
+例外が 1 つあり、起票と消化が同一ターンで指示された場合は `ready` を経由せず
+`triage → delegated` へ直接進む（[issue-workflow.md](../../dot/claude/rules/issue-workflow.md) §6.2）。
+その場の実装指示自体が上のゲートを満たす（＝ label ではなく人間の明示指示でゲートが
+充足される）ので、人間ゲートという性質そのものは崩れない。
 
 委譲時は `gh issue view <N> --json title,body` の本文をそのまま畳む。issue template の見出しは
 委譲プロンプト雛形と一致させてあるので加工は要らない。`<name>` と `-b <branch>` は
