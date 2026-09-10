@@ -1,0 +1,31 @@
+# Fire just after the 05:00 JST day boundary, so the digest covers a day that
+# has actually closed. 05:10 rather than 05:00 leaves room for work finishing
+# in the 04:00 hour to be written out.
+#
+# The trailing "Asia/Tokyo" pins the calendar expression to that zone
+# regardless of the host's local timezone (systemd.time(7), "Calendar
+# Events": a timezone -- literal "UTC" or an IANA zone name -- may follow the
+# time). Without it OnCalendar is evaluated in the host's local TZ, which
+# would only fire at JST 05:10 if the host itself is set to JST -- and
+# bin/claude-digest's day boundary (`+14400`, JST +9h minus the 5h offset) is
+# hardcoded JST regardless of host TZ, so the two would drift apart on a
+# non-JST host.
+#
+# Persistent=true backfills a run missed while the machine was off. That is
+# safe because `claude-digest --generate` is idempotent: it reuses whatever
+# intermediate summaries it already wrote, and any past day can be rebuilt.
+#
+# Enable with:
+#   loginctl enable-linger "$USER"
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-digest.timer
+
+[Unit]
+Description=Daily Claude Code digest at 05:10 JST
+
+[Timer]
+OnCalendar=*-*-* 05:10:00 Asia/Tokyo
+Persistent=true
+
+[Install]
+WantedBy=timers.target

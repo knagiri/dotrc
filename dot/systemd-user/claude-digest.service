@@ -1,0 +1,26 @@
+# Generate the previous day's digest. Paired with claude-digest.timer.
+#
+# `deploy.sh` symlinks dot/systemd-user/* into ~/.config/systemd/user, so this
+# file is not templated at deploy time and the repo path below is written out in
+# full.
+# It follows the ghq layout every other absolute path in this setup uses
+# (~/.bashrc has the same one). Move the checkout and this unit needs editing.
+#
+# PATH is set explicitly because a systemd user unit inherits none of the
+# shell's: ~/.bashrc returns early for non-interactive shells, so the
+# dotrc bin directory it appends is never on the PATH here.
+#
+# Requires `loginctl enable-linger <user>` to run while logged out.
+
+[Unit]
+Description=Generate the Claude Code daily digest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/ghq/github.com/knagiri/dotrc/bin:%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/ghq/github.com/knagiri/dotrc/bin/claude-digest --generate
+# The reduce waits on one LLM call per session; a slow day should not be left
+# half-written, but it should not hang the timer either.
+TimeoutStartSec=30min
