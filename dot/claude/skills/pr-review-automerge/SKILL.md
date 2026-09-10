@@ -66,15 +66,36 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       activity が有る場合に限った説明である。
 
    a-1. **判定**: `Task(subagent_type: "pr-judge", ...)` で fresh subagent を 1 つ dispatch する。
-      後述の「判定 subagent prompt」を、`<PR>` / `<owner>` / `<repo>` と手順 0 または a-0 時点の
-      検出レポート（イテレーション 1 は a-0 が走らないため手順 0 の値を使う）を埋めて渡す。
-      判定役は最終メッセージに判定 verdict JSON だけを返す。
+      後述の「判定 subagent prompt」を、`<PR>` / `<owner>` / `<repo>`、手順 0 または a-0 時点の
+      検出レポート（イテレーション 1 は a-0 が走らないため手順 0 の値を使う）、現在のイテレーション
+      番号 `<ITERATION>`、既裁定 findings `<GATED_CARRYOVER>`（a-3 で作る。イテレーション 1 では
+      空）を埋めて渡す。判定役は最終メッセージに判定 verdict JSON だけを返す。
 
    a-2. **修正**: 判定の `findings_to_fix` が**非空のときだけ** `Task(subagent_type: "pr-fix", ...)` で
       fresh subagent を 1 つ dispatch する。後述の「修正 subagent prompt」に `<PR>` と
       **`findings_to_fix` だけ**を埋めて渡す。**`findings_gated` は渡さない**（人間の議論待ち等を
       勝手に直させないため）。修正役は修正 verdict JSON だけを返す。`findings_to_fix` が空なら
       この手順はスキップし、`made_changes` は `false` として扱う。
+
+   a-3. **既裁定 findings の累積**: このイテレーションの判定 verdict の `findings_gated` のうち
+      **`blocker: false` のものだけ**を `GATED_CARRYOVER` へ**追記**する（次イテレーションの
+      a-1 が渡す）。**`blocker: true` の項目は carryover に載せない。** 理由: `blocker: true` は
+      2.c の継続判定が直接見る対象であり、carryover に載せて次巡の判定役へ「既裁定だから
+      載せ直すな」と伝えると、その巡の verdict から `blocker: true` が消えて 2.c の継続条件
+      （`findings_gated` / `threads_pending` に `blocker: true`）が成立しなくなる。
+      `mergeable: true` と重なれば未解決の blocker を抱えたまま手順 3（auto-merge 有効化）へ
+      抜けてしまう。`blocker: true` は却下ではなく人間の判断待ちなので、そもそも「裁定が
+      付いた」扱いにしない — 毎巡 fresh に再判定させ、決着しなければ手順 4 で人間へ返す。
+      持ち越すのは **1 件につき `- <要旨>: <却下理由>` の 1 行だけ**（要旨・却下理由とも 1 文で
+      書き、判定役の出力全文や議論の経緯は持ち越さない）。**既に carryover に載っている行と
+      同趣旨の要旨は追記しない** — 判定役が既裁定と同趣旨のものを載せ直してきたら、その項目は
+      捨てる。形を 1 行に固定して重複を弾くのは、同じ要旨が別表現で複数行積まれると判定役の
+      「既裁定と同趣旨か」という照合が揺れ、5 巡ぶん累積するこのリストがそのぶん膨らむため。
+      コンテキストを reset して fresh な目で再判定させるのがこの skill の設計そのものなので、
+      持ち越しは「もう裁定が付いた」と分かる最小限に留める。
+      前イテレーション分だけでなく**累積**するのは、判定役が既裁定のものを載せ直さなくなると
+      そのイテレーションの `findings_gated` が空になり、直近だけを渡す方式では次の巡で記録が
+      消えて再生産が復活するため。5 回の上限があるので累積しても嵩は知れている。
 
    b. 返ってきた JSON を parse する（判定 verdict と、修正役を走らせたならその修正 verdict の両方。
       後述スキーマ）。JSON の parse に失敗した場合は当イテレーションを失敗扱いとし、次イテレーションへ進む（5 回上限は維持）。
@@ -106,6 +127,36 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       （`checks[]` の fail した項目を報告に使う）。**チェックの確定は待たない**（`pending_count` が
       非 0 のまま先へ進んでよい。auto-merge が待つ）。このラッパーは required かどうかを判定しない
       ので、required check の充足判定は auto-merge（branch protection）に委ねる。
+      **fail の内訳が cancelled のみのときは、そう切り分けて報告する。** `checks[]` は `source`
+      によって fail の効き方が違う（`bin/gh-pr-checks` の `is_failure` 参照。このラッパー自体は
+      編集しない）。
+      - `source == "actions"`: `conclusion` が `cancelled` かつ `superseded` が `false`（(2)）、
+        または `conclusion` が `failure` / `timed_out` / `startup_failure`（(1) 実質的な
+        failure。`error` は Actions run の conclusion には現れないので対象外）。
+      - `source == "status"`: `conclusion` が `failure` / `error`（(1) 実質的な failure。
+        commit status に cancelled の概念は無い）。
+      (1) が 0 件で (2) だけなら実質的な failure は無く、GitHub 側の一過性事象の可能性が高い
+      （実測: paths-filter ジョブの全ステップが success なのに job conclusion だけ cancelled になり、
+      `contains(needs.*.result, 'cancelled')` を見る result ジョブが exit 1 した。再実行 1 回で
+      success）。
+      **ただしこの skill は再実行を自分では撃たない。** 許可されたラッパー（`gh-await-reviews` /
+      `gh-pr-comments` / `gh-list-threads` / `gh-resolve-thread` / `gh-pr-checks` / `gh-automerge`）に
+      run の再実行に当たるものが無く、raw な `gh run rerun` は allowlist に無いので撃てば承認
+      プロンプトで止まる。この skill は人間不在の委譲先で走ることがあり、そこでは誰も承認できず
+      凍結する。したがって cancelled のみでも auto-merge は有効化せず手順 4 へ抜けるが、報告は
+      `pending_count` で 2 通りに切り分ける（判定材料は `checks[]` の `name` / `workflow_id` /
+      `run_number` と `status` / `pending_count`）。`bin/gh-pr-checks` の `newest_completed` は
+      *completed* な run しか見ないため、`concurrency: cancel-in-progress` で置換 run が
+      in_progress の間は cancelled 側の `superseded` が `false` のまま残り、必要なのは再実行では
+      なく置換 run の完了待ちになる。
+      - `pending_count` が非 0 で同一 workflow により新しい pending run があるなら、
+        **「置換 run の完了待ち、再実行は不要」**と明記する。
+      - `pending_count` が 0（置換 run が無い）なら、現行どおり**「実質的な failure は 0 件、
+        内訳は cancelled のみ」「再実行 1 回で解消する見込み」**と明記し、人間が再実行 1 回で
+        復帰できる形にする。
+      再実行の手段を将来足す場合も **上限 1 回**に切る。無制限に撃ち直すと、本当に落ちている check を
+      「いつか通る」まで再実行して押し通す方向へ倒れる。1 回で直らないなら一過性ではないので、
+      そこで人間へ返すのが正しい。
    c. `has_failure` が `false` なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`。
       clean 拒否のときだけ `gh pr merge --merge` へ fallback する）。
    d. 次を実行し、**終端種別を機械的に判定できる文字列**（`MERGED` / `AUTO_MERGE_PENDING` /
@@ -137,12 +188,16 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       **auto-merge を有効化して待機中**（`AUTO_MERGE_PENDING`）か、**その場で merge が成立した**
       （`MERGED`。`--auto` の即時成立でも 3.c の fallback でも同じ値になる）か。「有効化済み」と
       決め打ちで書くと、後者に達した場合に報告文が実際の結果を表せない。
-4. **停止・報告**（auto-merge を有効化しなかった場合）: 各イテレーションの 指摘→対応、gate に残した findings /
-   修正役が直さなかった findings（`unfixed`）/ 議論待ち thread / CI の fail /
+4. **停止・報告**（auto-merge を有効化しなかった場合）: 各イテレーションの 指摘→対応、gate に残した findings
+   （却下済み分は `GATED_CARRYOVER` の累積、**`blocker: true` の未解決分は carryover には乗らず
+   最後のイテレーションの判定 verdict の `findings_gated` / `threads_pending` に残っている**の
+   でそちらを直接参照する）/
+   修正役が直さなかった findings（`unfixed`）/ 議論待ち thread / CI の fail（手順 3.b の
+   cancelled のみ切り分けを含む）/
    最後の検出レポートで `missing` だった reviewer / 停止理由・残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿・thread への reply はしない（人間が引き取る）。
 
-## 判定 subagent prompt（`<PR>`/`<owner>`/`<repo>` を埋めて `pr-judge` に渡す）
+## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` を埋めて `pr-judge` に渡す）
 
 > あなたは PR #`<PR>`（`<owner>/<repo>`）を独立した立場でレビューする**判定役**です。あなたは
 > この PR の作者ではありません。会話履歴はありません。**コードは一切変更しません**（変更は
@@ -151,6 +206,14 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >
 > **この PR で走った自動レビュー**（orchestrator が `gh-await-reviews` で検出したもの）:
 > `<DETECTION_REPORT>`
+>
+> **このイテレーション**: `<ITERATION>` 巡目（上限 5）。
+>
+> **既に裁定が付いている findings**（前イテレーションまでの判定役が `blocker: false` で
+> 却下した gate のみ。1 件 1 行の `- <要旨>: <却下理由>` 形式。空のこともある。
+> **`blocker: true`（人間の判断待ち）の項目はここに載らない** — 却下ではなく保留なので、
+> 毎巡あなたが改めて仕分けし直す）:
+> `<GATED_CARRYOVER>`
 >
 > 1. **repo 規約の把握**: リポジトリ root とサブディレクトリの `CLAUDE.md`、`.claude/rules/` 等を
 >    読み、この repo の規約・禁止事項を把握する。
@@ -185,6 +248,24 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >      `confidence`（`high` / `medium` / `low`）を添え、下流（orchestrator / 人間）がランク付け
 >      できるようにする。`threads_pending` には添えない（thread は人間の議論待ちが主で
 >      severity / confidence の意味が薄いため）。
+>    - **既裁定リストに載っているものと同趣旨の指摘は、新規 finding として載せない**
+>      （`findings_to_fix` にも `findings_gated` にも）。既にバケットへ載って却下済みで、
+>      記録は orchestrator が保持して最終サマリに出すので、coverage-first と矛盾しない。
+>      あなたには会話履歴が無いので、前巡が何を却下したかはこのリストからしか分からない。
+>      載せ直すと毎巡まったく同じ却下が再生産され、5 回の上限だけが減る。
+>      **このリストは `blocker: false`（却下）のものだけを含む。`blocker: true`（人間の判断
+>      待ち）と判断した指摘は、たとえ前巡と同趣旨でも毎巡あなた自身の verdict の
+>      `findings_gated` / `threads_pending` に `blocker: true` として載せ直す。** 載せないと
+>      2.c の継続判定が blocker を見失い、未解決のまま auto-merge へ進みかねない。
+>      例外は**後続の修正 commit が新たに作り込んだ問題**で、これは既裁定のものとは別の指摘なので
+>      通常どおり載せる。
+>    - **3 巡目以降（`<ITERATION>` が 3 以上）は、`findings_to_fix` に載せるのを correctness と
+>      安全性に関わるものだけに絞る。** correctness は動作の誤り・壊れたリンクや事実として誤った
+>      記述、安全性は秘密の露出・破壊的操作・権限の過剰付与を指す。妥当な指摘であっても、記述の
+>      精度・言い回し・網羅性の改善に留まるものは `findings_gated`（`blocker: false`）へ回す。
+>      理由: 記述精度の軸には上限が無く、doc やコメントが主体の PR では毎巡いくらでも新規 finding を
+>      作れてしまうため、「findings が出なくなる」という停止条件がそもそも成立しない。一方
+>      correctness と安全性は有限で、放置すれば実害が出るので巡目に関わらず拾う。
 >    - **あなたは commit / push / `gh-resolve-thread` を実行しない。** これらは修正役の担当。
 >    - **PR コメント（reply も含め）は投稿しない。**
 >    - standalone コメント（`gh-pr-comments` が返すもの）は **resolve できない**。コード修正で対応させるなら
@@ -217,6 +298,17 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 > - `ci_status`: `gh-pr-checks <PR>` を実行して判断する（raw `gh pr checks` は使わない。fine-grained PAT では
 >   必ず失敗する）。`has_failure` が `true` なら `fail`、`false` かつ `pending_count` が 0 なら `pass`、
 >   それ以外は `pending`。実行できず不明なら `pending`。
+>   **ただし `has_failure` が `true` でも、fail に効いているのが cancelled だけ**なら `pending`
+>   にする。手順 3.b と同じ (1)/(2) で判定し、**両方を満たすときに限る**（source ごとに独立に
+>   判定してよいのではなく、両 source 通しての AND 条件）: 実質的な failure（`source ==
+>   "actions"` の `conclusion` が `failure` / `timed_out` / `startup_failure`、`source ==
+>   "status"` の `conclusion` が `failure` / `error`。合わせて (1)）が両 source 通して 1 件も
+>   無く、**かつ** `source == "actions"` の `conclusion` が `cancelled` かつ `superseded: false`
+>   （(2)）が 1 件以上ある。`checks[]` の `source` 別の判定は `bin/gh-pr-checks` の `is_failure`
+>   参照（編集はしない）。
+>   実質的な failure が無い状態を `fail` と扱うと `mergeable` が `false` に固定され、5 巡を
+>   使い切って手順 3.b の切り分けにたどり着けなくなるため。merge の gate 自体は手順 3.b が
+>   `has_failure` で閉じたままにするので、ここを緩めても cancelled のまま merge されることはない。
 > - `mergeable`: レビュー観点で merge して良いと判断したか。**ただし `ci_status` が `fail` の場合は必ず `false` にする**（orchestrator が再イテレーションするため）。
 >   `blocker: false` の gate（却下した指摘・低 severity / 低 confidence で `findings_gated` に寄せたもの）が
 >   残っているだけの状態は `mergeable: true` にしてよい。gate の非空は merge を止める理由にしない
