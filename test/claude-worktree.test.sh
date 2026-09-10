@@ -744,6 +744,16 @@ headclone="$tmp/headclone"
 git clone -q "$stalebare" "$headclone"
 git -C "$headclone" symbolic-ref -d refs/remotes/origin/HEAD
 
+# git >= 2.47 defaults remote.<name>.followRemoteHEAD to "create", which makes
+# a bare `git fetch` (the wrapper's leading step) silently RECREATE the
+# origin/HEAD symref we just deleted -- and since it recreates it pointing at
+# origin/main, the 1st rung's sha and report string both match what the 2nd
+# rung would also produce, so the elif below would go untested without ever
+# failing (confirmed against git's own config docs and a throwaway-repo
+# fetch; git 2.43 here predates the setting and ignores the unknown key as a
+# no-op, so this line is inert locally but load-bearing on newer git in CI).
+git -C "$headclone" config remote.origin.followRemoteHEAD never
+
 # Advance the clone's own HEAD past origin/main (a local-only commit, never
 # pushed) so the 2nd rung (origin/main) and the 3rd rung (cwd's HEAD, the
 # no-origin-default fallback) would produce DIFFERENT shas here. Without this,
@@ -764,6 +774,14 @@ if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$fresh_head" ]; then
   echo "ok: with origin/HEAD absent, a new branch falls back to origin/main"
 else
   echo "FAIL: origin/HEAD-absent fallback rc=$rc sha=$wt_sha want=$fresh_head"; fail=1
+fi
+
+# The leading `git fetch origin` inside `wt` must not have recreated
+# origin/HEAD behind our back (see the followRemoteHEAD comment above) -- if
+# it did, the sha check above would have passed via the 1st rung instead of
+# the 2nd, same as if the elif had been deleted outright.
+if git -C "$headclone" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null; then
+  echo "FAIL: origin/HEAD was recreated by fetch, the sha check above did not test the 2nd rung"; fail=1
 fi
 
 out="$(cd "$headclone" && { unset TMUX TMUX_PANE
