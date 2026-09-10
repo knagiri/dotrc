@@ -25,7 +25,7 @@ paths:
 
 | 対象 | 挙動 | 結果 |
 |---|---|---|
-| `MergeLinkMap` に載るもの（現状 `claude`） | ディレクトリ丸ごとではなく、**配下の各エントリを個別に** link | `dot/claude/<entry>` → `~/.claude/<entry>` |
+| `MergeLinkMap` に載るもの（現状 `claude` / `systemd-user`） | ディレクトリ丸ごとではなく、**配下の各エントリを個別に** link | `dot/claude/<entry>` → `~/.claude/<entry>`。`dot/systemd-user/<entry>` → `~/.config/systemd/user/<entry>` |
 | `CustomLocationMap` に載るもの（現状 `git` / `nvim`） | ディレクトリ丸ごとを指定先へ link | `dot/git` → `~/.config/git` |
 | それ以外 | ディレクトリ／ファイル丸ごとを link | `dot/<name>` → `~/.<name>` |
 
