@@ -13,6 +13,8 @@ frontmatter の `description` には skill / agent の**起動トリガー**（�
 出典: `superpowers:writing-skills` skill の "Skill Discovery Optimization" → "1. Rich
 Description Field" 節（"CRITICAL: Description = When to Use, NOT What the Skill Does"）。
 
+由来: dotrc#39
+
 ### 要約を避ける理由は 2 つある
 
 **(a) 本文の方針変更に取り残される。** description は本文とは別の場所で保守されるため、
@@ -54,10 +56,3 @@ description は skill の起動条件そのものを兼ねるので、整理す�
 description は起動トリガーを兼ねているため、まとめて書き換えると skill が発火しなくなる
 回帰を招きうる。どのキーワードを残すかはユーザーが個別に判断すべき領域であり、agent が
 自律 merge するフローで巻き取る種類の変更ではない。
-
----
-
-由来: knagiri/dotrc#26。`implement-and-review` の SKILL.md 本文から「無条件に subagent 委譲を
-促進する」ニュアンスを外したのに、frontmatter の description は旧方針（「難度別の実装 subagent
-へ dispatch しながら実装し」）を述べたまま残り、独立した判定役に指摘されて直した。根本原因は
-同期の失念ではなく、description が本文の手順を要約していたこと自体。
