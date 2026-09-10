@@ -15,7 +15,7 @@
 | テスト | `test/claude-digest.test.sh` |
 | スケジュール | `dot/systemd-user/claude-digest.{service,timer}` |
 | 展開 | `bin/deploy.sh` の `MergeLinkMap["systemd-user"]` |
-| 朝の読み方 | `dot/tmux.conf` の `bind-key d` |
+| 朝の読み方 | `dot/tmux.conf` の `bind-key e` |
 | 隣接する仕組み | `src/claude-queue/`、`bin/claude-worktree`、`bin/git-reap-gone`（`docs/design/claude-tmux-worktree.md`） |
 
 ## 全体構造 — 2 段の map-reduce
@@ -445,10 +445,11 @@ systemd user unit は shell の PATH を継承しない。`~/.bashrc` は非対�
 ## 朝の読み方
 
 ```tmux
-bind-key d display-popup -E -w 80% -h 80% "claude-digest | bat --style=plain"
+bind-key e display-popup -E -w 80% -h 80% "claude-digest | bat --style=plain"
 ```
 
-prefix は `C-q`。`q` / `Q` は claude-queue picker に割り当て済みなので `d` を使う。
+prefix は `C-q`。`q` / `Q` は claude-queue picker、`d` は tmux 既定の `detach-client` に
+割り当て済みなので `e` を使う。
 
 **シェル起動時の自動表示はしない。** pane を開くたびに流れるため。日報は「読みに行くもの」で
 あって「流れてくるもの」ではない。
