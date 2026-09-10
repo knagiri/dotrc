@@ -45,6 +45,7 @@ declare -A CustomLocationMap
 # The specified value must include the symlink name.
 CustomLocationMap["git"]="${HOME}/.config/git"
 CustomLocationMap["nvim"]="${HOME}/.config/nvim"
+CustomLocationMap["systemd"]="${HOME}/.config/systemd"
 
 declare -A MergeLinkMap
 # For directories where individual files should be linked INTO
