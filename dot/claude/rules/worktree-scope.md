@@ -61,12 +61,7 @@ git rev-parse --git-path <name>        # 内部ファイルの実体パスが要
 この例外がまさに防ごうとしている false negative を許すことになる。`.git` の種別は
 `test -d .git` 等で別途確かめてから縛りを外す。
 
-<!-- 文脈: 別 repo での monorepo 作業中、main を merge して衝突解消の途中で
-     git commit が hook のタイムアウトで中断した際、`ls .git/MERGE_HEAD` で状態を
-     確認して「マージが失われた」と誤認しかけた incident。`.git` がファイルである
-     ためパス probe が成立していなかっただけで、`git rev-parse -q --verify
-     MERGE_HEAD` では MERGE_HEAD は実在し、そのまま復帰できた。根本: worktree の
-     レイアウトを確認せず main working tree と同じ前提でファイルパスを直接叩いたこと。 -->
+由来: dotrc#40
 
 ### 2. 原則：起動した worktree ディレクトリに閉じる
 
@@ -130,10 +125,7 @@ main checkout は「いつ来ても clean な main である」ことが期待�
 linked worktree にいる場合はこの節のトリガーに当たらない。既に隔離された作業ツリーにいるので、
 既定はその worktree 内で進める（§6 末尾）。
 
-<!-- 文脈: main checkout の session が「不要 skill を削除して」を受け、委譲せずその場で feature
-     branch を切って commit / push / PR まで走り、main checkout が占有されてユーザーから「main に
-     戻して」の手戻り指示が要った incident。根本: §6 は分岐を「並行作業の選択肢」としか書かず
-     末尾で抑制していたため、main working tree にいるときの既定＝委譲というトリガーが無かった。 -->
+由来: dotrc#20
 
 ### 6. 作業を別 worktree へ分岐する（`claude-worktree`）
 
@@ -179,6 +171,8 @@ claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-
 
 seed したファイルは gitignore 済みなら worktree 内でも untracked のままなので、委譲先の commit には載らない。
 
+由来: dotrc#14
+
 ##### 戻り方向も同じ — 委譲先が返す成果物は `.delegate/` に置く
 
 上の 2 つの理由（伝播しない・承認で固まる）は、委譲先が**返す**ファイルにもそのまま当てはまる。委譲元が読めるのは worktree 内のファイルだけで、外に置かれたものは絶対パス Read の承認で固まるか、そもそも到達できない。
@@ -187,19 +181,11 @@ seed したファイルは gitignore 済みなら worktree 内でも untracked �
 
 - `$CLAUDE_JOB_DIR` に置かない。job の削除で消えるので、報告を読む頃には無いことがある
 - `/tmp` に置かない。寿命が不定で、並行する別 job と名前が衝突しうる
-- `.delegate/` は `claude-worktree` が worktree 作成時に repo の exclude（`git rev-parse --git-path info/exclude` が返す `.git/info/exclude`）へ登録するので、置いたままでも `git status --porcelain` は空のままになる。§7 の `git-reap-gone` は worktree が clean であることを reap の条件にしており、`git worktree remove` も `--force` 無しで通る。つまり成果物を残したまま後片付けできる
+- `.delegate/` は `claude-worktree` が worktree 作成時に repo の exclude（`git rev-parse --git-path info/exclude` が返す `.git/info/exclude`）へ登録するので、置いたままでも `git status --porcelain` は空のままになる（per-worktree の `.git/worktrees/<name>/info/exclude` は git が読まないので、登録先は common dir 側になる）。§7 の `git-reap-gone` は worktree が clean であることを reap の条件にしており、`git worktree remove` も `--force` 無しで通る。つまり成果物を残したまま後片付けできる
 
 `.delegate/` を untracked のまま worktree 内に置く（exclude に入れない）と、この clean 判定が塞がって reap が skip される。逆に worktree の外へ出すと委譲元が読めない。exclude 済みの worktree 内、というのがその両方を同時に満たす唯一の場所である。
 
-<!-- 文脈: main checkout の gitignore 済み spec を絶対パスで参照する委譲プロンプトを渡したところ、
-     委譲先が worktree 外 Read の permission prompt で最初の一歩から動けなくなった incident。
-     根本: 委譲先が承認なしに読めるのは新 worktree 内のファイルだけ。
-     戻り方向の節の由来: 同じ「置き場所」の問題が返す側で 2 回別々に事故になった。1 回目は
-     $CLAUDE_JOB_DIR/tmp に PR 本文ドラフトを置き、job 削除で消えるうえ委譲元からは worktree 外
-     Read の承認になった。2 回目は worktree 内に untracked で置き、git-reap-gone が
-     「worktree not clean」で skip した。exclude 登録を claude-worktree 側へ入れて両方を塞いだ。
-     なお per-worktree の exclude（.git/worktrees/<name>/info/exclude）は git 2.43.0 では
-     読まれない（check-ignore が not ignored を返す）ので、登録先は repo 共通の方になる。 -->
+由来: dotrc#75
 
 連携の全体像（git worktree を土台に、既定の background 起動（`claude --bg`）と `--tmux` の tmux セッションへ分岐し、どちらも claude-queue が追跡するという層構成と、`claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
 

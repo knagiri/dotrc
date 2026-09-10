@@ -13,6 +13,8 @@ paths:
 `dot/` ツリー、`bin/deploy.sh`、`src/claude-queue` を触る作業でだけロードする（他リポジトリ
 では効かない話なので `paths` でスコープする）。
 
+由来: dotrc#25
+
 ### 1. 実物を読んでから書く
 
 展開方式を説明・変更する前に `bin/deploy.sh` を Read する。以下は現時点の要約であって、
@@ -111,14 +113,4 @@ find src/claude-queue -name '*.go' -newer bin/claude-queue   # 出力が空な�
 ソースは直っているのにバイナリは古い、という乖離は「直したはずの挙動が直っていない」として
 現れる。修正内容そのものを疑う方向へ切り分けが向かうので、原因に辿り着くまでが遠い。
 
----
-
-由来: 委譲ランの自己内省で捕捉。`dot/claude/agents/`（`pr-judge` / `pr-fix` / `impl-light` /
-`impl-standard` / `impl-heavy`）が repo に存在するのに `~/.claude/agents` が無く、
-`pr-review-automerge` が指定する `pr-judge` / `pr-fix` の agent type を解決できずに
-general-purpose での代替を強いられた。根本原因は個々の作業ミスではなく、「新規カテゴリ追加時に
-展開経路の再実行が要る」ことがどこにも明文化されていなかった点。
-
-§5 の由来: picker の `-d` 除去（PR #48）を merge した後もフォーカスが移らず、原因の切り分けに
-1 往復かかった。ソースからは `-d` が消えていたが、動いていたのは merge の 57 分前にビルドした
-バイナリだった。
+由来: dotrc#62
