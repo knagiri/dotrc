@@ -9,6 +9,15 @@ export __bin_path="${REPO_DIR}/bin"
 export __bashrc_path="${REPO_DIR}/rc/bashrc"
 
 # Bashrc
+# deploy.sh is meant to be re-run (that is how a new dot/ top-level entry gets
+# expanded), and the symlink loop below is idempotent through `ln -snvf`. This
+# append was the one part that was not, so it guards itself on the block's own
+# first line. The `guard@dotrc` tags mark the two lines test/deploy.test.sh
+# strips to build the guard-less control.
+# -s on grep: a first-time ~/.bashrc does not exist yet, and its absence must
+# read as "not installed", not as an error on stderr.
+__dotrc_marker='# DOTRC =================================='
+if ! grep -qsF "${__dotrc_marker}" "${HOME}/.bashrc"; then  # guard@dotrc
 cat - << 'EOF' | envsubst '${__bashrc_path} ${__bin_path}' >> ${HOME}/.bashrc
 # DOTRC ==================================
 # bin-path@dotrc
@@ -24,6 +33,7 @@ esac
 source "${__bashrc_path}"
 # ========================================
 EOF
+fi  # guard@dotrc
 
 #echo -e "\n# bashrc@dotrc\nsource $__bashrc_path" >> ${HOME}/.bashrc
 
