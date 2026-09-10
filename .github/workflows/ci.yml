@@ -45,6 +45,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck -S warning \
+            bin/claude-digest \
             bin/claude-reap-bg \
             bin/claude-review \
             bin/claude-stop-bg \
@@ -58,6 +59,7 @@ jobs:
             bin/gh-resolve-thread \
             bin/git-reap-gone \
             bin/git-set-commit-sign \
+            test/claude-digest.test.sh \
             test/claude-reap-bg.test.sh \
             test/claude-review.test.sh \
             test/claude-stop-bg.test.sh \
