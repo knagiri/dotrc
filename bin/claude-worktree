@@ -104,9 +104,16 @@ set -euo pipefail
 #                  cwd repo's list is not read.
 #   name           worktree label (suffix after the underscore); also the new
 #                  branch name when -b is omitted
-#   -b <branch>    branch to check out / create (default: <name>). Resolved as:
-#                  local branch, else origin/<branch> (tracked, no fetch), else
-#                  created fresh from the current HEAD.
+#   -b <branch>    branch to check out / create (default: <name>). A `git fetch
+#                  origin` runs first (failure warns, never aborts), then the
+#                  branch resolves as: local branch, else origin/<branch>
+#                  (tracked), else created fresh from origin/HEAD -- falling
+#                  back to origin/main, and only then to cwd's HEAD. A NEW
+#                  branch deliberately does NOT start from cwd's HEAD: cwd is
+#                  often a long-stale linked worktree, and a delegate branched
+#                  from there reads the repo's own files as its reference
+#                  implementation at whatever version that stale base carried.
+#                  Which base was used is printed in the report below.
 #   -- <prompt>    everything after `--` is the initial prompt. By default the
 #                  delegate is started with `claude --bg` (permission mode
 #                  `auto`, since nobody is there to approve prompts -- see the
@@ -269,12 +276,95 @@ if [ -n "$prompt" ] && [ "$use_tmux" = 0 ] && command -v jq >/dev/null 2>&1; the
   fi
 fi
 
+# Refresh remote-tracking refs before resolving the branch. Two separate things
+# below depend on refs that are only as current as the last fetch:
+#
+#   * a branch that exists ONLY on origin. Without a fetch the
+#     `refs/remotes/origin/<branch>` check simply misses and the delegation
+#     falls through to "create new", quietly ignoring the branch it was told to
+#     work on.
+#   * the base of a NEW branch (see below). A stale `origin/HEAD` would move the
+#     problem rather than fix it.
+#
+# Failure is a warning, never fatal. Offline, or a checkout with no `origin` at
+# all, must not stop a delegation from launching; the resolution below then just
+# uses whatever refs are already present, which is the pre-fetch behavior.
+# stdout is redirected to stderr so add-only mode's path-only stdout stays
+# scriptable (git writes progress to stderr already, but not every transport
+# does).
+#
+# GIT_TERMINAL_PROMPT=0 forces that "failure is a warning, never fatal" path
+# for missing HTTPS credentials too. Without it, a credential helper with
+# nothing cached makes git prompt for username/password on the controlling
+# terminal instead of failing -- worse than failure, since this runs inside an
+# unattended `claude --bg` delegation with nobody there to answer. It hangs
+# forever rather than falling through to "use whatever refs are already
+# present". BatchMode=yes closes the same hole for SSH remotes (passphrase /
+# host-key prompts) -- with the two limits spelled out below.
+#
+# `-o BatchMode=yes` is APPENDED to whatever GIT_SSH_COMMAND is already set to,
+# rather than replacing it. `${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}` used to
+# drop BatchMode entirely the moment the caller had a GIT_SSH_COMMAND of their
+# own (`ssh -i ~/.ssh/deploy_key` is a common one), which is exactly the
+# environment a delegation inherits -- so the hang this guard exists to prevent
+# was still reachable.
+#
+# What appending does and does not guarantee, per ssh_config(5): ssh takes
+# configuration from command-line options, then ~/.ssh/config, then
+# /etc/ssh/ssh_config, and "for each parameter, the first obtained value will be
+# used" -- first-obtained, not last. So:
+#
+#   * against the config FILES we always win: our -o is a command-line option,
+#     so a `BatchMode no` in ~/.ssh/config cannot re-open the hole.
+#   * against the caller's own value we do NOT win: an explicit
+#     `-o BatchMode=no` already in GIT_SSH_COMMAND is obtained first and stands
+#     (verified: `ssh -o BatchMode=no -o BatchMode=yes -G host` reports
+#     `batchmode no`). That is deliberate -- someone who spelled out
+#     BatchMode=no asked for interaction, and silently overriding them is the
+#     bigger surprise. It is also the one case this guard leaves open.
+#   * a GIT_SSH_COMMAND that does not take ssh's options at all (a wrapper
+#     script, plink) turns the appended flag into a fetch FAILURE, not a hang --
+#     which lands on the warning path right below, the same place any other
+#     fetch failure lands.
+if ! GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" git -C "$repo_dir" fetch origin >&2; then
+  echo "claude-worktree: git fetch origin failed; using the refs already present" >&2
+fi
+
+# Base for a NEW branch: the remote's default branch, NOT cwd's HEAD.
+#
+# cwd is routinely a long-lived linked worktree (a review-only checkout, a
+# delegation that has been sitting for days). Branching from its HEAD gave the
+# delegate a base arbitrarily far behind origin -- measured at 822 commits, on
+# all three delegations out of one session. The damage is not the stale diff: it
+# is that a prompt naming a file in the repo as the reference implementation has
+# the delegate read the OLD version and copy it forward as if it were current.
+# In a repo with generated artifacts it is worse than that, because regenerating
+# from a stale base still produces no diff -- the idempotence check passes while
+# the generated output reverts other PRs' changes, so no test can catch it.
+#
+# Prefer origin/HEAD, fall back to origin/main, then (only if neither resolves)
+# to the previous behavior of cwd's HEAD -- matching git-reap-gone's ladder for
+# the same question. The HEAD fallback is announced, since in add-only mode the
+# stdout report below is not printed and this is the one case worth noticing.
+new_base=""
+if b="$(git -C "$repo_dir" rev-parse --abbrev-ref origin/HEAD 2>/dev/null)" && [ "$b" != "origin/HEAD" ]; then
+  new_base="$b"
+elif git -C "$repo_dir" rev-parse --verify --quiet origin/main >/dev/null; then
+  new_base="origin/main"
+fi
+
 # Keep stdout clean (path only) so add-only mode is scriptable; git's checkout
 # chatter goes to stderr.
+#
+# `base` records what the checked-out branch actually came from, so the report
+# below can name it. A base decided silently is exactly how the staleness above
+# went unnoticed for three delegations.
 if [ -d "$wt_path" ]; then
   echo "claude-worktree: worktree dir already exists, reusing: $wt_path" >&2
+  base="reused existing worktree dir"
 elif git -C "$repo_dir" show-ref --verify --quiet "refs/heads/${branch}"; then
   git -C "$repo_dir" worktree add "$wt_path" "$branch" >&2               # existing local branch
+  base="existing local branch $branch"
 elif git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
   # Branch has no local tracking branch but exists on origin: check it out
   # explicitly from origin/<branch> rather than relying on `git worktree add`'s
@@ -283,12 +373,26 @@ elif git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/${branch}
   # branch across ALL remotes; with more than one remote (or none) the outcome
   # depends on checkout.defaultRemote. Naming `origin` explicitly makes this
   # deterministic regardless of remote configuration -- and matches this repo's
-  # other origin-assuming script, git-reap-gone. No fetch happens here: if the
-  # branch was never fetched, this check simply misses and falls through to the
-  # "new branch" case below, same as before this case existed.
+  # other origin-assuming script, git-reap-gone.
   git -C "$repo_dir" worktree add --track -b "$branch" "$wt_path" "origin/${branch}" >&2 # remote-only branch
+  base="origin/$branch"
+elif [ -n "$new_base" ]; then
+  # --no-track: $new_base is a remote-tracking ref (origin/HEAD or origin/main),
+  # and `git worktree add -b` with a remote-tracking start point sets it as the
+  # new branch's upstream by default (branch.autoSetupMerge). That upstream is
+  # wrong for a brand-new delegate branch: a plain `git push` then fails with
+  # "The upstream branch of your current branch does not match the name of your
+  # current branch", and es-create-pr's SKILL.md checks `@{upstream}` to decide
+  # whether the branch has been pushed yet, so an unpushed branch would read as
+  # already pushed. This is only about the START POINT above (an existing local
+  # or origin/<branch> checkout should still track normally); a freshly created
+  # branch should start with no upstream at all.
+  git -C "$repo_dir" worktree add --no-track -b "$branch" "$wt_path" "$new_base" >&2 # new branch off origin's default
+  base="$new_base (new branch)"
 else
-  git -C "$repo_dir" worktree add -b "$branch" "$wt_path" >&2 # new branch
+  echo "claude-worktree: no origin/HEAD or origin/main; new branch based on cwd's HEAD" >&2
+  git -C "$repo_dir" worktree add -b "$branch" "$wt_path" >&2 # new branch, no remote default to use
+  base="HEAD (new branch; no origin default resolvable)"
 fi
 
 # Reserve `.delegate/` as the delegate's return channel: where it drops files it
@@ -463,6 +567,7 @@ if [ "$use_tmux" = 0 ]; then
 
   echo "worktree : $wt_path"
   echo "branch   : $branch"
+  echo "base     : $base"
   if [ -n "$short" ]; then
     echo "session  : $short (background; auto)"
   else
@@ -530,6 +635,7 @@ attach="gts $session"
 
 echo "worktree : $wt_path"
 echo "branch   : $branch"
+echo "base     : $base"
 echo "session  : $session (detached; claude running with acceptEdits)"
 [ -z "$model" ] || echo "model    : $model"
 [ -z "$delegator" ] || echo "report-to: $delegator"

@@ -106,8 +106,10 @@ claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 - worktree を `<メインリポジトリ toplevel>/.worktrees/<name>` に作成（メイン checkout の内側の
   隠しディレクトリ。`~/.config/git/ignore` = global excludesFile で `.worktrees/` を無視する）
 - `name` は `[A-Za-z0-9_-]+` のみ許可（`.`/`:` は tmux ターゲット構文と衝突するため拒否）
-- `-b` 省略時はブランチ名 = `<name>`。解決順はローカルブランチ → `origin/<branch>` を追跡 checkout →
-  どちらにも無ければ新規作成（fetch はしない）
+- `-b` 省略時はブランチ名 = `<name>`。解決の前に `git fetch origin`（失敗は警告のみ）。解決順は
+  ローカルブランチ → `origin/<branch>` を追跡 checkout → どちらにも無ければ新規作成。新規作成の
+  base は `origin/HEAD` → `origin/main` → cwd の HEAD の順（cwd の HEAD 既定では、長く放置された
+  linked worktree から切った委譲先が古い base を掴む）。base は stdout の report に出る
 - プロンプト無し: worktree 追加のみ。stdout にパスのみ出力（`git wa` の置き換え）
 - プロンプト有り（既定）: **worktree dir で `claude --bg`（background agent, permission mode `auto`）を起動**。
   tmux session は作らない。捕捉した short session id を `attach: claude attach <short-id>` として
