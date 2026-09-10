@@ -232,6 +232,7 @@ claude-reap-bg [--dry-run] [--idle-minutes <n>] [<short-id>...]
 - **stop してよい条件（全通過のみ）**: ①roster（`claude agents --json`）が `kind == "background"` かつ `status == "idle"`、②claude-queue の最新 state が `idle_done`（`Stop` hook が書く）で、その event から `--idle-minutes`（既定 15）以上経っている、③transcript の最後の assistant ターンに `SendMessage` の tool_use が無い。③が bulk sweep を成立させている条件で、委譲元へ質問を送って返信を待つ委譲先も外からは `idle` に見えるため、これが無いと生きた作業を殺す。確認そのものができないもの（claude-queue に生きた row が無い・transcript が読めない／parse できない）も、止めずに skip する。
 - **停止は `claude-stop-bg` 経由**で、`claude stop` を直接は呼ばない。あちらの guard（background 以外を拒否、一意に解決しない id を拒否）が上の条件に重ねて効く。
 - 引数で short-id（8 桁）を指定するとその対象だけを（同じゲートを通して）stop する。無指定なら全 sweep。ゲートに掛からなかった id は skip として report されるので、名指ししたのに何も起きない理由が分かる。`--dry-run` は対象を report するだけで何も止めない。
+- roster には kind=="background" かつ `pid` の無い entry も現れる。これはプロセスが既に消えた job の残骸（`~/.claude/jobs/<id>/state.json` が居座っているだけ）で、そもそも `status` を持たないので上の stop ゲートには乗らず、`stale job records` という別節で report するだけに留める。判定は `kind == "background"` かつ `pid` の不在で、併記する `state` は claude 内部の語彙にすぎないので判定には使わない（診断表示のみ）。名指しした id がこれに該当する場合は skip 扱いにはならず、この節で説明される。表示する `rm -rf ~/.claude/jobs/<id>` は読ませるための文字列であって実行はせず、job dir には成果物が残ることもあるので削除するかは人間に委ねる。
 - **manual 運用**。cron/daemon の常駐は作らない。無人で走る session killer は、上の保守的な predicate がまさに避けようとしているものだから。
 - **settings.json では allow していない**（単一 id 指定に閉じた `claude-stop-bg` を allow しているのとは非対称）。引数無しで全 sweep できる形なので、allow すると agent へ session の一括 kill 権限を渡すことになり、grant の射程が読めない。実行ごとに承認プロンプトを踏むのは意図した摩擦で、まず `--dry-run` で対象を出してから承認を仰ぐ。
 
