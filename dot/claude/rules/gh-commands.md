@@ -123,3 +123,20 @@ prompt injection / 権限バイパスの経路になる。
   fallback せず終了コードごと呼び出し元へ返す。したがって auto-merge が無効な repo では
   引き続き merge ステップが完了せず、`pr-review-automerge` は report して停止する
   （fallback はこのケースを救わない）。
+
+#### grant 変更を含む PR は auto-merge させない
+
+allowlist（grant）の変更は agent に委譲してよい。ただし **grant 変更を含む PR は
+`pr-review-automerge` で auto-merge させず、人間の approve を待つ**。委譲プロンプトでは
+`pr-review-automerge` を起動させず PR 作成で停止させ、merge は人間が行う。
+
+以前の規約は「grant は agent に書かせず、人間が settings.json を直接編集する」だったが、
+禁じたいのは agent が grant 行を書くこと自体ではなく、**権限を広げる変更が人間のレビューを
+通らずに main へ入ること**である。auto-merge を許すと、この節が避けようとしている広い grant が
+人目を通らずそのまま main へ入り、規約がそのまま無効化される。逆に approve を人間に残せば、
+grant の広さは merge 前に必ず一度は人目を通る。だから条件を「誰が書くか」ではなく merge
+ゲート側へ置く。
+
+由来: PR #83 で `bin/gh-issue-file` を導入した際、allowlist を委譲先のスコープ外としたため
+必要な allow 行が未追加のまま残った（issue #87）。grant 追加だけが委譲できない例外として
+残る運用コストのほうが、書き手を人間に限る利得より大きかった。

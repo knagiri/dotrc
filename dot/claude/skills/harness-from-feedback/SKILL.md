@@ -28,9 +28,12 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
 - 委譲プロンプトで**末尾の自己内省（harness-from-retrospective）をスキップ**させる。ハーネスタスク
   自身が内省で更なるハーネスを提案する再帰ノイズを避けるため（実装は人間承認ゲート越しなので
   ループにはならないが、低価値な提案が積もるのを防ぐ）。
-- この skill が扱う artifact は rule / CLAUDE.md 追記 / lint / test / hook まで。allowlist（grant）は
-  対象外とし、人間が settings.json を直接編集して適用する（理由: 委譲先は pr-review-automerge で
-  自律マージするため、grant のような権限を広げる変更を agent に書かせない。gh-commands.md §5 参照）。
+- この skill が扱う artifact は rule / CLAUDE.md 追記 / lint / test / hook / allowlist（grant）。
+  **grant を含む変更は委譲してよいが、委譲先に auto-merge させず人間の approve を待つ**。委譲
+  プロンプトでは `pr-review-automerge` を起動させず PR 作成で停止させる（上の「マージは委譲先の
+  `pr-review-automerge` が行う」の例外はここだけ）。条件と理由の正典は `gh-commands.md` §5
+  「grant 変更を含む PR は auto-merge させない」。ここへ再掲せず参照に留めるのは、規約の出所を
+  1 つに保つため。
 
 ## 手順
 
@@ -58,7 +61,9 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
      済みファイル（spec 等）は `--seed <path>` で worktree へ入れ相対パスで参照させる（新 worktree
      は指定 branch を checkout するだけで起動元の gitignore 済み・未 commit ファイルは伝播せず、
      承認待ちに落ちれば人間不在の委譲先が固まる。詳細は `worktree-scope.md` §6）
-   - artifact 種別（rule / CLAUDE.md 追記 / lint / test / hook）・配置パス・対象 repo
+   - artifact 種別（rule / CLAUDE.md 追記 / lint / test / hook / allowlist）・配置パス・対象 repo
+   - allowlist（grant）を含む場合は、**`pr-review-automerge` を起動せず PR 作成で停止する**旨を
+     明記する（不変条件のとおり。人間の approve を待つ）
    - 内容の骨子（理由ベースのソフト指針の本文・由来）
    - rule を書く場合は「**既存のルールファイル（リポジトリの `.claude/rules/*.md`、dotrc なら `dot/claude/rules/*.md`）を1つ Read して形式を踏襲せよ**」と指示する（Read 経由で `rule-authoring` メタルールを確実にトリガーさせるため）
    - `paths` グロブ（領域限定なら）
@@ -73,7 +78,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
 
    ## やること（WHAT）
    - 指摘: <1〜3行の言語化（根本原因含む）>
-   - artifact: <rule / CLAUDE.md / lint / test / hook>
+   - artifact: <rule / CLAUDE.md / lint / test / hook / allowlist>
    - 受け入れ確認: <test/lint が過去の誤りを捕まえる / rule のロード条件と防げるシナリオ>
 
    ## 設計（HOW）
@@ -86,6 +91,8 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    1. 設計は確定済み。brainstorm せず実行に入る
    2. 実装し、受け入れ確認を満たす
    3. PR を出し、pr-review-automerge で merge
+      （allowlist（grant）を含む場合はここを「PR を出したら停止する。pr-review-automerge は
+      起動しない。人間の approve を待つ」に差し替える）
    4. これはハーネスタスクなので、末尾の自己内省（harness-from-retrospective）はスキップする
    ```
 
@@ -104,7 +111,9 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - 捕捉した指摘（言語化）
    - 置いた場所（rules / CLAUDE.md / lint / test / hook）と対象 repo
    - ロードされる条件（paths と想定シナリオ。rule の場合）
-   - branch 名とマージ方法（委譲先が pr-review-automerge まで自走。マージは保護ゲート依存）
+   - branch 名とマージ方法（委譲先が pr-review-automerge まで自走。マージは保護ゲート依存。
+     ただし allowlist（grant）を含む場合は PR 作成で止まるので、**人間の approve と merge が
+     要る**旨を報告する）
    - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
      保守的に reap。詳細は worktree-scope.md §7）
 
