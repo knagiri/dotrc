@@ -20,6 +20,10 @@ set -euo pipefail
 #                      --body-file <path> [--not-dup-of N[,N...]]
 # Exit:  0 created / 1 bad input / 2 dedup gate (candidates printed to stderr)
 #        / 128 called outside a git repo (git itself fails `set -e` below)
+#        / anything else: gh's own exit code, passed through unchanged by
+#          `set -e` (not rounded to 1) -- from the `gh issue list` dedup query
+#          or the trailing `exec gh issue create`. See
+#          dot/claude/rules/issue-workflow.md §2 for the read-and-diagnose flow.
 
 usage() {
   cat >&2 <<'EOF'

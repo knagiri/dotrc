@@ -174,7 +174,12 @@ name: task
 ## やること（WHAT）
 body
 TMPL
-sed -i 's/^## .*/&  /' "$tmpl_repo/.github/ISSUE_TEMPLATE/task.md"
+# Written via a temp file + mv rather than `sed -i`, for portability with
+# BSD/macOS sed (which requires a suffix argument to -i) -- matches the Case H
+# pattern above. Not writing the trailing whitespace as a source literal keeps
+# the same intent as Case H's sed call.
+sed 's/^## .*/&  /' "$tmpl_repo/.github/ISSUE_TEMPLATE/task.md" >"$tmp/tmpl.tmp"
+mv "$tmp/tmpl.tmp" "$tmpl_repo/.github/ISSUE_TEMPLATE/task.md"
 tmpl_body="$tmp/tmpl_body.md"
 cat >"$tmpl_body" <<'BODY'
 ## やること（WHAT）
