@@ -38,6 +38,19 @@ YAML issue form（`.github/ISSUE_TEMPLATE/*.yml`）も非対話経路からは�
 ラッパーへ再実装することになり、正典が 2 つに割れる。Markdown template なら同じファイルを
 人間と agent の両経路が読む。
 
+## 代替案 — 自己内省から自動起票
+
+`harness-from-retrospective` の提案をそのまま `gh-issue-file` へ流す形は採らない。提案が
+session 上に出ていれば、ユーザーはその場で説明を求められる。issue へ落とすとその往復が
+失われ、提案の背景を読み解く手間が後の消化側に移るだけになる。
+
+自動起票は issue の乱立も招く。dedup ゲートが止められるのは同一の気づきの重複までで、
+恒久ハーネスに値しない提案そのものは止められない。その判断は
+`dot/claude/rules/issue-workflow.md` §5「起票してよい粒度」が人間に置いている。
+
+したがって起票するかどうかの判断はユーザーに残す。`harness-from-retrospective` は提案を
+session 上に出して終わり、起票は人間の選択を経る。
+
 ## dedup を全件提示にした理由
 
 `gh-issue-file` は既存の agent task を**全件** stderr に出し、`--not-dup-of` に全番号を書かせて
@@ -72,14 +85,18 @@ label はラッパーに作らせない。作成権限までラッパーに持�
 label が無い状態の `gh issue create` はそのまま失敗する（ラッパーは gh の終了コードと stderr を
 握り潰さない）。
 
+`status/*` の description は `issue-workflow.md` §3 の label 表（正典）と同じ語で揃える。
+GitHub の label description は GitHub 上に独立して表示される文言なので、doc 内参照に
+差し替えることはできず、意味の再掲そのものは避けられない。ズレたら §3 側に合わせて直す。
+
 ```bash
 gh label create agent-task     --description "agent が起票した task" --color 5319e7
 gh label create kind/harness   --description "恒久ハーネスの追加・修正"   --color 0e8a16
 gh label create kind/bug       --description "再現する不具合"           --color d73a4a
 gh label create kind/task      --description "汎用の task"             --color 0075ca
-gh label create status/triage  --description "起票直後。委譲不可"        --color fbca04
-gh label create status/ready   --description "HOW 確定。委譲可"         --color 0e8a16
-gh label create status/delegated --description "委譲済み"              --color c5def5
+gh label create status/triage  --description "起票直後。着手しない（委譲・インラインとも）" --color fbca04
+gh label create status/ready   --description "HOW 確定。着手してよい（委譲・インラインとも）" --color 0e8a16
+gh label create status/delegated --description "着手済み（委譲またはインライン）" --color c5def5
 ```
 
 あわせて `dot/claude/settings.json` の allow へ次の 3 行を足す。allowlist は grant なので agent に
@@ -97,9 +114,14 @@ Bash(gh issue list *)
 
 ## 委譲との接続
 
-`status/ready` が委譲可の唯一の条件である。起票は必ず `status/triage` で入り、
+`status/ready` が委譲可の条件である。起票は必ず `status/triage` で入り、
 `triage → ready` の遷移は人間が行う。これが重複を潰す人間ゲートであり、同時に
 `delegate-to-worktree` の「WHAT + HOW 確定」不変条件を label で表現したものでもある。
+
+例外が 1 つあり、起票と消化が同一ターンで指示された場合は `ready` を経由せず
+`triage → delegated` へ直接進む（[issue-workflow.md](../../dot/claude/rules/issue-workflow.md) §6.2）。
+その場の実装指示自体が上のゲートを満たす（＝ label ではなく人間の明示指示でゲートが
+充足される）ので、人間ゲートという性質そのものは崩れない。
 
 委譲時は `gh issue view <N> --json title,body` の本文をそのまま畳む。issue template の見出しは
 委譲プロンプト雛形と一致させてあるので加工は要らない。`<name>` と `-b <branch>` は
