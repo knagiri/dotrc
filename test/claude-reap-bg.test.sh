@@ -47,6 +47,17 @@ chmod +x "$stubbin/claude"
 
 # Four background sessions plus one interactive, all `idle`. Only the id prefix
 # matters downstream; the rest mirrors the real roster shape.
+#
+# The next two mirror a stale job record as the real roster reports one: no
+# `pid` (the process is gone), no `status` either, and `state` instead -- with
+# `11111111` carrying a state and `22222222` carrying none, so the report is
+# exercised both with and without the diagnostic.
+#
+# The last one is an interactive entry with no `pid` -- an interactive session
+# can lack a pid too (e.g. attached over a remote transport), and it has no
+# `id` field of its own, so the `.id // .sessionId` fallback would otherwise
+# pick up its sessionId prefix as if it were a job id. ~/.claude/jobs/<id> is
+# a background-job concept; this entry must never appear in the stale section.
 roster="$tmp/roster.json"
 cat >"$roster" <<'EOF'
 [
@@ -55,7 +66,10 @@ cat >"$roster" <<'EOF'
   {"pid":3,"cwd":"/w/asked","kind":"background","sessionId":"cccccccc-1111-2222-3333-444444444444","status":"idle"},
   {"pid":4,"cwd":"/w/busy","kind":"background","sessionId":"dddddddd-1111-2222-3333-444444444444","status":"busy"},
   {"pid":5,"cwd":"/w/human","kind":"interactive","sessionId":"eeeeeeee-1111-2222-3333-444444444444","status":"idle"},
-  {"pid":6,"cwd":"/w/asked-meta","kind":"background","sessionId":"ffffffff-1111-2222-3333-444444444444","status":"idle"}
+  {"pid":6,"cwd":"/w/asked-meta","kind":"background","sessionId":"ffffffff-1111-2222-3333-444444444444","status":"idle"},
+  {"id":"11111111","cwd":"/w/stale","kind":"background","sessionId":"11111111-1111-2222-3333-444444444444","name":"gone","state":"blocked"},
+  {"id":"22222222","cwd":"/w/stale-nostate","kind":"background","sessionId":"22222222-1111-2222-3333-444444444444","name":"gone too"},
+  {"cwd":"/w/stale-interactive","kind":"interactive","sessionId":"33333333-1111-2222-3333-444444444444"}
 ]
 EOF
 
@@ -149,12 +163,37 @@ INSERT INTO events(session_id, event_type, state, created_at) VALUES
   ('ffffffff-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400);
 SQL
 
+# The removal command claude-reap-bg prints for a stale job record (see the
+# stale-record subtests below) is text to read, not an action. A `rm` stub
+# ahead of the real one on PATH records every invocation instead of
+# forwarding to the real rm: the hint names a path under the caller's real
+# $HOME, so a regression (or a mutation run against this test) would
+# otherwise delete it for real. claude-reap-bg never calls rm, so swallowing
+# the call costs nothing. This lives here, ahead of run() below, so every
+# subtest that goes through run() is protected -- not just the ones that
+# exercise stale records -- since a mutation could just as easily land on a
+# code path a different subtest happens to hit.
+rmlog="$tmp/rm.log"
+rmstub="$tmp/rmstub"
+mkdir -p "$rmstub"
+cat >"$rmstub/rm" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$CLAUDE_STUB_RMLOG"
+EOF
+chmod +x "$rmstub/rm"
+
+# Named so the control subtest below (which checks the stub actually
+# intercepts rm) uses the identical PATH prefix run() does, rather than a
+# copy that could drift out of sync.
+stubpath="$rmstub:$stubbin:$bindir:$PATH"
+
 stoplog="$tmp/stop.log"
 run() {
   : >"$stoplog"
-  PATH="$stubbin:$bindir:$PATH" \
+  : >"$rmlog"
+  PATH="$stubpath" \
     CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" \
-    CLAUDE_QUEUE_DB="$db" "$src" "$@"
+    CLAUDE_STUB_RMLOG="$rmlog" CLAUDE_QUEUE_DB="$db" "$src" "$@"
 }
 stopped() { grep -qF "$1" "$stoplog"; }
 
@@ -261,6 +300,81 @@ out="$(PATH="$stubbin:$bindir:$PATH" CLAUDE_STUB_ROSTER="$tmp/nope.json" CLAUDE_
 if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ]; then
   echo "ok: an unreadable roster aborts without stopping anything"
 else echo "FAIL: unreadable roster swept rc=$rc out=$out"; fail=1; fi
+
+# A roster entry with no `pid` is a stale job record: the process behind the job
+# is gone but ~/.claude/jobs/<id>/state.json keeps it listed. It has no
+# `status`, so no gate above can ever see it; it must surface in its own
+# section, with `state` as a diagnostic, and be left strictly alone.
+out="$(run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -q 'stale job records (2)' <<<"$out" \
+   && grep -q '11111111  no process (state: blocked)' <<<"$out" \
+   && grep -qF '→ rm -rf ~/.claude/jobs/11111111' <<<"$out"; then
+  echo "ok: a roster entry with no pid is reported as a stale job record"
+else echo "FAIL: stale record not reported rc=$rc out=$out"; fail=1; fi
+
+# Nothing is stopped for it: there is no process, so `claude stop` has no
+# target and calling it would be a guess about a session that no longer exists.
+if ! stopped 11111111 && ! stopped 22222222; then
+  echo "ok: no stop is attempted for a stale job record"
+else echo "FAIL: stop attempted for a stale record stoplog=$(cat "$stoplog")"; fail=1; fi
+
+# The rm stub (defined above run(), so it guards every subtest) never forwards
+# to the real rm -- see the comment there for why.
+if [ ! -s "$rmlog" ]; then
+  echo "ok: the suggested rm is printed, never executed"
+else echo "FAIL: rm was executed: $(cat "$rmlog")"; fail=1; fi
+
+# Control for the assertion above: an empty rmlog is also what we'd see if the
+# stub had silently fallen off PATH and a real `rm` ran instead (it has no
+# reason to write to $rmlog). Absence-as-success needs proof the stub is
+# actually reachable on the exact PATH run() uses, or the check above never
+# fails no matter what claude-reap-bg does (evidence-over-guesswork.md #5).
+: >"$rmlog"
+PATH="$stubpath" CLAUDE_STUB_RMLOG="$rmlog" rm -rf /nonexistent/probe
+if [ -s "$rmlog" ]; then
+  echo "ok: the rm stub actually intercepts calls on run()'s PATH (control for the check above)"
+else echo "FAIL: rm stub did not capture a direct call -- the above ok proves nothing"; fail=1; fi
+: >"$rmlog"
+
+# A stale entry without `state` prints no empty parenthesis, and still gets its
+# removal hint.
+if grep -q '22222222  no process$' <<<"$out" \
+   && grep -qF '→ rm -rf ~/.claude/jobs/22222222' <<<"$out"; then
+  echo "ok: a stale record with no state omits the empty parenthesis"
+else echo "FAIL: stateless stale record misformatted out=$out"; fail=1; fi
+
+# A pid-less interactive entry is not a stale job record: kind must be
+# "background" too, since ~/.claude/jobs/<id> is a background-job concept and
+# an interactive session has no such directory. Still exactly 2 stale records
+# (11111111, 22222222), not 3.
+if grep -q 'stale job records (2)' <<<"$out" && ! grep -q 33333333 <<<"$out"; then
+  echo "ok: a pid-less interactive entry is not reported as a stale job record"
+else echo "FAIL: pid-less interactive entry leaked into stale section out=$out"; fail=1; fi
+
+# Regression: the live sweep is unchanged by any of the above -- the ripe
+# session is still stopped and the fresh one still skipped in the same run.
+if stopped aaaaaaaa && ! stopped bbbbbbbb && grep -q 'bbbbbbbb.*threshold' <<<"$out"; then
+  echo "ok: the live reap path is unaffected by stale records in the roster"
+else echo "FAIL: live reap changed by stale records out=$out"; fail=1; fi
+
+# Naming a stale id explains it as stale rather than answering "not a live idle
+# background session", which would be true but useless: the caller still needs
+# to be told the record is a leftover and how to clear it.
+out="$(run 11111111 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -s "$stoplog" ] \
+   && grep -q 'stale job records (1)' <<<"$out" \
+   && grep -q '11111111  no process (state: blocked)' <<<"$out" \
+   && ! grep -q '11111111.*not a live idle background session' <<<"$out" \
+   && ! grep -q '22222222' <<<"$out"; then
+  echo "ok: a named stale id is reported as stale, restricted to that id"
+else echo "FAIL: named stale id rc=$rc out=$out"; fail=1; fi
+
+# --dry-run makes no difference here: nothing was ever going to be removed.
+out="$(run --dry-run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'stale job records (2)' <<<"$out"; then
+  echo "ok: --dry-run reports stale records the same way"
+else echo "FAIL: dry-run stale section rc=$rc out=$out"; fail=1; fi
 
 # A missing database aborts for the same reason.
 : >"$stoplog"
