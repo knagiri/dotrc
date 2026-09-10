@@ -38,6 +38,19 @@ YAML issue form（`.github/ISSUE_TEMPLATE/*.yml`）も非対話経路からは�
 ラッパーへ再実装することになり、正典が 2 つに割れる。Markdown template なら同じファイルを
 人間と agent の両経路が読む。
 
+## 代替案 — 自己内省から自動起票
+
+`harness-from-retrospective` の提案をそのまま `gh-issue-file` へ流す形は採らない。提案が
+session 上に出ていれば、ユーザーはその場で説明を求められる。issue へ落とすとその往復が
+失われ、提案の背景を読み解く手間が後の消化側に移るだけになる。
+
+自動起票は issue の乱立も招く。dedup ゲートが止められるのは同一の気づきの重複までで、
+恒久ハーネスに値しない提案そのものは止められない。その判断は
+`dot/claude/rules/issue-workflow.md` §5「起票してよい粒度」が人間に置いている。
+
+したがって起票するかどうかの判断はユーザーに残す。`harness-from-retrospective` は提案を
+session 上に出して終わり、起票は人間の選択を経る。
+
 ## dedup を全件提示にした理由
 
 `gh-issue-file` は既存の agent task を**全件** stderr に出し、`--not-dup-of` に全番号を書かせて
