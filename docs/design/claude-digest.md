@@ -50,8 +50,9 @@ claude-digest --generate --dry-run [<date>]
 `--dry-run` は仕様の 3 形式に対する追加で、**収集ロジックを LLM 抜きで観測するために足した**。
 テストはすべてこの出力に対して書かれている。
 
-表示は stdout が tty のときだけ `bat` に渡す。tmux popup 側が自分で `bat` に流すため、
-二重にページャを噛ませない。
+表示は stdout が tty のときだけページャに渡し、`bat` → `less` → `cat` の順で選ぶ
+（選択理由は `bin/claude-digest` の `show()` 内コメントを参照）。ページャの選択は
+claude-digest 側に一本化しており、`dot/tmux.conf` の binding はページャを指定しない。
 
 ## 日の境界は JST 05:00
 
@@ -309,8 +310,9 @@ git log -F --author="$pat" --no-merges "<merge>^1..<merge>^2"
 
 3 の base（`origin/HEAD`、無ければ `origin/main`）がどちらも解決できない repo — origin が
 無い、あるいは `origin/HEAD` 未設定で既定ブランチが `main` でもない — では、ブランチを測る
-相手が無い。この場合は着地を証明できないとみなして OPEN（`base=unknown`）に倒す。LANDED は「片付け」欄すなわち `git-reap-gone` の対象を
-意味するが、`git-reap-gone` 自身も base に `origin/HEAD` を要求するので、base の無い repo で
+相手が無い。この場合は着地を証明できないとみなして OPEN（`base=unknown`）に倒す。
+LANDED は「片付け」欄すなわち `git-reap-gone` の対象を意味するが、`git-reap-gone` 自身も
+base に `origin/HEAD` を要求するので、base の無い repo で
 出した片付け助言はそもそも実行できない。着地側の集計も同じ repo を対象外にしており、両者の
 扱いが揃う。
 
@@ -462,7 +464,7 @@ systemd user unit は shell の PATH を継承しない。`~/.bashrc` は非対�
 ## 朝の読み方
 
 ```tmux
-bind-key e display-popup -E -w 80% -h 80% "claude-digest | bat --style=plain"
+bind-key e display-popup -E -w 80% -h 80% "claude-digest"
 ```
 
 prefix は `C-q`。`q` / `Q` は claude-queue picker、`d` は tmux 既定の `detach-client` に
