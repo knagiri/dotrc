@@ -300,8 +300,33 @@ fi
 # unattended `claude --bg` delegation with nobody there to answer. It hangs
 # forever rather than falling through to "use whatever refs are already
 # present". BatchMode=yes closes the same hole for SSH remotes (passphrase /
-# host-key prompts).
-if ! GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" git -C "$repo_dir" fetch origin >&2; then
+# host-key prompts) -- with the two limits spelled out below.
+#
+# `-o BatchMode=yes` is APPENDED to whatever GIT_SSH_COMMAND is already set to,
+# rather than replacing it. `${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}` used to
+# drop BatchMode entirely the moment the caller had a GIT_SSH_COMMAND of their
+# own (`ssh -i ~/.ssh/deploy_key` is a common one), which is exactly the
+# environment a delegation inherits -- so the hang this guard exists to prevent
+# was still reachable.
+#
+# What appending does and does not guarantee, per ssh_config(5): ssh takes
+# configuration from command-line options, then ~/.ssh/config, then
+# /etc/ssh/ssh_config, and "for each parameter, the first obtained value will be
+# used" -- first-obtained, not last. So:
+#
+#   * against the config FILES we always win: our -o is a command-line option,
+#     so a `BatchMode no` in ~/.ssh/config cannot re-open the hole.
+#   * against the caller's own value we do NOT win: an explicit
+#     `-o BatchMode=no` already in GIT_SSH_COMMAND is obtained first and stands
+#     (verified: `ssh -o BatchMode=no -o BatchMode=yes -G host` reports
+#     `batchmode no`). That is deliberate -- someone who spelled out
+#     BatchMode=no asked for interaction, and silently overriding them is the
+#     bigger surprise. It is also the one case this guard leaves open.
+#   * a GIT_SSH_COMMAND that does not take ssh's options at all (a wrapper
+#     script, plink) turns the appended flag into a fetch FAILURE, not a hang --
+#     which lands on the warning path right below, the same place any other
+#     fetch failure lands.
+if ! GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" git -C "$repo_dir" fetch origin >&2; then
   echo "claude-worktree: git fetch origin failed; using the refs already present" >&2
 fi
 
