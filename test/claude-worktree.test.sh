@@ -671,9 +671,12 @@ fi
 
 # A new branch off a remote-tracking start point must NOT pick up that ref as
 # its upstream (branch.autoSetupMerge would otherwise set it to origin/main).
-# An untracked new branch has no upstream at all, so a plain `git push` works
-# and es-create-pr's @{upstream}-based pushed-check is not fooled into thinking
-# an unpushed branch is already pushed.
+# An untracked new branch has no upstream at all, so es-create-pr's
+# @{upstream}-based pushed-check is not fooled into thinking an unpushed branch
+# is already pushed. (What actually pushes it is my-create-pr's explicit
+# `git push -u origin HEAD` -- NOT a plain `git push`, which would fail here:
+# this repo sets neither push.default=current nor push.autoSetupRemote, so with
+# no upstream configured git has nothing to push to.)
 if git -C "$out" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
   echo "FAIL: new branch off origin's default has an upstream set (expected none)"; fail=1
 else
@@ -694,6 +697,10 @@ fi
 
 # The chosen base is reported. A base decided silently is how the staleness above
 # went unnoticed across three delegations, so the report is part of the fix.
+# This goes through the ladder's 1st rung (origin/HEAD, which `git clone` always
+# sets) -- the 2nd rung (origin/HEAD absent, falling back to origin/main) is
+# exercised separately further below, since this case can't tell the two apart:
+# origin/HEAD resolves to origin/main here regardless of which rung is taken.
 log="$tmp/base-report"
 out="$(cd "$staleclone" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log"
@@ -726,6 +733,45 @@ if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$unfetched_sha" ] && [ "$wt_upstream" = "or
 else
   echo "FAIL: unfetched branch rc=$rc sha=$wt_sha want=$unfetched_sha upstream=$wt_upstream"; fail=1
 fi
+
+# --- new_base ladder, 2nd rung: origin/HEAD absent, origin/main present -------
+# freshbase/keepmewt/basereport/unfetchedwt above all resolve through
+# origin/HEAD, since `git clone` always sets that ref -- none of them exercise
+# the `elif git rev-parse --verify --quiet origin/main` branch, and deleting
+# that elif still leaves every case above passing. A dedicated clone with
+# origin/HEAD explicitly dropped is what actually forces the 2nd rung.
+headclone="$tmp/headclone"
+git clone -q "$stalebare" "$headclone"
+git -C "$headclone" symbolic-ref -d refs/remotes/origin/HEAD
+
+# Advance the clone's own HEAD past origin/main (a local-only commit, never
+# pushed) so the 2nd rung (origin/main) and the 3rd rung (cwd's HEAD, the
+# no-origin-default fallback) would produce DIFFERENT shas here. Without this,
+# both rungs land on the same commit in this clone and the sha check below
+# would pass even with the elif deleted -- as observed while mutation-testing
+# this case (see evidence-over-guesswork.md §4).
+echo "local-only, never pushed" >"$headclone/local.txt"
+git -C "$headclone" add local.txt
+git -C "$headclone" -c user.email=t@t -c user.name=t commit -q -m "diverges headclone from origin/main"
+head_local_sha="$(git -C "$headclone" rev-parse HEAD)"
+if [ "$head_local_sha" = "$fresh_head" ]; then
+  echo "FAIL: test setup did not diverge headclone from origin/main, the assertion below would be vacuous"; fail=1
+fi
+
+out="$(cd "$headclone" && "$wt" headfallback 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$fresh_head" ]; then
+  echo "ok: with origin/HEAD absent, a new branch falls back to origin/main"
+else
+  echo "FAIL: origin/HEAD-absent fallback rc=$rc sha=$wt_sha want=$fresh_head"; fail=1
+fi
+
+out="$(cd "$headclone" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$tmp/base-report-headfallback"
+  "$wt" headfallbackreport -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -Fq 'base     : origin/main (new branch)' <<<"$out"; then
+  echo "ok: the report names origin/main as the base when origin/HEAD is absent"
+else echo "FAIL: origin/HEAD-absent base not reported rc=$rc out=$out"; fail=1; fi
 
 # A failing fetch must not abort the launch -- offline, or a checkout with no
 # `origin` at all, is not a reason to refuse a delegation. It degrades to the
