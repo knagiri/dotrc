@@ -965,4 +965,61 @@ if [ "$rc" -eq 0 ] && grep -Fq '報告先 name: test-delegator' "$log"; then
   echo "ok: --tmux receives the same delegator injection"
 else echo "FAIL: --tmux missing injection rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1; fi
 
+# --- fetch guard: BatchMode survives a caller-supplied GIT_SSH_COMMAND ---------
+# The leading fetch runs inside an unattended `claude --bg` delegation, so ssh
+# must never be able to ask for a passphrase or a host-key confirmation. The
+# guard is the composed GIT_SSH_COMMAND handed to `git fetch`; that string is
+# what these cases assert.
+#
+# What is NOT asserted, and why: whether ssh actually declines to prompt needs a
+# real remote, a real key and a controlling terminal, none of which a hermetic
+# test has. The composed value is the boundary this script owns; ssh's handling
+# of it is ssh's, and is pinned instead by the ssh_config(5) citation in the
+# comment above the fetch.
+#
+# `git` is shimmed on PATH: it records GIT_SSH_COMMAND when it sees a `fetch`
+# and then execs the real git, so the rest of claude-worktree runs unchanged.
+gitshimbin="$tmp/gitshimbin"
+mkdir -p "$gitshimbin"
+realgit="$(command -v git)"
+cat >"$gitshimbin/git" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = fetch ]; then
+    printf '%s\n' "\${GIT_SSH_COMMAND-<unset>}" >>"\$GIT_SHIM_LOG"
+    break
+  fi
+done
+exec "$realgit" "\$@"
+EOF
+chmod +x "$gitshimbin/git"
+
+# Fresh repo: fetch has no origin to reach, which is fine -- the failure lands on
+# the tolerated warning path and the shim has already recorded what it needed.
+sshrepo="$tmp/sshrepo"
+git init -q "$sshrepo"
+git -C "$sshrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+
+# No GIT_SSH_COMMAND in the environment: BatchMode must still be there.
+log="$tmp/gitshim-unset.log"; : >"$log"
+(cd "$sshrepo" && { unset GIT_SSH_COMMAND
+  export PATH="$gitshimbin:$PATH" GIT_SHIM_LOG="$log"
+  "$wt" sshdefault; }) >/dev/null 2>&1
+got="$(tail -n 1 "$log" 2>/dev/null)"
+if [ "$got" = "ssh -o BatchMode=yes" ]; then
+  echo "ok: fetch gets BatchMode=yes when GIT_SSH_COMMAND is unset"
+else echo "FAIL: unset GIT_SSH_COMMAND composed '$got' want 'ssh -o BatchMode=yes'"; fail=1; fi
+
+# The regression: a caller who already has GIT_SSH_COMMAND (`ssh -i <key>` is the
+# common shape) used to get their value verbatim, BatchMode silently dropped.
+# Their value must be preserved AND BatchMode appended.
+log="$tmp/gitshim-set.log"; : >"$log"
+(cd "$sshrepo" && { export PATH="$gitshimbin:$PATH" GIT_SHIM_LOG="$log" \
+    GIT_SSH_COMMAND="ssh -i /nonexistent/id_test"
+  "$wt" sshinherit; }) >/dev/null 2>&1
+got="$(tail -n 1 "$log" 2>/dev/null)"
+if [ "$got" = "ssh -i /nonexistent/id_test -o BatchMode=yes" ]; then
+  echo "ok: a caller-supplied GIT_SSH_COMMAND is preserved and BatchMode appended"
+else echo "FAIL: preset GIT_SSH_COMMAND composed '$got' want 'ssh -i /nonexistent/id_test -o BatchMode=yes'"; fail=1; fi
+
 exit "$fail"
