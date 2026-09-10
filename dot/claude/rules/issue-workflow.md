@@ -54,7 +54,7 @@ exit 2 のときは既存 agent task の一覧が stderr に出る。候補の t
 | label | 意味 |
 |---|---|
 | `status/triage` | 起票直後。HOW が未確定でありうる。**委譲しない** |
-| `status/ready` | HOW が確定し、委譲してよい |
+| `status/ready` | HOW が確定し、着手してよい（委譲・インラインとも。§6 参照） |
 | `status/delegated` | 着手済み（worktree が走っている、またはインラインで実装中） |
 
 起票は必ず `status/triage` で入る（ラッパーが固定するので agent の裁量では変えられない）。
@@ -62,10 +62,13 @@ exit 2 のときは既存 agent task の一覧が stderr に出る。候補の t
 `delegate-to-worktree` の「WHAT + HOW が固まっているか」という不変条件を label で表したもの
 でもある。
 
-`ready → delegated` の付け替えは委譲を起こした session が
+`ready → delegated` の付け替えは**着手した側**（委譲を起こした session、またはインラインで
+実装に入った session）が
 `gh issue edit <N> --remove-label status/ready --add-label status/delegated` で行う。
-`gh issue edit` は allowlist に入っていないので承認プロンプトを踏むが、委譲を起こすのは人間が
-同席する session なので摩擦は小さい。人間不在の委譲先はこの付け替えを行わない。
+`gh issue edit` は allowlist に入っていないので承認プロンプトを踏むが、着手するのは人間が
+同席する session なので摩擦は小さい。人間不在の委譲先はこの付け替えを行わない
+（§6.2 の由来と同じ理由で、担い手を「委譲」に限定すると §6 が広げたインライン経路で
+付け替え役が不在になるため）。
 
 ### 4. issue へのコメント投稿はしない
 
@@ -98,11 +101,11 @@ PR reply ポリシーと同じ扱いで、既定は指摘の整理・要約・�
 | 経路 | 起点 | 実装する主体 |
 |---|---|---|
 | **既定** | 人間が `triage → ready` にし、そのうえで委譲を指示する | `delegate-to-worktree` が起こす別 worktree の agent |
-| **名指しで引き取る** | 人間が「#N やって」と言う | 言われた session が引き取り、既定どおり worktree へ委譲する（[worktree-scope.md](./worktree-scope.md) §5） |
+| **名指しで引き取る** | 人間が「#N やって」と言う | 言われた session が引き取り、既定どおり worktree へ委譲する（main working tree にいる場合。[worktree-scope.md](./worktree-scope.md) §5）。既に linked worktree にいるなら §5 自身がその節をトリガーしないと言うので、その worktree 内で進める |
 | **インラインを明示される** | 人間が「#N をこの場でやって」と言う | 言われた session がその場で実装（[worktree-scope.md](./worktree-scope.md) §5 の例外を明示された場合） |
 | **無人の一括消化**（将来） | 定時起動の crawler session が `status/ready` を舐める | crawler が issue ごとに起こす別 worktree の agent |
 
-どの経路でも `ready → delegated` の付け替えは委譲を起こした側が行い、PR 本文に
+どの経路でも `ready → delegated` の付け替えは着手した側が行い（§3 と同じ語）、PR 本文に
 `Closes #<N>` を入れて merge で自動 close させる。
 
 **`status/ready` は「無人で着手されてよい」の意味である。** 上表の crawler 経路が入ると、
@@ -121,7 +124,10 @@ PR reply ポリシーと同じ扱いで、既定は指摘の整理・要約・�
 
 **起票と消化が同一ターンで指示された場合**（「issue に起こしてから実装して」）は 6.1 の
 「起票で完了」を適用しない。その依頼は起票と消化をひとまとめにしたものなので、続けて
-6.2 の経路へ入る。
+6.2 の経路へ入る。ただし §3 の label ゲートは飛ばさない。この経路に入った時点で issue は
+`status/triage` のままなので、ユーザーが同席している前提を使い、HOW をその場で確定させた
+うえで `triage → ready` を人間に押してもらう（同一ターンでの実装指示自体をこのゲートの
+充足として扱ってよい）。
 
 **消化側を状況から推測しない。** 緊急そうだから・文脈がロードされているから・今なら安いから、
 を理由に自分で引き取らない。割り当ては人間（または crawler）が明示的に行う。
