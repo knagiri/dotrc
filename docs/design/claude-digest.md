@@ -13,8 +13,8 @@
 |---|---|
 | 本体 | `bin/claude-digest` |
 | テスト | `test/claude-digest.test.sh` |
-| スケジュール | `dot/systemd/user/claude-digest.{service,timer}` |
-| 展開 | `bin/deploy.sh` の `CustomLocationMap["systemd"]`（**現状は届かない。後述の「既知の gap」**） |
+| スケジュール | `dot/systemd-user/claude-digest.{service,timer}` |
+| 展開 | `bin/deploy.sh` の `MergeLinkMap["systemd-user"]` |
 | 朝の読み方 | `dot/tmux.conf` の `bind-key d` |
 | 隣接する仕組み | `src/claude-queue/`、`bin/claude-worktree`、`bin/git-reap-gone`（`docs/design/claude-tmux-worktree.md`） |
 
@@ -415,35 +415,25 @@ systemctl --user daemon-reload
 systemctl --user enable --now claude-digest.timer
 ```
 
-### 既知の gap — `CustomLocationMap["systemd"]` は現状届かない
+### unit の配置 — `dot/systemd-user/` を `MergeLinkMap` で展開する
 
-`bin/deploy.sh` に `CustomLocationMap["systemd"]="${HOME}/.config/systemd"` を足したが、
-**このままでは unit が展開されない。** `~/.config/systemd` は既に実ディレクトリとして存在し
-（systemd 自身が `*.target.wants` を置いている）、`ln -snvf <src> <既存ディレクトリ>` は
-エラーにならずその中へ symlink を作る（`dot/claude/rules/dotrc-deploy.md` §4 と同じ罠。
-sandbox で再現確認済み: `dest/src -> src` が作られ、`dest` 自体は実ディレクトリのまま）。
-結果は `~/.config/systemd/systemd -> <repo>/dot/systemd` で、
-`~/.config/systemd/user/claude-digest.timer` はどこにも現れない。
-
-`MergeLinkMap` に変えても 1 段ずれるだけで同じ罠を踏む（`~/.config/systemd/user` も実
-ディレクトリなので `user/user` になる）。素直な直し方は unit を `dot/systemd-user/` に平置きして
+unit は `dot/systemd-user/` に平置きし、`bin/deploy.sh` が
 
 ```bash
 MergeLinkMap["systemd-user"]="${HOME}/.config/systemd/user"
 ```
 
-とすること。`MergeLinkMap` は配下の各ファイルを個別に link するので、systemd 自身の状態
-ディレクトリと共存できる。ただしこれは委譲時に確定していた HOW（`dot/systemd/` +
-`CustomLocationMap`）と別物なので、本 PR では指定どおりに入れ、この節で gap を記録するに
-留める。当面は手で symlink を張る:
+で `~/.config/systemd/user/` へ 1 ファイルずつ link する。`MergeLinkMap` は配下の各ファイルを
+個別に link し、リンク先を `mkdir -p` してから使うので、systemd 自身がそこに置く状態
+ディレクトリ（`*.target.wants` 等）と共存できる。
 
-```
-ln -snvf "$PWD/dot/systemd/user/claude-digest.service" ~/.config/systemd/user/
-ln -snvf "$PWD/dot/systemd/user/claude-digest.timer"   ~/.config/systemd/user/
-```
+ディレクトリ丸ごとを link する `CustomLocationMap` はここでは使えない。`~/.config/systemd` も
+その下の `user/` も既に実ディレクトリとして存在するため、`ln -snvf <src> <既存ディレクトリ>` は
+エラーにならずその中へ symlink を作る（`dot/claude/rules/dotrc-deploy.md` §4 と同じ罠）。
+`~/.config/systemd/systemd -> <repo>/dot/systemd` ができるだけで、unit はどこにも現れない。
 
-なお `dot/systemd` は新しいトップレベルエントリなので、いずれの方式でも
-`bin/deploy.sh` の再実行が要る（`dotrc-deploy.md` §4）。
+`dot/systemd-user` は新しいトップレベルエントリなので、展開には `bin/deploy.sh` の再実行が
+要る（`dotrc-deploy.md` §4）。
 
 ### unit の PATH
 
