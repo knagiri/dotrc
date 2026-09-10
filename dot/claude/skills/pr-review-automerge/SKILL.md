@@ -143,9 +143,17 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       `gh-pr-comments` / `gh-list-threads` / `gh-resolve-thread` / `gh-pr-checks` / `gh-automerge`）に
       run の再実行に当たるものが無く、raw な `gh run rerun` は allowlist に無いので撃てば承認
       プロンプトで止まる。この skill は人間不在の委譲先で走ることがあり、そこでは誰も承認できず
-      凍結する。したがって cancelled のみでも auto-merge は有効化せず手順 4 へ抜けるが、報告には
-      **「実質的な failure は 0 件、内訳は cancelled のみ」「再実行 1 回で解消する見込み」**を明記し、
-      人間が再実行 1 回で復帰できる形にする。
+      凍結する。したがって cancelled のみでも auto-merge は有効化せず手順 4 へ抜けるが、報告は
+      `pending_count` で 2 通りに切り分ける（判定材料は `checks[]` の `name` / `workflow_id` /
+      `run_number` と `status` / `pending_count`）。`bin/gh-pr-checks` の `newest_completed` は
+      *completed* な run しか見ないため、`concurrency: cancel-in-progress` で置換 run が
+      in_progress の間は cancelled 側の `superseded` が `false` のまま残り、必要なのは再実行では
+      なく置換 run の完了待ちになる。
+      - `pending_count` が非 0 で同一 workflow により新しい pending run があるなら、
+        **「置換 run の完了待ち、再実行は不要」**と明記する。
+      - `pending_count` が 0（置換 run が無い）なら、現行どおり**「実質的な failure は 0 件、
+        内訳は cancelled のみ」「再実行 1 回で解消する見込み」**と明記し、人間が再実行 1 回で
+        復帰できる形にする。
       再実行の手段を将来足す場合も **上限 1 回**に切る。無制限に撃ち直すと、本当に落ちている check を
       「いつか通る」まで再実行して押し通す方向へ倒れる。1 回で直らないなら一過性ではないので、
       そこで人間へ返すのが正しい。
@@ -291,12 +299,13 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >   必ず失敗する）。`has_failure` が `true` なら `fail`、`false` かつ `pending_count` が 0 なら `pass`、
 >   それ以外は `pending`。実行できず不明なら `pending`。
 >   **ただし `has_failure` が `true` でも、fail に効いているのが cancelled だけ**なら `pending`
->   にする。`checks[]` は `source` によって fail の効き方が違う（`bin/gh-pr-checks` の
->   `is_failure` 参照。編集はしない）: `source == "actions"` は `conclusion` が `failure` /
->   `timed_out` / `startup_failure` のものが 1 件も無く `conclusion: "cancelled"` かつ
->   `superseded: false` のものだけがある場合、`source == "status"` は `conclusion` が
->   `failure` / `error` のものが 1 件も無い場合（`status` に cancelled の概念は無いので、この
->   場合はそもそも fail に効くものが無い）。
+>   にする。手順 3.b と同じ (1)/(2) で判定し、**両方を満たすときに限る**（source ごとに独立に
+>   判定してよいのではなく、両 source 通しての AND 条件）: 実質的な failure（`source ==
+>   "actions"` の `conclusion` が `failure` / `timed_out` / `startup_failure`、`source ==
+>   "status"` の `conclusion` が `failure` / `error`。合わせて (1)）が両 source 通して 1 件も
+>   無く、**かつ** `source == "actions"` の `conclusion` が `cancelled` かつ `superseded: false`
+>   （(2)）が 1 件以上ある。`checks[]` の `source` 別の判定は `bin/gh-pr-checks` の `is_failure`
+>   参照（編集はしない）。
 >   実質的な failure が無い状態を `fail` と扱うと `mergeable` が `false` に固定され、5 巡を
 >   使い切って手順 3.b の切り分けにたどり着けなくなるため。merge の gate 自体は手順 3.b が
 >   `has_failure` で閉じたままにするので、ここを緩めても cancelled のまま merge されることはない。
