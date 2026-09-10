@@ -45,12 +45,15 @@ declare -A CustomLocationMap
 # The specified value must include the symlink name.
 CustomLocationMap["git"]="${HOME}/.config/git"
 CustomLocationMap["nvim"]="${HOME}/.config/nvim"
-CustomLocationMap["systemd"]="${HOME}/.config/systemd"
 
 declare -A MergeLinkMap
 # For directories where individual files should be linked INTO
 # an existing directory (instead of replacing the whole directory).
 MergeLinkMap["claude"]="${HOME}/.claude"
+# ~/.config/systemd and its user/ subdirectory already exist as real directories
+# (systemd keeps its own state there, e.g. *.target.wants), so a whole-directory
+# link would land inside them instead of replacing them.
+MergeLinkMap["systemd-user"]="${HOME}/.config/systemd/user"
 
 for dotname in $(ls "$__dotfiles_path"); do
     if [ -n "${MergeLinkMap["${dotname}"]}" ]; then
