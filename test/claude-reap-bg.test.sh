@@ -182,11 +182,16 @@ printf '%s\n' "$*" >>"$CLAUDE_STUB_RMLOG"
 EOF
 chmod +x "$rmstub/rm"
 
+# Named so the control subtest below (which checks the stub actually
+# intercepts rm) uses the identical PATH prefix run() does, rather than a
+# copy that could drift out of sync.
+stubpath="$rmstub:$stubbin:$bindir:$PATH"
+
 stoplog="$tmp/stop.log"
 run() {
   : >"$stoplog"
   : >"$rmlog"
-  PATH="$rmstub:$stubbin:$bindir:$PATH" \
+  PATH="$stubpath" \
     CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" \
     CLAUDE_STUB_RMLOG="$rmlog" CLAUDE_QUEUE_DB="$db" "$src" "$@"
 }
@@ -319,6 +324,18 @@ else echo "FAIL: stop attempted for a stale record stoplog=$(cat "$stoplog")"; f
 if [ ! -s "$rmlog" ]; then
   echo "ok: the suggested rm is printed, never executed"
 else echo "FAIL: rm was executed: $(cat "$rmlog")"; fail=1; fi
+
+# Control for the assertion above: an empty rmlog is also what we'd see if the
+# stub had silently fallen off PATH and a real `rm` ran instead (it has no
+# reason to write to $rmlog). Absence-as-success needs proof the stub is
+# actually reachable on the exact PATH run() uses, or the check above never
+# fails no matter what claude-reap-bg does (evidence-over-guesswork.md #5).
+: >"$rmlog"
+PATH="$stubpath" CLAUDE_STUB_RMLOG="$rmlog" rm -rf /nonexistent/probe
+if [ -s "$rmlog" ]; then
+  echo "ok: the rm stub actually intercepts calls on run()'s PATH (control for the check above)"
+else echo "FAIL: rm stub did not capture a direct call -- the above ok proves nothing"; fail=1; fi
+: >"$rmlog"
 
 # A stale entry without `state` prints no empty parenthesis, and still gets its
 # removal hint.
