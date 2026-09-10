@@ -56,9 +56,7 @@ git 固有の一文が付く（次節末尾を参照）。
 一度きりの read-only 覗き見」で `git -C <絶対パス>` を使う場合は、承認プロンプトが出るのを
 受け入れる（一度きりなので摩擦が小さい）。
 
-由来: 2026-08-26、Claude Code 2.1.246 が起動時に user 設定（`~/.claude/settings.json`）の
-`Bash(git -C * <sub>)` 32 行それぞれへ警告を出したのが発端。user 設定由来なので全 project で出る。
-同 32 行を削除し、上の方針へ差し替えた。
+由来: dotrc#52
 
 ### ファイル系 permission は Read/Edit の 2 ファミリでしか照合されない
 
@@ -74,7 +72,7 @@ git 固有の一文が付く（次節末尾を参照）。
 
 なおパスを伴わない裸のツール名 deny（例: `Write`）はツール全体にマッチする一括 deny であり、この 2 ファミリ判定の対象外なので警告は出ない。
 
-由来: PR #23 で `settings.json` から `Glob(...)` / `Write(...)` / `MultiEdit(...)` 形の dead rule 23 件を削除した際に判明。
+由来: dotrc#23
 
 ### 3 層の使い分け — 委譲先に効かせたい rule は tracked に置く
 
@@ -100,14 +98,7 @@ rule は、tracked な置き場所へ昇格させる（複数 repo で使うな�
 とおり）。その checkout 限りの実験や、ローカルのパスに依存する許可は local に残してよい
 （他人の checkout では dead rule になるだけで、伝播させる価値が無いため）。
 
-由来: background 委譲が permission prompt で構造的に停止した実測 4 本連続。いずれも
-`bash test/*.test.sh` / `go test` / `git fetch origin` という定型の検証コマンドだった。
-`implement-and-review` は PR を出す前に必ず `git fetch origin` を撃つ設計なので、穴が塞がるまで
-全委譲が必ず止まる状態だった。同種の rule は `.claude/settings.local.json` に個別に溜まって
-いたが、git 管理外で伝播しなかったのが根本原因。repo 固有の `bash test/*` は tracked な
-`<repo>/.claude/settings.json` を新設して解決し、複数 repo で使う `git fetch origin` / `go test`
-は表の基準どおり `~/.claude/settings.json`（dotrc の `dot/claude/settings.json`）側へ足した
-（PR #47）。
+由来: dotrc#59
 
 ### Hot-reload
 

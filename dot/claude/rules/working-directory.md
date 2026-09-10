@@ -10,6 +10,8 @@
 関連ルール: 承認が要るコマンドの回避一般は [bash-command-constraints.md](./bash-command-constraints.md)、
 別 worktree・別 repo を read-only で覗く許可は [worktree-scope.md](./worktree-scope.md) §3 を参照。
 
+由来: dotrc#17
+
 ### 大前提
 
 `cd <dir> && …` でディレクトリを渡り歩かない。編集・commit・実行したい先が cwd でないなら、
@@ -96,15 +98,4 @@ CLAUDE.md はロードされない）。エラーも警告も出ないので、�
 こちらはその合図が無く、静かに間違える。repo 内でも作業対象が cwd でないなら、§トリガーの
 とおり `/cd <dir>` を頼んで止まる。
 
----
-
-由来: worktree/monorepo 作業中、agent が cwd と別ディレクトリを触るのに
-`cd <絶対パス> && …` や `git -C <dir>` を多用し承認プロンプトを頻発させていた指摘から。
-claude-queue の実データ（約 78 件）を分類すると、他 worktree への書き込みは 0 件で安全性の
-問題ではなく、実害は「repo root への cd」「別 repo の read-only 調査」での承認プロンプトの
-摩擦だった。根本原因は cwd が作業対象からズレていること。`cd`/`git -C` はその場しのぎの
-回避で毎回守るのは期待薄なので、cwd 自体を `/cd` で直す規範へ寄せた。
-
-第 3 の形の由来: 委譲先の 1 つが repo 内サブディレクトリへ `cd` し、承認も巻き戻しも起きない
-まま以降の cwd が移った実測から。既存の 2 つはどちらも「working directory の外へ出る」前提
-だったため、この形が素通りしていた。
+由来: dotrc#78

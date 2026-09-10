@@ -137,6 +137,4 @@ allowlist（grant）の変更は agent に委譲してよい。ただし **grant
 grant の広さは merge 前に必ず一度は人目を通る。だから条件を「誰が書くか」ではなく merge
 ゲート側へ置く。
 
-由来: PR #83 で `bin/gh-issue-file` を導入した際、allowlist を委譲先のスコープ外としたため
-必要な allow 行が未追加のまま残った（issue #87）。grant 追加だけが委譲できない例外として
-残る運用コストのほうが、書き手を人間に限る利得より大きかった。
+由来: dotrc#90
