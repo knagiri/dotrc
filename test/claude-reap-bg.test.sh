@@ -48,10 +48,16 @@ chmod +x "$stubbin/claude"
 # Four background sessions plus one interactive, all `idle`. Only the id prefix
 # matters downstream; the rest mirrors the real roster shape.
 #
-# The last two mirror a stale job record as the real roster reports one: no
+# The next two mirror a stale job record as the real roster reports one: no
 # `pid` (the process is gone), no `status` either, and `state` instead -- with
 # `11111111` carrying a state and `22222222` carrying none, so the report is
 # exercised both with and without the diagnostic.
+#
+# The last one is an interactive entry with no `pid` -- an interactive session
+# can lack a pid too (e.g. attached over a remote transport), and it has no
+# `id` field of its own, so the `.id // .sessionId` fallback would otherwise
+# pick up its sessionId prefix as if it were a job id. ~/.claude/jobs/<id> is
+# a background-job concept; this entry must never appear in the stale section.
 roster="$tmp/roster.json"
 cat >"$roster" <<'EOF'
 [
@@ -62,7 +68,8 @@ cat >"$roster" <<'EOF'
   {"pid":5,"cwd":"/w/human","kind":"interactive","sessionId":"eeeeeeee-1111-2222-3333-444444444444","status":"idle"},
   {"pid":6,"cwd":"/w/asked-meta","kind":"background","sessionId":"ffffffff-1111-2222-3333-444444444444","status":"idle"},
   {"id":"11111111","cwd":"/w/stale","kind":"background","sessionId":"11111111-1111-2222-3333-444444444444","name":"gone","state":"blocked"},
-  {"id":"22222222","cwd":"/w/stale-nostate","kind":"background","sessionId":"22222222-1111-2222-3333-444444444444","name":"gone too"}
+  {"id":"22222222","cwd":"/w/stale-nostate","kind":"background","sessionId":"22222222-1111-2222-3333-444444444444","name":"gone too"},
+  {"cwd":"/w/stale-interactive","kind":"interactive","sessionId":"33333333-1111-2222-3333-444444444444"}
 ]
 EOF
 
@@ -314,6 +321,14 @@ if grep -q '22222222  no process$' <<<"$out" \
    && grep -qF '→ rm -rf ~/.claude/jobs/22222222' <<<"$out"; then
   echo "ok: a stale record with no state omits the empty parenthesis"
 else echo "FAIL: stateless stale record misformatted out=$out"; fail=1; fi
+
+# A pid-less interactive entry is not a stale job record: kind must be
+# "background" too, since ~/.claude/jobs/<id> is a background-job concept and
+# an interactive session has no such directory. Still exactly 2 stale records
+# (11111111, 22222222), not 3.
+if grep -q 'stale job records (2)' <<<"$out" && ! grep -q 33333333 <<<"$out"; then
+  echo "ok: a pid-less interactive entry is not reported as a stale job record"
+else echo "FAIL: pid-less interactive entry leaked into stale section out=$out"; fail=1; fi
 
 # Regression: the live sweep is unchanged by any of the above -- the ripe
 # session is still stopped and the fresh one still skipped in the same run.
