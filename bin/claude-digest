@@ -304,9 +304,20 @@ for uuid in "${session_ids[@]}"; do
     if [ -z "${repo_seen[$repo]+x}" ]; then repo_seen[$repo]=1; repos+=("$repo"); fi
     case "${s_repos[$uuid]}" in *" $repo "*) : ;; *) s_repos[$uuid]="${s_repos[$uuid]}$repo " ;; esac
     if [ -n "$branch" ]; then
-      branch_repo["${repo}${US}${branch}"]=1
-      s_branch_keys[$uuid]="${s_branch_keys[$uuid]}${repo}${US}${branch}
-"
+      key="${repo}${US}${branch}"
+      branch_repo[$key]=1
+      # Same dedupe as s_repos above: one session routinely records the same
+      # repo\001branch from two cwds (the repo and one of its worktrees, or a
+      # subdirectory), and both fold onto this one key -- session_branches()
+      # would then print the same OPEN_BRANCH line twice and hand stage 2 the
+      # same fact twice. Entries are newline-separated, so the guard has to be
+      # a whole-line match: the " $x " padding s_repos uses would not stop
+      # "repo\001feature/op" from matching inside "repo\001feature/open".
+      # branch_repo is an associative array, so it never needed one.
+      case $'\n'"${s_branch_keys[$uuid]}" in
+        *$'\n'"$key"$'\n'*) : ;;
+        *) s_branch_keys[$uuid]="${s_branch_keys[$uuid]}${key}"$'\n' ;;
+      esac
     fi
   done <<<"${s_pairs[$uuid]}"
 done
