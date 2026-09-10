@@ -52,6 +52,13 @@ run() {  # run <script> <home>
   ( HOME="$2" "$1" ) >/dev/null 2>&1
 }
 
+# Separate from run(): captures stderr instead of discarding it, to check the
+# skip notice the guard prints on its else branch (a stale block pointing at
+# another checkout should not go silently unnoticed -- dotrc-deploy.md §4).
+run_capture_stderr() {  # run_capture_stderr <script> <home> <stderr-out-file>
+  ( HOME="$2" "$1" ) >/dev/null 2>"$3"
+}
+
 # --- Case A: a first-time home, then a re-run -------------------------------
 home_a="$sandbox/home_a"; mkdir -p "$home_a"
 run "$repo/bin/deploy.sh" "$home_a"; rc_a=$?
@@ -72,6 +79,11 @@ check "re-running deploy.sh does not append the block a second time" \
 # not have cost the rest of the script its second pass.
 check "the re-run still expands dot/ entries" \
   "$(if [ -L "$home_a/.example" ]; then echo 0; else echo 1; fi)"
+stderr_a="$sandbox/stderr_a"
+run_capture_stderr "$repo/bin/deploy.sh" "$home_a" "$stderr_a"
+check "re-running deploy.sh reports the skip on stderr instead of staying silent" \
+  "$(if grep -qF 'already in' "$stderr_a" && grep -qF 'skipped' "$stderr_a"
+     then echo 0; else echo 1; fi)"
 
 # --- Case B: the same two runs without the guard ----------------------------
 home_b="$sandbox/home_b"; mkdir -p "$home_b"
