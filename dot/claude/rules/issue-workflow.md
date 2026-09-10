@@ -28,16 +28,17 @@ gh-issue-file --kind <harness|bug|task> --title <title> --body-file <path> [--no
 | code | 意味 | 対応 |
 |---|---|---|
 | 0 | 起票した | stdout の URL を報告する |
-| 1 | 引数か body の不備、または `gh issue create` 自体の失敗（label 未作成・認証など） | stderr を読んで切り分ける |
+| 1 | 引数か body の不備 | stderr を読んで切り分ける |
 | 2 | dedup ゲート | 下記のとおり候補を**読んでから**判断する |
 | 128 | git repo 外から呼んだ（`root="$(git rev-parse --show-toplevel)"` が `set -e` 下で素通しする git 自体の失敗） | stderr に `fatal: not a git repository ...` が出る。cwd を repo 内へ移して再実行する |
+| 上記以外の非 0 | 末尾で `exec` する `gh issue create`、または dedup ゲート手前で叩く `gh issue list` の失敗がそのまま伝播する（`set -e` は代入付き command substitution の失敗も gh の実際の終了コードのまま返し、1 に丸めない。実測: 未認証状態の `gh issue list` は exit 4） | stderr を読む。委譲 worktree では token 未供給を疑う（`worktree-scope.md` §6 の既知 gap） |
 
-code 1 は `bin/gh-issue-file` 自身の検証だけでなく、末尾で `exec gh issue create` した先の gh の
-失敗もそのまま返る。dedup ゲート手前で叩く `gh issue list` の失敗も同様で、非 0 で返れば
-`set -e` によりそのまま code 1 として終わる。stderr が欠落見出しを名指ししていれば body 側の
-不備なので直して再実行、そうでなければ gh 側の失敗（label 未作成・認証エラー・ネットワーク
-エラー等、`gh issue list` / `gh issue create` のどちらでも起こりうる）なので body を直さず原因を
-潰してから再実行する。
+code 1 は `bin/gh-issue-file` 自身の検証の失敗であり、末尾で `exec gh issue create` した先の gh の
+失敗や、dedup ゲート手前で叩く `gh issue list` の失敗はそれぞれの終了コードのまま返る（上表の
+「上記以外の非 0」）。stderr が欠落見出しを名指ししていれば body 側の不備（code 1）なので直して
+再実行、そうでなければ gh 側の失敗（label 未作成・認証エラー・ネットワークエラー等、
+`gh issue list` / `gh issue create` のどちらでも起こりうる）なので body を直さず原因を潰してから
+再実行する。
 
 exit 2 のときは既存 agent task の一覧が stderr に出る。候補の title を読み、
 
