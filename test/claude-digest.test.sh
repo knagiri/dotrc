@@ -138,6 +138,11 @@ merge_pr_b() {  # merge_pr_b <branch> <pr> <title> <author-email> <author-name>
 }
 merge_pr_b pr201 201 'feat: mine in repo_b' 'plain@example.com' 'Plain'
 merge_pr_b pr202 202 'chore: regex-only match' "$bre_impostor" 'Other'
+# Same PR number as repo_a's #101 above, landed here too, and mentioned by no
+# session anywhere. `linked` used to be keyed on PR number alone, so repo_a's
+# #101 being linked to the "early" session made this repo_b #101 vanish from
+# UNLINKED_LANDED as a side effect -- a silent loss, not merely a misattribution.
+merge_pr_b pr203 101 'chore: repo_b collision' 'plain@example.com' 'Plain'
 git -C "$repo_b" push -q origin main
 
 # A branch of mine that collides by name with repo_a's "feature/open" above,
@@ -290,6 +295,11 @@ check "a landed PR the session mentions is attached to it" \
      then echo 0; else echo 1; fi)"
 check "a landed PR nobody mentioned goes to the unlinked list" \
   "$(if grep -q '^- #103 fix: landed but unmentioned' <<<"$d1"; then echo 0; else echo 1; fi)"
+# repo_b's #101 shares its number with repo_a's #101, which the "early"
+# session links above. Keying `linked` on PR number alone would drop this one
+# out of UNLINKED_LANDED entirely, on top of nowhere else in the digest.
+check "a landed PR whose number collides with another repo's linked PR still surfaces as unlinked" \
+  "$(if grep -q '^- #101 chore: repo_b collision' <<<"$d1"; then echo 0; else echo 1; fi)"
 check "a near-miss author address is not counted as mine" \
   "$(if ! grep -q '#102' <<<"$d1"; then echo 0; else echo 1; fi)"
 check "the plain-address pattern still finds my own landings" \
