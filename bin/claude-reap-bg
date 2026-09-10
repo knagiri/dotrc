@@ -29,16 +29,20 @@ set -euo pipefail
 # wrapper's guard (refuse anything not kind=="background", refuse ambiguous
 # ids) still applies on top of the checks here.
 #
-# Separately, the roster also reports jobs whose process is already gone: an
-# entry with no `pid`. Its source is ~/.claude/jobs/<id>/state.json, and a job
-# left at state `blocked` never transitions to `stopped`, so the entry outlives
-# the process forever. Such an entry has no `status` either, so the gates above
-# can never see it -- it is a stale record, not a session. Those are REPORTED
-# in a third section and nothing else: there is no process to stop, and the job
-# directory routinely holds artifacts (PR drafts, backups), so removing it is
-# the human's call. The detection is `pid == null` alone; `state` is printed as
-# a diagnostic but never used to decide, since it is claude's own internal
-# vocabulary and free to change.
+# Separately, the roster also reports background jobs whose process is already
+# gone: a kind=="background" entry with no `pid`. Its source is
+# ~/.claude/jobs/<id>/state.json, and a job left at state `blocked` never
+# transitions to `stopped`, so the entry outlives the process forever. Such an
+# entry has no `status` either, so the gates above can never see it -- it is a
+# stale record, not a session. Those are REPORTED in a third section and
+# nothing else: there is no process to stop, and the job directory routinely
+# holds artifacts (PR drafts, backups), so removing it is the human's call. The
+# detection is `kind == "background" and pid == null`; `state` is printed as a
+# diagnostic but never used to decide, since it is claude's own internal
+# vocabulary and free to change. `kind` is required alongside `pid` because an
+# interactive entry can also lack a `pid`, and ~/.claude/jobs/<id> only ever
+# exists for background jobs -- without the kind check such an entry's
+# sessionId prefix would be reported as a job id backed by no such directory.
 #
 # Manual, best-effort: exits 0 even when candidates are skipped. There is no
 # cron/daemon on purpose -- an unattended killer of sessions is exactly what
@@ -163,10 +167,14 @@ done < <(jq -r '.[] | select(.kind == "background" and .status == "idle") | .ses
 declare -a shorts=()
 for sid in "${candidates[@]}"; do shorts+=("${sid:0:8}"); done
 
-# Stale job records: roster entries with no `pid`, i.e. the process behind the
-# job is already gone. `pid == null` alone decides this -- `state` comes along
-# only to be printed. These are reported, never acted on, so they are collected
-# apart from the reap accumulators. Each entry is "<job-id>\t<state>".
+# Stale job records: background roster entries with no `pid`, i.e. the process
+# behind the job is already gone. `kind == "background" and pid == null`
+# decides this -- `state` comes along only to be printed. Restricting to
+# kind=="background" matters because an interactive entry can also lack a
+# `pid`; ~/.claude/jobs/<id> is a background-job concept, not a general claude
+# one, so a pid-less interactive entry is not a stale job record at all. These
+# are reported, never acted on, so they are collected apart from the reap
+# accumulators. Each entry is "<job-id>\t<state>".
 declare -a stale=()
 while IFS=$'\t' read -r job_id job_state; do
   [ -n "$job_id" ] || continue
@@ -174,7 +182,7 @@ while IFS=$'\t' read -r job_id job_state; do
     continue
   fi
   stale+=("$job_id"$'\t'"$job_state")
-done < <(jq -r '.[] | select(.pid == null)
+done < <(jq -r '.[] | select(.kind == "background" and .pid == null)
                     | [ ((.id // .sessionId // "") | .[0:8]), (.state // "") ] | @tsv' <<<"$roster")
 
 declare -a stale_ids=()
