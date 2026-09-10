@@ -40,9 +40,10 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    単純なコマンド置換では `origin/main` へフォールバックできない）。
 
    ```sh
+   git fetch origin
    if b="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null)" && [ "$b" != "origin/HEAD" ]; then
      git merge --ff-only "$b"
-   else
+   elif git rev-parse --verify --quiet origin/main >/dev/null; then
      git merge --ff-only origin/main
    fi
    ```
