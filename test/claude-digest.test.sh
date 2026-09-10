@@ -155,6 +155,25 @@ git -C "$repo_b" commit -q --allow-empty -m 'name collides with repo_a feature/o
 git -C "$repo_b" commit -q --allow-empty -m 'second commit so ahead=2, unlike repo_a'
 git -C "$repo_b" switch -q main
 
+# repo_c: a remote whose default branch is "master", with refs/remotes/origin/
+# HEAD never set -- so default_ref() finds neither origin/HEAD nor origin/main
+# and returns nothing. followRemoteHEAD=never keeps `git fetch` (which the
+# digest runs per repo) from filling origin/HEAD in on git 2.47+.
+repo_c="$sandbox/repo_c"
+git init -q --bare "$sandbox/remote_c.git"
+git init -q -b master "$repo_c"
+git -C "$repo_c" config user.name 'Nobase'
+git -C "$repo_c" config user.email 'nobase@example.com'
+git -C "$repo_c" commit -q --allow-empty -m 'init'
+git -C "$repo_c" remote add origin "$sandbox/remote_c.git"
+git -C "$repo_c" config remote.origin.followRemoteHEAD never
+git -C "$repo_c" push -q -u origin master
+# Unmerged: one commit master does not have. With no base to measure against,
+# the ahead count is unknowable -- not zero.
+git -C "$repo_c" switch -q -c feature/nobase
+git -C "$repo_c" commit -q --allow-empty -m 'unmerged work'
+git -C "$repo_c" switch -q master
+
 unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
 
 # --------------------------------------------------------------------------
@@ -227,6 +246,12 @@ plain=66666666-6666-6666-6666-666666666666
   entry '2026-03-01T07:01:00.500Z' "$repo_b" 'feature/open'
 } >"$projects/-proj-b/$plain.jsonl"
 
+# NOBASE: the session that worked in repo_c, whose base cannot be resolved.
+nobase=88888888-8888-8888-8888-888888888888
+{ title_entry 'nobase session'
+  entry '2026-03-01T05:00:00.200Z' "$repo_c" 'feature/nobase'
+} >"$projects/-proj-b/$nobase.jsonl"
+
 # --------------------------------------------------------------------------
 run() {  # run <day>; prints the facts block
   env CLAUDE_PROJECTS_DIR="$projects" CLAUDE_DIGEST_DIR="$digests" \
@@ -248,6 +273,16 @@ extract_session() {
   awk -v u="$2" '
     $0 ~ ("^### SESSION " u "$") { f=1; print; next }
     /^### SESSION / { f=0 }
+    f { print }
+  ' <<<"$1"
+}
+# extract_section <facts> <heading-prefix>; prints one top-level section, so a
+# check can assert something is absent from REAP_CANDIDATES or UNLINKED_LANDED
+# specifically even when the same name legitimately appears elsewhere.
+extract_section() {
+  awk -v h="## $2" '
+    index($0, h) == 1 { f=1; next }
+    /^## / { f=0 }
     f { print }
   ' <<<"$1"
 }
@@ -290,16 +325,28 @@ check "a plain address falls back to the address itself" \
      then echo 0; else echo 1; fi)"
 
 # --- landed pull requests ---------------------------------------------------
-check "a landed PR the session mentions is attached to it" \
-  "$(if grep -q "^LANDED_PR: #101 feat: the mentioned one (自分の commit 1)" <<<"$d1"
+# Every fact line names its repo: PR numbers are not unique across repos, and
+# a day's sessions routinely span several, so a bare "#101" is ambiguous to
+# the reader and to stage 2.
+check "a landed PR the session mentions is attached to it, named with its repo" \
+  "$(if grep -qF "LANDED_PR: $repo_a #101 feat: the mentioned one (自分の commit 1)" <<<"$d1"
      then echo 0; else echo 1; fi)"
-check "a landed PR nobody mentioned goes to the unlinked list" \
-  "$(if grep -q '^- #103 fix: landed but unmentioned' <<<"$d1"; then echo 0; else echo 1; fi)"
+check "a landed PR nobody mentioned goes to the unlinked list, named with its repo" \
+  "$(if grep -qF -- "- $repo_a #103 fix: landed but unmentioned" <<<"$d1"
+     then echo 0; else echo 1; fi)"
 # repo_b's #101 shares its number with repo_a's #101, which the "early"
 # session links above. Keying `linked` on PR number alone would drop this one
 # out of UNLINKED_LANDED entirely, on top of nowhere else in the digest.
 check "a landed PR whose number collides with another repo's linked PR still surfaces as unlinked" \
-  "$(if grep -q '^- #101 chore: repo_b collision' <<<"$d1"; then echo 0; else echo 1; fi)"
+  "$(if grep -qF -- "- $repo_b #101 chore: repo_b collision" <<<"$d1"
+     then echo 0; else echo 1; fi)"
+# The two #101s are different pull requests in different repos, one linked and
+# one not. Without the repo on the line the unlinked entry reads as repo_a's.
+unlinked1="$(extract_section "$d1" UNLINKED_LANDED)"
+check "the unlinked #101 is legible as repo_b's, not repo_a's" \
+  "$(if grep -qF -- "- $repo_b #101 " <<<"$unlinked1" \
+       && ! grep -qF -- "- $repo_a #101 " <<<"$unlinked1"
+     then echo 0; else echo 1; fi)"
 check "a near-miss author address is not counted as mine" \
   "$(if ! grep -q '#102' <<<"$d1"; then echo 0; else echo 1; fi)"
 check "the plain-address pattern still finds my own landings" \
@@ -315,12 +362,15 @@ check "a PR number the session merely mentions does not become a landing" \
 # matching PR numbers without also requiring the session's repo to be among
 # the landing's repo would attach it here anyway.
 check "a landed PR from another repo is not linked despite a colliding mention" \
-  "$(if ! grep -q '^LANDED_PR: #201' <<<"$(extract_session "$d1" "$early")"
+  "$(if ! grep -q '^LANDED_PR: .* #201' <<<"$(extract_session "$d1" "$early")"
      then echo 0; else echo 1; fi)"
 
 # --- leftover branches ------------------------------------------------------
-check "a branch of mine that is ahead of the base is reported OPEN" \
-  "$(if grep -q '^OPEN_BRANCH: feature/open ahead=1' <<<"$d1"; then echo 0; else echo 1; fi)"
+# Branch lines name their repo for the same reason PR lines do: repo_a and
+# repo_b both have a "feature/open", with different ahead counts.
+check "a branch of mine that is ahead of the base is reported OPEN, named with its repo" \
+  "$(if grep -qF "OPEN_BRANCH: $repo_a feature/open ahead=1" <<<"$d1"
+     then echo 0; else echo 1; fi)"
 check "a branch whose tip is somebody else's is dropped" \
   "$(if ! grep -q 'feature/theirs' <<<"$d1"; then echo 0; else echo 1; fi)"
 # repo_b's "feature/open" (ahead=2) collides by name with repo_a's (ahead=1).
@@ -328,22 +378,37 @@ check "a branch whose tip is somebody else's is dropped" \
 # would leak repo_b's entry into a repo_a session's block.
 check "a same-named OPEN branch in another repo is not attributed here" \
   "$(if ! grep -q 'ahead=2' <<<"$(extract_session "$d1" "$early")"; then echo 0; else echo 1; fi)"
-check "...but it is still correctly reported for its own session" \
-  "$(if grep -q '^OPEN_BRANCH: feature/open ahead=2' <<<"$(extract_session "$d1" "$plain")"
+check "...but it is still correctly reported for its own session, named with its repo" \
+  "$(if grep -qF "OPEN_BRANCH: $repo_b feature/open ahead=2" <<<"$(extract_session "$d1" "$plain")"
      then echo 0; else echo 1; fi)"
 # "feature/op" is a strict prefix of "feature/open". Unanchored substring
 # matching would let it match inside "early"'s "...\001feature/open" pair and
 # show up in a session that never touched "feature/op".
 check "a branch name that is a prefix of another OPEN branch is not attributed here" \
-  "$(if ! grep -qF 'OPEN_BRANCH: feature/op ' <<<"$(extract_session "$d1" "$early")"
+  "$(if ! grep -qF "OPEN_BRANCH: $repo_a feature/op " <<<"$(extract_session "$d1" "$early")"
      then echo 0; else echo 1; fi)"
 check "...but it is still correctly reported for its own session" \
-  "$(if grep -qF 'OPEN_BRANCH: feature/op ' <<<"$(extract_session "$d1" "$prefix")"
+  "$(if grep -qF "OPEN_BRANCH: $repo_a feature/op " <<<"$(extract_session "$d1" "$prefix")"
      then echo 0; else echo 1; fi)"
 check "the base branch itself is never a leftover" \
-  "$(if ! grep -qE '^OPEN_BRANCH: main ' <<<"$d1"; then echo 0; else echo 1; fi)"
-check "a merged branch whose remote is gone becomes a reap candidate" \
-  "$(if grep -q '^- feature/landed (ahead=0 upstream gone)' <<<"$d1"
+  "$(if ! grep -qE '^OPEN_BRANCH: [^ ]+ main ' <<<"$d1"; then echo 0; else echo 1; fi)"
+check "a merged branch whose remote is gone becomes a reap candidate, named with its repo" \
+  "$(if grep -qF -- "- $repo_a feature/landed (ahead=0 upstream gone)" <<<"$d1"
+     then echo 0; else echo 1; fi)"
+
+# --- a repo whose base cannot be resolved -----------------------------------
+# repo_c has neither origin/HEAD nor origin/main, so there is nothing to count
+# the branch against. Leaving ahead at 0 would classify an unmerged branch as
+# LANDED and hand it to git-reap-gone -- which resolves origin/HEAD itself and
+# so could not act on the advice even if the branch really had landed.
+check "a repo with no resolvable base is reported as such" \
+  "$(if grep -qF "$repo_c base=? " <<<"$d1"; then echo 0; else echo 1; fi)"
+check "an unmerged branch in a base-less repo is not a reap candidate" \
+  "$(if ! grep -q 'feature/nobase' <<<"$(extract_section "$d1" REAP_CANDIDATES)"
+     then echo 0; else echo 1; fi)"
+check "an unmerged branch in a base-less repo is reported OPEN with base=unknown" \
+  "$(if grep -qF "OPEN_BRANCH: $repo_c feature/nobase base=unknown" \
+       <<<"$(extract_session "$d1" "$nobase")"
      then echo 0; else echo 1; fi)"
 
 # --- empty and missing ------------------------------------------------------
@@ -353,7 +418,7 @@ check "a session with no ai-title falls back to its first prompt" \
 check "a session with no surviving cwd is reported unreachable" \
   "$(if grep -q "^- ${bare:0:8} first prompt" <<<"$d1"; then echo 0; else echo 1; fi)"
 check "an entry with no gitBranch produces no branch line" \
-  "$(if ! grep -qE '^OPEN_BRANCH: +$' <<<"$d1"; then echo 0; else echo 1; fi)"
+  "$(if ! grep -qE '^OPEN_BRANCH: [^ ]+ +$' <<<"$d1"; then echo 0; else echo 1; fi)"
 
 d0="$(run 2026-01-01)"; rc0=$?
 check "a day with no sessions still produces a facts block" \
@@ -436,6 +501,46 @@ if env CLAUDE_DIGEST_DIR="$empty_dir" PATH="$stubdir:$PATH" "$bin" \
 then rc=1; else rc=0; fi
 check "show with an empty digest dir fails with a message, not silently" \
   "$(if [ "$rc" = 0 ] && grep -q 'no digest generated yet' "$sandbox/empty_err"
+     then echo 0; else echo 1; fi)"
+
+# --- show mode: which pager -------------------------------------------------
+# show() pages only when stdout is a tty, so every case here runs under a pty
+# from `script` (util-linux). PATH is rebuilt per case so the host's own bat
+# and less cannot leak in; sysbin carries only what show() itself calls.
+sysbin="$sandbox/sysbin"; mkdir -p "$sysbin"
+for t in bash ls sort tail cat; do ln -sf "$(command -v "$t")" "$sysbin/$t"; done
+
+pager_stub() {  # pager_stub <dir> <name>; records that it was the one chosen
+  mkdir -p "$1"
+  cat >"$1/$2" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "$2" >>"\$CD_PAGER"
+exit 0
+STUB
+  chmod +x "$1/$2"
+}
+pagers_both="$sandbox/pager_both"; pager_stub "$pagers_both" bat; pager_stub "$pagers_both" less
+pagers_less="$sandbox/pager_less"; pager_stub "$pagers_less" less
+pagers_none="$sandbox/pager_none"; mkdir -p "$pagers_none"
+
+show_under_pty() {  # show_under_pty <pager-dir>; prints the digest as shown
+  : >"$sandbox/pager.log"
+  script -qec "env PATH='$1:$sysbin' CD_PAGER='$sandbox/pager.log' \
+CLAUDE_DIGEST_DIR='$digests' '$bin' 2026-03-01" /dev/null
+}
+
+show_under_pty "$pagers_both" >/dev/null
+check "show pages through bat when it is available" \
+  "$(if [ "$(cat "$sandbox/pager.log")" = bat ]; then echo 0; else echo 1; fi)"
+show_under_pty "$pagers_less" >/dev/null
+check "show falls back to less when bat is missing" \
+  "$(if [ "$(cat "$sandbox/pager.log")" = less ]; then echo 0; else echo 1; fi)"
+# cat is the last resort, not the fallback: `display-popup -E` closes the
+# popup the moment the command exits, so a digest handed to cat is unreadable
+# there. It still has to print rather than page.
+pty_out="$(show_under_pty "$pagers_none")"
+check "show falls back to cat when neither pager exists" \
+  "$(if [ ! -s "$sandbox/pager.log" ] && grep -q 'STUB-DIGEST' <<<"$pty_out"
      then echo 0; else echo 1; fi)"
 
 # --- argument handling ------------------------------------------------------
