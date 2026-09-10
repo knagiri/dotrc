@@ -5,8 +5,6 @@
 # keep even on a checkout that has none of it.
 # See dot/claude/rules/worktree-scope.md §6.
 
-# A delegate opens PRs by default, so it needs a GitHub token, and mise reads
-# that token via this file. The file is a pointer (`_.file = "~/..."`); the
-# secret itself stays under $HOME, so the copy carries nothing sensitive into
-# the worktree or the repo.
-mise.local.toml
+# Worktrees live at <repo>/.worktrees/<name>, inside the main checkout, so mise
+# walks up and picks up the checkout's own mise.local.toml (already a trusted
+# path). No mise config needs seeding.

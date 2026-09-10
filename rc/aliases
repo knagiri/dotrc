@@ -11,7 +11,10 @@ alias rm='rm -i'
 
 alias vim='nvim'
 
-# ghq-tmux-session: pick an ghq repo/worktree and create/switch a tmux session
+# ghq-tmux-session: pick a ghq repo and create/switch a tmux session.
+# Repos only -- worktrees live at <repo>/.worktrees/<name>, which ghq does not
+# list; reach a worktree's session with C-q q (claude-queue picker) or
+# `claude attach <short-id>` instead.
 alias gts='ghq-tmux-session'
 
 alias pacman='sudo pacman'
