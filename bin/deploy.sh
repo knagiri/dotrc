@@ -12,8 +12,10 @@ export __bashrc_path="${REPO_DIR}/rc/bashrc"
 # deploy.sh is meant to be re-run (that is how a new dot/ top-level entry gets
 # expanded), and the symlink loop below is idempotent through `ln -snvf`. This
 # append was the one part that was not, so it guards itself on the block's own
-# first line. The `guard@dotrc` tags mark the four lines test/deploy.test.sh
-# strips to build the guard-less control.
+# first line. The `guard@dotrc` tags mark the lines test/deploy.test.sh strips
+# to build the guard-less control (grep also drops this comment line itself,
+# since it contains the tag string too; that is harmless here because only a
+# comment line is removed).
 # -s on grep: a first-time ~/.bashrc does not exist yet, and its absence must
 # read as "not installed", not as an error on stderr.
 # The marker match is a literal string, not path-aware: it also reads as
