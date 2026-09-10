@@ -9,6 +9,23 @@ export __bin_path="${REPO_DIR}/bin"
 export __bashrc_path="${REPO_DIR}/rc/bashrc"
 
 # Bashrc
+# deploy.sh is meant to be re-run (that is how a new dot/ top-level entry gets
+# expanded), and the symlink loop below is idempotent through `ln -snvf`. This
+# append was the one part that was not, so it guards itself on the block's own
+# first line. The `guard@dotrc` tags mark the lines test/deploy.test.sh strips
+# to build the guard-less control (grep also drops this comment line itself,
+# since it contains the tag string too; that is harmless here because only a
+# comment line is removed).
+# -s on grep: a first-time ~/.bashrc does not exist yet, and its absence must
+# read as "not installed", not as an error on stderr.
+# The marker match is a literal string, not path-aware: it also reads as
+# "installed" when an existing block points at a different checkout (moved
+# repo path, or a second checkout sharing $HOME), so the guard skips silently
+# in that case too. The stderr note below is the deliberate mitigation --
+# surface the skip so a stale block does not go unnoticed instead of trying to
+# detect "same checkout" (dotrc-deploy.md §4 has the fuller rationale).
+__dotrc_marker='# DOTRC =================================='
+if ! grep -qsF "${__dotrc_marker}" "${HOME}/.bashrc"; then  # guard@dotrc
 cat - << 'EOF' | envsubst '${__bashrc_path} ${__bin_path}' >> ${HOME}/.bashrc
 # DOTRC ==================================
 # bin-path@dotrc
@@ -24,6 +41,9 @@ esac
 source "${__bashrc_path}"
 # ========================================
 EOF
+else                                                         # guard@dotrc
+  echo "deploy.sh: DOTRC block already in ${HOME}/.bashrc; skipped (it may point at another checkout)" >&2  # guard@dotrc
+fi  # guard@dotrc
 
 #echo -e "\n# bashrc@dotrc\nsource $__bashrc_path" >> ${HOME}/.bashrc
 
