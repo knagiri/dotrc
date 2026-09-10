@@ -19,5 +19,4 @@
 しか効かないため明示する。長すぎる応答はユーザーの読解コストを増やし、成果物では
 埋め草が本質を薄める。
 
-<!-- 由来: Anthropic 公式 Opus 5 移行ガイドの verbosity / longer written deliverables 項に
-     対応。2026-07 の Opus 5 対応で追加。 -->
+由来: dotrc#32
