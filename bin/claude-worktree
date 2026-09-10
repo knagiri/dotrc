@@ -352,7 +352,17 @@ elif git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/${branch}
   git -C "$repo_dir" worktree add --track -b "$branch" "$wt_path" "origin/${branch}" >&2 # remote-only branch
   base="origin/$branch"
 elif [ -n "$new_base" ]; then
-  git -C "$repo_dir" worktree add -b "$branch" "$wt_path" "$new_base" >&2 # new branch off origin's default
+  # --no-track: $new_base is a remote-tracking ref (origin/HEAD or origin/main),
+  # and `git worktree add -b` with a remote-tracking start point sets it as the
+  # new branch's upstream by default (branch.autoSetupMerge). That upstream is
+  # wrong for a brand-new delegate branch: a plain `git push` then fails with
+  # "The upstream branch of your current branch does not match the name of your
+  # current branch", and es-create-pr's SKILL.md checks `@{upstream}` to decide
+  # whether the branch has been pushed yet, so an unpushed branch would read as
+  # already pushed. This is only about the START POINT above (an existing local
+  # or origin/<branch> checkout should still track normally); a freshly created
+  # branch should start with no upstream at all.
+  git -C "$repo_dir" worktree add --no-track -b "$branch" "$wt_path" "$new_base" >&2 # new branch off origin's default
   base="$new_base (new branch)"
 else
   echo "claude-worktree: no origin/HEAD or origin/main; new branch based on cwd's HEAD" >&2

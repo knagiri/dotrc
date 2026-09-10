@@ -669,6 +669,17 @@ else
   echo "FAIL: new-branch base rc=$rc sha=$wt_sha want=$fresh_head (cwd HEAD is $stale_head)"; fail=1
 fi
 
+# A new branch off a remote-tracking start point must NOT pick up that ref as
+# its upstream (branch.autoSetupMerge would otherwise set it to origin/main).
+# An untracked new branch has no upstream at all, so a plain `git push` works
+# and es-create-pr's @{upstream}-based pushed-check is not fooled into thinking
+# an unpushed branch is already pushed.
+if git -C "$out" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
+  echo "FAIL: new branch off origin's default has an upstream set (expected none)"; fail=1
+else
+  echo "ok: a new branch off origin's default has no upstream configured"
+fi
+
 # An EXISTING local branch must keep its own commit: the base only applies where
 # a branch is being created. Rebasing a delegator's chosen branch onto origin
 # would silently discard whatever it was pointed at.
