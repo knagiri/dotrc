@@ -85,14 +85,18 @@ label はラッパーに作らせない。作成権限までラッパーに持�
 label が無い状態の `gh issue create` はそのまま失敗する（ラッパーは gh の終了コードと stderr を
 握り潰さない）。
 
+`status/*` の description は `issue-workflow.md` §3 の label 表（正典）と同じ語で揃える。
+GitHub の label description は GitHub 上に独立して表示される文言なので、doc 内参照に
+差し替えることはできず、意味の再掲そのものは避けられない。ズレたら §3 側に合わせて直す。
+
 ```bash
 gh label create agent-task     --description "agent が起票した task" --color 5319e7
 gh label create kind/harness   --description "恒久ハーネスの追加・修正"   --color 0e8a16
 gh label create kind/bug       --description "再現する不具合"           --color d73a4a
 gh label create kind/task      --description "汎用の task"             --color 0075ca
-gh label create status/triage  --description "起票直後。委譲不可"        --color fbca04
-gh label create status/ready   --description "HOW 確定。委譲可"         --color 0e8a16
-gh label create status/delegated --description "委譲済み"              --color c5def5
+gh label create status/triage  --description "起票直後。着手しない（委譲・インラインとも）" --color fbca04
+gh label create status/ready   --description "HOW 確定。着手してよい（委譲・インラインとも）" --color 0e8a16
+gh label create status/delegated --description "着手済み（委譲またはインライン）" --color c5def5
 ```
 
 あわせて `dot/claude/settings.json` の allow へ次の 3 行を足す。allowlist は grant なので agent に
