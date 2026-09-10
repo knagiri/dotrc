@@ -33,8 +33,8 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 
    **参照実装を読む前に base の追随を済ませる**: 委譲プロンプトが repo 内のファイルを参照実装
    として名指ししているなら（「`X` の先行実装に合わせる」「`Y` と同じ形にする」等）、それを
-   読む前に `git fetch origin` して base を追随させる。ローカル commit がまだ無ければ、
-   `bin/claude-worktree` の新規ブランチ base 解決と同じ ladder で追随させる（素の
+   読む前に `git fetch origin` して base を追随させる。追随先は `bin/claude-worktree` の
+   新規ブランチ base 解決と同じ ladder で決める（素の
    `git rev-parse --abbrev-ref origin/HEAD` は、`origin/HEAD` 未設定の checkout では失敗する
    か、git のバージョンによっては literal 文字列 `origin/HEAD` を返して exit 0 になるため、
    単純なコマンド置換では `origin/main` へフォールバックできない）。
@@ -42,11 +42,27 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    ```sh
    git fetch origin
    if b="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null)" && [ "$b" != "origin/HEAD" ]; then
-     git merge --ff-only "$b"
+     git merge --no-edit "$b"
    elif git rev-parse --verify --quiet origin/main >/dev/null; then
-     git merge --ff-only origin/main
+     git merge --no-edit origin/main
    fi
    ```
+
+   `--ff-only` ではなく素の merge なのは、ローカル commit の有無で分けたいことを git 自身が
+   既にやっているからである。commit が無ければ fast-forward し、あればマージコミットを作る。
+   同じ条件を散文とスニペットの両方に持たせると、片方だけ直したときに黙って食い違う。実際
+   `--ff-only` だったときのここは「ローカル commit がまだ無ければ」という条件を散文しか持たず、
+   スニペットは無条件に撃っていた。既存ブランチの worktree へ再委譲するとローカル commit が
+   ある状態で始まるので、手順どおり実行した委譲先が必ず非 0 で詰まる形だった。素の merge は
+   この repo が push 済みブランチの base 追随に rebase ではなく merge を使う方針とも揃う。
+
+   `--no-edit` は、git が v1.7.10 以降 **fast-forward でない merge でエディタを開く**ため
+   （`git-merge(1)` が "Older scripts ... will see an editor opened when they run git merge" と
+   名指しで警告している）。TTY が無ければ開かないので委譲先の Bash tool 経由では実害が無い
+   （実測で確認）が、この手順は人間が端末で実行することもあるので isatty 頼みにしない。
+
+   conflict したらそこで止まり、解消してから先へ進む。これは手順 3 が PR を出す前にどのみち
+   強制する作業を、まだ何も書いていないこの時点へ前倒ししているだけである。
 
    既定ブランチを `origin/main` に決め打ちしないのは、手順 3・手順 4 と同じ理由（既定
    ブランチが `master`/`trunk` の repo でも成り立たせるため）で、`bin/claude-worktree` の
