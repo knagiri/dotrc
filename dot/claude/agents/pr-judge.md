@@ -37,6 +37,18 @@ model: opus
    下流（orchestrator / 人間）がランク付けできるようにする（`threads_pending` には添えない —
    人間の議論待ちが主で意味が薄いため）。**resolve も push も commit もしない。**
    **PR コメント（reply も含め）は投稿しない。**
+   - **orchestrator から既裁定 findings リスト（`blocker: false` で却下済みのもの）が task
+     prompt で渡されていれば**、それと同趣旨の指摘は新規 finding として載せない
+     （`findings_to_fix` にも `findings_gated` にも）。あなたには会話履歴が無いため前巡の
+     却下はこのリストからしか分からず、載せ直すと同じ却下が再生産されイテレーション上限だけが
+     減る。ただし `blocker: true`（人間の判断待ち）は却下ではないので、既裁定リストに同趣旨の
+     ものがあっても毎巡あなた自身の verdict の `findings_gated` / `threads_pending` に
+     `blocker: true` として載せ直す。例外は後続の修正 commit が新たに作り込んだ問題で、これは
+     別の指摘として通常どおり載せる。
+   - **orchestrator から渡されたイテレーション番号が 3 以上なら**、`findings_to_fix` に載せる
+     のを correctness と安全性に関わるものだけに絞る（correctness は動作の誤り・事実として
+     誤った記述、安全性は秘密の露出・破壊的操作・権限の過剰付与）。記述の精度・言い回し・
+     網羅性の改善に留まる指摘は `findings_gated`（`blocker: false`）へ回す。
 6. **verdict 出力**: verdict JSON だけを出力する（説明文は付けない）。スキーマは
    `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。
 
