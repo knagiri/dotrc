@@ -14,7 +14,7 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 | PR の CI 状態を見る | `gh-pr-checks <N>`（§5 参照） | `gh pr checks` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks` は読み取り専用の `gh api`（`actions/runs` と `commits/<sha>/status`）2 本を合成する薄いラッパーで、高位コマンドが使えない代替であって「`gh api` を避けている」わけではない |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
 | PR に review を提出する | `gh pr review <N> [--approve\|--request-changes\|--comment] -b "..."` | 高位コマンドが review object を正しく扱う |
-| Issue 操作 | `gh issue *` | 同上 |
+| Issue 操作 | `gh issue *`。ただし**起票のみ** `gh-issue-file`（[issue-workflow.md](./issue-workflow.md) §1）。閲覧（`gh issue view` / `gh issue list`）は高位コマンドのまま | 同上 |
 | Run（GH Actions）を見る | `gh run view *` | 同上 |
 | Repo 情報を見る | `gh repo view *` | 同上 |
 

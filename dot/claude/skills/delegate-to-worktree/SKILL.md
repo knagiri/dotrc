@@ -74,6 +74,22 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    した。その結論だけを spec に書いたため誰も再現できず、5 本の並列委譲を経て 8 箇所の doc へ
    伝播し、撤回に PR 2 本を要した。
 
+   **issue 起点で委譲する場合**、着手条件は `status/ready` label が付いていることだけである。
+   `status/triage` の issue は HOW が未確定でありうるので委譲しない（上の「WHAT と HOW が固まって
+   いるか確認」を label で表現したもの）。`triage → ready` の遷移は人間が行う。
+
+   - `gh issue view <N> --json title,body` の body をそのまま手順 2 の `## やること（WHAT）` /
+     `## 設計（HOW）` として畳む。issue template の見出しは手順 2 の雛形と一致させてあるので
+     加工は要らない。
+   - `<name>` と `-b <branch>` は `issue-<N>-<slug>`。
+   - 委譲プロンプトに「PR 本文へ `Closes #<N>` を入れること」を明記する。merge で issue が
+     自動 close される。
+   - 起動後、issue の label を `status/ready` → `status/delegated` へ替える
+     （`gh issue edit` は allowlist に無いので承認プロンプトを踏む。委譲を起こすのは人間が
+     同席する session なので摩擦は小さい）。
+
+   起票側の規範は `dot/claude/rules/issue-workflow.md`。
+
 2. **自己完結プロンプトを組む**。起動先 claude は会話履歴を持たない。追加質問なしに
    着手できるよう、目的・背景・制約・関連ファイル・期待成果物に加え、**確定した設計（HOW）**を
    畳み込む。先頭に `implement-and-review` の明示起動命令を置く。

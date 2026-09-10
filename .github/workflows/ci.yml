@@ -51,6 +51,7 @@ jobs:
             bin/claude-worktree \
             bin/gh-automerge \
             bin/gh-await-reviews \
+            bin/gh-issue-file \
             bin/gh-list-threads \
             bin/gh-pr-checks \
             bin/gh-pr-comments \
@@ -61,5 +62,6 @@ jobs:
             test/claude-review.test.sh \
             test/claude-stop-bg.test.sh \
             test/claude-worktree.test.sh \
+            test/gh-issue-file.test.sh \
             test/gh-wrappers.test.sh \
             test/git-reap-gone.test.sh

@@ -95,6 +95,10 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - リポジトリ固有: `claude-worktree --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
    - グローバル（dotrc）: `claude-worktree --self --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
 
+   **issue 起点で起こす場合**は branch / name を `issue-<N>-<slug>` にし、委譲プロンプトへ
+   「PR 本文に `Closes #<N>` を入れること」を明記する。起票そのものは `gh-issue-file` 経由で
+   行い、生の `gh issue create` は使わない（`dot/claude/rules/issue-workflow.md`）。
+
 6. **報告して終了**（fire-and-forget）: `claude-worktree` の出力（worktree / branch / session /
    model / report-to / attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:
    - 捕捉した指摘（言語化）
