@@ -592,10 +592,13 @@ linked=" "
       LIVE)      printf 'RESUME: claude-queue picker（C-q q）\n' ;;
       CWD_GONE)  printf 'RESUME: 到達不可（cwd 消滅）\n' ;;
     esac
-    while IFS=$'\t' read -r _r pr subject mine; do
+    while IFS=$'\t' read -r r pr subject mine; do
       [ -n "$pr" ] || continue
       printf 'LANDED_PR: #%s %s (自分の commit %s)\n' "$pr" "$subject" "$mine"
-      case "$linked" in *" $pr "*) : ;; *) linked="$linked$pr " ;; esac
+      # PR number alone is not unique across repos (see s_repos / session_prs
+      # above), so key linked on repo+pr to avoid another repo's same-numbered
+      # landed PR being silently dropped from UNLINKED_LANDED below.
+      case "$linked" in *" $r$US$pr "*) : ;; *) linked="$linked$r$US$pr " ;; esac
     done < <(session_prs "$uuid")
     while IFS=$'\t' read -r b d; do
       [ -n "$b" ] || continue
@@ -611,8 +614,9 @@ linked=" "
   printf '## UNLINKED_LANDED（どの session にも紐付かなかった着地）\n'
   any=0
   for e in "${landed[@]}"; do
+    repo="$(cut -f1 <<<"$e")"
     pr="$(cut -f2 <<<"$e")"
-    case "$linked" in *" $pr "*) continue ;; esac
+    case "$linked" in *" $repo$US$pr "*) continue ;; esac
     printf -- '- #%s %s\n' "$pr" "$(cut -f3 <<<"$e")"; any=1
   done
   [ "$any" = 0 ] && printf -- '- なし\n'
