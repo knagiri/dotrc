@@ -693,7 +693,7 @@ if { cat <<'EOP'
 
 ### <SHORT>  <TITLE>        [<REACH>]
 着地  <repo #PR 要約 (commit N)>   ※無ければ「なし」
-残り  <OPEN_BRANCH と SUMMARY の「残っているもの」を統合した 1〜3 行>   ※無ければ「なし」
+残り  <OPEN_BRANCH（repo 付き）と SUMMARY の「残っているもの」を統合した 1〜3 行>   ※無ければ「なし」
 → <RESUME>   ※REACH が RESUMABLE のときだけ書く
 
 ## 紐付かなかった着地
