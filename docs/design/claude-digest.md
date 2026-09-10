@@ -50,8 +50,9 @@ claude-digest --generate --dry-run [<date>]
 `--dry-run` は仕様の 3 形式に対する追加で、**収集ロジックを LLM 抜きで観測するために足した**。
 テストはすべてこの出力に対して書かれている。
 
-表示は stdout が tty のときだけ `bat` に渡す。tmux popup 側が自分で `bat` に流すため、
-二重にページャを噛ませない。
+表示は stdout が tty のときだけページャに渡し、`bat` → `less` → `cat` の順で選ぶ
+（選択理由は `bin/claude-digest` の `show()` 内コメントを参照）。ページャの選択は
+claude-digest 側に一本化しており、`dot/tmux.conf` の binding はページャを指定しない。
 
 ## 日の境界は JST 05:00
 
@@ -280,6 +281,16 @@ git log -F --author="$pat" --no-merges "<merge>^1..<merge>^2"
 別リポジトリの `#591`〜`#600` が番号だけで混ざった。逆に着地側だけを見ると、どの session の
 仕事だったのかが分からない。
 
+交差自体も repo でスコープする。PR 番号は repo をまたぐと一意でないので、突き合わせるのは
+番号ではなく repo + 番号であり、session 側は「その session が触った repo」の集合を持つ。
+番号だけで突き合わせると、repo A の `#201` に言及した session へ repo B の `#201` が付く。
+「紐付いた着地」の集合も同じキーで持つ。裸の番号でキーすると、repo A の `#201` が紐付いた
+時点で repo B の `#201` が紐付き済みとみなされ、どこにも出ないまま消える。
+
+同じ理由で、残骸ブランチの状態も repo + ブランチ名でキーする（ブランチ名も repo をまたぐと
+一意でない）。事実ブロックの着地・残骸の各行は repo パスを先頭に持ち、読み手も段 2 の LLM も
+同名・同番号を区別できる。
+
 関係は n:m でよい（1 PR に実装 / レビュー / automerge の複数 session、1 session に複数 PR）。
 交差しなかった着地は「紐付かなかった着地」として別枠に出す — 消すのではなく、
 紐付かなかったという事実を残す。
@@ -296,6 +307,14 @@ git log -F --author="$pat" --no-merges "<merge>^1..<merge>^2"
 4 が要るのは、他人が動かしている長命な共有ブランチを落とすため。実測で
 `develop ahead=442` の tip author が別メンバーだった。**この 1 件だけが落ち、他は全部残る** —
 フィルタが効きすぎていないことの対照になっている。
+
+3 の base（`origin/HEAD`、無ければ `origin/main`）がどちらも解決できない repo — origin が
+無い、あるいは `origin/HEAD` 未設定で既定ブランチが `main` でもない — では、ブランチを測る
+相手が無い。この場合は着地を証明できないとみなして OPEN（`base=unknown`）に倒す。
+LANDED は「片付け」欄すなわち `git-reap-gone` の対象を意味するが、`git-reap-gone` 自身も
+base に `origin/HEAD` を要求するので、base の無い repo で
+出した片付け助言はそもそも実行できない。着地側の集計も同じ repo を対象外にしており、両者の
+扱いが揃う。
 
 なお 4 は `git log -1 -F --author=<pat> <branch>` では書けない。`-1` はフィルタ後の出力を
 1 件に切るので、この形は「この履歴の中で自分が書いた一番新しい commit」を返し、他人のブランチ
@@ -354,14 +373,14 @@ session をキーにした 1 本のリスト。優先度順に並べ、「残り
 ## 確認すべき session（優先度順）
 
 ### f13a218f  mukoyama_kuki ncs-gateway RTSP停止        [LIVE]
-着地  #6885 fix(ncs-gateway): 上流カメラからの RTCP BYE を検知して… (commit 5)
-      #6844 ci(ncs-gateway): bare 名 ECR に multi-arch イメージを push… (13)
-残り  agent/fix/ncs-gateway-rtcp-bye-adr-playbook が ahead=4 で未統合
+着地  eversteel-backend-api #6885 fix(ncs-gateway): 上流カメラからの RTCP BYE を検知して… (commit 5)
+      eversteel-backend-api #6844 ci(ncs-gateway): bare 名 ECR に multi-arch イメージを push… (13)
+残り  eversteel-backend-api agent/fix/ncs-gateway-rtcp-bye-adr-playbook が ahead=4 で未統合
       委譲先が「ADR は follow-up に分離」と報告、未着手
 
 ### f2a48cfd  remote assessment access control          [RESUMABLE]
 着地  なし
-残り  agent/feature/hide-remote-assessment が ahead=7 で未統合
+残り  eversteel-backend-api agent/feature/hide-remote-assessment が ahead=7 で未統合
 → claude --resume f2a48cfd-…  (cwd: …/.worktrees/hide-remote-assessment)
 
 ## 紐付かなかった着地
@@ -445,7 +464,7 @@ systemd user unit は shell の PATH を継承しない。`~/.bashrc` は非対�
 ## 朝の読み方
 
 ```tmux
-bind-key e display-popup -E -w 80% -h 80% "claude-digest | bat --style=plain"
+bind-key e display-popup -E -w 80% -h 80% "claude-digest"
 ```
 
 prefix は `C-q`。`q` / `Q` は claude-queue picker、`d` は tmux 既定の `detach-client` に
@@ -480,7 +499,7 @@ command not found になるだけで判別にならない）。
 | ブランチ tip の author フィルタを外す | a branch whose tip is somebody else's is dropped |
 | `author_pattern` から数値 ID 導出を外す | a noreply address yields the numeric-id author pattern |
 | `blocked` の +4 を外す | a blocked session sorts to the top |
-| 着地 ∩ 言及の交差をやめる | a landed PR nobody mentioned goes to the unlinked list |
+| 着地 ∩ 言及の交差をやめる | a landed PR nobody mentioned goes to the unlinked list, named with its repo |
 | 段1 の中間サマリ再利用をやめる | re-running a day reuses the intermediates and only redoes the reduce |
 
 `-F` の判別には BRE 前提の fixture が要る。手元の git は `grep.patternType` 未設定で

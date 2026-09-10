@@ -121,10 +121,14 @@ show() {
     file="$(ls -1 "$digest_dir"/[0-9]*.md 2>/dev/null | sort | tail -1)" || true
     [ -n "$file" ] || { echo "claude-digest: no digest generated yet (looked in $digest_dir)" >&2; exit 1; }
   fi
-  # Only page when a human is watching: the tmux popup binding pipes this into
-  # bat itself, and so does anything else post-processing the output.
+  # Only page when a human is watching; anything post-processing the output
+  # gets the plain file. The fallback goes through less before cat because the
+  # tmux popup (`display-popup -E`) closes the instant the command exits, so a
+  # digest handed straight to cat would flash past unread.
   if [ -t 1 ] && command -v bat >/dev/null 2>&1; then
     bat --style=plain --paging=always "$file"
+  elif [ -t 1 ] && command -v less >/dev/null 2>&1; then
+    less "$file"
   else
     cat "$file"
   fi
@@ -394,10 +398,15 @@ for key in "${!branch_repo[@]}"; do
     tip="$(git -C "$repo" log -1 --format='%an <%ae>' "refs/heads/$branch" 2>/dev/null)"
     case "$tip" in *"$pat"*) : ;; *) continue ;; esac
   fi
-  ahead=0
-  if [ -n "$base" ]; then
-    ahead="$(git -C "$repo" rev-list --count "$base..refs/heads/$branch" 2>/dev/null || echo 0)"
+  # Without a base there is nothing to measure the branch against, so landing
+  # cannot be shown. Fall to OPEN: LANDED feeds REAP_CANDIDATES, git-reap-gone
+  # resolves origin/HEAD itself, and a repo where that fails is one where the
+  # advice could not be carried out even if the branch really had landed.
+  if [ -z "$base" ]; then
+    branch_state[$key]="OPEN"; branch_detail[$key]="base=unknown"
+    continue
   fi
+  ahead="$(git -C "$repo" rev-list --count "$base..refs/heads/$branch" 2>/dev/null || echo 0)"
   if [ "$ahead" -gt 0 ]; then
     branch_state[$key]="OPEN"; branch_detail[$key]="ahead=$ahead"
   else
@@ -551,7 +560,7 @@ session_branches() {  # $1 = uuid, $2 = wanted state
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     [ "${branch_state[$key]:-}" = "$want" ] || continue
-    printf '%s\t%s\n' "${key#*${US}}" "${branch_detail[$key]:-}"
+    printf '%s\t%s\t%s\n' "${key%%${US}*}" "${key#*${US}}" "${branch_detail[$key]:-}"
   done <<<"${s_branch_keys[$uuid]}"
 }
 
@@ -594,15 +603,17 @@ linked=" "
     esac
     while IFS=$'\t' read -r r pr subject mine; do
       [ -n "$pr" ] || continue
-      printf 'LANDED_PR: #%s %s (自分の commit %s)\n' "$pr" "$subject" "$mine"
+      # The repo leads every fact line here: neither a PR number nor a branch
+      # name is unique across repos, and a session's day can span several.
+      printf 'LANDED_PR: %s #%s %s (自分の commit %s)\n' "$r" "$pr" "$subject" "$mine"
       # PR number alone is not unique across repos (see s_repos / session_prs
       # above), so key linked on repo+pr to avoid another repo's same-numbered
       # landed PR being silently dropped from UNLINKED_LANDED below.
       case "$linked" in *" $r$US$pr "*) : ;; *) linked="$linked$r$US$pr " ;; esac
     done < <(session_prs "$uuid")
-    while IFS=$'\t' read -r b d; do
+    while IFS=$'\t' read -r r b d; do
       [ -n "$b" ] || continue
-      printf 'OPEN_BRANCH: %s %s\n' "$b" "$d"
+      printf 'OPEN_BRANCH: %s %s %s\n' "$r" "$b" "$d"
     done < <(session_branches "$uuid" OPEN)
     if [ "$dry_run" = 0 ] && [ -s "$digest_dir/$day/$uuid.md" ]; then
       printf 'SUMMARY:\n'
@@ -617,7 +628,7 @@ linked=" "
     repo="$(cut -f1 <<<"$e")"
     pr="$(cut -f2 <<<"$e")"
     case "$linked" in *" $repo$US$pr "*) continue ;; esac
-    printf -- '- #%s %s\n' "$pr" "$(cut -f3 <<<"$e")"; any=1
+    printf -- '- %s #%s %s\n' "$repo" "$pr" "$(cut -f3 <<<"$e")"; any=1
   done
   [ "$any" = 0 ] && printf -- '- なし\n'
   printf '\n'
@@ -626,7 +637,7 @@ linked=" "
   any=0
   for key in "${!branch_state[@]}"; do
     [ "${branch_state[$key]}" = "LANDED" ] || continue
-    printf -- '- %s (%s)\n' "${key#*${US}}" "${branch_detail[$key]:-}"; any=1
+    printf -- '- %s %s (%s)\n' "${key%%${US}*}" "${key#*${US}}" "${branch_detail[$key]:-}"; any=1
   done
   [ "$any" = 0 ] && printf -- '- なし\n'
   printf '\n'
@@ -668,6 +679,8 @@ if { cat <<'EOP'
 - SESSIONS の並び順は決定済み。入れ替えない。
 - PR 番号・ブランチ名・ahead 数・resume コマンド・session id は事実ブロックの表記を
   一字一句そのまま使う。事実ブロックに無いものを書かない。
+- LANDED_PR・OPEN_BRANCH・「紐付かなかった着地」・「片付け」の各行は先頭に repo パスを
+  持つ。PR 番号もブランチ名も repo をまたぐと一意でないので、repo を落として書かない。
 - session を見れば分かる詳細に踏み込まない。日報は「着地したもの」と「残っているもの」を
   session ごとに 1〜3 行で示す交通整理であって、作業の再説明ではない。
 - 「残り」が空の session は短く畳む。
@@ -679,8 +692,8 @@ if { cat <<'EOP'
 ## 確認すべき session（優先度順）
 
 ### <SHORT>  <TITLE>        [<REACH>]
-着地  <#PR 要約 (commit N)>   ※無ければ「なし」
-残り  <OPEN_BRANCH と SUMMARY の「残っているもの」を統合した 1〜3 行>   ※無ければ「なし」
+着地  <repo #PR 要約 (commit N)>   ※無ければ「なし」
+残り  <OPEN_BRANCH（repo 付き）と SUMMARY の「残っているもの」を統合した 1〜3 行>   ※無ければ「なし」
 → <RESUME>   ※REACH が RESUMABLE のときだけ書く
 
 ## 紐付かなかった着地
