@@ -107,6 +107,15 @@ git -C "$repo_a" push -q origin --delete feature/landed
 git -C "$repo_a" fetch -q --prune
 git -C "$repo_a" switch -q main
 
+# A branch whose name is a strict prefix of "feature/open" above. It belongs
+# to the "prefix" session below, never to "early" (which mentions
+# "feature/open"). Matching branch_state keys by unanchored substring
+# (instead of an exact repo\001branch key) would let "\001feature/op" match
+# inside "early"'s own "...\001feature/open" pair and misattribute it.
+git -C "$repo_a" switch -q -c feature/op
+git -C "$repo_a" commit -q --allow-empty -m 'prefix of feature/open'
+git -C "$repo_a" switch -q main
+
 # repo_b: the plain-address fallback, and the home of the -F check. Its author
 # pattern is the address itself, "." included.
 repo_b="$sandbox/repo_b"
@@ -131,6 +140,16 @@ merge_pr_b pr201 201 'feat: mine in repo_b' 'plain@example.com' 'Plain'
 merge_pr_b pr202 202 'chore: regex-only match' "$bre_impostor" 'Other'
 git -C "$repo_b" push -q origin main
 
+# A branch of mine that collides by name with repo_a's "feature/open" above,
+# with a different ahead count (2, vs. repo_a's 1) so a misattribution is
+# observable. branch_state is keyed by repo\001branch; matching branches by
+# name alone (dropping the repo half of the key) would let this leak into a
+# repo_a session's OPEN_BRANCH list.
+git -C "$repo_b" switch -q -c feature/open
+git -C "$repo_b" commit -q --allow-empty -m 'name collides with repo_a feature/open'
+git -C "$repo_b" commit -q --allow-empty -m 'second commit so ahead=2, unlike repo_a'
+git -C "$repo_b" switch -q main
+
 unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
 
 # --------------------------------------------------------------------------
@@ -148,10 +167,22 @@ title_entry() { jq -cn --arg t "$1" '{type:"ai-title", aiTitle:$t}'; }
 # timestamps carry milliseconds, which fromdateiso8601 refuses outright.
 early=11111111-1111-1111-1111-111111111111
 { title_entry 'early session'
-  TEXT='landed https://github.com/o/r/pull/101 and also o/r/pull/999' \
+  # The "pull/201" mention is repo_b's PR, never repo_a's -- this session
+  # only ever touches repo_a. A number-only intersection (ignoring which repo
+  # a session belongs to) would wrongly attach it here anyway, since #201 is
+  # a landed PR somewhere.
+  TEXT='landed https://github.com/o/r/pull/101 and also o/r/pull/999 and pull/201' \
     entry '2026-03-01T19:30:00.197Z' "$repo_a" 'feature/open'
   entry '2026-03-01T19:31:00.900Z' "$repo_a" 'feature/landed'
 } >"$projects/-proj-a/$early.jsonl"
+
+# PREFIX: mentions repo_a's "feature/op", never "feature/open". Exists to
+# prove "feature/op" is attributed here and NOT to "early" above (see the
+# feature/op branch fixture).
+prefix=77777777-7777-7777-7777-777777777777
+{ title_entry 'prefix session'
+  entry '2026-03-01T06:30:00.400Z' "$repo_a" 'feature/op'
+} >"$projects/-proj-a/$prefix.jsonl"
 
 # LATE: 20:30Z is JST 05:30, past the boundary, so it belongs to 2026-03-02.
 late=22222222-2222-2222-2222-222222222222
@@ -182,10 +213,13 @@ jq -cn '{type:"user", entrypoint:"cli", isSidechain:false, origin:{kind:"human"}
          message:{role:"user", content:"first prompt of an untitled session"}}' \
   >"$projects/-proj-a/$bare.jsonl"
 
-# PLAIN: lives in the repo whose user.email is not a noreply address.
+# PLAIN: lives in the repo whose user.email is not a noreply address. Its
+# second entry mentions repo_b's "feature/open", which collides by name with
+# repo_a's -- see the feature/open branch fixture in repo_b above.
 plain=66666666-6666-6666-6666-666666666666
 { title_entry 'plain email session'
   entry '2026-03-01T07:00:00.500Z' "$repo_b" 'main'
+  entry '2026-03-01T07:01:00.500Z' "$repo_b" 'feature/open'
 } >"$projects/-proj-b/$plain.jsonl"
 
 # --------------------------------------------------------------------------
@@ -200,6 +234,17 @@ run() {  # run <day>; prints the facts block
 # so no exit status of a test is ever read back through $?.
 check() {
   if [ "$2" = 0 ]; then echo "ok: $1"; else echo "FAIL: $1"; fail=1; fi
+}
+# extract_session <facts> <uuid>; prints just one SESSION block, so a check
+# can assert something is absent from a *specific* session rather than from
+# the facts block as a whole (which would also pass if it merely landed under
+# a different session).
+extract_session() {
+  awk -v u="$2" '
+    $0 ~ ("^### SESSION " u "$") { f=1; print; next }
+    /^### SESSION / { f=0 }
+    f { print }
+  ' <<<"$1"
 }
 
 d1="$(run 2026-03-01)"; rc1=$?
@@ -256,12 +301,35 @@ check "-F keeps a regex-only author collision out of the landed list" \
   "$(if ! grep -q '#202' <<<"$d1"; then echo 0; else echo 1; fi)"
 check "a PR number the session merely mentions does not become a landing" \
   "$(if ! grep -q '#999' <<<"$d1"; then echo 0; else echo 1; fi)"
+# repo_a's "early" session mentions "pull/201", but #201 is repo_b's PR --
+# matching PR numbers without also requiring the session's repo to be among
+# the landing's repo would attach it here anyway.
+check "a landed PR from another repo is not linked despite a colliding mention" \
+  "$(if ! grep -q '^LANDED_PR: #201' <<<"$(extract_session "$d1" "$early")"
+     then echo 0; else echo 1; fi)"
 
 # --- leftover branches ------------------------------------------------------
 check "a branch of mine that is ahead of the base is reported OPEN" \
   "$(if grep -q '^OPEN_BRANCH: feature/open ahead=1' <<<"$d1"; then echo 0; else echo 1; fi)"
 check "a branch whose tip is somebody else's is dropped" \
   "$(if ! grep -q 'feature/theirs' <<<"$d1"; then echo 0; else echo 1; fi)"
+# repo_b's "feature/open" (ahead=2) collides by name with repo_a's (ahead=1).
+# Matching branch_state by branch name alone (dropping repo from the key)
+# would leak repo_b's entry into a repo_a session's block.
+check "a same-named OPEN branch in another repo is not attributed here" \
+  "$(if ! grep -q 'ahead=2' <<<"$(extract_session "$d1" "$early")"; then echo 0; else echo 1; fi)"
+check "...but it is still correctly reported for its own session" \
+  "$(if grep -q '^OPEN_BRANCH: feature/open ahead=2' <<<"$(extract_session "$d1" "$plain")"
+     then echo 0; else echo 1; fi)"
+# "feature/op" is a strict prefix of "feature/open". Unanchored substring
+# matching would let it match inside "early"'s "...\001feature/open" pair and
+# show up in a session that never touched "feature/op".
+check "a branch name that is a prefix of another OPEN branch is not attributed here" \
+  "$(if ! grep -qF 'OPEN_BRANCH: feature/op ' <<<"$(extract_session "$d1" "$early")"
+     then echo 0; else echo 1; fi)"
+check "...but it is still correctly reported for its own session" \
+  "$(if grep -qF 'OPEN_BRANCH: feature/op ' <<<"$(extract_session "$d1" "$prefix")"
+     then echo 0; else echo 1; fi)"
 check "the base branch itself is never a leftover" \
   "$(if ! grep -qE '^OPEN_BRANCH: main ' <<<"$d1"; then echo 0; else echo 1; fi)"
 check "a merged branch whose remote is gone becomes a reap candidate" \
@@ -281,6 +349,10 @@ d0="$(run 2026-01-01)"; rc0=$?
 check "a day with no sessions still produces a facts block" \
   "$(if [ "$rc0" -eq 0 ] && grep -q '^# 2026-01-01' <<<"$d0" && grep -q '^- なし' <<<"$d0"
      then echo 0; else echo 1; fi)"
+# --generate --dry-run advertises "no LLM call, nothing written" (see usage
+# in bin/claude-digest); the day directory must not exist afterward either.
+check "--dry-run does not create the day's digest directory" \
+  "$(if [ ! -e "$digests/2026-01-01" ]; then echo 0; else echo 1; fi)"
 
 # --- ordering ---------------------------------------------------------------
 # A background session the roster reports as blocked outranks everything, and
@@ -337,6 +409,24 @@ check "show fails for a day that was never generated" "$rc"
 out="$(env CLAUDE_DIGEST_DIR="$digests" PATH="$stubdir:$PATH" "$bin" 2>&1)"
 check "show with no date picks the most recent digest" \
   "$(if grep -q 'STUB-DIGEST' <<<"$out"; then echo 0; else echo 1; fi)"
+
+# `ls` finding no digest under an empty/missing dir must not be treated as a
+# pipeline failure that `set -e` exits on ahead of the "no digest yet" check
+# -- that would exit silently (no stderr message) instead of reaching it.
+missing_dir="$sandbox/no_such_digest_dir"
+if env CLAUDE_DIGEST_DIR="$missing_dir" PATH="$stubdir:$PATH" "$bin" \
+     >/dev/null 2>"$sandbox/missing_err"
+then rc=1; else rc=0; fi
+check "show with a nonexistent digest dir fails with a message, not silently" \
+  "$(if [ "$rc" = 0 ] && grep -q 'no digest generated yet' "$sandbox/missing_err"
+     then echo 0; else echo 1; fi)"
+empty_dir="$sandbox/empty_digest_dir"; mkdir -p "$empty_dir"
+if env CLAUDE_DIGEST_DIR="$empty_dir" PATH="$stubdir:$PATH" "$bin" \
+     >/dev/null 2>"$sandbox/empty_err"
+then rc=1; else rc=0; fi
+check "show with an empty digest dir fails with a message, not silently" \
+  "$(if [ "$rc" = 0 ] && grep -q 'no digest generated yet' "$sandbox/empty_err"
+     then echo 0; else echo 1; fi)"
 
 # --- argument handling ------------------------------------------------------
 if "$bin" 2026-3-1 >/dev/null 2>&1; then rc=1; else rc=0; fi
