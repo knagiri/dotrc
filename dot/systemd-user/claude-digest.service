@@ -1,7 +1,8 @@
 # Generate the previous day's digest. Paired with claude-digest.timer.
 #
-# `deploy.sh` symlinks dot/systemd to ~/.config/systemd, so this file is not
-# templated at deploy time and the repo path below is written out in full.
+# `deploy.sh` symlinks dot/systemd-user/* into ~/.config/systemd/user, so this
+# file is not templated at deploy time and the repo path below is written out in
+# full.
 # It follows the ghq layout every other absolute path in this setup uses
 # (~/.bashrc has the same one). Move the checkout and this unit needs editing.
 #
