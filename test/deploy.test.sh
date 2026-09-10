@@ -11,9 +11,9 @@
 # out of the test.
 #
 # Case B is the discrimination check (evidence-over-guesswork §4): the same
-# script with the two `guard@dotrc` lines stripped must append twice. If that
-# tag ever disappears from deploy.sh the mutant becomes identical to the
-# original and case B fails, so the check cannot rot into a no-op silently.
+# script with its `guard@dotrc` lines stripped must append twice. If that tag
+# ever disappears from deploy.sh the mutant becomes identical to the original
+# and case B fails, so the check cannot rot into a no-op silently.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
