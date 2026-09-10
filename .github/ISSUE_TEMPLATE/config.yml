@@ -1,0 +1,5 @@
+# Issues opened through the web UI must pick one of the templates in this
+# directory. The agent path (bin/gh-issue-file) does not go through the picker
+# at all -- gh issue create --title/--body never applies a template -- so the
+# wrapper validates the body against these same files instead.
+blank_issues_enabled: false

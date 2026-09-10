@@ -2,7 +2,8 @@
 # Functional tests for claude-worktree's repo anchoring. Two throwaway git repos
 # stand in for the "script repo" (dotrc) and an unrelated "cwd repo". We assert
 # add-only mode prints a worktree path anchored to the right repo: default = cwd,
-# --self = the repo the script itself lives in. No test framework; run with bash.
+# --self = the repo the script itself lives in. Worktrees live INSIDE the anchor
+# repo at <anchor>/.worktrees/<name>. No test framework; run with bash.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -28,23 +29,23 @@ git -C "$cwdrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m in
 
 wt="$scriptrepo/bin/claude-worktree"
 
-# Default (no --self): anchored to cwd repo -> "<cwdrepo>_def".
+# Default (no --self): anchored to cwd repo -> "<cwdrepo>/.worktrees/def".
 out="$(cd "$cwdrepo" && "$wt" def 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}_def" ]; then
+if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}/.worktrees/def" ]; then
   echo "ok: default anchors worktree to cwd repo"
-else echo "FAIL: default anchor rc=$rc out=$out want=${cwdrepo}_def"; fail=1; fi
+else echo "FAIL: default anchor rc=$rc out=$out want=${cwdrepo}/.worktrees/def"; fail=1; fi
 
-# --self: anchored to the script's repo -> "<scriptrepo>_glob", NOT cwd repo.
+# --self: anchored to the script's repo -> "<scriptrepo>/.worktrees/glob", NOT cwd repo.
 out="$(cd "$cwdrepo" && "$wt" --self glob 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_glob" ]; then
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/glob" ]; then
   echo "ok: --self anchors worktree to the script's own repo"
-else echo "FAIL: --self anchor rc=$rc out=$out want=${scriptrepo}_glob"; fail=1; fi
+else echo "FAIL: --self anchor rc=$rc out=$out want=${scriptrepo}/.worktrees/glob"; fail=1; fi
 
 # --self composes with -b (branch name independent of worktree label).
 out="$(cd "$cwdrepo" && "$wt" --self glob2 -b harness/x 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_glob2" ]; then
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/glob2" ]; then
   echo "ok: --self composes with -b"
-else echo "FAIL: --self with -b rc=$rc out=$out want=${scriptrepo}_glob2"; fail=1; fi
+else echo "FAIL: --self with -b rc=$rc out=$out want=${scriptrepo}/.worktrees/glob2"; fail=1; fi
 
 # Unknown flags still rejected (regression: parser didn't swallow everything).
 (cd "$cwdrepo" && "$wt" --bogus name) >/dev/null 2>&1; [ $? -ne 0 ] \
@@ -66,7 +67,7 @@ git -C "$cwdrepo" add .gitignore
 git -C "$cwdrepo" -c user.email=t@t -c user.name=t commit -q -m ignore
 
 out="$(cd "$cwdrepo" && "$wt" --seed docs/specs/plan.md seeded 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(cat "${cwdrepo}_seeded/docs/specs/plan.md" 2>/dev/null)" = "plan body" ]; then
+if [ "$rc" -eq 0 ] && [ "$(cat "${cwdrepo}/.worktrees/seeded/docs/specs/plan.md" 2>/dev/null)" = "plan body" ]; then
   echo "ok: --seed copies the file to the same relative path in the worktree"
 else echo "FAIL: --seed copy rc=$rc out=$out"; fail=1; fi
 
@@ -74,30 +75,30 @@ else echo "FAIL: --seed copy rc=$rc out=$out"; fail=1; fi
 # delegated session running `git add -A` cannot sweep the spec into a commit.
 # Empty `status --porcelain` is exactly that guarantee.
 # (guard on the file existing too, so this can't pass vacuously when nothing copied)
-st="$(git -C "${cwdrepo}_seeded" status --porcelain 2>/dev/null)"
-if [ -f "${cwdrepo}_seeded/docs/specs/plan.md" ] && [ -z "$st" ]; then
+st="$(git -C "${cwdrepo}/.worktrees/seeded" status --porcelain 2>/dev/null)"
+if [ -f "${cwdrepo}/.worktrees/seeded/docs/specs/plan.md" ] && [ -z "$st" ]; then
   echo "ok: seeded gitignored file stays ignored in the worktree"
 else echo "FAIL: seeded file is visible to git: ${st:-<file missing>}"; fail=1; fi
 
 # --self anchors the WORKTREE to the script's repo, but seed sources always
 # resolve against cwd's checkout (that's where the uncommitted files live).
 out="$(cd "$cwdrepo" && "$wt" --self --seed docs/specs/plan.md selfseed 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_selfseed" ] \
-   && [ "$(cat "${scriptrepo}_selfseed/docs/specs/plan.md" 2>/dev/null)" = "plan body" ]; then
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/selfseed" ] \
+   && [ "$(cat "${scriptrepo}/.worktrees/selfseed/docs/specs/plan.md" 2>/dev/null)" = "plan body" ]; then
   echo "ok: --self seeds from cwd's checkout into the script repo's worktree"
 else echo "FAIL: --self --seed rc=$rc out=$out"; fail=1; fi
 
 # A missing seed must fail BEFORE `git worktree add` -- otherwise the delegated
 # session stalls on a file that never arrives, and an orphan worktree is left.
 (cd "$cwdrepo" && "$wt" --seed docs/specs/nope.md missingseed) >/dev/null 2>&1; rc=$?
-if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_missingseed" ]; then
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}/.worktrees/missingseed" ]; then
   echo "ok: missing --seed fails before the worktree is created"
-else echo "FAIL: missing seed rc=$rc, worktree created?=$([ -d "${cwdrepo}_missingseed" ] && echo yes || echo no)"; fail=1; fi
+else echo "FAIL: missing seed rc=$rc, worktree created?=$([ -d "${cwdrepo}/.worktrees/missingseed" ] && echo yes || echo no)"; fail=1; fi
 
 # Seeds outside cwd's checkout have no relative path in the worktree -> reject.
 echo outside >"$tmp/outside.md"
 (cd "$cwdrepo" && "$wt" --seed "$tmp/outside.md" outsideseed) >/dev/null 2>&1; rc=$?
-if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_outsideseed" ]; then
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}/.worktrees/outsideseed" ]; then
   echo "ok: --seed outside the checkout is rejected"
 else echo "FAIL: out-of-checkout seed accepted rc=$rc"; fail=1; fi
 
@@ -109,11 +110,11 @@ echo "note body" >"$cwdrepo/docs/note.md"
 (cd "$cwdrepo" && "$wt" --seed docs/specs --seed docs/note.md multiseed) >/dev/null 2>&1; rc=$?
 (cd "$cwdrepo" && "$wt" --seed docs/specs --seed docs/note.md multiseed) >/dev/null 2>&1; rc2=$?
 if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] \
-   && [ "$(cat "${cwdrepo}_multiseed/docs/specs/plan.md" 2>/dev/null)" = "plan body" ] \
-   && [ "$(cat "${cwdrepo}_multiseed/docs/note.md" 2>/dev/null)" = "note body" ] \
-   && [ ! -e "${cwdrepo}_multiseed/docs/specs/specs" ]; then
+   && [ "$(cat "${cwdrepo}/.worktrees/multiseed/docs/specs/plan.md" 2>/dev/null)" = "plan body" ] \
+   && [ "$(cat "${cwdrepo}/.worktrees/multiseed/docs/note.md" 2>/dev/null)" = "note body" ] \
+   && [ ! -e "${cwdrepo}/.worktrees/multiseed/docs/specs/specs" ]; then
   echo "ok: repeated --seed and directory seeds replace rather than nest on reseed"
-else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
+else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}/.worktrees/multiseed/docs/specs/specs" ] && echo yes || echo no)"; fail=1; fi
 
 # --- .delegate/ return channel -------------------------------------------------
 # `.delegate/` is where a delegate leaves files it wants to hand back. It has to
@@ -128,24 +129,51 @@ else echo "FAIL: multi/dir seed rc=$rc rc2=$rc2 nested?=$([ -e "${cwdrepo}_multi
 # just the entry, is what would catch a "fix" that moves the write to the
 # per-worktree path -- where it would stop working without failing.
 (cd "$cwdrepo" && "$wt" delegatewt) >/dev/null 2>&1; rc=$?
-ex="$(git -C "${cwdrepo}_delegatewt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
+ex="$(git -C "${cwdrepo}/.worktrees/delegatewt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
 if [ "$rc" -eq 0 ] && [ "$ex" = "$cwdrepo/.git/info/exclude" ] && grep -qxF '/.delegate/' "$ex"; then
   echo "ok: worktree creation adds /.delegate/ to the repo-wide exclude"
 else echo "FAIL: exclude entry missing rc=$rc path=${ex:-<unresolved>}"; fail=1; fi
 
+# `/.worktrees/` rides the same write, for the reason the layout change created:
+# worktrees now sit INSIDE the main checkout, so without this the main checkout
+# sees `.worktrees/` as untracked -- and `git add -A` there stages the worktree
+# as an embedded gitlink. The global excludesFile (dot/git/ignore) only covers
+# machines that ran bin/deploy.sh, so the repo-local entry is what makes this
+# hold on a fresh clone or a CI runner.
+if [ "$rc" -eq 0 ] && grep -qxF '/.worktrees/' "$ex"; then
+  echo "ok: worktree creation adds /.worktrees/ to the repo-wide exclude"
+else echo "FAIL: /.worktrees/ exclude entry missing rc=$rc"; fail=1; fi
+
+# The point of that entry, measured on the MAIN checkout (not the worktree):
+# status stays empty even though .worktrees/delegatewt exists on disk. Guard on
+# the directory existing so this cannot pass vacuously. `core.excludesFile` is
+# emptied so the host's own ~/.config/git/ignore -- which on a deployed machine
+# already carries `/.worktrees/` -- cannot be what makes this pass.
+#
+# It has to be `core.excludesFile`, not GIT_CONFIG_GLOBAL: when the option is
+# unset git falls back to `$XDG_CONFIG_HOME/git/ignore`, and that default is
+# resolved independently of the global *config* file. Emptying GIT_CONFIG_GLOBAL
+# only drops the setting, so the XDG ignore stays in force and this assertion
+# would pass on a deployed machine even with the exclude write removed entirely
+# (measured on git 2.54.0).
+mainst="$(git -c core.excludesFile=/dev/null -C "$cwdrepo" status --porcelain 2>/dev/null)"
+if [ -d "${cwdrepo}/.worktrees/delegatewt" ] && [ -z "$mainst" ]; then
+  echo "ok: .worktrees/ stays invisible to the main checkout's git status"
+else echo "FAIL: .worktrees/ visible in the main checkout: ${mainst:-<worktree missing>}"; fail=1; fi
+
 # The point of the entry: a file dropped in .delegate/ leaves `status --porcelain`
 # empty, which is exactly the predicate git-reap-gone gates on. Guard on the file
 # existing so this cannot pass vacuously.
-mkdir -p "${cwdrepo}_delegatewt/.delegate"
-echo "pr body draft" >"${cwdrepo}_delegatewt/.delegate/pr-body.md"
-st="$(git -C "${cwdrepo}_delegatewt" status --porcelain 2>/dev/null)"
-if [ -f "${cwdrepo}_delegatewt/.delegate/pr-body.md" ] && [ -z "$st" ]; then
+mkdir -p "${cwdrepo}/.worktrees/delegatewt/.delegate"
+echo "pr body draft" >"${cwdrepo}/.worktrees/delegatewt/.delegate/pr-body.md"
+st="$(git -C "${cwdrepo}/.worktrees/delegatewt" status --porcelain 2>/dev/null)"
+if [ -f "${cwdrepo}/.worktrees/delegatewt/.delegate/pr-body.md" ] && [ -z "$st" ]; then
   echo "ok: files under .delegate/ stay invisible to git status"
 else echo "FAIL: .delegate/ is visible to git: ${st:-<file missing>}"; fail=1; fi
 
 # ...and the worktree is still removable without --force, which is the other half
 # of what git-reap-gone needs.
-git -C "$cwdrepo" worktree remove "${cwdrepo}_delegatewt" >/dev/null 2>&1; rc=$?
+git -C "$cwdrepo" worktree remove "${cwdrepo}/.worktrees/delegatewt" >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ]; then
   echo "ok: a worktree holding .delegate/ files is removable without --force"
 else echo "FAIL: worktree remove refused a .delegate/-holding worktree rc=$rc"; fail=1; fi
@@ -154,17 +182,19 @@ else echo "FAIL: worktree remove refused a .delegate/-holding worktree rc=$rc"; 
 # entry (the script reuses the dir rather than recreating it).
 (cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1
 (cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1; rc=$?
-ex="$(git -C "${cwdrepo}_dupwt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
+ex="$(git -C "${cwdrepo}/.worktrees/dupwt" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)"
 n="$(grep -cxF '/.delegate/' "$ex" 2>/dev/null || echo 0)"
-if [ "$rc" -eq 0 ] && [ "$n" -eq 1 ]; then
-  echo "ok: a repeat run leaves exactly one /.delegate/ entry"
-else echo "FAIL: exclude entry count=$n rc=$rc"; fail=1; fi
+nw="$(grep -cxF '/.worktrees/' "$ex" 2>/dev/null || echo 0)"
+if [ "$rc" -eq 0 ] && [ "$n" -eq 1 ] && [ "$nw" -eq 1 ]; then
+  echo "ok: a repeat run leaves exactly one of each exclude entry"
+else echo "FAIL: exclude entry counts delegate=$n worktrees=$nw rc=$rc"; fail=1; fi
 
 # An exclude the repo already wrote must survive: the script appends, never
 # rewrites. Losing a user's pattern would be a silent regression.
 printf '/scratch/\n' >>"$ex"
 (cd "$cwdrepo" && "$wt" dupwt) >/dev/null 2>&1
-if grep -qxF '/scratch/' "$ex" && [ "$(grep -cxF '/.delegate/' "$ex")" -eq 1 ]; then
+if grep -qxF '/scratch/' "$ex" && [ "$(grep -cxF '/.delegate/' "$ex")" -eq 1 ] \
+   && [ "$(grep -cxF '/.worktrees/' "$ex")" -eq 1 ]; then
   echo "ok: an existing exclude entry is preserved"
 else echo "FAIL: existing exclude entry clobbered"; fail=1; fi
 
@@ -184,9 +214,27 @@ printf '/scratch/' >"$noeolrepo/.git/info/exclude" # deliberately no trailing ne
 
 (cd "$noeolrepo" && "$wt" noeolwt) >/dev/null 2>&1; rc=$?
 ex2="$noeolrepo/.git/info/exclude"
-if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/scratch/' "$ex2")" -eq 1 ] && grep -qxF '/.delegate/' "$ex2"; then
+if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/scratch/' "$ex2")" -eq 1 ] \
+   && grep -qxF '/.delegate/' "$ex2" && grep -qxF '/.worktrees/' "$ex2"; then
   echo "ok: appending to a non-newline-terminated exclude preserves the existing entry"
 else echo "FAIL: exclude corrupted: $(cat "$ex2" 2>/dev/null)"; fail=1; fi
+
+# The append loop writes two patterns in one run, so the SECOND one lands on a
+# file the first just extended. An empty exclude is the other end of that range
+# (no last line to glue onto, and `[ -s ]` skips the newline fixup): both
+# patterns must still come out as their own lines.
+emptyrepo="$tmp/emptyexcluderepo"
+mkdir -p "$emptyrepo"
+git -C "$emptyrepo" init -q
+git -C "$emptyrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mkdir -p "$emptyrepo/.git/info"
+: >"$emptyrepo/.git/info/exclude" # exists but empty
+(cd "$emptyrepo" && "$wt" emptywt) >/dev/null 2>&1; rc=$?
+ex3="$emptyrepo/.git/info/exclude"
+if [ "$rc" -eq 0 ] && [ "$(grep -cxF '/.delegate/' "$ex3")" -eq 1 ] \
+   && [ "$(grep -cxF '/.worktrees/' "$ex3")" -eq 1 ]; then
+  echo "ok: both patterns land as their own lines in an empty exclude"
+else echo "FAIL: empty-exclude append: $(cat "$ex3" 2>/dev/null)"; fail=1; fi
 
 # --- default seeds declared in .claude/worktree-seed ---------------------------
 # A repo names the gitignored files a delegate cannot work without (the config
@@ -196,7 +244,7 @@ else echo "FAIL: exclude corrupted: $(cat "$ex2" 2>/dev/null)"; fail=1; fi
 
 # No list at all -> unchanged behavior (nothing copied, worktree still created).
 out="$(cd "$cwdrepo" && "$wt" nolist 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}_nolist" ]; then
+if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}/.worktrees/nolist" ]; then
   echo "ok: no .claude/worktree-seed is a no-op"
 else echo "FAIL: absent seed list rc=$rc out=$out"; fail=1; fi
 
@@ -216,9 +264,9 @@ printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$cwdrepo/mise.local.tom
 err="$tmp/list-default-err"
 out="$(cd "$cwdrepo" && "$wt" listdefault 2>"$err")"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Fq '_.file' "${cwdrepo}_listdefault/mise.local.toml" 2>/dev/null \
+   && grep -Fq '_.file' "${cwdrepo}/.worktrees/listdefault/mise.local.toml" 2>/dev/null \
    && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ] \
-   && [ ! -e "${cwdrepo}_listdefault/does" ]; then
+   && [ ! -e "${cwdrepo}/.worktrees/listdefault/does" ]; then
   echo "ok: listed paths are seeded, missing ones skipped, comments ignored"
 else echo "FAIL: seed list rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
 
@@ -226,7 +274,7 @@ else echo "FAIL: seed list rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$er
 err="$tmp/list-explicit-err"
 out="$(cd "$cwdrepo" && "$wt" --seed mise.local.toml listexplicit 2>"$err")"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Fq '_.file' "${cwdrepo}_listexplicit/mise.local.toml" 2>/dev/null \
+   && grep -Fq '_.file' "${cwdrepo}/.worktrees/listexplicit/mise.local.toml" 2>/dev/null \
    && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
   echo "ok: a listed path also passed as --seed is not seeded twice"
 else echo "FAIL: list/--seed overlap rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
@@ -237,14 +285,14 @@ else echo "FAIL: list/--seed overlap rc=$rc seeded=$(grep -c 'seeded mise.local.
 # file that repo happens to have) would leak into the anchor repo's worktree
 # with no explicit request from the caller. Explicit --seed is unaffected.
 out="$(cd "$cwdrepo" && "$wt" --self selfnolist 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_selfnolist" ] \
-   && [ ! -e "${scriptrepo}_selfnolist/mise.local.toml" ]; then
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/selfnolist" ] \
+   && [ ! -e "${scriptrepo}/.worktrees/selfnolist/mise.local.toml" ]; then
   echo "ok: --self does not read an unrelated cwd repo's default seed list"
-else echo "FAIL: --self default-seed leak rc=$rc out=$out present?=$([ -e "${scriptrepo}_selfnolist/mise.local.toml" ] && echo yes || echo no)"; fail=1; fi
+else echo "FAIL: --self default-seed leak rc=$rc out=$out present?=$([ -e "${scriptrepo}/.worktrees/selfnolist/mise.local.toml" ] && echo yes || echo no)"; fail=1; fi
 
 out="$(cd "$cwdrepo" && "$wt" --self --seed mise.local.toml selfexplicitseed 2>/dev/null)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}_selfexplicitseed" ] \
-   && grep -Fq '_.file' "${scriptrepo}_selfexplicitseed/mise.local.toml" 2>/dev/null; then
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/selfexplicitseed" ] \
+   && grep -Fq '_.file' "${scriptrepo}/.worktrees/selfexplicitseed/mise.local.toml" 2>/dev/null; then
   echo "ok: --self with explicit --seed still copies from cwd's checkout"
 else echo "FAIL: --self explicit --seed rc=$rc out=$out"; fail=1; fi
 
@@ -253,7 +301,7 @@ else echo "FAIL: --self explicit --seed rc=$rc out=$out"; fail=1; fi
 # fail loudly -- and before the worktree exists.
 printf '../outside.md\n' >"$cwdrepo/.claude/worktree-seed"
 (cd "$cwdrepo" && "$wt" listescape) >/dev/null 2>&1; rc=$?
-if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_listescape" ]; then
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}/.worktrees/listescape" ]; then
   echo "ok: a seed-list entry outside the checkout fails before the worktree is created"
 else echo "FAIL: escaping list entry accepted rc=$rc"; fail=1; fi
 
@@ -261,7 +309,7 @@ else echo "FAIL: escaping list entry accepted rc=$rc"; fail=1; fi
 # as the escaping-entry case above), before the worktree is created.
 printf '/etc/passwd\n' >"$cwdrepo/.claude/worktree-seed"
 (cd "$cwdrepo" && "$wt" listabs) >/dev/null 2>&1; rc=$?
-if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_listabs" ]; then
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}/.worktrees/listabs" ]; then
   echo "ok: an absolute seed-list entry fails before the worktree is created"
 else echo "FAIL: absolute list entry accepted rc=$rc"; fail=1; fi
 
@@ -291,7 +339,7 @@ printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$lwdefault/mise.local.t
 err="$tmp/lw-default-err"
 out="$(cd "$lwdefault" && "$wt" fromlwdefault 2>"$err")"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Fq '_.file' "${cwdrepo}_fromlwdefault/mise.local.toml" 2>/dev/null \
+   && grep -Fq '_.file' "${cwdrepo}/.worktrees/fromlwdefault/mise.local.toml" 2>/dev/null \
    && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
   echo "ok: default seed list is honored when cwd is a linked worktree of the anchor repo"
 else echo "FAIL: linked-worktree default seed rc=$rc out=$out"; fail=1; fi
@@ -308,7 +356,7 @@ printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$lwself/mise.local.toml
 err="$tmp/lw-self-err"
 out="$(cd "$lwself" && "$wt" --self fromlwself 2>"$err")"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Fq '_.file' "${scriptrepo}_fromlwself/mise.local.toml" 2>/dev/null \
+   && grep -Fq '_.file' "${scriptrepo}/.worktrees/fromlwself/mise.local.toml" 2>/dev/null \
    && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
   echo "ok: default seed list is honored when cwd is a linked worktree of the --self-anchored repo"
 else echo "FAIL: linked-worktree --self default seed rc=$rc out=$out"; fail=1; fi
@@ -376,8 +424,9 @@ if [ "$rc" -eq 0 ] \
    && grep -Fq -- '--permission-mode acceptEdits' "$log" \
    && ! grep -Fq -- '--permission-mode auto' "$log" \
    && grep -Fxq "$prompt" "$log" \
+   && grep -A1 -Fx -- '-s' "$log" | grep -Fxq "$(basename "$cwdrepo")_insess" \
    && grep -q 'attach   : gts' <<<"$out"; then
-  echo "ok: \$TMUX set wires switch-client back to origin pane, prompt intact, acceptEdits kept"
+  echo "ok: \$TMUX set wires switch-client back to origin pane, prompt intact, acceptEdits kept, session name is <repo>_<name>"
 else
   echo "FAIL: in-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
@@ -396,8 +445,9 @@ if [ "$rc" -eq 0 ] \
    && grep -A1 -Fx -- '--permission-mode' "$log" | grep -Fxq 'acceptEdits' \
    && ! grep -Fxq -- 'auto' "$log" \
    && grep -Fxq "$prompt" "$log" \
+   && grep -A1 -Fx -- '-s' "$log" | grep -Fxq "$(basename "$cwdrepo")_nosess" \
    && grep -q 'attach   : tmux attach -t' <<<"$out"; then
-  echo "ok: no \$TMUX launches claude directly, no pane-return chain, acceptEdits kept"
+  echo "ok: no \$TMUX launches claude directly, no pane-return chain, acceptEdits kept, session name is <repo>_<name>"
 else
   echo "FAIL: out-of-tmux launch rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1
 fi
@@ -470,7 +520,7 @@ fi
 # to the inherited default here would run an unwatched delegation on a model the
 # caller did not ask for, so it must fail loudly (and before the worktree exists).
 (cd "$cwdrepo" && "$wt" --model "" emptymodel) >/dev/null 2>&1; rc=$?
-if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}_emptymodel" ]; then
+if [ "$rc" -ne 0 ] && [ ! -d "${cwdrepo}/.worktrees/emptymodel" ]; then
   echo "ok: empty --model value is rejected before the worktree is created"
 else echo "FAIL: empty --model accepted rc=$rc"; fail=1; fi
 
@@ -673,7 +723,7 @@ fi
 # cwdrepo has no remote, so `git fetch origin` fails outright.
 err="$tmp/nofetch-err"
 out="$(cd "$cwdrepo" && "$wt" nofetch 2>"$err")"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}_nofetch" ] \
+if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}/.worktrees/nofetch" ] \
    && grep -q 'git fetch origin failed' "$err" \
    && grep -q "no origin/HEAD or origin/main" "$err" \
    && [ "$(git -C "$out" rev-parse HEAD 2>/dev/null)" = "$(git -C "$cwdrepo" rev-parse HEAD)" ]; then
@@ -734,9 +784,9 @@ log="$tmp/bg-cwd"; cwdlog="$tmp/bg-cwd-pwd"
   export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_CWDLOG="$cwdlog" \
          CLAUDE_STUB_ROSTER="$emptyroster"
   "$wt" bgcwd -- "$prompt"; }) >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(cat "$cwdlog" 2>/dev/null)" = "${cwdrepo}_bgcwd" ]; then
+if [ "$rc" -eq 0 ] && [ "$(cat "$cwdlog" 2>/dev/null)" = "${cwdrepo}/.worktrees/bgcwd" ]; then
   echo "ok: bg launch runs with the worktree as cwd"
-else echo "FAIL: bg cwd rc=$rc got=$(cat "$cwdlog" 2>/dev/null) want=${cwdrepo}_bgcwd"; fail=1; fi
+else echo "FAIL: bg cwd rc=$rc got=$(cat "$cwdlog" 2>/dev/null) want=${cwdrepo}/.worktrees/bgcwd"; fail=1; fi
 
 # --model rides through to the bg launch as two adjacent argv elements. The
 # launch has a separate branch per --model, so the mode is re-asserted here:
@@ -810,7 +860,7 @@ EOF
 chmod +x "$stubbin/claude"
 busyroster="$tmp/roster-busy.json"
 cat >"$busyroster" <<EOF
-[{"pid":1,"cwd":"${cwdrepo}_bgbusy","kind":"background","sessionId":"feedface-1111-2222-3333-444444444444","status":"working"}]
+[{"pid":1,"cwd":"${cwdrepo}/.worktrees/bgbusy","kind":"background","sessionId":"feedface-1111-2222-3333-444444444444","status":"working"}]
 EOF
 log="$tmp/bg-busy"; : >"$log"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE

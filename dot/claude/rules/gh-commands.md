@@ -14,7 +14,7 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 | PR の CI 状態を見る | `gh-pr-checks <N>`（§5 参照） | `gh pr checks` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks` は読み取り専用の `gh api`（`actions/runs` と `commits/<sha>/status`）2 本を合成する薄いラッパーで、高位コマンドが使えない代替であって「`gh api` を避けている」わけではない |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
 | PR に review を提出する | `gh pr review <N> [--approve\|--request-changes\|--comment] -b "..."` | 高位コマンドが review object を正しく扱う |
-| Issue 操作 | `gh issue *` | 同上 |
+| Issue 操作 | `gh issue *`。ただし**起票のみ** `gh-issue-file`（[issue-workflow.md](./issue-workflow.md) §1）。閲覧（`gh issue view` / `gh issue list`）は高位コマンドのまま | 同上 |
 | Run（GH Actions）を見る | `gh run view *` | 同上 |
 | Repo 情報を見る | `gh repo view *` | 同上 |
 
@@ -96,7 +96,7 @@ prompt injection / 権限バイパスの経路になる。
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
 | CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
-| merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>` のみ | `Bash(gh-automerge *)` |
+| merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>`、clean 拒否のときだけ `gh pr merge --merge <PR>` へ fallback | `Bash(gh-automerge *)` |
 
 - ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
   フラグを付けられない。auto-merge 有効化前に skill 自身が `gh-pr-checks` で
@@ -114,5 +114,29 @@ prompt injection / 権限バイパスの経路になる。
 - raw `gh api graphql *` / `gh pr merge *` は **allow しない**（§4 のとおり）。thread resolve は
   reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。
-- ラッパーは **repo 単位**で、特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）。`--auto` は branch protection / required checks を尊重するため未通過 PR を強制 merge はできないが、「PR 限定ではない」点は把握しておく。
-- `gh-automerge`（= `gh pr merge --auto`）は **repo で auto-merge が有効**である必要がある。無効な repo では失敗するため、`pr-review-automerge` の merge ステップが完了しない（skill は report して停止する）。
+- ラッパーは **repo 単位**で、特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）。`--auto` は branch protection / required checks を尊重するため未通過 PR を強制 merge はできないが、「PR 限定ではない」点は把握しておく。fallback の直接 merge（`gh pr merge --merge`）も同じで、ゲートを掛けるのは GitHub 側の branch protection であり、ラッパーは `--admin` 等のバイパスフラグを一切付けない。したがって fallback 経路に落ちても required checks / required approvals は変わらず強制される。
+- `gh-automerge` の fallback は **clean 拒否 1 種類にだけ**効く。`gh pr merge --auto` の失敗の
+  stderr に `clean status` が含まれるとき（= 待つものが何も無い PR に auto-merge は張れない、と
+  GitHub が拒否したとき）だけ `gh pr merge --merge <PR>` へ落ちる。CI workflow を持たない repo は
+  PR 作成直後にこの状態へ入るので、fallback が無いと auto-merge が構造的に届かなかったため
+  （PR #73）。それ以外の失敗（required check 未達、conflict、**repo で auto-merge が無効**、など）は
+  fallback せず終了コードごと呼び出し元へ返す。したがって auto-merge が無効な repo では
+  引き続き merge ステップが完了せず、`pr-review-automerge` は report して停止する
+  （fallback はこのケースを救わない）。
+
+#### grant 変更を含む PR は auto-merge させない
+
+allowlist（grant）の変更は agent に委譲してよい。ただし **grant 変更を含む PR は
+`pr-review-automerge` で auto-merge させず、人間の approve を待つ**。委譲プロンプトでは
+`pr-review-automerge` を起動させず PR 作成で停止させ、merge は人間が行う。
+
+以前の規約は「grant は agent に書かせず、人間が settings.json を直接編集する」だったが、
+禁じたいのは agent が grant 行を書くこと自体ではなく、**権限を広げる変更が人間のレビューを
+通らずに main へ入ること**である。auto-merge を許すと、この節が避けようとしている広い grant が
+人目を通らずそのまま main へ入り、規約がそのまま無効化される。逆に approve を人間に残せば、
+grant の広さは merge 前に必ず一度は人目を通る。だから条件を「誰が書くか」ではなく merge
+ゲート側へ置く。
+
+由来: PR #83 で `bin/gh-issue-file` を導入した際、allowlist を委譲先のスコープ外としたため
+必要な allow 行が未追加のまま残った（issue #87）。grant 追加だけが委譲できない例外として
+残る運用コストのほうが、書き手を人間に限る利得より大きかった。
