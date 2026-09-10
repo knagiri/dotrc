@@ -30,6 +30,53 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    `gts <session>` / `tmux attach` で入れるなら、質問を出して REPL で待機してよい。そうでなければ
    届ける相手がいないので、前提を明示して進める。
    解釈の幅が結果を大きく変えないなら、同じく前提を明示して進める。
+
+   **参照実装を読む前に base の追随を済ませる**: 委譲プロンプトが repo 内のファイルを参照実装
+   として名指ししているなら（「`X` の先行実装に合わせる」「`Y` と同じ形にする」等）、それを
+   読む前に `git fetch origin` して base を追随させる。追随先は `bin/claude-worktree` の
+   新規ブランチ base 解決と同じ ladder で決める（素の
+   `git rev-parse --abbrev-ref origin/HEAD` は、`origin/HEAD` 未設定の checkout では失敗する
+   か、git のバージョンによっては literal 文字列 `origin/HEAD` を返して exit 0 になるため、
+   単純なコマンド置換では `origin/main` へフォールバックできない）。
+
+   ```sh
+   git fetch origin
+   if b="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null)" && [ "$b" != "origin/HEAD" ]; then
+     git merge --no-edit "$b"
+   elif git rev-parse --verify --quiet origin/main >/dev/null; then
+     git merge --no-edit origin/main
+   fi
+   ```
+
+   `--ff-only` ではなく素の merge なのは、fast-forward できるなら git が自動で fast-forward し、分岐していればマージコミットを作るためである。
+   （ローカル commit があっても常にマージコミットになるわけではない）。
+   同じ条件を散文とスニペットの両方に持たせると、片方だけ直したときに黙って食い違う。実際
+   `--ff-only` だったときのここは「ローカル commit がまだ無ければ」という条件を散文しか持たず、
+   スニペットは無条件に撃っていた。既存ブランチの worktree へ再委譲するとローカル commit が
+   ある状態で始まるので、手順どおり実行した委譲先が必ず非 0 で詰まる形だった。素の merge は
+   この repo が push 済みブランチの base 追随に rebase ではなく merge を使う方針とも揃う。
+
+   `--no-edit` は、git が v1.7.10 以降 **fast-forward でない merge でエディタを開く**ため
+   （`git-merge(1)` が "Older scripts ... will see an editor opened when they run git merge" と
+   名指しで警告している）。TTY が無ければ開かないので委譲先の Bash tool 経由では実害が無い
+   （実測で確認）が、この手順は人間が端末で実行することもあるので isatty 頼みにしない。
+
+   conflict したらそこで止まり、解消してから先へ進む。これは手順 3 が PR を出す前にどのみち
+   強制する作業を、まだ何も書いていないこの時点へ前倒ししているだけである。
+
+   既定ブランチを `origin/main` に決め打ちしないのは、手順 3・手順 4 と同じ理由（既定
+   ブランチが `master`/`trunk` の repo でも成り立たせるため）で、`bin/claude-worktree` の
+   新規ブランチ base 解決（origin/HEAD → origin/main の ladder）とも揃える。
+
+   手順 3 の base 確認とは役割が違うので、両方置く。あちらは PR を出す前の conflict 回避で、
+   参照実装を読むのはその遥か前である。参照先が古ければ、気づいた時には既に書き写した後で
+   手遅れになる。しかも生成物を持つ repo（生成系のドキュメント等）では、古い base で生成しても
+   「再生成して差分が出ない」冪等性チェックは通ってしまうので、検証の側でも捕まらない
+   — その生成物は他 PR の変更を巻き戻す。
+
+   `bin/claude-worktree` は新規ブランチの base を origin/HEAD にするので、委譲がその経路で
+   起きたならここは追随済みのはずである。この二重化が拾うのは、委譲元が既存ブランチの再利用を
+   指定した場合（base の付け替えが起きないので古いままになり得る）。
 2. **実装**: 実装計画があれば `superpowers:executing-plans` に従い、タスク単位で進める。
    実装作業を subagent へ dispatch するときは、難度に応じて agent を選ぶ（モデルは各 agent
    定義の `model:` frontmatter で固定されている）。
@@ -112,12 +159,25 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    由来: knagiri/dotrc#26（Opus 5 の委譲上限を追記した PR）で、実装中に base が 40 コミット
    以上進み、そのうち 1 つが自分と同一ファイルの同一段落を変更していたのに気づかず conflict
    したまま PR を出し、レビュー段の判定役が発見して 1 イテレーションを消費した実例。
-4. **review→merge**: **PR は `my-create-pr` skill で作る**（生の `gh pr create` を直接叩かない）。
-   base の決定（`gh repo view` で既定ブランチを取得し、ブランチ名を決め打ちにしない）・
-   diff の基準（ローカル追跡ブランチでなく remote ref を 3 点表記で使う）・`--base` の常時明示
-   といった非自明な作法が `my-create-pr` 側に集約されており、生の `gh pr create` はそれを
-   丸ごと迂回するため。由来: 上と同じ委譲ランで、repo に `my-create-pr` があり settings.json で
-   allow までされているのに素通りし、生の `gh pr create` を使っていた。
+4. **review→merge**: PR は既定では `my-create-pr` skill で作り、生の `gh pr create` は直接
+   叩かない。base の決定（`gh repo view` で既定ブランチを取得し、ブランチ名を決め打ちに
+   しない）・diff の基準（ローカル追跡ブランチでなく remote ref を 3 点表記で使う）・
+   `--base` の常時明示といった非自明な作法が `my-create-pr` 側に集約されており、生の
+   `gh pr create` はそれを丸ごと迂回するため。由来: 上と同じ委譲ランで、repo に
+   `my-create-pr` があり settings.json で allow までされているのに素通りし、生の
+   `gh pr create` を使っていた。
+
+   **ただし実行先 repo が PR 作成のレーンを定めているなら、そちらが優先される。** repo の
+   doc（`docs/pr-creation-lanes.md` 等）や CLAUDE.md がブランチ名で PR 作成の経路を分けて
+   いれば、その規約に従う。レーンを混ぜると同一 head に対して open PR が重複し、片方が
+   失敗してブランチに赤バツが付くため。実例: eversteel のモノレポは `agent/**` で始まる
+   ブランチへ push すると GitHub App 名義で PR を作る仕組みが起動し、同 repo の
+   `docs/pr-creation-lanes.md` が「es-create-pr はこのレーンを扱わない」と明記している。
+   この skill の指示だけを見て `my-create-pr` / `es-create-pr` を撃つと衝突するので、PR を
+   出す前に実行先 repo の規約を確認する。由来: 2 つの委譲先がこれに遭遇した。片方は自力で
+   repo doc を読んで回避し、もう片方は委譲元がプロンプトで明示したので回避できた
+   — どちらも skill の指示を上書きする何かがあったから助かっただけで、skill 自身は
+   無条件の指示のままだった。
 
    PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
    レビュー・required CI 確認を経て自律 merge する。

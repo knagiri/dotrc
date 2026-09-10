@@ -612,14 +612,199 @@ else
   fail=1
 fi
 
-# Case 3: branch absent from both local and origin -> unchanged behavior, a new
-# branch created from the clone's current HEAD.
+# Case 3: branch absent from both local and origin -> created fresh. This clone
+# has not diverged from origin, so its HEAD and origin's default are the same
+# commit; which of the two the base came from is pinned down by the stale-clone
+# section further below, where they differ.
 out="$(cd "$clone2" && "$wt" newbranchtest -b brandnew 2>/dev/null)"; rc=$?
 wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
 if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$clone_head_sha" ]; then
-  echo "ok: branch absent from both local and origin is created fresh from current HEAD"
+  echo "ok: branch absent from both local and origin is created fresh"
 else
   echo "FAIL: new-branch fallback rc=$rc sha=$wt_sha want=$clone_head_sha"; fail=1
+fi
+
+# --- new-branch base + fetch --------------------------------------------------
+# A new branch must be based on origin's default branch, NOT on cwd's HEAD.
+# cwd is routinely a long-lived linked worktree that has not pulled in days, and
+# a delegate branched off it reads the repo's own files -- the ones a prompt
+# names as the reference implementation -- at whatever version that stale base
+# carried. Measured at 822 commits behind, on all three delegations out of one
+# session. A dedicated bare origin + clone is used so the clone can be left
+# deliberately stale without disturbing the repos above.
+stalebare="$tmp/stale-origin.git"
+git init -q --bare "$stalebare"
+stalesrc="$tmp/stalesrc"
+mkdir -p "$stalesrc"
+git -C "$stalesrc" init -q
+git -C "$stalesrc" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$stalesrc" branch -q -M main       # init.defaultBranch varies by environment
+git -C "$stalesrc" push -q "$stalebare" HEAD:refs/heads/main
+git -C "$stalebare" symbolic-ref HEAD refs/heads/main
+
+staleclone="$tmp/staleclone"
+git clone -q "$stalebare" "$staleclone"
+stale_head="$(git -C "$staleclone" rev-parse HEAD)"
+
+# origin moves AFTER the clone, and the clone never pulls.
+echo "upstream moved on" >"$stalesrc/moved.txt"
+git -C "$stalesrc" add moved.txt
+git -C "$stalesrc" -c user.email=t@t -c user.name=t commit -q -m "commit the stale clone never saw"
+git -C "$stalesrc" push -q "$stalebare" main
+fresh_head="$(git -C "$stalesrc" rev-parse main)"
+
+if [ "$stale_head" = "$fresh_head" ] \
+   || [ "$(git -C "$staleclone" rev-parse origin/main)" != "$stale_head" ]; then
+  echo "FAIL: test setup did not produce a stale clone, the assertions below would be vacuous"; fail=1
+fi
+
+# The case itself: branch created from origin's default, not from the stale HEAD.
+# This needs BOTH halves of the change -- the leading fetch (or origin/main is as
+# stale as HEAD) and taking the base from origin/HEAD.
+out="$(cd "$staleclone" && "$wt" freshbase 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$fresh_head" ]; then
+  echo "ok: a new branch is based on origin's default even when cwd's HEAD is stale"
+else
+  echo "FAIL: new-branch base rc=$rc sha=$wt_sha want=$fresh_head (cwd HEAD is $stale_head)"; fail=1
+fi
+
+# A new branch off a remote-tracking start point must NOT pick up that ref as
+# its upstream (branch.autoSetupMerge would otherwise set it to origin/main).
+# An untracked new branch has no upstream at all, so es-create-pr's
+# @{upstream}-based pushed-check is not fooled into thinking an unpushed branch
+# is already pushed. (What actually pushes it is my-create-pr's explicit
+# `git push -u origin HEAD` -- NOT a plain `git push`, which would fail here:
+# this repo sets neither push.default=current nor push.autoSetupRemote, so with
+# no upstream configured git has nothing to push to.)
+if git -C "$out" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
+  echo "FAIL: new branch off origin's default has an upstream set (expected none)"; fail=1
+else
+  echo "ok: a new branch off origin's default has no upstream configured"
+fi
+
+# An EXISTING local branch must keep its own commit: the base only applies where
+# a branch is being created. Rebasing a delegator's chosen branch onto origin
+# would silently discard whatever it was pointed at.
+git -C "$staleclone" branch -q keepme "$stale_head"
+out="$(cd "$staleclone" && "$wt" keepmewt -b keepme 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$stale_head" ]; then
+  echo "ok: an existing local branch is checked out as-is, not re-based on origin"
+else
+  echo "FAIL: local branch re-based rc=$rc sha=$wt_sha want=$stale_head"; fail=1
+fi
+
+# The chosen base is reported. A base decided silently is how the staleness above
+# went unnoticed across three delegations, so the report is part of the fix.
+# This goes through the ladder's 1st rung (origin/HEAD, which `git clone` always
+# sets) -- the 2nd rung (origin/HEAD absent, falling back to origin/main) is
+# exercised separately further below, since this case can't tell the two apart:
+# origin/HEAD resolves to origin/main here regardless of which rung is taken.
+log="$tmp/base-report"
+out="$(cd "$staleclone" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log"
+  "$wt" basereport -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -Fq 'base     : origin/main (new branch)' <<<"$out"; then
+  echo "ok: the report names the base a new branch was created from"
+else echo "FAIL: base not reported rc=$rc out=$out"; fail=1; fi
+
+# The leading fetch also fixes the neighbouring miss: a branch that exists on
+# origin but was never fetched used to fall through to "create new", quietly
+# ignoring the branch the delegation was told to work on. Push it only now, so
+# it is still unfetched in the clone (the `wt` runs above each fetch) -- and
+# assert that absence, or this case would pass without testing anything.
+git -C "$stalesrc" checkout -q -b unfetched
+echo "only on origin" >"$stalesrc/unfetched.txt"
+git -C "$stalesrc" add unfetched.txt
+git -C "$stalesrc" -c user.email=t@t -c user.name=t commit -q -m "branch pushed after the clone last fetched"
+unfetched_sha="$(git -C "$stalesrc" rev-parse unfetched)"
+git -C "$stalesrc" push -q "$stalebare" unfetched
+git -C "$stalesrc" checkout -q main
+if [ -n "$(git -C "$staleclone" rev-parse --verify --quiet origin/unfetched)" ]; then
+  echo "FAIL: origin/unfetched already present in the clone, the assertion below would be vacuous"; fail=1
+fi
+
+out="$(cd "$staleclone" && "$wt" unfetchedwt -b unfetched 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+wt_upstream="$(git -C "$out" rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$unfetched_sha" ] && [ "$wt_upstream" = "origin/unfetched" ]; then
+  echo "ok: a branch pushed since the last fetch is picked up instead of created fresh"
+else
+  echo "FAIL: unfetched branch rc=$rc sha=$wt_sha want=$unfetched_sha upstream=$wt_upstream"; fail=1
+fi
+
+# --- new_base ladder, 2nd rung: origin/HEAD absent, origin/main present -------
+# freshbase/keepmewt/basereport/unfetchedwt above all resolve through
+# origin/HEAD, since `git clone` always sets that ref -- none of them exercise
+# the `elif git rev-parse --verify --quiet origin/main` branch, and deleting
+# that elif still leaves every case above passing. A dedicated clone with
+# origin/HEAD explicitly dropped is what actually forces the 2nd rung.
+headclone="$tmp/headclone"
+git clone -q "$stalebare" "$headclone"
+git -C "$headclone" symbolic-ref -d refs/remotes/origin/HEAD
+
+# git >= 2.47 defaults remote.<name>.followRemoteHEAD to "create", which makes
+# a bare `git fetch` (the wrapper's leading step) silently RECREATE the
+# origin/HEAD symref we just deleted -- and since it recreates it pointing at
+# origin/main, the 1st rung's sha and report string both match what the 2nd
+# rung would also produce, so the elif below would go untested without ever
+# failing (confirmed against git's own config docs and a throwaway-repo
+# fetch; git 2.43 here predates the setting and ignores the unknown key as a
+# no-op, so this line is inert locally but load-bearing on newer git in CI).
+git -C "$headclone" config remote.origin.followRemoteHEAD never
+
+# Advance the clone's own HEAD past origin/main (a local-only commit, never
+# pushed) so the 2nd rung (origin/main) and the 3rd rung (cwd's HEAD, the
+# no-origin-default fallback) would produce DIFFERENT shas here. Without this,
+# both rungs land on the same commit in this clone and the sha check below
+# would pass even with the elif deleted -- as observed while mutation-testing
+# this case (see evidence-over-guesswork.md §4).
+echo "local-only, never pushed" >"$headclone/local.txt"
+git -C "$headclone" add local.txt
+git -C "$headclone" -c user.email=t@t -c user.name=t commit -q -m "diverges headclone from origin/main"
+head_local_sha="$(git -C "$headclone" rev-parse HEAD)"
+if [ "$head_local_sha" = "$fresh_head" ]; then
+  echo "FAIL: test setup did not diverge headclone from origin/main, the assertion below would be vacuous"; fail=1
+fi
+
+out="$(cd "$headclone" && "$wt" headfallback 2>/dev/null)"; rc=$?
+wt_sha="$(git -C "$out" rev-parse HEAD 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$wt_sha" = "$fresh_head" ]; then
+  echo "ok: with origin/HEAD absent, a new branch falls back to origin/main"
+else
+  echo "FAIL: origin/HEAD-absent fallback rc=$rc sha=$wt_sha want=$fresh_head"; fail=1
+fi
+
+# The leading `git fetch origin` inside `wt` must not have recreated
+# origin/HEAD behind our back (see the followRemoteHEAD comment above) -- if
+# it did, the sha check above would have passed via the 1st rung instead of
+# the 2nd, same as if the elif had been deleted outright.
+if git -C "$headclone" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null; then
+  echo "FAIL: origin/HEAD was recreated by fetch, the sha check above did not test the 2nd rung"; fail=1
+fi
+
+out="$(cd "$headclone" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$tmp/base-report-headfallback"
+  "$wt" headfallbackreport -- "$prompt"; } 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -Fq 'base     : origin/main (new branch)' <<<"$out"; then
+  echo "ok: the report names origin/main as the base when origin/HEAD is absent"
+else echo "FAIL: origin/HEAD-absent base not reported rc=$rc out=$out"; fail=1; fi
+
+# A failing fetch must not abort the launch -- offline, or a checkout with no
+# `origin` at all, is not a reason to refuse a delegation. It degrades to the
+# previous behavior (cwd's HEAD as the base) and says so, since in add-only mode
+# the report above is not printed and this is the one case worth noticing.
+# cwdrepo has no remote, so `git fetch origin` fails outright.
+err="$tmp/nofetch-err"
+out="$(cd "$cwdrepo" && "$wt" nofetch 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}/.worktrees/nofetch" ] \
+   && grep -q 'git fetch origin failed' "$err" \
+   && grep -q "no origin/HEAD or origin/main" "$err" \
+   && [ "$(git -C "$out" rev-parse HEAD 2>/dev/null)" = "$(git -C "$cwdrepo" rev-parse HEAD)" ]; then
+  echo "ok: a failing fetch warns and falls back to cwd's HEAD instead of aborting"
+else
+  echo "FAIL: fetch-failure fallback rc=$rc out=$out"; sed 's/^/  err| /' "$err" 2>/dev/null; fail=1
 fi
 
 # --- background launch mode (default when a prompt is given) ------------------
@@ -843,5 +1028,62 @@ log="$tmp/tmux-name"
 if [ "$rc" -eq 0 ] && grep -Fq '報告先 name: test-delegator' "$log"; then
   echo "ok: --tmux receives the same delegator injection"
 else echo "FAIL: --tmux missing injection rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1; fi
+
+# --- fetch guard: BatchMode survives a caller-supplied GIT_SSH_COMMAND ---------
+# The leading fetch runs inside an unattended `claude --bg` delegation, so ssh
+# must never be able to ask for a passphrase or a host-key confirmation. The
+# guard is the composed GIT_SSH_COMMAND handed to `git fetch`; that string is
+# what these cases assert.
+#
+# What is NOT asserted, and why: whether ssh actually declines to prompt needs a
+# real remote, a real key and a controlling terminal, none of which a hermetic
+# test has. The composed value is the boundary this script owns; ssh's handling
+# of it is ssh's, and is pinned instead by the ssh_config(5) citation in the
+# comment above the fetch.
+#
+# `git` is shimmed on PATH: it records GIT_SSH_COMMAND when it sees a `fetch`
+# and then execs the real git, so the rest of claude-worktree runs unchanged.
+gitshimbin="$tmp/gitshimbin"
+mkdir -p "$gitshimbin"
+realgit="$(command -v git)"
+cat >"$gitshimbin/git" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = fetch ]; then
+    printf '%s\n' "\${GIT_SSH_COMMAND-<unset>}" >>"\$GIT_SHIM_LOG"
+    break
+  fi
+done
+exec "$realgit" "\$@"
+EOF
+chmod +x "$gitshimbin/git"
+
+# Fresh repo: fetch has no origin to reach, which is fine -- the failure lands on
+# the tolerated warning path and the shim has already recorded what it needed.
+sshrepo="$tmp/sshrepo"
+git init -q "$sshrepo"
+git -C "$sshrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+
+# No GIT_SSH_COMMAND in the environment: BatchMode must still be there.
+log="$tmp/gitshim-unset.log"; : >"$log"
+(cd "$sshrepo" && { unset GIT_SSH_COMMAND
+  export PATH="$gitshimbin:$PATH" GIT_SHIM_LOG="$log"
+  "$wt" sshdefault; }) >/dev/null 2>&1
+got="$(tail -n 1 "$log" 2>/dev/null)"
+if [ "$got" = "ssh -o BatchMode=yes" ]; then
+  echo "ok: fetch gets BatchMode=yes when GIT_SSH_COMMAND is unset"
+else echo "FAIL: unset GIT_SSH_COMMAND composed '$got' want 'ssh -o BatchMode=yes'"; fail=1; fi
+
+# The regression: a caller who already has GIT_SSH_COMMAND (`ssh -i <key>` is the
+# common shape) used to get their value verbatim, BatchMode silently dropped.
+# Their value must be preserved AND BatchMode appended.
+log="$tmp/gitshim-set.log"; : >"$log"
+(cd "$sshrepo" && { export PATH="$gitshimbin:$PATH" GIT_SHIM_LOG="$log" \
+    GIT_SSH_COMMAND="ssh -i /nonexistent/id_test"
+  "$wt" sshinherit; }) >/dev/null 2>&1
+got="$(tail -n 1 "$log" 2>/dev/null)"
+if [ "$got" = "ssh -i /nonexistent/id_test -o BatchMode=yes" ]; then
+  echo "ok: a caller-supplied GIT_SSH_COMMAND is preserved and BatchMode appended"
+else echo "FAIL: preset GIT_SSH_COMMAND composed '$got' want 'ssh -i /nonexistent/id_test -o BatchMode=yes'"; fail=1; fi
 
 exit "$fail"
