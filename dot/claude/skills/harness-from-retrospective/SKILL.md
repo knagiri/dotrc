@@ -52,8 +52,17 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 
 ## 承認後（この skill の外）
 
-ユーザーが方針を review し、承認した項目だけ `harness-from-feedback` を起動する。以降は
-harness-from-feedback の既存フロー（要件確定 → 委譲 → 実装 → PR）。
+ユーザーが方針を review し、承認した項目の行き先を選ぶ。経路は 2 つあり、**どちらを選ぶかは
+ユーザーが決める**。
+
+- **今すぐ実装する** → `harness-from-feedback` を起動する。以降は harness-from-feedback の
+  既存フロー（要件確定 → 委譲 → 実装 → PR）
+- **backlog へ回す** → `gh-issue-file` で起票する（`issue-workflow.md` §1）。以降はその rule の
+  §3 の人間ゲートと §6 の消化経路に乗る。起票した時点でその気づきに対する task は完了で、
+  実装するのは別の主体になる（§6.1 / §6.2）
+
+**この skill が自動で起票することはない。** 起票するかどうかの判断はユーザーに残す。理由は
+`docs/design/agent-issue-workflow.md`「代替案 — 自己内省から自動起票」を参照。
 
 allowlist（grant）候補も harness-from-feedback へ渡してよい。ただし **grant を含む委譲は
 auto-merge させず、人間の approve を待つ**（条件と理由の正典は `gh-commands.md` §5「grant 変更を
