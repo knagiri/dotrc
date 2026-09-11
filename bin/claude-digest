@@ -434,7 +434,7 @@ done
 # --- reachability -----------------------------------------------------------
 
 roster="$(claude agents --json 2>/dev/null || echo '[]')"
-declare -A s_reach=() s_state=() s_cwd=()
+declare -A s_reach=() s_state=() s_cwd=() s_kind=()
 
 for uuid in "${session_ids[@]}"; do
   live="$(jq -c --arg id "$uuid" '[.[] | select(.sessionId == $id)] | first // empty' \
@@ -446,9 +446,14 @@ for uuid in "${session_ids[@]}"; do
     if [ -n "$c" ] && [ -d "$c" ]; then alive_cwd="$c"; break; fi
   done <<<"${s_pairs[$uuid]}"
   s_cwd[$uuid]="$alive_cwd"
+  s_kind[$uuid]=""
   if [ -n "$live" ]; then
     s_reach[$uuid]="LIVE"
     s_state[$uuid]="$(jq -r '.state // .status // "-"' <<<"$live")"
+    # background vs. interactive decides how a live session is reached at all:
+    # `claude attach` is background-only and fails with "No job matching" on an
+    # interactive one (see docs/design/claude-digest.md).
+    s_kind[$uuid]="$(jq -r '.kind // ""' <<<"$live")"
   elif [ -n "$alive_cwd" ]; then
     s_reach[$uuid]="RESUMABLE"; s_state[$uuid]="-"
   else
@@ -609,7 +614,21 @@ linked=" "
       # `claude --resume <unknown-uuid>` silently opens an empty new session
       # instead of failing, so an unchecked resume line would be a trap.
       RESUMABLE) printf 'RESUME: claude --resume %s   (cwd: %s)\n' "$uuid" "${s_cwd[$uuid]}" ;;
-      LIVE)      printf 'RESUME: claude-queue picker（C-q q）\n' ;;
+      # `C-q q` is never offered here. That binding passes --repo-scope, so the
+      # picker it opens lists only the repo of the pane it was opened from --
+      # and the digest is a cross-repo index, so following it from any one pane
+      # hides most of what the digest just ranked. `C-q Q` is the unscoped one.
+      # A background session is reached directly instead, by its short id.
+      # Searching by title needs a title: "(no title)" is the placeholder the
+      # collection step substitutes, so it is a search key that matches nothing.
+      LIVE)
+        if [ "${s_kind[$uuid]}" = "background" ]; then
+          printf 'RESUME: claude attach %s\n' "${uuid:0:8}"
+        elif [ "${s_title[$uuid]}" = "(no title)" ]; then
+          printf 'RESUME: claude-queue picker（C-q Q）\n'
+        else
+          printf 'RESUME: C-q Q →「%s」で検索\n' "${s_title[$uuid]}"
+        fi ;;
       CWD_GONE)  printf 'RESUME: 到達不可（cwd 消滅）\n' ;;
     esac
     while IFS=$'\t' read -r r pr subject mine; do
@@ -705,11 +724,19 @@ if { cat <<'EOP'
 ### <SHORT>  <TITLE>        [<REACH>]
 着地  <repo #PR 要約 (commit N)>   ※無ければ「なし」
 残り  <OPEN_BRANCH（repo 付き）と SUMMARY の「残っているもの」を統合した 1〜3 行>   ※無ければ「なし」
-→ <RESUME>   ※REACH が RESUMABLE のときだけ書く
+→ <RESUME>   ※RESUME 行があるときだけ書く（CWD_GONE には無い）
 
 ## 紐付かなかった着地
 ## 片付け（git-reap-gone 対象）
 ## 到達不可（記録のみ）
+
+`→` 行は事実ブロックの `RESUME:` の後ろを**一字一句そのまま**写す。言い換えない。
+到達手段は reach で 3 通りに分かれており、どれもそのまま打てる／検索できる形で既に
+書いてある。書き換えるとコマンドも検索キーも使えなくなる。
+
+- `claude attach <short-id>`         … LIVE な background session
+- `C-q Q →「<title>」で検索`         … LIVE な interactive session
+- `claude --resume <uuid>  (cwd: …)` … RESUMABLE
 
 --- 事実ブロック ---
 EOP

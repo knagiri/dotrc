@@ -347,18 +347,31 @@ OPEN   6 件  origin/main に未統合 → session の「残り」として出�
 
 | 分類 | 条件 | 日報に書く到達手段 |
 |---|---|---|
-| LIVE | roster に `sessionId` がある | claude-queue picker（`C-q q`） |
+| LIVE / roster の `kind` が `background` | roster に `sessionId` がある | `claude attach <short-id>` |
+| LIVE / それ以外（interactive） | 同上 | `C-q Q →「<title>」で検索` |
 | RESUMABLE | roster に無いが cwd が実在 | `claude --resume <uuid>` |
 | CWD_GONE | cwd が消滅 | 到達不可。記録のみ |
 
 実測（2026-09-08 の cli 30 session）: LIVE 10 / RESUMABLE 17 / CWD_GONE 3。
 
+LIVE を `kind` で割るのは、`claude attach` が background 専用で、interactive に投げると
+`No job matching` で落ちるため（`worktree-scope.md` §6 / §8）。`<short-id>` は `sessionId` の
+先頭 8 文字で、`claude-worktree` が起動時に出すものと同じ。
+
+interactive 側の案内は **`C-q Q`（scope なし）であって `C-q q` ではない。** `C-q q` は
+`--repo-scope` 付きで popup を開いた pane の repo だけを一覧するので、repo 横断で session を
+並べる日報の導線としては、ほとんどの行に到達できない。picker は title 列を持つ fzf なので、
+日報の見出しの title がそのまま絞り込みキーになる（picker の title も日報の title も出所は
+transcript の `ai-title` で同一）。title が `(no title)` の session は検索キーにならないため、
+`C-q Q` の案内だけを書く。
+
 **resume コマンドは transcript の実在を確認してから書く。** `claude --resume <存在しない uuid>`
 はエラーにならず、**その id で空の新規 session を立ててしまう**。日報は transcript を読んで
 uuid を得ているので実在は構造的に保証されるが、この性質のせいで「間違った resume 行」は
 静かに壊れる（起動して、しかし何も残っていない）ため、経路として明示しておく。
-`claude attach` は background 専用で、interactive に投げると `No job matching` で落ちる
-（`worktree-scope.md` §6 / §8）。
+
+`→` 行は段2 の LLM が書くので、prompt 側にも上の分岐を書き、事実ブロックの `RESUME:` 行を
+そのまま写させる。言い換えられるとコマンドも検索キーも使えなくなる。
 
 ラベルは `ai-title` entry（`{"type":"ai-title","aiTitle":"..."}`）の最後の値。実測で 30 session
 中 28 で取れる。取れないものは最初の人間プロンプトの先頭 60 文字で代用する。
@@ -377,6 +390,7 @@ session をキーにした 1 本のリスト。優先度順に並べ、「残り
       eversteel-backend-api #6844 ci(ncs-gateway): bare 名 ECR に multi-arch イメージを push… (13)
 残り  eversteel-backend-api agent/fix/ncs-gateway-rtcp-bye-adr-playbook が ahead=4 で未統合
       委譲先が「ADR は follow-up に分離」と報告、未着手
+→ C-q Q →「mukoyama_kuki ncs-gateway RTSP停止」で検索
 
 ### f2a48cfd  remote assessment access control          [RESUMABLE]
 着地  なし

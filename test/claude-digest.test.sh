@@ -264,6 +264,17 @@ jq -cn '{type:"user", entrypoint:"cli", isSidechain:false, origin:{kind:"human"}
          message:{role:"user", content:"first prompt of an untitled session"}}' \
   >"$projects/-proj-a/$bare.jsonl"
 
+# UNTITLED: neither an ai-title nor a human prompt, so the title falls all the
+# way through to the "(no title)" placeholder. A live session like this cannot
+# be found in the picker by title, so its reach line must not offer one as a
+# search key.
+untitled=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb
+jq -cn --arg cwd "$repo_a" \
+  '{type:"assistant", entrypoint:"cli", isSidechain:false,
+    timestamp:"2026-03-01T03:00:00.700Z", cwd:$cwd, gitBranch:"main",
+    message:{role:"assistant", content:[{type:"text", text:"no human turn here"}]}}' \
+  >"$projects/-proj-a/$untitled.jsonl"
+
 # PLAIN: lives in the repo whose user.email is not a noreply address. Its
 # second entry mentions repo_b's "feature/open", which collides by name with
 # repo_a's -- see the feature/open branch fixture in repo_b above.
@@ -485,6 +496,39 @@ echo '[]' >"$sandbox/roster.json"
 check "a session with a surviving cwd is offered --resume with its own uuid" \
   "$(if grep -qF "RESUME: claude --resume $early   (cwd: $repo_a)" <<<"$d1"
      then echo 0; else echo 1; fi)"
+
+# How a LIVE session is reached depends on its roster `kind`: `claude attach`
+# is background-only, and an interactive one is found in the unscoped picker by
+# title. One roster covers all three live shapes at once.
+jq -cn --arg bg "$plain" --arg ia "$early" --arg nt "$untitled" \
+  '[{sessionId:$bg, kind:"background", status:"idle"},
+    {sessionId:$ia, kind:"interactive", status:"working"},
+    {sessionId:$nt, kind:"interactive", status:"working"}]' >"$sandbox/roster.json"
+dlive="$(run 2026-03-01)"
+
+check "a live background session is reached by claude attach with its short id" \
+  "$(if grep -qF "RESUME: claude attach ${plain:0:8}" \
+       <<<"$(extract_session "$dlive" "$plain")"
+     then echo 0; else echo 1; fi)"
+check "a live interactive session is reached through C-q Q, searched by its title" \
+  "$(if grep -qF 'RESUME: C-q Q →「early session」で検索' \
+       <<<"$(extract_session "$dlive" "$early")"
+     then echo 0; else echo 1; fi)"
+# "(no title)" is the placeholder for a session that has neither an ai-title
+# nor a human prompt. Handing it to the picker's filter matches nothing, so the
+# line must stop at the binding.
+check "a live session with no title is sent to C-q Q without a search key" \
+  "$(if grep -qF 'RESUME: claude-queue picker（C-q Q）' \
+       <<<"$(extract_session "$dlive" "$untitled")" \
+       && ! grep -q 'で検索' <<<"$(extract_session "$dlive" "$untitled")"
+     then echo 0; else echo 1; fi)"
+# `C-q q` opens the picker with --repo-scope, which lists only the repo of the
+# pane it was opened from. The digest ranks sessions across repos, so that
+# binding drops most of them -- it must never be the advice, for any reach.
+check "no reach line ever offers the repo-scoped C-q q binding" \
+  "$(if ! grep -qF 'C-q q' <<<"$dlive" && ! grep -qF 'C-q q' <<<"$d1"
+     then echo 0; else echo 1; fi)"
+echo '[]' >"$sandbox/roster.json"
 
 # --- generate: idempotency and the two stages -------------------------------
 : >"$sandbox/calls"
