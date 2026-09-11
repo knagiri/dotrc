@@ -132,7 +132,7 @@ linked worktree にいる場合はこの節のトリガーに当たらない。�
 今の worktree の作業を止めずに、独立した別ラインの作業を切り出したいときは `claude-worktree`（`bin/`）を使う。現在 worktree への変更はそのまま残り、分岐先は別ディレクトリ・別ブランチで進む。
 
 ```
-claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
+claude-worktree [--global] [--tmux] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
 ```
 
 - worktree は `<メインリポジトリ toplevel>/.worktrees/<name>` に作られる（メイン基準なので worktree 内から切ってもパスがネストしない）。メイン checkout の**内側**に置くのは 2 つの理由による: ghq が repo として列挙しないので `gts` の候補が repo 本体だけになり、mise が親方向へ config を辿って checkout 自身の `mise.local.toml`（既に trust 済みのパス）を拾うため seed も `mise trust` も要らなくなる。`.worktrees/` は `dot/git/ignore`（= `~/.config/git/ignore`、git 既定の global excludesFile）で無視するので、メイン checkout の `git status` は汚れない
@@ -143,7 +143,7 @@ claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-
 - `claude-worktree` が委譲元 session の name を解決し、プロンプト末尾へ `## 委譲元` 節（`報告先 name: <name>`）を自動付加する（`--tmux` 経路でも同じ。解決できないときは何も付かない）。委譲先はこれを受け取り、完了・不足・中断を SendMessage で委譲元へ報告する。**permission 承認だけはこの経路に乗らない**（tool call の途中で凍結するため委譲先自身が動けない）。承認は人間が attach して行う
 - 委譲元は委譲先から完了報告を受けたら、質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（§7 の後片付けと同じく、保守的なラッパー経由で行う）。自然終了に任せない理由は 2 つ: 委譲先は完遂しても `idle`（承認待ちの `status: waiting` とは別状態）で次の入力を待ち続け、放置すると約 60 分居座る。しかもその自然消滅では `SessionEnd` が飛ばないため claude-queue の `terminated_at` が NULL のまま幽霊行が残る。追跡がきれいに閉じるのは `claude stop`（= `claude-stop-bg`）経路だけ。この一次経路が取りこぼした session は §8 の `claude-reap-bg` が拾う
 - プロンプト無しなら worktree 追加のみ（stdout にパスのみ出力。`git wa` の置き換え）
-- `--self` は worktree の基準 repo を、cwd の repo ではなく **`claude-worktree` 自身が置かれている repo**（symlink 解決後。= dotrc）にする。無関係な project で作業中に dotrc のグローバル harness（rules / skills / bin）を切りたいときに使う。`--seed` のコピー元は `--self` の有無に関わらず cwd の checkout のまま
+- `--global` は worktree の基準 repo を、cwd の repo ではなく **`claude-worktree` 自身が置かれている repo**（symlink 解決後。= dotrc）にする。無関係な project で作業中に dotrc のグローバル harness（rules / skills / bin）を切りたいときに使う。`--seed` のコピー元は `--global` の有無に関わらず cwd の checkout のまま。旧名 `--self` も deprecated alias として動く（stderr に注意書きを出すだけで失敗はしない）。名前を機構（スクリプト自身の位置）ではなく意図（グローバル層を選ぶ）に寄せたのは、`harness-from-feedback` 手順 3 や [claude-settings.md](./claude-settings.md) の 3 層の表が既に「グローバル」の語で同じ区別をしているため
 - `--seed <path>`（繰り返し可）は、現 checkout の `<path>` を新 worktree の同じ相対位置へコピーする。存在しない／checkout 外の seed は worktree 作成前に fail する
 - 現 checkout の `.claude/worktree-seed`（1 行 1 パス、repo root からの相対。行頭 `#` はコメント）に挙げたパスは、`--seed` を渡さなくても**既定で seed される**。委譲先が無いと動けない gitignore 済み設定（token を供給する設定ファイル、ローカルの `.env` 等）を repo 側が名指しする場所で、script にファイル名を埋め込まない。明示 `--seed` と違い**挙げたパスが無いときは skip する**（fail しない）。一覧自体が無い repo も同様に何もしない。明示 `--seed` と重なっても二重コピー・二重ログにはならない。ただし絶対パスや checkout の外へ出る entry は fail する（commit されてレビューされる一覧なので、壊れた行は黙って通さない）
 - worktree はメイン checkout の内側 `<repo>/.worktrees/<name>` にあるので、mise が親方向へ辿って checkout 自身の `mise.local.toml` を拾い、trust も親の path prefix が覆う（実測: `<repo>` だけを `mise trust` した状態で `<repo>/.worktrees/foo` から `mise env` を引くと親の値が出る）。したがって mise config の seed は要らない。この repo の既定 seed に実エントリは無いが、機構自体は残置してある
