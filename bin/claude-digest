@@ -38,6 +38,16 @@ set -euo pipefail
 # both are pure text-in, text-out summarisation -- so removing the entire tool
 # surface is strictly safer than trying to deny-list it.
 #
+# Both also pass --restricted, which is what keeps the digest's own LLM calls
+# out of claude-queue's resumable list. Each -p call is a child session that
+# the hooks in ~/.claude/settings.json record, and it closes with reason
+# "other", so a morning's run leaves dozens of entries reading as sessions cut
+# short (41 of 43 on 2026-09-11). --restricted ignores the user, project and
+# local settings files, so claude-queue's own hooks are not loaded for these
+# calls and the digest stops filing them. (--bare has the same effect but
+# forces ANTHROPIC_API_KEY-only authentication, which this login does not
+# have.) The tools --restricted drops are already gone via --tools "".
+#
 # Usage:
 #   claude-digest                       show the most recent digest
 #   claude-digest <YYYY-MM-DD>          show that day's digest
@@ -229,6 +239,19 @@ while IFS= read -r file; do
   # sdk-py sessions are the security-review skill talking to itself through the
   # SDK, not work anybody did. Only the CLI entrypoint is a real session.
   [ "$(jq -r '.entrypoint // ""' <<<"$rec")" = "cli" ] || continue
+  # A session whose transcript carries no human prompt and no assistant text
+  # has nothing to triage, so it is dropped here rather than listed with a
+  # placeholder -- nine such sessions once took twenty-seven lines of a digest.
+  # The test is the stage 1 material itself, extracted here and reused there,
+  # never a proxy like "has a title" or "has a first prompt": a session that
+  # only ever got assistant text has neither and would be wrongly dropped.
+  #
+  # The extract goes to the mktemp scratch dir, never $digest_dir, so --dry-run
+  # keeps its promise to write nothing.
+  mat="$work/$uuid.txt"
+  jq -rn --arg day "$day" -f "$work/material.jq" "$file" 2>/dev/null \
+    | head -c 400000 >"$mat" || true
+  [ -s "$mat" ] || continue
 
   seen_uuid="$seen_uuid$uuid "
   session_ids+=("$uuid")
@@ -504,13 +527,11 @@ for uuid in "${session_ids[@]}"; do
 
   out="$digest_dir/$day/$uuid.md"
   if [ ! -s "$out" ]; then
+    # Written during collection, and non-empty for every session that got this
+    # far -- an empty one is what dropped the session from session_ids.
     mat="$work/$uuid.txt"
-    jq -rn --arg day "$day" -f "$work/material.jq" "${s_file[$uuid]}" 2>/dev/null \
-      | head -c 400000 >"$mat" || true
-    if [ ! -s "$mat" ]; then
-      printf -- '---\nends_with_question: no\ndelegate_incomplete: no\n---\n## 着地したもの\nなし\n## 残っているもの\nなし\n## 一言\n本文素材のないセッション。\n' >"$out"
-    elif { stage1_prompt; printf '\n### セッション: %s\n\n' "${s_title[$uuid]}"; cat "$mat"; } \
-           | claude -p --tools "" >"$out.part" 2>"$work/$uuid.err"; then
+    if { stage1_prompt; printf '\n### セッション: %s\n\n' "${s_title[$uuid]}"; cat "$mat"; } \
+         | claude -p --tools "" --restricted >"$out.part" 2>"$work/$uuid.err"; then
       mv "$out.part" "$out"
     else
       echo "claude-digest: summarising $uuid failed; see $work/$uuid.err" >&2
@@ -714,7 +735,7 @@ if { cat <<'EOP'
 --- 事実ブロック ---
 EOP
      cat "$facts"
-   } | claude -p --tools "" >"$out.part" 2>"$work/reduce.err"; then
+   } | claude -p --tools "" --restricted >"$out.part" 2>"$work/reduce.err"; then
   mv "$out.part" "$out"
 else
   echo "claude-digest: reduce failed; see stderr below" >&2
