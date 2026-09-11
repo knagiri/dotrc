@@ -2,8 +2,9 @@
 # Functional tests for claude-worktree's repo anchoring. Two throwaway git repos
 # stand in for the "script repo" (dotrc) and an unrelated "cwd repo". We assert
 # add-only mode prints a worktree path anchored to the right repo: default = cwd,
-# --self = the repo the script itself lives in. Worktrees live INSIDE the anchor
-# repo at <anchor>/.worktrees/<name>. No test framework; run with bash.
+# --global = the repo the script itself lives in (--self is its deprecated
+# alias). Worktrees live INSIDE the anchor repo at <anchor>/.worktrees/<name>.
+# No test framework; run with bash.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -29,23 +30,35 @@ git -C "$cwdrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m in
 
 wt="$scriptrepo/bin/claude-worktree"
 
-# Default (no --self): anchored to cwd repo -> "<cwdrepo>/.worktrees/def".
+# Default (no --global): anchored to cwd repo -> "<cwdrepo>/.worktrees/def".
 out="$(cd "$cwdrepo" && "$wt" def 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "${cwdrepo}/.worktrees/def" ]; then
   echo "ok: default anchors worktree to cwd repo"
 else echo "FAIL: default anchor rc=$rc out=$out want=${cwdrepo}/.worktrees/def"; fail=1; fi
 
-# --self: anchored to the script's repo -> "<scriptrepo>/.worktrees/glob", NOT cwd repo.
-out="$(cd "$cwdrepo" && "$wt" --self glob 2>/dev/null)"; rc=$?
+# --global: anchored to the script's repo -> "<scriptrepo>/.worktrees/glob", NOT cwd repo.
+out="$(cd "$cwdrepo" && "$wt" --global glob 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/glob" ]; then
-  echo "ok: --self anchors worktree to the script's own repo"
-else echo "FAIL: --self anchor rc=$rc out=$out want=${scriptrepo}/.worktrees/glob"; fail=1; fi
+  echo "ok: --global anchors worktree to the script's own repo"
+else echo "FAIL: --global anchor rc=$rc out=$out want=${scriptrepo}/.worktrees/glob"; fail=1; fi
 
-# --self composes with -b (branch name independent of worktree label).
-out="$(cd "$cwdrepo" && "$wt" --self glob2 -b harness/x 2>/dev/null)"; rc=$?
+# --global composes with -b (branch name independent of worktree label).
+out="$(cd "$cwdrepo" && "$wt" --global glob2 -b harness/x 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/glob2" ]; then
-  echo "ok: --self composes with -b"
-else echo "FAIL: --self with -b rc=$rc out=$out want=${scriptrepo}/.worktrees/glob2"; fail=1; fi
+  echo "ok: --global composes with -b"
+else echo "FAIL: --global with -b rc=$rc out=$out want=${scriptrepo}/.worktrees/glob2"; fail=1; fi
+
+# --self is the deprecated spelling of --global: same anchoring, plus a warning
+# on stderr. Kept working because a delegation script nobody is watching must
+# not die over a rename. Both halves are asserted -- the anchor (so the alias
+# is not silently a no-op that falls through to the cwd repo) and the notice
+# (so the deprecation is actually visible to whoever is reading the log).
+err="$tmp/selferr"
+out="$(cd "$cwdrepo" && "$wt" --self deprecated 2>"$err")"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/deprecated" ] \
+  && grep -q 'deprecated' "$err"; then
+  echo "ok: --self still anchors like --global and warns that it is deprecated"
+else echo "FAIL: --self alias rc=$rc out=$out err=$(cat "$err" 2>/dev/null)"; fail=1; fi
 
 # Unknown flags still rejected (regression: parser didn't swallow everything).
 (cd "$cwdrepo" && "$wt" --bogus name) >/dev/null 2>&1; [ $? -ne 0 ] \
@@ -80,13 +93,13 @@ if [ -f "${cwdrepo}/.worktrees/seeded/docs/specs/plan.md" ] && [ -z "$st" ]; the
   echo "ok: seeded gitignored file stays ignored in the worktree"
 else echo "FAIL: seeded file is visible to git: ${st:-<file missing>}"; fail=1; fi
 
-# --self anchors the WORKTREE to the script's repo, but seed sources always
+# --global anchors the WORKTREE to the script's repo, but seed sources always
 # resolve against cwd's checkout (that's where the uncommitted files live).
-out="$(cd "$cwdrepo" && "$wt" --self --seed docs/specs/plan.md selfseed 2>/dev/null)"; rc=$?
+out="$(cd "$cwdrepo" && "$wt" --global --seed docs/specs/plan.md selfseed 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/selfseed" ] \
    && [ "$(cat "${scriptrepo}/.worktrees/selfseed/docs/specs/plan.md" 2>/dev/null)" = "plan body" ]; then
-  echo "ok: --self seeds from cwd's checkout into the script repo's worktree"
-else echo "FAIL: --self --seed rc=$rc out=$out"; fail=1; fi
+  echo "ok: --global seeds from cwd's checkout into the script repo's worktree"
+else echo "FAIL: --global --seed rc=$rc out=$out"; fail=1; fi
 
 # A missing seed must fail BEFORE `git worktree add` -- otherwise the delegated
 # session stalls on a file that never arrives, and an orphan worktree is left.
@@ -279,22 +292,22 @@ if [ "$rc" -eq 0 ] \
   echo "ok: a listed path also passed as --seed is not seeded twice"
 else echo "FAIL: list/--seed overlap rc=$rc seeded=$(grep -c 'seeded mise.local.toml' "$err")"; fail=1; fi
 
-# The default list is scoped to same-repo: --self anchors the WORKTREE to the
+# The default list is scoped to same-repo: --global anchors the WORKTREE to the
 # SCRIPT repo while the list still lives in cwd's (unrelated) repo, so it must
 # NOT be read -- otherwise an unrelated cwd repo's list (e.g. naming a secret
 # file that repo happens to have) would leak into the anchor repo's worktree
 # with no explicit request from the caller. Explicit --seed is unaffected.
-out="$(cd "$cwdrepo" && "$wt" --self selfnolist 2>/dev/null)"; rc=$?
+out="$(cd "$cwdrepo" && "$wt" --global selfnolist 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/selfnolist" ] \
    && [ ! -e "${scriptrepo}/.worktrees/selfnolist/mise.local.toml" ]; then
-  echo "ok: --self does not read an unrelated cwd repo's default seed list"
-else echo "FAIL: --self default-seed leak rc=$rc out=$out present?=$([ -e "${scriptrepo}/.worktrees/selfnolist/mise.local.toml" ] && echo yes || echo no)"; fail=1; fi
+  echo "ok: --global does not read an unrelated cwd repo's default seed list"
+else echo "FAIL: --global default-seed leak rc=$rc out=$out present?=$([ -e "${scriptrepo}/.worktrees/selfnolist/mise.local.toml" ] && echo yes || echo no)"; fail=1; fi
 
-out="$(cd "$cwdrepo" && "$wt" --self --seed mise.local.toml selfexplicitseed 2>/dev/null)"; rc=$?
+out="$(cd "$cwdrepo" && "$wt" --global --seed mise.local.toml selfexplicitseed 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "${scriptrepo}/.worktrees/selfexplicitseed" ] \
    && grep -Fq '_.file' "${scriptrepo}/.worktrees/selfexplicitseed/mise.local.toml" 2>/dev/null; then
-  echo "ok: --self with explicit --seed still copies from cwd's checkout"
-else echo "FAIL: --self explicit --seed rc=$rc out=$out"; fail=1; fi
+  echo "ok: --global with explicit --seed still copies from cwd's checkout"
+else echo "FAIL: --global explicit --seed rc=$rc out=$out"; fail=1; fi
 
 # An entry escaping the checkout has no relative path in the worktree. Unlike a
 # merely absent entry this is a bug in a committed, reviewed file, so it must
@@ -324,9 +337,9 @@ else echo "FAIL: absolute list entry accepted rc=$rc"; fail=1; fi
 # worktree's OWN toplevel -- not the shared repo -- get compared against
 # main_top, silently disabling the default seed for exactly this repo's primary
 # delegation workflow (delegating FROM a linked worktree). Two cases: default
-# anchor, and --self (anchored to the script's own repo).
+# anchor, and --global (anchored to the script's own repo).
 
-# Case A: no --self. cwd is a linked worktree of cwdrepo; default anchor
+# Case A: no --global. cwd is a linked worktree of cwdrepo; default anchor
 # (main_top) also resolves to cwdrepo, so the guard must pass and the default
 # seed list in the LINKED WORKTREE's own checkout (seed_top always resolves
 # against cwd, per --seed's existing semantics) must be honored.
@@ -344,7 +357,7 @@ if [ "$rc" -eq 0 ] \
   echo "ok: default seed list is honored when cwd is a linked worktree of the anchor repo"
 else echo "FAIL: linked-worktree default seed rc=$rc out=$out"; fail=1; fi
 
-# Case B: --self. cwd is a linked worktree of scriptrepo; --self anchors to
+# Case B: --global. cwd is a linked worktree of scriptrepo; --global anchors to
 # scriptrepo, so the guard must likewise pass and honor that linked worktree's
 # own default seed list.
 lwself="$tmp/scriptrepo-lw-self"
@@ -354,12 +367,12 @@ printf 'mise.local.toml\n' >"$lwself/.claude/worktree-seed"
 printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"$lwself/mise.local.toml"
 
 err="$tmp/lw-self-err"
-out="$(cd "$lwself" && "$wt" --self fromlwself 2>"$err")"; rc=$?
+out="$(cd "$lwself" && "$wt" --global fromlwself 2>"$err")"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -Fq '_.file' "${scriptrepo}/.worktrees/fromlwself/mise.local.toml" 2>/dev/null \
    && [ "$(grep -c 'seeded mise.local.toml' "$err")" = 1 ]; then
-  echo "ok: default seed list is honored when cwd is a linked worktree of the --self-anchored repo"
-else echo "FAIL: linked-worktree --self default seed rc=$rc out=$out"; fail=1; fi
+  echo "ok: default seed list is honored when cwd is a linked worktree of the --global-anchored repo"
+else echo "FAIL: linked-worktree --global default seed rc=$rc out=$out"; fail=1; fi
 
 # Removed again so the launch-mode tests below are unaffected by either.
 rm -rf "$cwdrepo/.claude" "$cwdrepo/mise.local.toml"
