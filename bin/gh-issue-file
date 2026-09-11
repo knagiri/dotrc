@@ -22,7 +22,10 @@ set -euo pipefail
 #        / 128 called outside a git repo (git itself fails `set -e` below)
 #        / anything else: gh's own exit code, passed through unchanged by
 #          `set -e` (not rounded to 1) -- from the `gh issue list` dedup query
-#          or the trailing `exec gh issue create`. See
+#          or the trailing `gh issue create`. Both now run through gh_mise
+#          (bin/lib/gh-mise.sh) rather than `exec`; `mise exec` propagates its
+#          child's status unchanged (measured: a gh exiting 4 still arrives as
+#          4), so the contract below is unaffected. See
 #          dot/claude/rules/issue-workflow.md §2 for the read-and-diagnose flow.
 
 usage() {
@@ -63,6 +66,20 @@ if [ -n "$not_dup_of" ] && [[ ! "$not_dup_of" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
 fi
 
 root="$(git rev-parse --show-toplevel)"
+
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh. $root is
+# handed over so the template lookup, the dedup query and the create below all
+# resolve against one and the same repo.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$root"
+
+# gh runs with $root as its cwd (gh_mise), not the caller's, so a relative
+# --body-file would be resolved against the repo root -- reading a different
+# file, or none. Absolutise it here, after the readability check above has
+# already passed against the caller's cwd.
+body_file="$(realpath -- "$body_file")"   # abs-body-file@dotrc
+
 template="$root/.github/ISSUE_TEMPLATE/$kind.md"
 if [ ! -r "$template" ]; then
   echo "gh-issue-file: no template at $template" >&2
@@ -103,7 +120,7 @@ fi
 # is two sessions filing the same idea under different kinds. gh's built-in --jq
 # is used so no system jq is required.
 limit=200
-candidates="$(gh issue list --state all --label agent-task --limit "$limit" \
+candidates="$(gh_mise issue list --state all --label agent-task --limit "$limit" \
   --json number,title,state,labels \
   --jq '.[] | [(.number|tostring), .state,
                ((.labels // []) | map(.name) | map(select(startswith("kind/"))) | first // "kind/?"),
@@ -165,7 +182,7 @@ fi
 # intentional -- the wrapper does not create labels (that would widen what this
 # grant can do); run the one-time setup in
 # docs/design/agent-issue-workflow.md first.
-exec gh issue create \
+gh_mise issue create \
   --title "$title" \
   --body-file "$body_file" \
   --label agent-task \

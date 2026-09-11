@@ -20,11 +20,16 @@ if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-owner_repo="$(gh repo view --json owner,name --jq '.owner.login + " " + .name')"
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+owner_repo="$(gh_mise repo view --json owner,name --jq '.owner.login + " " + .name')"
 owner="${owner_repo%% *}"
 repo="${owner_repo##* }"
 
-exec gh api graphql \
+gh_mise api graphql \
   -f query='query($owner:String!,$repo:String!,$pr:Int!){
     repository(owner:$owner,name:$repo){ pullRequest(number:$pr){
       reviewThreads(first:100){ nodes{ id isResolved isOutdated
