@@ -279,6 +279,37 @@ nobase=88888888-8888-8888-8888-888888888888
   entry '2026-03-01T05:00:00.200Z' "$repo_c" 'feature/nobase'
 } >"$projects/-proj-b/$nobase.jsonl"
 
+# NOMATERIAL: a real cli session whose transcript holds nothing summarisable --
+# only system/attachment bookkeeping, no human prompt and no assistant text.
+# There is nothing to triage in it, so it must not reach the facts block at
+# all. Its cwd and branch are repo_a's, so it would certainly be listed if the
+# filter were absent.
+nomaterial=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb
+{ jq -cn --arg cwd "$repo_a" \
+    '{type:"system", subtype:"local_command_output", entrypoint:"cli",
+      isSidechain:false, timestamp:"2026-03-01T03:00:00.100Z", cwd:$cwd,
+      gitBranch:"main", content:"<local-command-stdout></local-command-stdout>"}'
+  jq -cn --arg cwd "$repo_a" \
+    '{type:"attachment", entrypoint:"cli", isSidechain:false,
+      timestamp:"2026-03-01T03:00:01.100Z", cwd:$cwd, gitBranch:"main",
+      attachment:{type:"new_directory", path:"/tmp"}}'
+} >"$projects/-proj-a/$nomaterial.jsonl"
+
+# ASSISTANT_ONLY: no human turn at all, so it has neither an ai-title nor a
+# first prompt -- but it does carry assistant text, which is material. It is
+# the reason the drop above keys on material.jq rather than on the title or
+# the first prompt: either of those proxies would take this session with it.
+assistant_only=cccccccc-cccc-cccc-cccc-cccccccccccc
+{ jq -cn --arg cwd "$repo_a" \
+    '{type:"system", subtype:"local_command_output", entrypoint:"cli",
+      isSidechain:false, timestamp:"2026-03-01T03:10:00.100Z", cwd:$cwd,
+      gitBranch:"main", content:"<local-command-stdout></local-command-stdout>"}'
+  jq -cn --arg cwd "$repo_a" \
+    '{type:"assistant", entrypoint:"cli", isSidechain:false,
+      timestamp:"2026-03-01T03:11:00.100Z", cwd:$cwd, gitBranch:"main",
+      message:{role:"assistant", content:[{type:"text", text:"resumed and summarised the branch"}]}}'
+} >"$projects/-proj-a/$assistant_only.jsonl"
+
 # --------------------------------------------------------------------------
 run() {  # run <day>; prints the facts block
   env CLAUDE_PROJECTS_DIR="$projects" CLAUDE_DIGEST_DIR="$digests" \
@@ -458,6 +489,21 @@ check "a session with no surviving cwd is reported unreachable" \
 check "an entry with no gitBranch produces no branch line" \
   "$(if ! grep -qE '^OPEN_BRANCH: [^ ]+ +$' <<<"$d1"; then echo 0; else echo 1; fi)"
 
+# --- sessions with no summarisable material ---------------------------------
+# A session holding only system/attachment bookkeeping has nothing to triage,
+# so it is dropped before the facts block is built rather than listed with a
+# placeholder summary.
+check "a session with no summarisable material is dropped from the facts block" \
+  "$(if ! grep -q "SESSION $nomaterial" <<<"$d1"; then echo 0; else echo 1; fi)"
+# The control for the check above: without it, dropping every session would
+# pass just as well. "early" is in the same facts block and does carry material.
+check "...while a session of the same day that has material is still listed" \
+  "$(if grep -q "SESSION $early" <<<"$d1"; then echo 0; else echo 1; fi)"
+# The drop keys on material.jq, never on the title or the first prompt: this
+# session has neither (no ai-title, no human turn) and yet is full of material.
+check "a session with only assistant text, and no human prompt, is kept" \
+  "$(if grep -q "SESSION $assistant_only" <<<"$d1"; then echo 0; else echo 1; fi)"
+
 d0="$(run 2026-01-01)"; rc0=$?
 check "a day with no sessions still produces a facts block" \
   "$(if [ "$rc0" -eq 0 ] && grep -q '^# 2026-01-01' <<<"$d0" && grep -q '^- なし' <<<"$d0"
@@ -505,13 +551,16 @@ check "generate writes the day's digest" \
 check "stage 1 writes one intermediate per session" \
   "$(if [ -s "$digests/2026-03-01/$early.md" ] && [ -s "$digests/2026-03-01/$dup.md" ]
      then echo 0; else echo 1; fi)"
+# The dropped session never reaches stage 1 either, so no placeholder
+# intermediate is written for it.
+check "no intermediate is written for a session with no material" \
+  "$(if [ ! -e "$digests/2026-03-01/$nomaterial.md" ]; then echo 0; else echo 1; fi)"
 # The second run reuses every intermediate, so it costs exactly one more -p
 # call than the first: the reduce.
 check "re-running a day reuses the intermediates and only redoes the reduce" \
   "$(if [ "$g2" -eq 0 ] && [ "$(( calls2 - calls1 ))" -eq 1 ]; then echo 0; else echo 1; fi)"
 check "the reduce is handed the facts, not the raw transcripts" \
   "$(if grep -q "SHORT: ${early:0:8}" "$digests/2026-03-01.md"; then echo 0; else echo 1; fi)"
-
 # --- show mode --------------------------------------------------------------
 out="$(env CLAUDE_DIGEST_DIR="$digests" PATH="$stubdir:$PATH" "$bin" 2026-03-01 2>&1)"
 check "show prints the requested day" \
