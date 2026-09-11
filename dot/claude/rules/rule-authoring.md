@@ -50,8 +50,8 @@ agent が「この理由は今の状況に当てはまるか」を判断する�
   規約を入れた PR で、物語はその本文にある。写せば二重管理になり、更新されない側が残る。
   番号が特定できない由来はポインタも付けずに落とす
   - `git log -S'<規約の一文>' -- <file>` で代用しない。`-S` が返すのは文言を入れた commit
-    であって PR ではなく（`git log --merges --ancestry-path --reverse <sha>..origin/main
-    | head -1` で絞る必要がある）、規約の一文が後で言い換えられれば空振りもする
+    であって PR ではなく（`git log --merges --ancestry-path --reverse --oneline
+    <sha>..origin/main | head -1` で絞る必要がある）、規約の一文が後で言い換えられれば空振りもする
   - 複数 PR を並べるときは各番号に `dotrc#` を付ける（`dotrc#37 / dotrc#76`）。rules は
     `~/.claude/rules/` へ展開されて**他 repo の session にもロードされる**ので、裸の `#78`
     では読んだ session がいる repo の PR に読めてしまう。自動リンクが目的ではない
