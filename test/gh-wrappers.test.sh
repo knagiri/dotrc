@@ -653,4 +653,83 @@ if [ ! -s "$stubdir/args" ]; then
   echo "ok: removing the fallback breaks the wrapper when mise is absent (the case above is discriminating)"
 else echo "FAIL: alwaysmise mutant still reached gh without mise: $(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
 
+# --- gh-pr-create -----------------------------------------------------------
+# Unlike the other wrappers this one passes every flag through: it exists only
+# to put the repo's mise env in front of `gh pr create`, which my-create-pr used
+# to call directly and which is what actually failed twice in a delegated agent.
+# So the assertions are (a) the flags arrive untouched, (b) no flag is added,
+# and (c) the two file-reading flags are absolutised before gh's cwd moves.
+prcreatedir="$stubdir/prcreate"; mkdir -p "$prcreatedir/sub"
+git -C "$prcreatedir" init -q 2>/dev/null || true
+prcreate_real="$(cd "$prcreatedir" && pwd -P)"
+printf 'REAL\n' >"$prcreatedir/sub/pr.md"
+printf 'DECOY\n' >"$prcreatedir/pr.md"
+
+prcreate_run() {  # prcreate_run <bindir> [args...]; runs from $prcreatedir/sub
+  : >"$stubdir/args"
+  ( cd "$prcreatedir/sub" && env GH_ARGS_FILE="$stubdir/args" \
+      PATH="$stubdir:$PATH" "$1/gh-pr-create" "${@:2}" ) >/dev/null 2>&1
+}
+
+prcreate_run "$bindir" --title t --body b --base main
+if grep -qxF '[pr]' "$stubdir/args" && grep -qxF '[create]' "$stubdir/args" \
+  && grep -qxF '[--title]' "$stubdir/args" && grep -qxF '[t]' "$stubdir/args" \
+  && grep -qxF '[--body]' "$stubdir/args" && grep -qxF '[b]' "$stubdir/args" \
+  && grep -qxF '[--base]' "$stubdir/args" && grep -qxF '[main]' "$stubdir/args" \
+  && [ "$(grep -c . "$stubdir/args")" -eq 8 ]; then
+  echo "ok: gh-pr-create passes its flags through to gh pr create and adds none"
+else echo "FAIL: gh-pr-create passthrough args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# A relative --body-file must still name the caller's file after gh's cwd moves
+# to the repo root, where a DECOY of the same name sits. Both spellings, and the
+# --body-file=<path> form, go through the same rewrite.
+for flag in --body-file -F; do
+  prcreate_run "$bindir" "$flag" pr.md
+  if grep -qxF "[$prcreate_real/sub/pr.md]" "$stubdir/args"; then
+    echo "ok: gh-pr-create absolutises a relative $flag value"
+  else echo "FAIL: gh-pr-create $flag args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+done
+
+# --template is left exactly as given: gh matches it against the repo's own PR
+# templates by name, so rewriting it could change what gh looks up.
+prcreate_run "$bindir" --template pull_request_template.md
+if grep -qxF '[pull_request_template.md]' "$stubdir/args"; then
+  echo "ok: gh-pr-create leaves --template untouched (gh resolves it by name)"
+else echo "FAIL: gh-pr-create --template args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+prcreate_run "$bindir" --body-file=pr.md
+if grep -qxF "[--body-file=$prcreate_real/sub/pr.md]" "$stubdir/args"; then
+  echo "ok: gh-pr-create absolutises the --body-file=<path> form too"
+else echo "FAIL: gh-pr-create --body-file= args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# "-" means stdin, not a path, so it must survive untouched.
+prcreate_run "$bindir" --body-file -
+if grep -qxF '[-]' "$stubdir/args"; then
+  echo "ok: gh-pr-create leaves --body-file - alone"
+else echo "FAIL: gh-pr-create stdin body args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# gh-pr-create reaches gh through mise, like every other wrapper.
+: >"$miseargs"
+( cd "$prcreatedir/sub" && env GH_ARGS_FILE="$stubdir/args" MISE_ARGS_FILE="$miseargs" \
+    PATH="$stubdir:$PATH" "$bindir/gh-pr-create" --title t ) >/dev/null 2>&1
+if grep -qxF '[mise:exec]' "$miseargs" && grep -qxF "[mise:$prcreate_real]" "$miseargs" \
+  && grep -qxF '[mise:gh]' "$miseargs"; then
+  echo "ok: gh-pr-create reaches gh through mise exec -C <repo toplevel>"
+else echo "FAIL: gh-pr-create mise prefix mise=$(cat "$miseargs" 2>/dev/null)"; fail=1; fi
+
+# Discrimination (evidence-over-guesswork §4): with the absolutisation stripped,
+# the relative --body-file reaches gh as "pr.md" -- which, from the repo root,
+# is the DECOY. `cmp` keeps the check from rotting into a no-op.
+prcreatemutant="$stubdir/prcreatemutant"
+rm -rf "$prcreatemutant"; mkdir -p "$prcreatemutant"
+cp -a "$bindir/." "$prcreatemutant/"
+grep -v 'abs-path-arg@dotrc' "$bindir/gh-pr-create" >"$prcreatemutant/gh-pr-create"
+chmod +x "$prcreatemutant/gh-pr-create"
+if cmp -s "$bindir/gh-pr-create" "$prcreatemutant/gh-pr-create"; then
+  echo "FAIL: the gh-pr-create mutant is identical; the cases above are no-ops"; fail=1
+fi
+prcreate_run "$prcreatemutant" --body-file pr.md
+if grep -qxF '[pr.md]' "$stubdir/args"; then
+  echo "ok: dropping the absolutisation hands gh the bare relative path (the cases above are discriminating)"
+else echo "FAIL: gh-pr-create mutant args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
 exit "$fail"
