@@ -54,6 +54,15 @@ claude-digest --generate --dry-run [<date>]
 （選択理由は `bin/claude-digest` の `show()` 内コメントを参照）。ページャの選択は
 claude-digest 側に一本化しており、`dot/tmux.conf` の binding はページャを指定しない。
 
+### LLM 呼び出しは `--restricted`
+
+段1・段2 とも `claude -p --tools "" --restricted` で呼ぶ。`--tools ""` は要約が純粋な
+text-in / text-out であり、読ませる transcript に第三者由来のテキストが混ざるためで、
+`--restricted` は user / project / local の settings を読ませないためである。読ませると
+claude-queue の hook が子 session を 1 本ずつ登録し、終了理由が `other` になるので、
+resumable 一覧（`C-q Q`）が「途中で切られた session」で埋まる（2026-09-11 朝は 43 本中 41 本）。
+`--bare` も hook を止めるが認証を `ANTHROPIC_API_KEY` のみに強制するため使えない。
+
 ## 日の境界は JST 05:00
 
 深夜作業を前日側に落とすため、日は 05:00 JST から 05:00 JST までとする。
@@ -123,6 +132,19 @@ origin == null                     238   tool_result 等
 
 **jq の落とし穴**: `.message.content[]?` の中へ入ると `.sessionId` などトップレベルの
 フィールドは null になる。必要なら `.sessionId as $s |` で先に束縛する。
+
+### 素材ゼロの session は一覧に載せない
+
+上の表で 1 件も採れなかった session は、`session_ids` を確定する段階で落とす。事実ブロックにも
+日報にも一切現れない。`system` / `attachment` / `last-prompt` しか持たない 10 行程度の
+transcript が実際に生まれ、確認すべきことが何も無いのに「確認すべき session」として並ぶため。
+
+判定は**段1 が使う `material.jq` そのもの**で、その出力が空なら落とす。`title` の有無や
+`first_prompt` の有無で代用しない — assistant の発話だけを持つ session はそのどちらも欠くが
+素材はあるので、代用すると誤って落ちる。
+
+抽出は収集ループの中で作業用 `mktemp -d` へ 1 度だけ行い、段1 はその結果を読み直す。書き出し先が
+`$CLAUDE_DIGEST_DIR` の外なので、`--dry-run` の「何も書かない」は保たれる。
 
 ### 素材量（2026-09-08、cli セッションのみ）
 
@@ -501,6 +523,8 @@ command not found になるだけで判別にならない）。
 | `blocked` の +4 を外す | a blocked session sorts to the top |
 | 着地 ∩ 言及の交差をやめる | a landed PR nobody mentioned goes to the unlinked list, named with its repo |
 | 段1 の中間サマリ再利用をやめる | re-running a day reuses the intermediates and only redoes the reduce |
+| `claude -p` から `--restricted` を外す | every -p call the digest makes carries --restricted |
+| 素材ゼロ session の除外を外す | a session with no summarisable material is dropped from the facts block（対照の「…while a session of the same day that has material is still listed」と「a session with only assistant text, and no human prompt, is kept」は通り続ける） |
 
 `-F` の判別には BRE 前提の fixture が要る。手元の git は `grep.patternType` 未設定で
 `--author` が BRE 既定になるため、`+` はリテラルであり、ERE 前提の偽 author
