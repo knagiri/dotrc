@@ -38,6 +38,16 @@ set -euo pipefail
 # both are pure text-in, text-out summarisation -- so removing the entire tool
 # surface is strictly safer than trying to deny-list it.
 #
+# Both also pass --restricted, which is what keeps the digest's own LLM calls
+# out of claude-queue's resumable list. Each -p call is a child session that
+# the hooks in ~/.claude/settings.json record, and it closes with reason
+# "other", so a morning's run leaves dozens of entries reading as sessions cut
+# short (41 of 43 on 2026-09-11). --restricted ignores the user, project and
+# local settings files, so claude-queue's own hooks are not loaded for these
+# calls and the digest stops filing them. (--bare has the same effect but
+# forces ANTHROPIC_API_KEY-only authentication, which this login does not
+# have.) The tools --restricted drops are already gone via --tools "".
+#
 # Usage:
 #   claude-digest                       show the most recent digest
 #   claude-digest <YYYY-MM-DD>          show that day's digest
@@ -521,7 +531,7 @@ for uuid in "${session_ids[@]}"; do
     # far -- an empty one is what dropped the session from session_ids.
     mat="$work/$uuid.txt"
     if { stage1_prompt; printf '\n### セッション: %s\n\n' "${s_title[$uuid]}"; cat "$mat"; } \
-         | claude -p --tools "" >"$out.part" 2>"$work/$uuid.err"; then
+         | claude -p --tools "" --restricted >"$out.part" 2>"$work/$uuid.err"; then
       mv "$out.part" "$out"
     else
       echo "claude-digest: summarising $uuid failed; see $work/$uuid.err" >&2
@@ -725,7 +735,7 @@ if { cat <<'EOP'
 --- 事実ブロック ---
 EOP
      cat "$facts"
-   } | claude -p --tools "" >"$out.part" 2>"$work/reduce.err"; then
+   } | claude -p --tools "" --restricted >"$out.part" 2>"$work/reduce.err"; then
   mv "$out.part" "$out"
 else
   echo "claude-digest: reduce failed; see stderr below" >&2
