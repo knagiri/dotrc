@@ -181,7 +181,9 @@ seed したファイルは gitignore 済みなら worktree 内でも untracked �
 
 - `$CLAUDE_JOB_DIR` に置かない。job の削除で消えるので、報告を読む頃には無いことがある
 - `/tmp` に置かない。寿命が不定で、並行する別 job と名前が衝突しうる
-- `.delegate/` は `claude-worktree` が worktree 作成時に repo の exclude（`git rev-parse --git-path info/exclude` が返す `.git/info/exclude`）へ登録するので、置いたままでも `git status --porcelain` は空のままになる（per-worktree の `.git/worktrees/<name>/info/exclude` は git が読まないので、登録先は common dir 側になる）。§7 の `git-reap-gone` は worktree が clean であることを reap の条件にしており、`git worktree remove` も `--force` 無しで通る。つまり成果物を残したまま後片付けできる
+- `.delegate/` は `claude-worktree` が worktree 作成時に repo の exclude（`git rev-parse --git-path info/exclude` が返す `.git/info/exclude`）へ登録するので、置いたままでも `git status --porcelain` は空のままになる
+  - `info/` は worktree 間で共有される領域なので、git は linked worktree でも（`commondir` で解決した）common dir 側の `info/exclude` だけを読み、`.git/worktrees/<name>/info/exclude` へ書いても読まれない
+  - §7 の `git-reap-gone` は worktree が clean であることを reap の条件にしており、`git worktree remove` も `--force` 無しで通る。つまり成果物を残したまま後片付けできる
 
 `.delegate/` を untracked のまま worktree 内に置く（exclude に入れない）と、この clean 判定が塞がって reap が skip される。逆に worktree の外へ出すと委譲元が読めない。exclude 済みの worktree 内、というのがその両方を同時に満たす唯一の場所である。
 
