@@ -13,8 +13,13 @@ agent が生む task（harness 改善案・不具合・設計課題）を GitHub
 agent が issue を起こすときは `bin/gh-issue-file` を使い、生の `gh issue create` は使わない。
 
 ```
-gh-issue-file --kind <harness|bug|task> --title <title> --body-file <path> [--not-dup-of N[,N...]]
+gh-issue-file [--global] --kind <harness|bug|task> --title <title> --body-file <path> [--not-dup-of N[,N...]]
 ```
+
+dotrc 以外の repo で作業中に harness issue を起こすときは `--global` を付ける。付けると
+template の探索・dedup クエリ・起票先がすべて **`gh-issue-file` 自身が置かれた repo**（= dotrc）
+に揃う。付けないと cwd の repo に `.github/ISSUE_TEMPLATE/<kind>.md` が無くて exit 1 になり、
+起票経路自体が無い。`claude-worktree --global` と同じ意図・同じ綴り。
 
 生で叩くと 2 つのゲートを迂回する。ひとつは本文の構造検証で、`gh issue create --title/--body`
 は非対話起票で issue template を適用しないため、骨格を担保しているのはラッパー側だけである。
@@ -32,7 +37,7 @@ gh-issue-file --kind <harness|bug|task> --title <title> --body-file <path> [--no
 | 0 | 起票した | stdout の URL を報告する |
 | 1 | 引数か body の不備 | stderr を読んで切り分ける |
 | 2 | dedup ゲート | 下記のとおり候補を**読んでから**判断する |
-| 128 | git repo 外から呼んだ（`root="$(git rev-parse --show-toplevel)"` が `set -e` 下で素通しする git 自体の失敗） | stderr に `fatal: not a git repository ...` が出る。cwd を repo 内へ移して再実行する |
+| 128 | git repo 外から呼んだ（`root="$(git rev-parse --show-toplevel)"` が `set -e` 下で素通しする git 自体の失敗） | stderr に `fatal: not a git repository ...` が出る。cwd を repo 内へ移して再実行する。`--global` は cwd の repo を解決しないのでこの経路に入らない |
 | 上記以外の非 0 | 末尾の `gh issue create`、または dedup ゲート手前で叩く `gh issue list` の失敗がそのまま伝播する（`set -e` は代入付き command substitution の失敗も gh の実際の終了コードのまま返し、1 に丸めない。実測: 未認証状態の `gh issue list` は exit 4） | stderr を読む。委譲 worktree では token 未供給を疑う（`worktree-scope.md` §6 の既知 gap） |
 
 code 1 は `bin/gh-issue-file` 自身の検証の失敗であり、末尾の `gh issue create` の gh の
