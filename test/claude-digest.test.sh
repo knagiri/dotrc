@@ -22,7 +22,8 @@ mkdir -p "$projects/-proj-a" "$projects/-proj-b" "$digests"
 
 # --------------------------------------------------------------------------
 # The `claude` stub: serves the roster, and answers -p from stdin. It records
-# one line per -p call so the idempotency test can count them.
+# one line per -p call, carrying that call's whole argument list, so the tests
+# can both count the calls and assert which flags they carried.
 # --------------------------------------------------------------------------
 stubdir="$sandbox/stub"; mkdir -p "$stubdir"
 cat >"$stubdir/claude" <<'STUB'
@@ -31,7 +32,7 @@ case "${1:-}" in
   agents) cat "${CD_ROSTER:-/dev/null}"; exit 0 ;;
   -p)
     body="$(cat)"
-    printf '%s\n' "-p" >>"${CD_CALLS:-/dev/null}"
+    printf '%s\n' "$*" >>"${CD_CALLS:-/dev/null}"
     if printf '%s' "$body" | grep -q '事実ブロック'; then
       printf 'STUB-DIGEST\n'
       printf '%s\n' "$body" | grep -E '^(SHORT|LANDED_PR|OPEN_BRANCH):' || true
@@ -561,6 +562,13 @@ check "re-running a day reuses the intermediates and only redoes the reduce" \
   "$(if [ "$g2" -eq 0 ] && [ "$(( calls2 - calls1 ))" -eq 1 ]; then echo 0; else echo 1; fi)"
 check "the reduce is handed the facts, not the raw transcripts" \
   "$(if grep -q "SHORT: ${early:0:8}" "$digests/2026-03-01.md"; then echo 0; else echo 1; fi)"
+# Every -p call -- stage 1 and the reduce alike -- must carry --restricted, or
+# the user settings files load for it and each call is filed as a session that
+# ended for reason "other", silting up claude-queue's resumable list.
+restricted="$(grep -c -- '--restricted' "$sandbox/calls")"
+check "every -p call the digest makes carries --restricted" \
+  "$(if [ "$calls2" -gt 0 ] && [ "$restricted" -eq "$calls2" ]; then echo 0; else echo 1; fi)"
+
 # --- show mode --------------------------------------------------------------
 out="$(env CLAUDE_DIGEST_DIR="$digests" PATH="$stubdir:$PATH" "$bin" 2026-03-01 2>&1)"
 check "show prints the requested day" \
