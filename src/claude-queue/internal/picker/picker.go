@@ -2,6 +2,7 @@ package picker
 
 import (
 	"bytes"
+	"database/sql"
 	"flag"
 	"fmt"
 	"os"
@@ -560,10 +561,10 @@ func Run(args []string) {
 		fmt.Fprintf(os.Stderr, "reconciled %d ended session(s)\n", n)
 	}
 
-	rows, err := db.ListRows(conn, db.ListOpts{
-		ShowWorking: *showWorking,
-		ShowStale:   *showStale,
-	})
+	// Every live row is read, whatever the flags say: the state filter picks
+	// the rows to show, but buildForest still needs their filtered-out
+	// ancestors to hang them from.
+	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true, ShowStale: true})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return
@@ -578,11 +579,13 @@ func Run(args []string) {
 	} else {
 		resumable = filterResumable(cands, isFile, isDir)
 	}
-	if *showResumable {
-		// Appended, not merged: ResumableCandidates hands back priorities above
-		// every one the queue view assigns, so concatenation is already the
-		// global order and fzf is run with --no-sort.
-		rows = append(rows, resumable...)
+
+	asciiMode := os.Getenv("CLAUDE_QUEUE_ASCII") == "1"
+	filter := db.ListOpts{ShowWorking: *showWorking, ShowStale: *showStale}
+	opts := forestOpts{
+		Keep:       func(r db.Row) bool { return filter.Includes(r.EffectiveState) },
+		ParentLive: liveSessions(conn),
+		ASCII:      asciiMode,
 	}
 
 	// --repo-scope (prefix q): keep only rows in the same repo as the pane the
@@ -591,36 +594,53 @@ func Run(args []string) {
 	// shares one --git-common-dir, so main checkout + all its .worktrees/*
 	// collapse to one group. A picker cwd outside any repo cannot scope, so
 	// say so and stop rather than silently listing everything.
+	keys := repoKeyCache{}
+	wantKey := ""
 	if *repoScope {
 		wd, _ := os.Getwd()
-		wantKey := repoKey(wd)
+		wantKey = repoKey(wd)
 		if wantKey == "" {
 			fmt.Fprintln(os.Stderr, "not in a git repo; use prefix Q for all sessions")
 			return
 		}
-		rows = filterSameRepo(rows, wantKey, repoKeyCache{}.key)
-		if len(rows) == 0 {
-			fmt.Fprintln(os.Stderr, "no active sessions in this repo (prefix Q lists all)")
-			return
+		opts.InScope = func(r db.Row) bool { return keys.key(rowCwd(r)) == wantKey }
+	}
+
+	lines := buildForest(rows, opts)
+	if *showResumable {
+		// Appended flat, after the tree: ResumableCandidates hands back
+		// priorities above every one the queue view assigns, so they belong
+		// last, and fzf is run with --no-sort.
+		extra := resumable
+		if *repoScope {
+			extra = filterSameRepo(extra, wantKey, keys.key)
+		}
+		for _, r := range extra {
+			lines = append(lines, treeRow{Row: r})
 		}
 	}
 
-	if len(rows) == 0 {
-		fmt.Fprintln(os.Stderr, noRowsMessage(len(resumable), *showResumable))
+	if len(lines) == 0 {
+		if *repoScope {
+			fmt.Fprintln(os.Stderr, "no active sessions in this repo (prefix Q lists all)")
+		} else {
+			fmt.Fprintln(os.Stderr, noRowsMessage(len(resumable), *showResumable))
+		}
 		return
 	}
 
 	var buf bytes.Buffer
 	now := time.Now().Unix()
-	asciiMode := os.Getenv("CLAUDE_QUEUE_ASCII") == "1"
 	names := worktreeCache{}
-	for _, r := range rows {
+	for _, l := range lines {
 		// The title is read here rather than inside FormatLine for the same
 		// reason the worktree name is -- it needs the filesystem. It costs one
 		// bounded tail read per row (see label's tailScanBytes), which the
 		// picker can afford: it is user-driven and lists a handful of rows.
-		title := label.DisplayTitle(rowTranscript(r), titleWidth)
-		buf.WriteString(FormatLine(r, title, names.name(rowCwd(r)), now, asciiMode))
+		title := prefixedTitle(l.Prefix, func(cols int) string {
+			return label.DisplayTitle(rowTranscript(l.Row), cols)
+		})
+		buf.WriteString(FormatLine(l.Row, title, names.name(rowCwd(l.Row)), now, asciiMode))
 		buf.WriteByte('\n')
 	}
 
@@ -730,6 +750,24 @@ func describeTarget(mux multiplexer.Multiplexer, sessionID, ledgerPane, cwd, tra
 		}
 	}
 	return t
+}
+
+// liveSessions returns the ledger's view of which sessions are running, for
+// telling an orphan from a delegate whose parent is merely not listed. Run
+// reconciles first, so the ledger tracks the roster closely. A lookup that
+// fails counts every parent as alive: the orphan mark is then withheld rather
+// than shown on a session that may still have its delegator.
+func liveSessions(conn *sql.DB) func(string) bool {
+	ids, err := db.LiveSessionIDs(conn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "parent liveness lookup skipped:", err)
+		return func(string) bool { return true }
+	}
+	live := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		live[id] = true
+	}
+	return func(id string) bool { return live[id] }
 }
 
 func isFile(path string) bool {
