@@ -3,13 +3,11 @@ set -euo pipefail
 
 # gh-pr-create [gh pr create flags...] -- open a PR with the repo's mise env.
 #
-# `gh pr create` is what actually broke twice in a row: `mise activate` never
-# fires in a non-interactive process, so a delegated background agent
-# (`claude --bg`) never gets the repo's mise-config GH_TOKEN. gh then uses
-# whatever its env carries -- the delegator's launch-time token when env is
-# inherited (measured), possibly stale or under-privileged, or the hosts.yml PAT
-# when nothing is -- and GitHub answers "Resource not accessible by personal
-# access token". The other
+# `gh pr create` is what actually broke twice in a row: the repo's PAT is not in
+# a delegated background agent's env (by design; see bin/lib/gh-mise.sh for why
+# and for what that env does carry), so a bare gh uses hosts.yml's token or a
+# stale one, and GitHub answers "Resource not accessible by personal access
+# token". The other
 # gh wrappers in bin/ are now immune (bin/lib/gh-mise.sh); this one exists
 # because my-create-pr calls `gh pr create` directly and so had nothing to be
 # immune through.

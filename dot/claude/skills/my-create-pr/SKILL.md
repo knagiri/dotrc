@@ -51,5 +51,5 @@ Pull Request を作成する。以下のフローに従うこと。本文確認�
 6. **表示 → Push → 作成**:
    - 完成した本文を画面に表示する（情報提供。block しない）。
    - 未プッシュのコミットがある場合（`git log @{upstream}..HEAD`）のみ `git push -u origin HEAD` を実行する。
-   - `gh-pr-create --title ... --body ... --base <手順 1 で決めた base>` で PR を作成し、URL を返す。`gh-pr-create` は `gh pr create` を包む薄いラッパーで、フラグを素通ししたうえで repo の mise env（`GH_TOKEN`）だけを載せる（委譲先の非対話プロセスには repo の mise config が定める現在の値が届かず、素の `gh pr create` は env に載っているもの — 委譲元から継承した起動時点の token か、無ければ hosts.yml の PAT — を使って権限エラーになるため。[gh-commands.md](../../rules/gh-commands.md) §5）。手順 1 で決めた base は既定ブランチを採った場合も含め常に明示する（省略すると base の決定が `gh pr create` 側の既定解決に委ねられ、手順 1 で集めた diff の基準と PR の base が一致する保証が無くなるため。明示しておけば gh 側の解決規則に依存せず両者が必ず揃う。既定ブランチと一致するケースでも明示は無害）。
+   - `gh-pr-create --title ... --body ... --base <手順 1 で決めた base>` で PR を作成し、URL を返す。`gh-pr-create` は `gh pr create` を包む薄いラッパーで、フラグを素通ししたうえで repo の mise env（`GH_TOKEN`）だけを載せる（repo の個人 PAT は `MISE_ENV=gh` のときだけ読まれる `mise.gh.local.toml` にあり shell の env には載らないので、素の `gh pr create` は hosts.yml の token を使って権限エラーになるため。背景は `bin/lib/gh-mise.sh` のヘッダ。[gh-commands.md](../../rules/gh-commands.md) §5）。手順 1 で決めた base は既定ブランチを採った場合も含め常に明示する（省略すると base の決定が `gh pr create` 側の既定解決に委ねられ、手順 1 で集めた diff の基準と PR の base が一致する保証が無くなるため。明示しておけば gh 側の解決規則に依存せず両者が必ず揃う。既定ブランチと一致するケースでも明示は無害）。
    - push 失敗・PR 作成失敗時は素直に止めてエラーを表示する。skill 側でリトライしない。

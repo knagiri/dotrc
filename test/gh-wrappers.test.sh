@@ -26,16 +26,19 @@ printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 # Where gh was run matters now that the wrappers move its cwd to the repo root;
 # only the mise-plumbing section sets GH_PWD_FILE, so nothing else is affected.
 [ -z "${GH_PWD_FILE:-}" ] || pwd -P >"$GH_PWD_FILE"
+# The token gh would authenticate with; only the real-mise case sets GH_TOKEN_FILE.
+[ -z "${GH_TOKEN_FILE:-}" ] || printf '%s\n' "${GH_TOKEN:-}" >"$GH_TOKEN_FILE"
 STUB
 chmod +x "$stubdir/gh"
 
 # Stands in for `mise exec -C <dir> -- <cmd> [args...]`: records its own argv
-# under a `mise:` prefix, then runs the command in <dir> exactly as mise does.
+# under a `mise:` prefix, followed by the MISE_ENV it was called with, then runs
+# the command in <dir> exactly as mise does.
 # Installed into every stub directory so no test reaches the real mise.
 install_mise_stub() {  # install_mise_stub <dir>
   cat >"$1/mise" <<'STUB'
 #!/usr/bin/env bash
-[ -z "${MISE_ARGS_FILE:-}" ] || printf '[mise:%s]\n' "$@" >>"$MISE_ARGS_FILE"
+[ -z "${MISE_ARGS_FILE:-}" ] || printf '[mise:%s]\n' "$@" "MISE_ENV=${MISE_ENV:-}" >>"$MISE_ARGS_FILE"
 dir=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -541,13 +544,14 @@ PATH="$awaitstub:$PATH" "$bindir/gh-await-reviews" 42 --watch >/dev/null 2>&1; [
   && echo "ok: gh-await-reviews rejects extra flag arg" || { echo "FAIL: gh-await-reviews extra flag"; fail=1; }
 
 # --- mise env plumbing (bin/lib/gh-mise.sh) ---------------------------------
-# Every wrapper must reach gh through `mise exec -C <repo root> -- gh` so a
-# non-interactive process -- a delegated background agent -- gets the repo's
-# current mise-supplied GH_TOKEN instead of whatever its env carries (a token
-# inherited from the delegator's launch-time env, or hosts.yml's PAT when none
-# is inherited). Two things are asserted: the prefix is there, and the
-# directory it names is the repo TOPLEVEL rather than the caller's cwd (the
-# wrappers are run from a subdirectory to make those two differ).
+# Every wrapper must reach gh through `MISE_ENV=gh mise exec -C <repo root> --
+# gh`: the PAT lives in mise.gh.local.toml, which mise reads only under
+# MISE_ENV=gh, so it stays out of every shell's (and the bg daemon's) env and is
+# loaded here at call time instead. Three things are asserted: the prefix is
+# there, it carries MISE_ENV=gh, and the directory it names is the repo TOPLEVEL
+# rather than the caller's cwd (the wrappers are run from a subdirectory to make
+# those two differ). MISE_ENV is unset on the way in so an ambient value cannot
+# satisfy the check.
 #
 # rc is deliberately not asserted in the sweep below: gh-pr-checks and
 # gh-await-reviews consume gh's *output*, which the plain recorder does not
@@ -568,7 +572,7 @@ wrapper_arg() {  # the one argument each wrapper's validation accepts
 # $2 (optional) overrides PATH, which the no-mise cases below need.
 mise_run() {  # mise_run <bindir> <wrapper> [path]
   : >"$miseargs"; : >"$stubdir/args"; : >"$stubdir/pwd"
-  ( cd "$miserepo/sub" && env GH_ARGS_FILE="$stubdir/args" \
+  ( cd "$miserepo/sub" && env -u MISE_ENV GH_ARGS_FILE="$stubdir/args" \
       MISE_ARGS_FILE="$miseargs" GH_PWD_FILE="$stubdir/pwd" \
       GH_AWAIT_REVIEWS_TIMEOUT=1 GH_AWAIT_REVIEWS_QUIET=0 \
       GH_AWAIT_REVIEWS_GRACE=0 GH_AWAIT_REVIEWS_POLL=1 \
@@ -576,9 +580,10 @@ mise_run() {  # mise_run <bindir> <wrapper> [path]
 }
 
 # True when the recorded mise argv is exactly the `exec -C <toplevel> -- gh`
-# prefix this change is about.
+# prefix this change is about, called with MISE_ENV=gh.
 went_through_mise() {
-  grep -qxF '[mise:exec]' "$miseargs" \
+  grep -qxF '[mise:MISE_ENV=gh]' "$miseargs" \
+    && grep -qxF '[mise:exec]' "$miseargs" \
     && grep -qxF '[mise:-C]' "$miseargs" \
     && grep -qxF "[mise:$miserepo_real]" "$miseargs" \
     && grep -qxF '[mise:--]' "$miseargs" \
@@ -588,22 +593,22 @@ went_through_mise() {
 for w in $wrappers; do
   mise_run "$bindir" "$w"
   if went_through_mise; then
-    echo "ok: $w reaches gh through mise exec -C <repo toplevel>"
+    echo "ok: $w reaches gh through MISE_ENV=gh mise exec -C <repo toplevel>"
   else echo "FAIL: $w mise prefix mise=$(cat "$miseargs" 2>/dev/null)"; fail=1; fi
 done
 
 # Discrimination (evidence-over-guesswork §4). gh-mise.sh is a new file, so
 # running these assertions against the pre-change wrappers would only prove the
 # symbol did not exist yet. Instead the NEW code is mutated, one branch at a
-# time, and each mutant must break the case that covers that branch. Both
-# mutants are produced by rewriting the single `command -v mise` condition, so
-# they stay syntactically valid; `cmp` guards against the sed silently matching
-# nothing and the checks below rotting into no-ops.
+# time, and each mutant must break the case that covers that branch. Mutants A
+# and B rewrite the single `command -v mise` condition and mutant C drops the
+# MISE_ENV=gh assignment, so all stay syntactically valid; `cmp` guards against
+# the sed silently matching nothing and the checks below rotting into no-ops.
 mutantdir="$stubdir/mutant"
-mk_mutant() {  # mk_mutant <name> <replacement for the mise-present condition>
+mk_mutant() {  # mk_mutant <name> <sed expression applied to gh-mise.sh>
   rm -rf "${mutantdir:?}/${1:?}"; mkdir -p "${mutantdir:?}/${1:?}"
   cp -a "$bindir/." "$mutantdir/$1/"
-  sed "s|command -v mise >/dev/null 2>&1|$2|" "$bindir/lib/gh-mise.sh" \
+  sed "$2" "$bindir/lib/gh-mise.sh" \
     >"$mutantdir/$1/lib/gh-mise.sh"
   if cmp -s "$bindir/lib/gh-mise.sh" "$mutantdir/$1/lib/gh-mise.sh"; then
     echo "FAIL: mutant '$1' is identical to gh-mise.sh; the check is a no-op"; fail=1
@@ -613,7 +618,7 @@ mk_mutant() {  # mk_mutant <name> <replacement for the mise-present condition>
 # Mutant A: mise is never used even though it is installed. The sweep above
 # must fail against it -- otherwise those assertions were passing for some
 # reason other than the prefix.
-mk_mutant nomise false
+mk_mutant nomise 's|command -v mise >/dev/null 2>&1|false|'
 mise_run "$mutantdir/nomise" gh-pr-comments
 if ! went_through_mise && grep -qxF '[pr]' "$stubdir/args"; then
   echo "ok: forcing gh-mise.sh down its fallback branch loses the mise prefix (the sweep above is discriminating)"
@@ -648,11 +653,70 @@ else echo "FAIL: no-mise fallback args=$(cat "$stubdir/args" 2>/dev/null) pwd=$(
 # machine without mise gets `mise: command not found`. The case above must fail
 # against it -- that is what shows the fallback is load-bearing rather than
 # decorative.
-mk_mutant alwaysmise true
+mk_mutant alwaysmise 's|command -v mise >/dev/null 2>&1|true|'
 mise_run "$mutantdir/alwaysmise" gh-pr-comments "$nomise_path"
 if [ ! -s "$stubdir/args" ]; then
   echo "ok: removing the fallback breaks the wrapper when mise is absent (the case above is discriminating)"
 else echo "FAIL: alwaysmise mutant still reached gh without mise: $(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# Mutant C: MISE_ENV=gh is dropped, which is exactly the pre-fix call. The sweep
+# must fail against it; the prefix is otherwise intact, so this isolates the
+# MISE_ENV assertion from the rest of went_through_mise.
+mk_mutant nomiseenv 's|MISE_ENV=gh ||'
+mise_run "$mutantdir/nomiseenv" gh-pr-comments
+if ! went_through_mise && grep -qxF '[mise:exec]' "$miseargs"; then
+  echo "ok: dropping MISE_ENV=gh fails the sweep while the rest of the prefix survives (the MISE_ENV check is discriminating)"
+else echo "FAIL: nomiseenv mutant mise=$(cat "$miseargs" 2>/dev/null)"; fail=1; fi
+
+# With the real mise: a repo holding both mise.local.toml and mise.gh.local.toml
+# must keep the gh one out of plain `mise env` (what `mise activate` puts in a
+# shell, and so in the bg daemon) while gh_mise hands it to gh. Hermetic: the
+# repo is trusted via MISE_TRUSTED_CONFIG_PATHS rather than the user's trust
+# store, the global config is pointed at nothing (so no user-configured tool --
+# a mise-managed gh included -- shadows the stub), the config walk stops above
+# the temp dir, and an ambient MISE_ENV / GH_TOKEN is removed.
+realmise="$(command -v mise 2>/dev/null || true)"
+if [ -z "$realmise" ]; then
+  echo "skip: no real mise on PATH; the mise.gh.local.toml cases need it"
+else
+  rmroot="$stubdir/realmise"; rmrepo="$rmroot/repo"
+  mkdir -p "$rmrepo/sub" "$rmroot/cfg"
+  git -C "$rmrepo" init -q
+  rmrepo_real="$(cd "$rmrepo" && pwd -P)"
+  printf '[env]\nDOTRC_TEST_PLAIN = "plain-marker"\n' >"$rmrepo/mise.local.toml"
+  printf '[env]\nGH_TOKEN = "tok-from-gh-env"\n' >"$rmrepo/mise.gh.local.toml"
+  realmise_env() {  # realmise_env <cmd...>
+    env -u MISE_ENV -u GH_TOKEN MISE_TRUSTED_CONFIG_PATHS="$rmrepo_real" \
+      MISE_CEILING_PATHS="$(cd "$rmroot" && pwd -P)" \
+      MISE_GLOBAL_CONFIG_FILE="$rmroot/none.toml" MISE_CONFIG_DIR="$rmroot/cfg" "$@"
+  }
+  # Runs the wrapper under the real mise with only the gh stub in front of it.
+  realmise_run() {  # realmise_run <bindir>
+    : >"$stubdir/args"; : >"$stubdir/token"
+    ( cd "$rmrepo/sub" && realmise_env GH_ARGS_FILE="$stubdir/args" \
+        GH_TOKEN_FILE="$stubdir/token" PATH="$nomisedir:$PATH" \
+        "$1/gh-pr-comments" 42 ) >/dev/null 2>&1
+  }
+
+  # The plain-marker is the control: it proves mise read this repo's config, so
+  # the token's absence is not just a config that was never loaded.
+  plain_env="$(realmise_env "$realmise" env -C "$rmrepo_real/sub" 2>/dev/null)"
+  if printf '%s' "$plain_env" | grep -qF 'plain-marker' \
+    && ! printf '%s' "$plain_env" | grep -qF 'tok-from-gh-env'; then
+    echo "ok: plain mise env loads mise.local.toml but not mise.gh.local.toml"
+  else echo "FAIL: plain mise env=$plain_env"; fail=1; fi
+
+  realmise_run "$bindir"
+  if grep -qxF '[pr]' "$stubdir/args" \
+    && [ "$(cat "$stubdir/token")" = "tok-from-gh-env" ]; then
+    echo "ok: gh_mise hands gh the GH_TOKEN from mise.gh.local.toml (real mise)"
+  else echo "FAIL: real mise gh_mise args=$(cat "$stubdir/args" 2>/dev/null) token=$(cat "$stubdir/token" 2>/dev/null)"; fail=1; fi
+
+  realmise_run "$mutantdir/nomiseenv"
+  if grep -qxF '[pr]' "$stubdir/args" && [ -z "$(cat "$stubdir/token")" ]; then
+    echo "ok: without MISE_ENV=gh the real mise gives gh no token (the case above is discriminating)"
+  else echo "FAIL: nomiseenv mutant under real mise args=$(cat "$stubdir/args" 2>/dev/null) token=$(cat "$stubdir/token" 2>/dev/null)"; fail=1; fi
+fi
 
 # --- gh-pr-create -----------------------------------------------------------
 # Unlike the other wrappers this one passes every flag through: it exists only
@@ -710,11 +774,11 @@ else echo "FAIL: gh-pr-create stdin body args=$(cat "$stubdir/args" 2>/dev/null)
 
 # gh-pr-create reaches gh through mise, like every other wrapper.
 : >"$miseargs"
-( cd "$prcreatedir/sub" && env GH_ARGS_FILE="$stubdir/args" MISE_ARGS_FILE="$miseargs" \
+( cd "$prcreatedir/sub" && env -u MISE_ENV GH_ARGS_FILE="$stubdir/args" MISE_ARGS_FILE="$miseargs" \
     PATH="$stubdir:$PATH" "$bindir/gh-pr-create" --title t ) >/dev/null 2>&1
 if grep -qxF '[mise:exec]' "$miseargs" && grep -qxF "[mise:$prcreate_real]" "$miseargs" \
-  && grep -qxF '[mise:gh]' "$miseargs"; then
-  echo "ok: gh-pr-create reaches gh through mise exec -C <repo toplevel>"
+  && grep -qxF '[mise:gh]' "$miseargs" && grep -qxF '[mise:MISE_ENV=gh]' "$miseargs"; then
+  echo "ok: gh-pr-create reaches gh through MISE_ENV=gh mise exec -C <repo toplevel>"
 else echo "FAIL: gh-pr-create mise prefix mise=$(cat "$miseargs" 2>/dev/null)"; fail=1; fi
 
 # Discrimination (evidence-over-guesswork §4): with the absolutisation stripped,
