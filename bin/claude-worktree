@@ -541,13 +541,14 @@ resolve_delegator
 # Inject the name as a bare datum. What to report, and when, is doctrine and
 # lives in the implement-and-review skill -- this script only supplies the fact
 # the skill cannot derive. Appending to the prompt (rather than exporting an env
-# var) is deliberate: `claude --bg` starts via a background service, so env
-# inheritance is not guaranteed, whereas the prompt is the one channel that is.
-# Inheritance has been measured to happen (a delegate's GH_TOKEN matched its
-# delegator's), but one observation does not make it a contract. And what is
-# inherited is the delegator's launch-time env, not the repo's mise config, so
-# per-repo env such as GH_TOKEN still has to be loaded with `mise exec` at call
-# time (bin/lib/gh-mise.sh) whether or not inheritance happens.
+# var) is deliberate: `claude --bg` hands the task to a daemon, and a delegate's
+# env is that daemon's -- i.e. the env of whichever `claude --bg` call started
+# the daemon for this config dir on demand -- not this script's. Only the cwd
+# crosses over (measured: a probe var exported here was absent in the delegate,
+# whose GH_TOKEN matched the daemon's). The prompt is the one channel that
+# reliably arrives. The same fact is why per-repo secrets such as the PAT are
+# kept out of every env and loaded with `mise exec` at call time
+# (bin/lib/gh-mise.sh).
 if [ -n "$delegator" ]; then
   prompt="${prompt}
 
