@@ -33,7 +33,8 @@ type forestOpts struct {
 	// ancestors are listed whether or not they pass it.
 	Keep func(db.Row) bool
 	// InScope is the repo filter, applied after ancestors are pulled back. nil
-	// keeps every row.
+	// keeps every row. Pulled-back ancestors whose kept descendants it removes
+	// go with them.
 	InScope func(db.Row) bool
 	// ParentLive reports whether the ledger still considers a session running.
 	ParentLive func(sessionID string) bool
@@ -53,7 +54,8 @@ type treeRow struct {
 // usually `working` while its delegates wait, and the default listing hides
 // `working`: filtering them would flatten exactly the trees worth showing. The
 // repo filter is applied after that and is not undone, so a row whose parent
-// lives in another repo is shown as a root, marked.
+// lives in another repo is shown as a root, marked. A pulled-back row left with
+// no kept descendant after the repo filter is dropped.
 //
 // Siblings -- roots included -- are ordered by the most urgent priority in
 // their subtree, then its most recent event, then session id, so a delegate
@@ -65,11 +67,13 @@ func buildForest(rows []db.Row, o forestOpts) []treeRow {
 	}
 
 	listed := map[string]bool{}
+	kept := map[string]bool{}
 	for _, r := range rows {
 		if !o.Keep(r) {
 			continue
 		}
 		listed[r.SessionID] = true
+		kept[r.SessionID] = true
 		seen := map[string]bool{r.SessionID: true}
 		for cur := r; cur.ParentSessionID.Valid; {
 			pid := cur.ParentSessionID.String
@@ -86,6 +90,25 @@ func buildForest(rows []db.Row, o forestOpts) []treeRow {
 		for id := range listed {
 			if !o.InScope(byID[id]) {
 				delete(listed, id)
+			}
+		}
+		// A row that is listed only because it was pulled back is there to hold
+		// its kept descendants. Once the repo filter has taken them all, it is
+		// noise in a listing of this repo's sessions. Dropping one can leave its
+		// own pulled-back parent childless, so repeat until nothing changes.
+		for changed := true; changed; {
+			changed = false
+			hasChild := map[string]bool{}
+			for id := range listed {
+				if p := byID[id].ParentSessionID; p.Valid && p.String != id {
+					hasChild[p.String] = true
+				}
+			}
+			for id := range listed {
+				if !kept[id] && !hasChild[id] {
+					delete(listed, id)
+					changed = true
+				}
 			}
 		}
 	}
