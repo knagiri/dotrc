@@ -1,4 +1,5 @@
 /bin/claude-queue
 /docs/superpowers/
 /mise.local.toml
+/mise.*.local.toml
 /tmux-client-*.log
