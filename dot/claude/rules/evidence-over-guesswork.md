@@ -39,15 +39,17 @@
   足しても効かない。後勝ちを前提にすると正しく見える
 - config 既定に依存して黙って付く副作用 — 例: `git worktree add -b <branch> <path> origin/HEAD`
   のように remote-tracking ref を start point に渡すと、`branch.autoSetupMerge` の既定で
-  新規ブランチの upstream が `origin/main` になり、素の `git push` や `@{upstream}` を使う
-  判定が狂う
+  新規ブランチの upstream が `origin/main` になり、`git status` の ahead/behind や
+  `@{upstream}` を使う判定（例: `git log @{upstream}..HEAD` が空に見える）が
+  `origin/main` 基準に狂う（素の `git push` は push.default=simple の既定なら upstream 名と
+  ブランチ名の不一致をエラーで止めるので、このクラスには当たらない）
 
 man を読むだけで終えず、実効値を出せるツールがあればそれで確かめる（`ssh -G <host>`、
 `git config --list --show-origin`、作った直後の `git rev-parse --abbrev-ref <branch>@{upstream}`
 等）。読んだ内容と実効値が食い違うことこそがこのクラスの典型で、解決順も既定値も、手元の
 config や呼び出し側の引数との組み合わせで初めて決まるため。
 
-由来: dotrc#72 / dotrc#104
+由来: dotrc#75 / dotrc#104
 
 ### 2. ローカルで再現できないエラーを推測で修正しない
 
