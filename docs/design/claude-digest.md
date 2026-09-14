@@ -497,9 +497,10 @@ bind-key g display-popup -E -w 80% -h 80% "claude-digest"
 bind-key G display-popup -E -w 80% -h 80% "claude-digest --pick"
 ```
 
-prefix は `C-q`。`g` で最新の日報、`G` で過去日の一覧。claude-queue picker の `q` / `Q` と同じく
-「小文字 = 既定表示、大文字 = 一覧」の対にしている。`g` / `G` は tmux 既定の prefix table で
-大小とも未使用（`E` は既定の `select-layout -E` なので対にできない）。
+prefix は `C-q`。`g` で最新の日報、`G` で過去日の一覧。claude-queue picker の `q` / `Q` とは
+対の軸が違う点に注意（`q` / `Q` はどちらも picker = 一覧で、範囲（repo-scope か全件か）だけが
+違う。`g` / `G` は「一覧を経ずに最新を直接開くか、一覧から選ぶか」が違う）。`g` / `G` は
+tmux 既定の prefix table で大小とも未使用（`E` は既定の `select-layout -E` なので対にできない）。
 
 **シェル起動時の自動表示はしない。** pane を開くたびに流れるため。日報は「読みに行くもの」で
 あって「流れてくるもの」ではない。
