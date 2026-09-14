@@ -1034,6 +1034,28 @@ if [ "$rc" -eq 0 ] && ! grep -Fq '委譲元' "$log" && ! grep -q 'report-to' <<<
   echo "ok: a roster entry without a name is treated as unresolvable"
 else echo "FAIL: nameless entry injected rc=$rc"; fail=1; fi
 
+# `claude agents --json` exiting 0 with non-JSON output (e.g. a roster entry
+# that isn't the shape resolve_delegator expects) must not abort the launch.
+# resolve_delegator is called directly in the main shell (not via a command
+# substitution, which would have swallowed its errexit), so an unguarded jq
+# parse failure inside it would take down the whole script under
+# `set -euo pipefail`. Regression test for that abort.
+badroster="$tmp/roster-bad.json"
+printf 'not json' >"$badroster"
+cqlog="$tmp/cq-badroster"; : >"$cqlog"
+log="$tmp/bg-badroster"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$badroster" \
+         CQ_STUB_LOG="$cqlog"
+  "$wt" bgbadroster -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! grep -Fq '委譲元' "$log" \
+   && [ ! -s "$cqlog" ]; then
+  echo "ok: a jq parse failure while resolving the delegator does not abort the launch"
+else
+  echo "FAIL: bad roster rc=$rc"; printf '%s\n' "$out" | sed 's/^/  out| /'; fail=1
+fi
+
 # --tmux gets the same injection: a human may be sitting with that session, but
 # the delegate still benefits from knowing who asked.
 log="$tmp/tmux-name"
