@@ -33,6 +33,9 @@ gh_mise_use() { gh_mise_dir="$1"; }
 # gh_mise_repo_root [<dir>] -- toplevel of the checkout holding <dir> (cwd by
 # default). Outside a checkout it yields <dir> itself, so gh still reports the
 # missing repository exactly as it did before this indirection existed.
+# The argument is optional by design: the only caller that passes one is
+# gh-issue-file (another file), which shellcheck cannot see from here.
+# shellcheck disable=SC2120
 gh_mise_repo_root() {
   local d="${1:-$PWD}" root
   root="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"
