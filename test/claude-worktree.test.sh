@@ -401,6 +401,21 @@ printf 'backgrounded · %s\n' "${CLAUDE_STUB_ID:-abcd1234}"
 EOF
 chmod +x "$stubbin/claude"
 
+# A bg launch with a resolvable delegator records the delegation through
+# `claude-queue link`. The real binary is usually on PATH (bin/ is), and would
+# write into the host's queue database, so every test gets this stub instead:
+# one argv per call, space-joined, appended to $CQ_STUB_LOG, exiting with
+# $CQ_STUB_RC. CLAUDE_QUEUE_DB is pointed into $tmp as a second guard, in case
+# some test ever reaches a real claude-queue anyway.
+export CLAUDE_QUEUE_DB="$tmp/never-the-real.db"
+cat >"$stubbin/claude-queue" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${CQ_STUB_LOG:-/dev/null}"
+[ "${CQ_STUB_RC:-0}" = 0 ] || echo "stub claude-queue: failing on purpose" >&2
+exit "${CQ_STUB_RC:-0}"
+EOF
+chmod +x "$stubbin/claude-queue"
+
 # Prompt carrying a space plus both quote kinds -- must survive as ONE argv
 # element (the whole point of passing it separately, not folded into a string).
 prompt='say "hi" it'\''s here'
@@ -1028,6 +1043,91 @@ log="$tmp/tmux-name"
 if [ "$rc" -eq 0 ] && grep -Fq '報告先 name: test-delegator' "$log"; then
   echo "ok: --tmux receives the same delegator injection"
 else echo "FAIL: --tmux missing injection rc=$rc"; sed 's/^/  argv| /' "$log" 2>/dev/null; fail=1; fi
+
+# --- delegation link (claude-queue link) --------------------------------------
+# A bg launch whose delegator resolves records parent -> child exactly once: the
+# parent as the delegator's FULL sessionId (from the same roster entry as the
+# name), the child as the short id read off the banner.
+cqlog="$tmp/cq-link"; : >"$cqlog"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$tmp/bg-link" CLAUDE_STUB_ROSTER="$namedroster" \
+         CQ_STUB_LOG="$cqlog"
+  "$wt" bglink -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && [ "$(wc -l <"$cqlog")" -eq 1 ] \
+   && [ "$(cat "$cqlog")" = "link --parent eeeeeeee-1111-2222-3333-444444444444 --child abcd1234" ]; then
+  echo "ok: a bg launch with a delegator records the link once, with full parent and short child"
+else echo "FAIL: link call rc=$rc calls=$(cat "$cqlog") out=$out"; fail=1; fi
+
+# No delegator -> nothing to link. A human launching from a plain shell has no
+# parent session, and recording one would invent a tree.
+: >"$cqlog"
+(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$tmp/bg-nolink" CLAUDE_STUB_ROSTER="$emptyroster" \
+         CQ_STUB_LOG="$cqlog"
+  "$wt" bgnolink -- "$prompt"; }) >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -s "$cqlog" ]; then
+  echo "ok: no delegator -> no link"
+else echo "FAIL: link without delegator rc=$rc calls=$(cat "$cqlog")"; fail=1; fi
+
+# A nameless entry is unresolvable as a delegator, so it is not a parent either,
+# even though it carries a sessionId.
+: >"$cqlog"
+(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$tmp/bg-nonamelink" CLAUDE_STUB_ROSTER="$nonameroster" \
+         CQ_STUB_LOG="$cqlog"
+  "$wt" bgnonamelink -- "$prompt"; }) >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -s "$cqlog" ]; then
+  echo "ok: a nameless roster entry is not recorded as a parent"
+else echo "FAIL: link for nameless entry rc=$rc calls=$(cat "$cqlog")"; fail=1; fi
+
+# --tmux never links: the interactive claude picks its own id inside the pane,
+# so there is no child id to record at launch.
+: >"$cqlog"
+(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$tmp/tmux-link" CLAUDE_STUB_ROSTER="$namedroster" \
+         CQ_STUB_LOG="$cqlog"
+  "$wt" --tmux tmuxlink -- "$prompt"; }) >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -s "$cqlog" ]; then
+  echo "ok: --tmux does not record a link"
+else echo "FAIL: --tmux linked rc=$rc calls=$(cat "$cqlog")"; fail=1; fi
+
+# A failing link warns and the launch still succeeds: the session is already
+# running, so exiting non-zero would report a failed delegation that did not fail.
+: >"$cqlog"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$tmp/bg-linkfail" CLAUDE_STUB_ROSTER="$namedroster" \
+         CQ_STUB_LOG="$cqlog" CQ_STUB_RC=1
+  "$wt" bglinkfail -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -s "$cqlog" ] \
+   && grep -q 'claude-queue link failed' <<<"$out" \
+   && grep -q 'failing on purpose' <<<"$out" \
+   && grep -q 'session  : abcd1234' <<<"$out"; then
+  echo "ok: a failing claude-queue link warns and the launch still exits 0"
+else echo "FAIL: link failure rc=$rc out=$out"; fail=1; fi
+
+# claude-queue absent from PATH: same best-effort answer. The PATH is rebuilt
+# without any directory holding a claude-queue (the host's bin/ usually has one),
+# and the stubs other than claude-queue are copied ahead of it.
+nocqbin="$tmp/nocqbin"
+mkdir -p "$nocqbin"
+cp "$stubbin/claude" "$stubbin/tmux" "$nocqbin/"
+nocqpath="$nocqbin"
+IFS=: read -r -a pathdirs <<<"$PATH"
+for d in "${pathdirs[@]}"; do
+  [ -n "$d" ] && [ -x "$d/claude-queue" ] && continue
+  nocqpath="$nocqpath:$d"
+done
+if PATH="$nocqpath" command -v claude-queue >/dev/null 2>&1; then
+  echo "FAIL: could not build a PATH without claude-queue; the absent case below proves nothing"; fail=1
+fi
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$nocqpath" CLAUDE_STUB_LOG="$tmp/bg-linkabsent" CLAUDE_STUB_ROSTER="$namedroster"
+  "$wt" bglinkabsent -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'claude-queue not on PATH' <<<"$out" \
+   && grep -q 'session  : abcd1234' <<<"$out"; then
+  echo "ok: a missing claude-queue warns and the launch still exits 0"
+else echo "FAIL: absent claude-queue rc=$rc out=$out"; fail=1; fi
 
 # --- fetch guard: BatchMode survives a caller-supplied GIT_SSH_COMMAND ---------
 # The leading fetch runs inside an unattended `claude --bg` delegation, so ssh

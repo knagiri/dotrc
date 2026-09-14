@@ -24,6 +24,12 @@ type Row struct {
 	// "the work was finished and the session closed", which decides both the
 	// resumable ordering and what the summary column says.
 	PriorState sql.NullString
+
+	// ParentSessionID is the full id of the session that delegated this one,
+	// from session_links. NULL means no link was recorded -- not that the
+	// parent is gone -- and is always NULL on the resumable rows, which the
+	// picker lists flat.
+	ParentSessionID sql.NullString
 }
 
 // StateResumable is the pseudo effective_state of a terminated row that
@@ -66,34 +72,66 @@ func Counts(conn *sql.DB) (map[string]int, error) {
 	return out, rows.Err()
 }
 
-// ListRows returns rows sorted by priority ASC, created_at DESC.
-// By default working + stale are excluded.
-func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
-	where := []string{"effective_state IN ('awaiting_approval', 'idle_done')"}
-	if opts.ShowWorking {
-		where[0] = "effective_state IN ('awaiting_approval', 'idle_done', 'working')"
+// Includes reports whether a row in effectiveState passes the filter. By
+// default working + stale are excluded; with both flags set nothing is.
+//
+// It is the filter ListRows applies, exposed because the picker reads every
+// row and applies it itself: a delegating parent is usually `working`, and the
+// picker must still find it to hang the filtered-in children off it.
+func (o ListOpts) Includes(effectiveState string) bool {
+	if o.ShowWorking && o.ShowStale {
+		return true
 	}
-	if opts.ShowStale {
-		if opts.ShowWorking {
-			where[0] = "1=1"
-		} else {
-			where[0] = "effective_state IN ('awaiting_approval', 'idle_done', 'stale')"
-		}
+	switch effectiveState {
+	case "awaiting_approval", "idle_done":
+		return true
+	case "working":
+		return o.ShowWorking
+	case "stale":
+		return o.ShowStale
 	}
-	q := fmt.Sprintf(`
-		SELECT session_id, tmux_pane, cwd, transcript_path,
-		       event_type, raw_state, effective_state, payload, created_at, priority,
-		       NULL AS prior_state
-		FROM queue
-		WHERE %s
-		ORDER BY priority ASC, created_at DESC
-	`, where[0])
+	return false
+}
 
-	rows, err := conn.Query(q)
+// ListRows returns rows sorted by priority ASC, created_at DESC, filtered by
+// opts.Includes, each carrying its recorded delegation parent (if any).
+func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
+	rows, err := conn.Query(`
+		SELECT q.session_id, q.tmux_pane, q.cwd, q.transcript_path,
+		       q.event_type, q.raw_state, q.effective_state, q.payload, q.created_at, q.priority,
+		       NULL AS prior_state, l.parent_session_id
+		FROM queue q
+		LEFT JOIN session_links l ON l.child_short = substr(q.session_id, 1, 8)
+		ORDER BY q.priority ASC, q.created_at DESC
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
 	}
-	return scanRows(rows)
+	all, err := scanRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	var out []Row
+	for _, r := range all {
+		if opts.Includes(r.EffectiveState) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// LinkSession records that the session whose id starts with childShort was
+// delegated by parentSessionID. Re-linking a child replaces its parent and
+// restarts the GC clock.
+func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
+	if _, err := conn.Exec(`
+		INSERT INTO session_links(child_short, parent_session_id) VALUES (?, ?)
+		ON CONFLICT(child_short) DO UPDATE
+		  SET parent_session_id = excluded.parent_session_id, created_at = unixepoch()
+	`, childShort, parentSessionID); err != nil {
+		return fmt.Errorf("link session: %w", err)
+	}
+	return nil
 }
 
 // ResumableCandidates returns the terminated rows whose conversation
@@ -134,7 +172,7 @@ func ResumableCandidates(conn *sql.DB) ([]Row, error) {
 		       e.event_type, e.state AS raw_state, ? AS effective_state,
 		       e.payload, e.created_at,
 		       CASE WHEN p.state IN ('working', 'awaiting_approval') THEN ? ELSE ? END AS priority,
-		       p.state AS prior_state
+		       p.state AS prior_state, NULL AS parent_session_id
 		FROM events e
 		JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
 		  ON e.id = l.mid
@@ -167,7 +205,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		if err := rows.Scan(
 			&r.SessionID, &r.TmuxPane, &r.Cwd, &r.TranscriptPath,
 			&r.EventType, &r.RawState, &r.EffectiveState, &r.Payload, &r.CreatedAt, &r.Priority,
-			&r.PriorState,
+			&r.PriorState, &r.ParentSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -222,7 +260,10 @@ func TerminateSession(conn *sql.DB, sessionID string) error {
 }
 
 // GC deletes ended sessions (and their events) whose terminated_at is
-// older than maxAgeSec seconds ago.
+// older than maxAgeSec seconds ago, and the delegation links older than that
+// whose child is no longer running. A link is aged by its own created_at
+// rather than by its child's row, because the child may never have written
+// one.
 func GC(conn *sql.DB, maxAgeSec int64) error {
 	tx, err := conn.Begin()
 	if err != nil {
@@ -244,6 +285,13 @@ func GC(conn *sql.DB, maxAgeSec int64) error {
 		WHERE terminated_at IS NOT NULL AND terminated_at < unixepoch() - ?
 	`, maxAgeSec); err != nil {
 		return fmt.Errorf("gc sessions: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM session_links
+		WHERE created_at < unixepoch() - ?
+		  AND child_short NOT IN (SELECT substr(session_id, 1, 8) FROM sessions WHERE terminated_at IS NULL)
+	`, maxAgeSec); err != nil {
+		return fmt.Errorf("gc session_links: %w", err)
 	}
 	return tx.Commit()
 }
