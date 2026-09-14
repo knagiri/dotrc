@@ -188,9 +188,10 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
    レビュー・required CI 確認を経て自律 merge する。
 
-   このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しと本文
-   更新は `pr-review-automerge` 手順 3.c が `gh-automerge` の直前に行う（戻った時点では
-   既に merge 済みでありうる）。
+   このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しは
+   `pr-review-automerge` 手順 3.c が `gh-automerge` の直前に行い、値は最終サマリと委譲元への
+   報告に載る（本文の書き換えは allowlist の制約により行われない）。戻った時点では既に
+   merge 済みでありうるので、ここで直せる前提に立たない。
 5. **自己内省（末尾ハーネス）**: `pr-review-automerge` から戻ったら（auto-merge 有効化に至らず
    5 イテレーション未収束や CI fail で停止・報告して終わった場合も含む）、委譲プロンプトに
    自己内省をスキップする明示（例: 「harness-from-retrospective はスキップ」）が**無い限り**、
