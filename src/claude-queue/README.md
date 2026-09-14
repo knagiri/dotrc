@@ -42,6 +42,7 @@ make install
 | `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` / `--show-resumable` で一覧を広げる |
 | `claude-queue reconcile` | `claude agents --json` に載っていない生存扱いの row を terminated にする（picker 起動時に自動実行される） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
+| `claude-queue link --parent <session-id> --child <short-id>` | 委譲の親子関係を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示と孤児の判定に使う。設計は `docs/design/claude-queue-session-tree.md` |
 | `claude-queue --version` | バージョン表示 |
 
 ### 環境変数
@@ -59,7 +60,7 @@ make install
 | 列 | 中身 | 幅 |
 |---|---|---|
 | 1 | state アイコン | 可変（1〜2 桁） |
-| 2 | ai-title（transcript 由来） | 40 桁 padding + truncate |
+| 2 | 委譲の木の罫線・孤児の印 + ai-title（transcript 由来） | 40 桁 padding + truncate（罫線込み） |
 | 3 | worktree 名（`<main-repo-basename>_<name>`。メイン checkout は `<repo>` のみ） | 56 桁 padding + truncate |
 | 4 | age | 可変（短い） |
 | 5 | summary（何で止まっているか） | padding なし。payload 由来は 150 桁で truncate |
@@ -226,7 +227,7 @@ Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
 ## Auto-GC
 
 `SessionEnd` hook 末尾で、`terminated_at` が 7 日以上前の sessions とその
-events を削除。
+events を削除。`session_links` は作成から 7 日以上経ち、子が生きていないものを削除。
 
 ## tmux 設定（`dot/tmux.conf`）
 
