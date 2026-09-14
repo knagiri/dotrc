@@ -450,3 +450,147 @@ func TestGC_DeletesOldEndedSessions(t *testing.T) {
 		t.Errorf("recent session should be kept; count = %d", n)
 	}
 }
+
+func linkParent(t *testing.T, conn *sql.DB, childID string) string {
+	t.Helper()
+	var p sql.NullString
+	err := conn.QueryRow(
+		"SELECT parent_session_id FROM session_links WHERE child_short = ?", childID,
+	).Scan(&p)
+	if err == sql.ErrNoRows {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("read link %s: %v", childID, err)
+	}
+	return p.String
+}
+
+// Re-linking a child replaces its parent rather than failing on the primary
+// key or keeping the first one: a worktree re-delegated from another session
+// belongs to the new delegator.
+func TestLinkSession_Upsert(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "l.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+
+	if err := LinkSession(conn, "abcd1234", "parent-one"); err != nil {
+		t.Fatalf("LinkSession: %v", err)
+	}
+	// Age the first link so the upsert has a created_at to restart.
+	if _, err := conn.Exec("UPDATE session_links SET created_at = unixepoch() - 1000"); err != nil {
+		t.Fatalf("age link: %v", err)
+	}
+	if err := LinkSession(conn, "abcd1234", "parent-two"); err != nil {
+		t.Fatalf("LinkSession relink: %v", err)
+	}
+	if got := linkParent(t, conn, "abcd1234"); got != "parent-two" {
+		t.Errorf("parent = %q, want parent-two", got)
+	}
+	var n, age int64
+	_ = conn.QueryRow("SELECT COUNT(*), MAX(unixepoch() - created_at) FROM session_links").Scan(&n, &age)
+	if n != 1 {
+		t.Errorf("links = %d, want 1", n)
+	}
+	if age > 10 {
+		t.Errorf("relink kept the old created_at (age %ds)", age)
+	}
+}
+
+// GC drops a link only when it is both old and its child is not running. A
+// fresh link survives even with no child row (the child's SessionStart may not
+// have fired yet), and an old link survives while its child is still live.
+func TestGC_SessionLinks(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "g.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+
+	insertSession(t, conn, "11111111-aaaa", "%1") // live child
+	insertSession(t, conn, "22222222-aaaa", "%2") // ended child
+	terminate(t, conn, "22222222-aaaa", 100)
+
+	for _, c := range []string{"11111111", "22222222", "33333333", "44444444"} {
+		if err := LinkSession(conn, c, "p"); err != nil {
+			t.Fatalf("LinkSession %s: %v", c, err)
+		}
+	}
+	// 44444444 stays fresh; the rest are older than the GC horizon.
+	if _, err := conn.Exec("UPDATE session_links SET created_at = unixepoch() - 700000 WHERE child_short != '44444444'"); err != nil {
+		t.Fatalf("age links: %v", err)
+	}
+
+	if err := GC(conn, 7*24*3600); err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+
+	want := map[string]bool{
+		"11111111": true,  // old, child live
+		"22222222": false, // old, child ended
+		"33333333": false, // old, child never had a row
+		"44444444": true,  // fresh, child has no row yet
+	}
+	for c, keep := range want {
+		if got := linkParent(t, conn, c) != ""; got != keep {
+			t.Errorf("link %s kept = %v, want %v", c, got, keep)
+		}
+	}
+}
+
+// ListRows joins a link on the 8-char prefix of the row's full id, and a row
+// with no link comes back NULL rather than empty.
+func TestListRows_JoinsParent(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "j.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+
+	insertSession(t, conn, "abcd1234-1111-2222-3333-444444444444", "%1")
+	insertSession(t, conn, "ffff0000-1111-2222-3333-444444444444", "%2")
+	insertEvent(t, conn, "abcd1234-1111-2222-3333-444444444444", "Stop", "idle_done", 5)
+	insertEvent(t, conn, "ffff0000-1111-2222-3333-444444444444", "Stop", "idle_done", 5)
+	if err := LinkSession(conn, "abcd1234", "parent-uuid"); err != nil {
+		t.Fatalf("LinkSession: %v", err)
+	}
+
+	rows, err := ListRows(conn, ListOpts{})
+	if err != nil {
+		t.Fatalf("ListRows: %v", err)
+	}
+	got := map[string]sql.NullString{}
+	for _, r := range rows {
+		got[r.SessionID] = r.ParentSessionID
+	}
+	if p := got["abcd1234-1111-2222-3333-444444444444"]; !p.Valid || p.String != "parent-uuid" {
+		t.Errorf("linked row parent = %+v, want parent-uuid", p)
+	}
+	if p, ok := got["ffff0000-1111-2222-3333-444444444444"]; !ok || p.Valid {
+		t.Errorf("unlinked row parent = %+v (present %v), want NULL", p, ok)
+	}
+}
+
+// ListOpts.Includes is the filter the picker applies to rows it read unfiltered,
+// so it has to agree with what the flags meant when ListRows filtered in SQL.
+func TestListOptsIncludes(t *testing.T) {
+	states := []string{"awaiting_approval", "idle_done", "working", "stale"}
+	cases := []struct {
+		opts ListOpts
+		want []bool
+	}{
+		{ListOpts{}, []bool{true, true, false, false}},
+		{ListOpts{ShowWorking: true}, []bool{true, true, true, false}},
+		{ListOpts{ShowStale: true}, []bool{true, true, false, true}},
+		{ListOpts{ShowWorking: true, ShowStale: true}, []bool{true, true, true, true}},
+	}
+	for _, tc := range cases {
+		for i, s := range states {
+			if got := tc.opts.Includes(s); got != tc.want[i] {
+				t.Errorf("%+v.Includes(%q) = %v, want %v", tc.opts, s, got, tc.want[i])
+			}
+		}
+	}
+}

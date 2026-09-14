@@ -24,6 +24,12 @@ set -euo pipefail
 #     This is the check that makes a bulk sweep safe at all -- it is exactly the
 #     case claude-stop-bg's header calls out as the reason it has no sweep of
 #     its own.
+#     EXCEPT for an orphan: a session claude-queue's session_links records as
+#     delegated by a parent that no roster entry carries any more (a pid-less
+#     stale job record still counts as present). Its question can never be
+#     answered, so this check -- and the transcript it needs -- is skipped for
+#     it; every other gate still applies, and the report says `orphan: parent
+#     <id> gone`. See docs/design/claude-queue-session-tree.md.
 #
 # Stopping goes through claude-stop-bg, never `claude stop` directly, so that
 # wrapper's guard (refuse anything not kind=="background", refuse ambiguous
@@ -124,6 +130,25 @@ queue="$(sqlite3 -separator $'\t' "$db" \
   echo "claude-reap-bg: could not read the claude-queue database at $db" >&2
   exit 1
 }
+
+# Delegation links, read once for the same reason. Unlike the queue they are
+# optional: a database from before session_links existed, or any other read
+# failure, only means no session can be recognised as an orphan, which is
+# exactly the behaviour without links -- so warn and carry on.
+if ! links="$(sqlite3 -separator $'\t' "$db" \
+  "SELECT child_short, parent_session_id FROM session_links" 2>/dev/null)"; then
+  echo "claude-reap-bg: could not read session_links; treating every session as unlinked" >&2
+  links=""
+fi
+
+# Every sessionId the roster lists, stale job records included: the orphan test
+# asks whether a parent is gone, and a record still standing is not proof of
+# that, so it counts as present.
+declare -a roster_sids=()
+while IFS= read -r rsid; do
+  [ -n "$rsid" ] || continue
+  roster_sids+=("$rsid")
+done < <(jq -r '.[] | .sessionId // empty' <<<"$roster")
 
 # last_turn_sent_message <transcript.jsonl> -- true when the most recent
 # assistant turn issued a SendMessage.
@@ -232,28 +257,43 @@ for sid in "${candidates[@]}"; do
     continue
   fi
 
-  # No transcript means the SendMessage check cannot run. Skip rather than
-  # assume: an unverifiable session is indistinguishable from one holding a
-  # pending question.
-  if [ -z "$q_transcript" ] || [ ! -r "$q_transcript" ]; then
-    reap_skip "$short" "no readable transcript to check for a pending question"
-    continue
-  fi
-  if ! sent="$(last_turn_sent_message "$q_transcript" 2>/dev/null)"; then
-    reap_skip "$short" "could not parse the transcript ($q_transcript)"
-    continue
-  fi
-  if [ "$sent" != "false" ]; then
-    reap_skip "$short" "last turn sent a SendMessage (likely awaiting a reply)"
-    continue
+  # Orphan: linked to a parent the roster no longer lists.
+  orphan_note=""
+  while IFS=$'\t' read -r l_child l_parent; do
+    [ "$l_child" = "$short" ] || continue
+    if [ -n "$l_parent" ] \
+       && ! { [ "${#roster_sids[@]}" -gt 0 ] && in_list "$l_parent" "${roster_sids[@]}"; }; then
+      orphan_note="; orphan: parent ${l_parent:0:8} gone"
+    fi
+    break
+  done <<<"$links"
+
+  # The pending-question check, skipped for an orphan: the delegator it would
+  # be waiting on is gone, so no reply is coming.
+  if [ -z "$orphan_note" ]; then
+    # No transcript means the SendMessage check cannot run. Skip rather than
+    # assume: an unverifiable session is indistinguishable from one holding a
+    # pending question.
+    if [ -z "$q_transcript" ] || [ ! -r "$q_transcript" ]; then
+      reap_skip "$short" "no readable transcript to check for a pending question"
+      continue
+    fi
+    if ! sent="$(last_turn_sent_message "$q_transcript" 2>/dev/null)"; then
+      reap_skip "$short" "could not parse the transcript ($q_transcript)"
+      continue
+    fi
+    if [ "$sent" != "false" ]; then
+      reap_skip "$short" "last turn sent a SendMessage (likely awaiting a reply)"
+      continue
+    fi
   fi
 
   if [ "$dry_run" = 1 ]; then
-    reap_ok "$short" "would stop (idle $(( age / 60 ))m)"
+    reap_ok "$short" "would stop (idle $(( age / 60 ))m${orphan_note})"
     continue
   fi
   if claude-stop-bg "$short"; then
-    reap_ok "$short" "stopped (idle $(( age / 60 ))m)"
+    reap_ok "$short" "stopped (idle $(( age / 60 ))m${orphan_note})"
   else
     reap_skip "$short" "claude-stop-bg refused"
   fi

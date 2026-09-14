@@ -267,8 +267,12 @@ fi
 # name the existing session so the caller can reach it. Skipped when jq is
 # absent: the guard is a convenience, not a correctness boundary.
 if [ -n "$prompt" ] && [ "$use_tmux" = 0 ] && command -v jq >/dev/null 2>&1; then
+  # `|| existing=""`: a jq parse failure (roster entry isn't the JSON we
+  # expect) must not abort the launch under `set -euo pipefail` -- this guard
+  # is a convenience per the comment above, so treat a failure the same as "no
+  # collision found" rather than taking the whole script down with it.
   existing="$(claude agents --json 2>/dev/null | jq -r --arg d "$wt_path" \
-    'first(.[] | select(.kind == "background" and .cwd == $d) | .sessionId[0:8]) // empty')"
+    'first(.[] | select(.kind == "background" and .cwd == $d) | .sessionId[0:8]) // empty')" || existing=""
   if [ -n "$existing" ]; then
     echo "claude-worktree: a background session is already running in $wt_path" >&2
     echo "  attach with: claude attach $existing" >&2
@@ -485,27 +489,44 @@ fi
 # `claude agents --json` lists every live session with its pid, so walking this
 # process's ancestors until one of them IS a listed session identifies the
 # caller exactly -- no cwd heuristics, no ambiguity when several sessions share
-# a directory. Returns empty (never fails the launch) when there is no claude
-# ancestor, when the entry carries no name, or when jq is unavailable: a human
-# running this from a plain shell has no delegator, and that is not an error.
+# a directory. Leaves both empty (never fails the launch) when there is no
+# claude ancestor, when the entry carries no name, or when jq is unavailable: a
+# human running this from a plain shell has no delegator, and that is not an
+# error.
+#
+# Sets two globals from the SAME roster entry: `delegator` (its name, injected
+# into the prompt) and `delegator_sid` (its full session id, recorded as the
+# parent in claude-queue's session_links -- see
+# docs/design/claude-queue-session-tree.md). Globals rather than stdout because
+# a command substitution could only carry one of them cleanly.
+delegator=""
+delegator_sid=""
 resolve_delegator() {
   command -v jq >/dev/null 2>&1 || return 0
-  local agents p name
+  local agents p entry
   agents="$(claude agents --json 2>/dev/null)" || return 0
   [ -n "$agents" ] || return 0
   p=$$
   while [ -n "$p" ] && [ "$p" -gt 1 ]; do
-    name="$(printf '%s' "$agents" | jq -r --arg pid "$p" \
-      'first(.[] | select(.pid == ($pid | tonumber)) | .name // empty) // empty')"
-    if [ -n "$name" ]; then
-      printf '%s' "$name"
+    # Name on the first line, sessionId on the second, so neither needs escaping.
+    # `|| return 0` on both assignments below: this function is called directly
+    # (not via command substitution) so callers see its own errexit. Without the
+    # guard, a jq parse failure (roster entry isn't the JSON we expect) or ps
+    # exiting non-zero (ancestor already gone) would abort the whole script
+    # instead of just leaving delegator/delegator_sid empty -- see header.
+    entry="$(printf '%s' "$agents" | jq -r --arg pid "$p" \
+      '[.[] | select(.pid == ($pid | tonumber)) | select((.name // "") != "")]
+       | first // empty | .name, (.sessionId // "")')" || return 0
+    if [ -n "$entry" ]; then
+      delegator="${entry%%$'\n'*}"
+      if [ "$entry" != "$delegator" ]; then delegator_sid="${entry#*$'\n'}"; fi
       return 0
     fi
-    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')" || return 0
   done
 }
 
-delegator="$(resolve_delegator)"
+resolve_delegator
 
 # Inject the name as a bare datum. What to report, and when, is doctrine and
 # lives in the implement-and-review skill -- this script only supplies the fact
@@ -564,6 +585,24 @@ if [ "$use_tmux" = 0 ]; then
   # than matching the separator, which is a multibyte middle dot.
   short="$(printf '%s\n' "$launch_out" \
     | awk '/backgrounded/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9a-f]{8}$/) { print $i; exit } }')"
+
+  # Record the delegation in claude-queue so the picker can show this session
+  # under its delegator and claude-reap-bg can tell when the delegator is gone
+  # (docs/design/claude-queue-session-tree.md). The child is recorded by the
+  # short id because that is all the banner gives us -- --bg ignores
+  # --session-id, and the roster may not list the new session yet. Best-effort
+  # like the delegator lookup itself: the session is already running, so a
+  # missing or failing claude-queue costs the link, never the launch.
+  if [ -n "$short" ] && [ -n "$delegator_sid" ]; then
+    if ! command -v claude-queue >/dev/null 2>&1; then
+      echo "claude-worktree: claude-queue not on PATH; delegation link not recorded" >&2
+    elif link_err="$(claude-queue link --parent "$delegator_sid" --child "$short" 2>&1)"; then
+      :
+    else
+      echo "claude-worktree: claude-queue link failed; delegation link not recorded:" >&2
+      printf '%s\n' "$link_err" >&2
+    fi
+  fi
 
   echo "worktree : $wt_path"
   echo "branch   : $branch"
