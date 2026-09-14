@@ -15,7 +15,7 @@
 | テスト | `test/claude-digest.test.sh` |
 | スケジュール | `dot/systemd-user/claude-digest.{service,timer}` |
 | 展開 | `bin/deploy.sh` の `MergeLinkMap["systemd-user"]` |
-| 朝の読み方 | `dot/tmux.conf` の `bind-key e` |
+| 朝の読み方 | `dot/tmux.conf` の `bind-key g` / `bind-key G` |
 | 隣接する仕組み | `src/claude-queue/`、`bin/claude-worktree`、`bin/git-reap-gone`（`docs/design/claude-tmux-worktree.md`） |
 
 ## 全体構造 — 2 段の map-reduce
@@ -42,6 +42,7 @@
 ```
 claude-digest                       最新の日報を表示
 claude-digest <YYYY-MM-DD>          日付指定で表示
+claude-digest --pick                過去日を fzf で選んで表示（Enter で開き、閉じると一覧へ戻る）
 claude-digest --generate [<date>]   生成。日付省略時は「直近に閉じた日」
 claude-digest --generate --dry-run [<date>]
                                     収集した事実ブロックを出力して終わる（LLM を呼ばない）
@@ -53,6 +54,12 @@ claude-digest --generate --dry-run [<date>]
 表示は stdout が tty のときだけページャに渡し、`bat` → `less` → `cat` の順で選ぶ
 （選択理由は `bin/claude-digest` の `show()` 内コメントを参照）。ページャの選択は
 claude-digest 側に一本化しており、`dot/tmux.conf` の binding はページャを指定しない。
+
+`--pick` は表示モードの一形態で、日付引数・`--generate`・`--dry-run` とは併用できない。
+一覧に出すのは `<day>.md` が実在する日だけで、新しい順に並べる。中間サマリのディレクトリだけが
+残った日（段2 が未完了）は出さない。開くには生成が要り、picker は閲覧専用で LLM を呼ばないため。
+右側の preview は `bat`（無ければ `cat`）、Enter で開くページャは上と同じ選択を共有する。
+`fzf` が要る（`bin/ghq-tmux-session` も使っており新規依存ではない）。
 
 ### LLM 呼び出しは `--restricted`
 
@@ -486,11 +493,13 @@ systemd user unit は shell の PATH を継承しない。`~/.bashrc` は非対�
 ## 朝の読み方
 
 ```tmux
-bind-key e display-popup -E -w 80% -h 80% "claude-digest"
+bind-key g display-popup -E -w 80% -h 80% "claude-digest"
+bind-key G display-popup -E -w 80% -h 80% "claude-digest --pick"
 ```
 
-prefix は `C-q`。`q` / `Q` は claude-queue picker、`d` は tmux 既定の `detach-client` に
-割り当て済みなので `e` を使う。
+prefix は `C-q`。`g` で最新の日報、`G` で過去日の一覧。claude-queue picker の `q` / `Q` と同じく
+「小文字 = 既定表示、大文字 = 一覧」の対にしている。`g` / `G` は tmux 既定の prefix table で
+大小とも未使用（`E` は既定の `select-layout -E` なので対にできない）。
 
 **シェル起動時の自動表示はしない。** pane を開くたびに流れるため。日報は「読みに行くもの」で
 あって「流れてくるもの」ではない。
@@ -524,6 +533,13 @@ command not found になるだけで判別にならない）。
 | 着地 ∩ 言及の交差をやめる | a landed PR nobody mentioned goes to the unlinked list, named with its repo |
 | 段1 の中間サマリ再利用をやめる | re-running a day reuses the intermediates and only redoes the reduce |
 | `claude -p` から `--restricted` を外す | every -p call the digest makes carries --restricted |
+| `--pick` の一覧で `sort -r` を `sort` にする | pick offers only days with a final digest, newest first |
+| `--pick` の glob から `.md` を外す | pick offers only days with a final digest, newest first / ...and a day holding only intermediates is not offered（`<day>.md.part` が候補に出る） |
+| `--pick` の `-f` テストを外す | pick with no digest at all fails like show does |
+| `--pick` の再表示ループをやめる（1 回開いたら終了） | after the pager closes, pick returns to the list |
+| fzf の非 0 終了で `exit 1` にする | leaving fzf (Esc) ends pick with exit 0 and shows nothing |
+| preview に digest dir を未 quote で埋め込む | the preview shows the highlighted day's digest, from a path with a space |
+| `--pick` と他フラグ・日付の併用チェックを外す | --pick --generate is rejected / --pick 2026-03-01 is rejected（`--pick --dry-run` は既存の `--dry-run` 単独チェックでも弾かれる） |
 | 素材ゼロ session の除外を外す | a session with no summarisable material is dropped from the facts block（対照の「…while a session of the same day that has material is still listed」と「a session with only assistant text, and no human prompt, is kept」は通り続ける） |
 
 `-F` の判別には BRE 前提の fixture が要る。手元の git は `grep.patternType` 未設定で
