@@ -159,6 +159,11 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       そこで人間へ返すのが正しい。
    c. `has_failure` が `false` なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`。
       clean 拒否のときだけ `gh pr merge --merge` へ fallback する）。
+      **撃つ前に、PR 本文の実測値を現在の HEAD で測り直して更新する** — PR 本文が実測値を持ち、
+      かつこの run で修正 commit が入っている場合。`gh-automerge` は即時 merge が成立しうる
+      （3.d の 2 経路）ので、ここが本文を直せる最後の地点であり、通り過ぎると誤った値が訂正
+      できないまま正典になる。本文の更新をこの session で行えないなら（token 権限が無い等）
+      回避策は撃たず、測り直した値を 3.e の最終サマリと委譲元への報告に必ず載せる。
    d. 次を実行し、**終端種別を機械的に判定できる文字列**（`MERGED` / `AUTO_MERGE_PENDING` /
       `NOT_TERMINAL`）を得る（散文での判定ではなく、コマンド自体が判定値を返す形にする）。
 
