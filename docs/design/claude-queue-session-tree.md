@@ -42,7 +42,10 @@ GC は `created_at` が GC 期限より古く、かつ子が生きていない l
 1. 生きている行を全状態で読み、state filter（`--show-working` / `--show-stale`）を通った行を残す
 2. 残した行の祖先を `parent_session_id` で辿り、生きている行に在れば加える。**祖先には state filter
    を掛けない**。`q` は `working` を隠すが委譲中の親はたいてい `working` なので、掛けると木が崩れる
-3. repo-scope（`--repo-scope`）を掛ける。これは祖先の引き戻しより後で、戻さない
+3. repo-scope（`--repo-scope`）を掛ける。これは祖先の引き戻しより後で、戻さない。そのうえで、
+   引き戻しでしか入っていない行のうち repo filter 後の一覧に子が残らなかったものを、変化が
+   無くなるまで落とす。子が repo 外で落ちたのに親だけが一覧に残ると、この repo の session を見る
+   一覧にとってノイズになるため
 4. 森を組み、兄弟（root 同士を含む）を「部分木の最小 priority 昇順 → 部分木の最大 `created_at`
    降順 → session id 昇順」で並べる。承認待ちの子がいれば親ごと上に来る
 5. `--show-resumable` の行は木の末尾に平坦なまま足す
@@ -74,8 +77,8 @@ link の循環は `claude-worktree` からは生じないが、テーブルは�
 stale job record も「居る」に数え、判定を保守側に倒す。
 
 `/clear` は session を終わらせ、別の session id で新しい session を始める。委譲元が `/clear` すると
-その子は ledger でも roster でも親を失って孤児になる。新しい session は子の報告を受け取らず、子を
-閉じることもないので、閉じ手が居ないという孤児の状態に合う。compact は session id を変えないので、
+その子は ledger でも roster でも親を失って孤児になる。新しい session は委譲の文脈を引き継がないので
+子を閉じず、閉じ手が居ないという孤児の状態に合う。compact は session id を変えないので、
 長く動く委譲元が compact を挟んでも link は切れない。
 
 `SendMessage` gate は委譲元へ質問して返信待ちの委譲先を殺さないためにある。委譲元が消えていれば
