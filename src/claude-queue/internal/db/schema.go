@@ -26,6 +26,17 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_session_latest
   ON events(session_id, id DESC);
 
+-- Delegation parent/child links, written by bin/claude-worktree through
+-- ` + "`claude-queue link`" + `. The child is keyed by its 8-char short id because that
+-- is all ` + "`claude --bg`" + ` prints, and its sessions row may not exist yet when the
+-- link is written; readers join on substr(session_id, 1, 8). No FK to sessions
+-- for the same reason, and because the parent's row can be GC'd first.
+CREATE TABLE IF NOT EXISTS session_links (
+  child_short       TEXT PRIMARY KEY,
+  parent_session_id TEXT NOT NULL,
+  created_at        INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 DROP VIEW IF EXISTS queue;
 CREATE VIEW queue AS
 SELECT
