@@ -522,6 +522,11 @@ delegator="$(resolve_delegator)"
 # the skill cannot derive. Appending to the prompt (rather than exporting an env
 # var) is deliberate: `claude --bg` starts via a background service, so env
 # inheritance is not guaranteed, whereas the prompt is the one channel that is.
+# Inheritance has been measured to happen (a delegate's GH_TOKEN matched its
+# delegator's), but one observation does not make it a contract. And what is
+# inherited is the delegator's launch-time env, not the repo's mise config, so
+# per-repo env such as GH_TOKEN still has to be loaded with `mise exec` at call
+# time (bin/lib/gh-mise.sh) whether or not inheritance happens.
 if [ -n "$delegator" ]; then
   prompt="${prompt}
 

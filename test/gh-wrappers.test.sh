@@ -542,9 +542,10 @@ PATH="$awaitstub:$PATH" "$bindir/gh-await-reviews" 42 --watch >/dev/null 2>&1; [
 
 # --- mise env plumbing (bin/lib/gh-mise.sh) ---------------------------------
 # Every wrapper must reach gh through `mise exec -C <repo root> -- gh` so a
-# non-interactive process -- a delegated background agent, which inherits no env
-# -- gets the repo's mise-supplied GH_TOKEN instead of whatever stale PAT gh's
-# hosts.yml still holds. Two things are asserted: the prefix is there, and the
+# non-interactive process -- a delegated background agent -- gets the repo's
+# current mise-supplied GH_TOKEN instead of whatever its env carries (a token
+# inherited from the delegator's launch-time env, or hosts.yml's PAT when none
+# is inherited). Two things are asserted: the prefix is there, and the
 # directory it names is the repo TOPLEVEL rather than the caller's cwd (the
 # wrappers are run from a subdirectory to make those two differ).
 #
