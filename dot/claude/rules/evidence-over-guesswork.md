@@ -40,9 +40,12 @@
 - config 既定に依存して黙って付く副作用 — 例: `git worktree add -b <branch> <path> origin/HEAD`
   のように remote-tracking ref を start point に渡すと、`branch.autoSetupMerge` の既定で
   新規ブランチの upstream が `origin/main` になり、`git status` の ahead/behind や
-  `@{upstream}` を使う判定（例: `git log @{upstream}..HEAD` が空に見える）が
-  `origin/main` 基準に狂う（素の `git push` は push.default=simple の既定なら upstream 名と
-  ブランチ名の不一致をエラーで止めるので、このクラスには当たらない）
+  `@{upstream}` を使う判定が `origin/main` 基準に狂う（実測: `git log @{upstream}..HEAD` は
+  commit を積む前こそ空だが、1 commit 積むと表示され、`git push origin <branch>` で
+  push した後も空にならない。push 済みなのに未 push の commit が残っているように見え、
+  `git status -sb` も `## <branch>...origin/main [ahead 1]` のまま変わらない）。
+  素の `git push` は push.default=simple の既定なら upstream 名とブランチ名の不一致を
+  エラーで止めるので、このクラスには当たらない
 
 man を読むだけで終えず、実効値を出せるツールがあればそれで確かめる（`ssh -G <host>`、
 `git config --list --show-origin`、作った直後の `git rev-parse --abbrev-ref <branch>@{upstream}`
