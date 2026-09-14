@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-pr-create [gh pr create flags...] -- open a PR with the repo's mise env.
+#
+# `gh pr create` is what actually broke twice in a row: `mise activate` never
+# fires in a non-interactive process, so a delegated background agent
+# (`claude --bg`) never gets the repo's mise-config GH_TOKEN. gh then uses
+# whatever its env carries -- the delegator's launch-time token when env is
+# inherited (measured), possibly stale or under-privileged, or the hosts.yml PAT
+# when nothing is -- and GitHub answers "Resource not accessible by personal
+# access token". The other
+# gh wrappers in bin/ are now immune (bin/lib/gh-mise.sh); this one exists
+# because my-create-pr calls `gh pr create` directly and so had nothing to be
+# immune through.
+#
+# It loads the env and NOTHING ELSE. Every flag is passed through untouched --
+# base selection, the three-dot diff and the body drafting stay in the
+# my-create-pr skill, which is where they are reviewed. Unlike the narrow
+# wrappers (gh-automerge, gh-resolve-thread) there is no grant to keep small
+# here: `Bash(gh pr create *)` is already allowlisted, so `Bash(gh-pr-create *)`
+# widens nothing.
+#
+# The one exception to "nothing else" is forced by the fix itself: gh_mise runs
+# gh with the repo root as its cwd, so a relative --body-file would be resolved
+# against the root and quietly read a different file. That value is absolutised
+# here; "-" (read the body from stdin) is left alone.
+#
+# --template is deliberately NOT rewritten. gh matches it against the repo's own
+# pull request templates by name, so turning it into an absolute path could
+# change which thing gh looks up -- and those templates live under the repo root,
+# which is precisely the cwd gh now gets, so the move helps rather than hurts.
+#
+# Usage: gh-pr-create [any gh pr create flags]
+
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+# Rebuild argv, absolutising the --body-file value. Both spellings are handled,
+# including the --body-file=<path> form.
+args=()
+next_is_path=0
+for a in "$@"; do
+  if [ "$next_is_path" = 1 ]; then
+    next_is_path=0
+    [ "$a" = "-" ] || a="$(realpath -- "$a")"   # abs-path-arg@dotrc
+    args+=("$a")
+    continue
+  fi
+  case "$a" in
+    -F|--body-file) next_is_path=1; args+=("$a") ;;
+    --body-file=*)
+      flag="${a%%=*}"; val="${a#*=}"
+      [ "$val" = "-" ] || val="$(realpath -- "$val")"   # abs-path-arg@dotrc
+      args+=("$flag=$val") ;;
+    *) args+=("$a") ;;
+  esac
+done
+
+# "${args[@]}" with set -u: an empty array is an unset variable in bash < 4.4,
+# and gh-pr-create with no arguments is a legitimate call (gh then prompts).
+gh_mise pr create ${args[@]+"${args[@]}"}

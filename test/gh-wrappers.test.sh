@@ -3,6 +3,14 @@
 # per bracketed line) so we assert each wrapper issues exactly the intended gh
 # command -- and, for gh-automerge, that no extra flags (e.g. --admin) leak
 # through. No test framework; run with bash.
+#
+# Every wrapper now reaches gh through `mise exec -C <repo root> -- gh`
+# (bin/lib/gh-mise.sh), so each stub directory also carries a mise stub that
+# re-runs the command after `--`. Without it these tests would fall through to
+# the real mise on PATH, which is both slower and not hermetic. The mise stub
+# records into MISE_ARGS_FILE rather than GH_ARGS_FILE because the gh stubs
+# below truncate the latter on entry; only the mise-plumbing section at the end
+# sets it.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -15,8 +23,32 @@ cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash
 : >"$GH_ARGS_FILE"
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
+# Where gh was run matters now that the wrappers move its cwd to the repo root;
+# only the mise-plumbing section sets GH_PWD_FILE, so nothing else is affected.
+[ -z "${GH_PWD_FILE:-}" ] || pwd -P >"$GH_PWD_FILE"
 STUB
 chmod +x "$stubdir/gh"
+
+# Stands in for `mise exec -C <dir> -- <cmd> [args...]`: records its own argv
+# under a `mise:` prefix, then runs the command in <dir> exactly as mise does.
+# Installed into every stub directory so no test reaches the real mise.
+install_mise_stub() {  # install_mise_stub <dir>
+  cat >"$1/mise" <<'STUB'
+#!/usr/bin/env bash
+[ -z "${MISE_ARGS_FILE:-}" ] || printf '[mise:%s]\n' "$@" >>"$MISE_ARGS_FILE"
+dir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -C) dir="$2"; shift 2 ;;
+    --) shift; break ;;
+    *)  shift ;;
+  esac
+done
+cd "${dir:-.}" && exec "$@"
+STUB
+  chmod +x "$1/mise"
+}
+install_mise_stub "$stubdir"
 
 # gh-automerge: numeric PR issues `gh pr merge --auto --merge <PR>`, no --admin.
 GH_ARGS_FILE="$stubdir/args" PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 >/dev/null 2>&1; rc=$?
@@ -56,6 +88,7 @@ esac
 exit 0
 STUB
 chmod +x "$amdir/gh"
+install_mise_stub "$amdir"
 
 amrun() {  # $1 = --auto failure message ("" = succeed), $2 = its exit code
   : >"$amdir/args"
@@ -158,6 +191,7 @@ case "$*" in
 esac
 STUB
 chmod +x "$checksstub/gh"
+install_mise_stub "$checksstub"
 
 sha40='9ae7061c0c4b7b4f2b3b1f7a4d6e8c9f0a1b2c3d'
 checksenv() { env GH_STUB_DIR="$1" GH_ARGS_FILE="$1/args" PATH="$checksstub:$PATH" \
@@ -367,6 +401,7 @@ f="$GH_STUB_DIR/$n"
 cat "$f"
 STUB
 chmod +x "$awaitstub/gh"
+install_mise_stub "$awaitstub"
 
 # Fast clocks so the state machine is exercised in ~1s, not ~10min.
 awaitenv() { env GH_AWAIT_REVIEWS_TIMEOUT=3 GH_AWAIT_REVIEWS_QUIET=1 \
@@ -504,5 +539,198 @@ PATH="$awaitstub:$PATH" "$bindir/gh-await-reviews" 9z >/dev/null 2>&1; [ $? -ne 
   && echo "ok: gh-await-reviews non-numeric fails" || { echo "FAIL: gh-await-reviews non-numeric"; fail=1; }
 PATH="$awaitstub:$PATH" "$bindir/gh-await-reviews" 42 --watch >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-await-reviews rejects extra flag arg" || { echo "FAIL: gh-await-reviews extra flag"; fail=1; }
+
+# --- mise env plumbing (bin/lib/gh-mise.sh) ---------------------------------
+# Every wrapper must reach gh through `mise exec -C <repo root> -- gh` so a
+# non-interactive process -- a delegated background agent -- gets the repo's
+# current mise-supplied GH_TOKEN instead of whatever its env carries (a token
+# inherited from the delegator's launch-time env, or hosts.yml's PAT when none
+# is inherited). Two things are asserted: the prefix is there, and the
+# directory it names is the repo TOPLEVEL rather than the caller's cwd (the
+# wrappers are run from a subdirectory to make those two differ).
+#
+# rc is deliberately not asserted in the sweep below: gh-pr-checks and
+# gh-await-reviews consume gh's *output*, which the plain recorder does not
+# supply. What is under test here is the prefix, not the wrapper's own logic --
+# that is covered case by case above.
+miserepo="$stubdir/miserepo"
+mkdir -p "$miserepo/sub"
+git -C "$miserepo" init -q
+miserepo_real="$(cd "$miserepo" && pwd -P)"
+miseargs="$stubdir/miseargs"
+
+wrappers="gh-automerge gh-await-reviews gh-list-threads gh-pr-checks gh-pr-comments gh-resolve-thread"
+wrapper_arg() {  # the one argument each wrapper's validation accepts
+  case "$1" in gh-resolve-thread) echo 'PRRT_kwABC' ;; *) echo 42 ;; esac
+}
+
+# Runs <wrapper> from a subdirectory of $miserepo with the stubs on PATH.
+# $2 (optional) overrides PATH, which the no-mise cases below need.
+mise_run() {  # mise_run <bindir> <wrapper> [path]
+  : >"$miseargs"; : >"$stubdir/args"; : >"$stubdir/pwd"
+  ( cd "$miserepo/sub" && env GH_ARGS_FILE="$stubdir/args" \
+      MISE_ARGS_FILE="$miseargs" GH_PWD_FILE="$stubdir/pwd" \
+      GH_AWAIT_REVIEWS_TIMEOUT=1 GH_AWAIT_REVIEWS_QUIET=0 \
+      GH_AWAIT_REVIEWS_GRACE=0 GH_AWAIT_REVIEWS_POLL=1 \
+      PATH="${3:-$stubdir:$PATH}" "$1/$2" "$(wrapper_arg "$2")" ) >/dev/null 2>&1
+}
+
+# True when the recorded mise argv is exactly the `exec -C <toplevel> -- gh`
+# prefix this change is about.
+went_through_mise() {
+  grep -qxF '[mise:exec]' "$miseargs" \
+    && grep -qxF '[mise:-C]' "$miseargs" \
+    && grep -qxF "[mise:$miserepo_real]" "$miseargs" \
+    && grep -qxF '[mise:--]' "$miseargs" \
+    && grep -qxF '[mise:gh]' "$miseargs"
+}
+
+for w in $wrappers; do
+  mise_run "$bindir" "$w"
+  if went_through_mise; then
+    echo "ok: $w reaches gh through mise exec -C <repo toplevel>"
+  else echo "FAIL: $w mise prefix mise=$(cat "$miseargs" 2>/dev/null)"; fail=1; fi
+done
+
+# Discrimination (evidence-over-guesswork §4). gh-mise.sh is a new file, so
+# running these assertions against the pre-change wrappers would only prove the
+# symbol did not exist yet. Instead the NEW code is mutated, one branch at a
+# time, and each mutant must break the case that covers that branch. Both
+# mutants are produced by rewriting the single `command -v mise` condition, so
+# they stay syntactically valid; `cmp` guards against the sed silently matching
+# nothing and the checks below rotting into no-ops.
+mutantdir="$stubdir/mutant"
+mk_mutant() {  # mk_mutant <name> <replacement for the mise-present condition>
+  rm -rf "${mutantdir:?}/${1:?}"; mkdir -p "${mutantdir:?}/${1:?}"
+  cp -a "$bindir/." "$mutantdir/$1/"
+  sed "s|command -v mise >/dev/null 2>&1|$2|" "$bindir/lib/gh-mise.sh" \
+    >"$mutantdir/$1/lib/gh-mise.sh"
+  if cmp -s "$bindir/lib/gh-mise.sh" "$mutantdir/$1/lib/gh-mise.sh"; then
+    echo "FAIL: mutant '$1' is identical to gh-mise.sh; the check is a no-op"; fail=1
+  fi
+}
+
+# Mutant A: mise is never used even though it is installed. The sweep above
+# must fail against it -- otherwise those assertions were passing for some
+# reason other than the prefix.
+mk_mutant nomise false
+mise_run "$mutantdir/nomise" gh-pr-comments
+if ! went_through_mise && grep -qxF '[pr]' "$stubdir/args"; then
+  echo "ok: forcing gh-mise.sh down its fallback branch loses the mise prefix (the sweep above is discriminating)"
+else echo "FAIL: nomise mutant still recorded a mise prefix: $(cat "$miseargs" 2>/dev/null)"; fail=1; fi
+
+# The no-mise environment for the two cases below: a PATH with the stubs but
+# without mise anywhere. Stripping is iterative because mise may sit in more
+# than one PATH entry. The control assertion is what keeps these cases honest:
+# if mise were still reachable, "falls back" would pass vacuously.
+nomise_path="$PATH"
+while d="$(PATH="$nomise_path" command -v mise 2>/dev/null)"; do
+  d="$(dirname "$d")"
+  nomise_path="$(printf '%s' "$nomise_path" | tr ':' '\n' | grep -vxF "$d" | paste -sd: -)"
+done
+nomisedir="$stubdir/nomise"; mkdir -p "$nomisedir"
+cp "$stubdir/gh" "$nomisedir/gh"
+nomise_path="$nomisedir:$nomise_path"
+if ! PATH="$nomise_path" command -v mise >/dev/null 2>&1; then
+  echo "ok: the no-mise PATH really has no mise on it"
+else echo "FAIL: no-mise PATH still resolves mise; the fallback cases would pass vacuously"; fail=1; fi
+
+# With no mise installed the wrapper still runs gh -- and still runs it in the
+# repo toplevel, so which repo a wrapper targets does not depend on whether
+# mise happens to be installed.
+mise_run "$bindir" gh-pr-comments "$nomise_path"
+if grep -qxF '[pr]' "$stubdir/args" && [ ! -s "$miseargs" ] \
+  && [ "$(cat "$stubdir/pwd" 2>/dev/null)" = "$miserepo_real" ]; then
+  echo "ok: with no mise on PATH the wrapper calls gh directly, still in the repo toplevel"
+else echo "FAIL: no-mise fallback args=$(cat "$stubdir/args" 2>/dev/null) pwd=$(cat "$stubdir/pwd" 2>/dev/null)"; fail=1; fi
+
+# Mutant B: the fallback branch is removed (the condition is always true), so a
+# machine without mise gets `mise: command not found`. The case above must fail
+# against it -- that is what shows the fallback is load-bearing rather than
+# decorative.
+mk_mutant alwaysmise true
+mise_run "$mutantdir/alwaysmise" gh-pr-comments "$nomise_path"
+if [ ! -s "$stubdir/args" ]; then
+  echo "ok: removing the fallback breaks the wrapper when mise is absent (the case above is discriminating)"
+else echo "FAIL: alwaysmise mutant still reached gh without mise: $(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# --- gh-pr-create -----------------------------------------------------------
+# Unlike the other wrappers this one passes every flag through: it exists only
+# to put the repo's mise env in front of `gh pr create`, which my-create-pr used
+# to call directly and which is what actually failed twice in a delegated agent.
+# So the assertions are (a) the flags arrive untouched, (b) no flag is added,
+# and (c) the two file-reading flags are absolutised before gh's cwd moves.
+prcreatedir="$stubdir/prcreate"; mkdir -p "$prcreatedir/sub"
+git -C "$prcreatedir" init -q 2>/dev/null || true
+prcreate_real="$(cd "$prcreatedir" && pwd -P)"
+printf 'REAL\n' >"$prcreatedir/sub/pr.md"
+printf 'DECOY\n' >"$prcreatedir/pr.md"
+
+prcreate_run() {  # prcreate_run <bindir> [args...]; runs from $prcreatedir/sub
+  : >"$stubdir/args"
+  ( cd "$prcreatedir/sub" && env GH_ARGS_FILE="$stubdir/args" \
+      PATH="$stubdir:$PATH" "$1/gh-pr-create" "${@:2}" ) >/dev/null 2>&1
+}
+
+prcreate_run "$bindir" --title t --body b --base main
+if grep -qxF '[pr]' "$stubdir/args" && grep -qxF '[create]' "$stubdir/args" \
+  && grep -qxF '[--title]' "$stubdir/args" && grep -qxF '[t]' "$stubdir/args" \
+  && grep -qxF '[--body]' "$stubdir/args" && grep -qxF '[b]' "$stubdir/args" \
+  && grep -qxF '[--base]' "$stubdir/args" && grep -qxF '[main]' "$stubdir/args" \
+  && [ "$(grep -c . "$stubdir/args")" -eq 8 ]; then
+  echo "ok: gh-pr-create passes its flags through to gh pr create and adds none"
+else echo "FAIL: gh-pr-create passthrough args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# A relative --body-file must still name the caller's file after gh's cwd moves
+# to the repo root, where a DECOY of the same name sits. Both spellings, and the
+# --body-file=<path> form, go through the same rewrite.
+for flag in --body-file -F; do
+  prcreate_run "$bindir" "$flag" pr.md
+  if grep -qxF "[$prcreate_real/sub/pr.md]" "$stubdir/args"; then
+    echo "ok: gh-pr-create absolutises a relative $flag value"
+  else echo "FAIL: gh-pr-create $flag args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+done
+
+# --template is left exactly as given: gh matches it against the repo's own PR
+# templates by name, so rewriting it could change what gh looks up.
+prcreate_run "$bindir" --template pull_request_template.md
+if grep -qxF '[pull_request_template.md]' "$stubdir/args"; then
+  echo "ok: gh-pr-create leaves --template untouched (gh resolves it by name)"
+else echo "FAIL: gh-pr-create --template args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+prcreate_run "$bindir" --body-file=pr.md
+if grep -qxF "[--body-file=$prcreate_real/sub/pr.md]" "$stubdir/args"; then
+  echo "ok: gh-pr-create absolutises the --body-file=<path> form too"
+else echo "FAIL: gh-pr-create --body-file= args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# "-" means stdin, not a path, so it must survive untouched.
+prcreate_run "$bindir" --body-file -
+if grep -qxF '[-]' "$stubdir/args"; then
+  echo "ok: gh-pr-create leaves --body-file - alone"
+else echo "FAIL: gh-pr-create stdin body args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# gh-pr-create reaches gh through mise, like every other wrapper.
+: >"$miseargs"
+( cd "$prcreatedir/sub" && env GH_ARGS_FILE="$stubdir/args" MISE_ARGS_FILE="$miseargs" \
+    PATH="$stubdir:$PATH" "$bindir/gh-pr-create" --title t ) >/dev/null 2>&1
+if grep -qxF '[mise:exec]' "$miseargs" && grep -qxF "[mise:$prcreate_real]" "$miseargs" \
+  && grep -qxF '[mise:gh]' "$miseargs"; then
+  echo "ok: gh-pr-create reaches gh through mise exec -C <repo toplevel>"
+else echo "FAIL: gh-pr-create mise prefix mise=$(cat "$miseargs" 2>/dev/null)"; fail=1; fi
+
+# Discrimination (evidence-over-guesswork §4): with the absolutisation stripped,
+# the relative --body-file reaches gh as "pr.md" -- which, from the repo root,
+# is the DECOY. `cmp` keeps the check from rotting into a no-op.
+prcreatemutant="$stubdir/prcreatemutant"
+rm -rf "$prcreatemutant"; mkdir -p "$prcreatemutant"
+cp -a "$bindir/." "$prcreatemutant/"
+grep -v 'abs-path-arg@dotrc' "$bindir/gh-pr-create" >"$prcreatemutant/gh-pr-create"
+chmod +x "$prcreatemutant/gh-pr-create"
+if cmp -s "$bindir/gh-pr-create" "$prcreatemutant/gh-pr-create"; then
+  echo "FAIL: the gh-pr-create mutant is identical; the cases above are no-ops"; fail=1
+fi
+prcreate_run "$prcreatemutant" --body-file pr.md
+if grep -qxF '[pr.md]' "$stubdir/args"; then
+  echo "ok: dropping the absolutisation hands gh the bare relative path (the cases above are discriminating)"
+else echo "FAIL: gh-pr-create mutant args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
 
 exit "$fail"

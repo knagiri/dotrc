@@ -33,8 +33,13 @@ fi
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
 rc=0
-gh pr merge --auto --merge "$pr" 2>"$err" || rc=$?
+gh_mise pr merge --auto --merge "$pr" 2>"$err" || rc=$?
 cat "$err" >&2
 if [ "$rc" -eq 0 ]; then
   echo "gh-automerge: enabled auto-merge on #$pr" >&2
@@ -46,4 +51,4 @@ if ! grep -qi 'clean status' "$err"; then
 fi
 
 echo "gh-automerge: auto-merge refused (#$pr is in clean status); merging directly" >&2
-gh pr merge --merge "$pr"
+gh_mise pr merge --merge "$pr"

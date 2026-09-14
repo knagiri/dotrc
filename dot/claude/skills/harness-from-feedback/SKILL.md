@@ -100,7 +100,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    （`[A-Za-z0-9_-]+`、pre-fetch した worktree 一覧と衝突しない名に）。
    委譲先は `delegate-to-worktree` と同じ B の役なので、`--model opus` でモデルを固定する。
    - リポジトリ固有: `claude-worktree --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
-   - グローバル（dotrc）: `claude-worktree --self --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
+   - グローバル（dotrc）: `claude-worktree --global --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
 
    **issue 起点で起こす場合**は branch / name を `issue-<N>-<slug>` にし、委譲プロンプトへ
    「PR 本文に `Closes #<N>` を入れること」を明記する。起票そのものは `gh-issue-file` 経由で

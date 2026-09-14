@@ -93,13 +93,18 @@ if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-repo=$(gh repo view --json owner,name --jq '.owner.login + "/" + .name')
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+repo=$(gh_mise repo view --json owner,name --jq '.owner.login + "/" + .name')
 if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   echo "gh-pr-checks: could not resolve the current repository (got: $repo)" >&2
   exit 1
 fi
 
-sha=$(gh pr view "$pr" --json headRefOid --jq '.headRefOid')
+sha=$(gh_mise pr view "$pr" --json headRefOid --jq '.headRefOid')
 if [[ ! "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
   echo "gh-pr-checks: could not resolve the head SHA of PR $pr (got: $sha)" >&2
   exit 1
@@ -113,10 +118,10 @@ fi
 # workflow_id because it is that rule's grouping key -- without both, a
 # projected run carries no way to tell which of two runs of the same workflow
 # is newer.
-runs=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" \
+runs=$(gh_mise api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" \
   --jq '{workflow_runs: [(.workflow_runs // [])[] | {name, status, conclusion, run_number, workflow_id}]}')
 # Commit statuses catch external CI that never creates an Actions run.
-statuses=$(gh api "repos/$repo/commits/$sha/status" \
+statuses=$(gh_mise api "repos/$repo/commits/$sha/status" \
   --jq '{statuses: [(.statuses // [])[] | {context, state}]}')
 
 # skipped / neutral are not failures: a skipped job is the normal outcome of a
