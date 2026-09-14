@@ -56,9 +56,11 @@ jobs:
             bin/gh-list-threads \
             bin/gh-pr-checks \
             bin/gh-pr-comments \
+            bin/gh-pr-create \
             bin/gh-resolve-thread \
             bin/git-reap-gone \
             bin/git-set-commit-sign \
+            bin/lib/gh-mise.sh \
             test/claude-digest.test.sh \
             test/claude-reap-bg.test.sh \
             test/claude-review.test.sh \
