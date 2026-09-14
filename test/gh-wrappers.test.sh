@@ -600,7 +600,7 @@ done
 # nothing and the checks below rotting into no-ops.
 mutantdir="$stubdir/mutant"
 mk_mutant() {  # mk_mutant <name> <replacement for the mise-present condition>
-  rm -rf "$mutantdir/$1"; mkdir -p "$mutantdir/$1"
+  rm -rf "${mutantdir:?}/${1:?}"; mkdir -p "${mutantdir:?}/${1:?}"
   cp -a "$bindir/." "$mutantdir/$1/"
   sed "s|command -v mise >/dev/null 2>&1|$2|" "$bindir/lib/gh-mise.sh" \
     >"$mutantdir/$1/lib/gh-mise.sh"
