@@ -1069,6 +1069,18 @@ else
   echo "FAIL: bad roster rc=$rc"; printf '%s\n' "$out" | sed 's/^/  out| /'; fail=1
 fi
 
+# Exit 0 alone only says nothing failed; it is also what a script that stopped
+# early and quietly would return. The launch itself is what must be shown: claude
+# was started with --bg and the report that follows it came out in full.
+if grep -Fxq -- '--bg' "$log" \
+   && grep -Fxq "worktree : ${cwdrepo}/.worktrees/bgbadroster" <<<"$out" \
+   && grep -Fxq 'branch   : bgbadroster' <<<"$out" \
+   && grep -Fxq 'session  : abcd1234 (background; auto)' <<<"$out"; then
+  echo "ok: with a non-JSON roster the launch still completes and reports"
+else
+  echo "FAIL: bad roster launch incomplete"; printf '%s\n' "$out" | sed 's/^/  out| /'; fail=1
+fi
+
 # --tmux gets the same injection: a human may be sitting with that session, but
 # the delegate still benefits from knowing who asked.
 log="$tmp/tmux-name"
