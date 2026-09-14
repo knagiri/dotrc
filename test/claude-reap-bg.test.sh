@@ -48,6 +48,11 @@ chmod +x "$stubbin/claude"
 # Four background sessions plus one interactive, all `idle`. Only the id prefix
 # matters downstream; the rest mirrors the real roster shape.
 #
+# pid 7-11 are delegates with a session_links row (see the fixture database):
+# 12121212, 56565656 and 78787878 are orphans (their parent 99999999 is in no
+# roster entry); 34343434's parent is the live interactive eeeeeeee; 90909090's
+# parent is the pid-less stale record 11111111, which still counts as present.
+#
 # The next two mirror a stale job record as the real roster reports one: no
 # `pid` (the process is gone), no `status` either, and `state` instead -- with
 # `11111111` carrying a state and `22222222` carrying none, so the report is
@@ -67,6 +72,11 @@ cat >"$roster" <<'EOF'
   {"pid":4,"cwd":"/w/busy","kind":"background","sessionId":"dddddddd-1111-2222-3333-444444444444","status":"busy"},
   {"pid":5,"cwd":"/w/human","kind":"interactive","sessionId":"eeeeeeee-1111-2222-3333-444444444444","status":"idle"},
   {"pid":6,"cwd":"/w/asked-meta","kind":"background","sessionId":"ffffffff-1111-2222-3333-444444444444","status":"idle"},
+  {"pid":7,"cwd":"/w/orphan-asked","kind":"background","sessionId":"12121212-1111-2222-3333-444444444444","status":"idle"},
+  {"pid":8,"cwd":"/w/child-asked","kind":"background","sessionId":"34343434-1111-2222-3333-444444444444","status":"idle"},
+  {"pid":9,"cwd":"/w/orphan-fresh","kind":"background","sessionId":"56565656-1111-2222-3333-444444444444","status":"idle"},
+  {"pid":10,"cwd":"/w/orphan-notx","kind":"background","sessionId":"78787878-1111-2222-3333-444444444444","status":"idle"},
+  {"pid":11,"cwd":"/w/stale-child","kind":"background","sessionId":"90909090-1111-2222-3333-444444444444","status":"idle"},
   {"id":"11111111","cwd":"/w/stale","kind":"background","sessionId":"11111111-1111-2222-3333-444444444444","name":"gone","state":"blocked"},
   {"id":"22222222","cwd":"/w/stale-nostate","kind":"background","sessionId":"22222222-1111-2222-3333-444444444444","name":"gone too"},
   {"cwd":"/w/stale-interactive","kind":"interactive","sessionId":"33333333-1111-2222-3333-444444444444"}
@@ -116,8 +126,8 @@ EOF
 # `effective_state` and `priority` from the `queue` view because
 # claude-reap-bg only ever reads `session_id`, `raw_state`, `created_at`, and
 # `transcript_path`, plus the view's live-row filter (terminated_at IS NULL
-# AND state != 'ended'). If schema.go's column names or that filter change,
-# update this block to match.
+# AND state != 'ended'), and `session_links` whole. If schema.go's column names
+# or that filter change, update this block to match.
 db="$tmp/queue.db"
 sqlite3 "$db" <<SQL
 CREATE TABLE sessions (
@@ -136,6 +146,11 @@ CREATE TABLE events (
   payload    TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
+CREATE TABLE session_links (
+  child_short       TEXT PRIMARY KEY,
+  parent_session_id TEXT NOT NULL,
+  created_at        INTEGER NOT NULL DEFAULT (unixepoch())
+);
 CREATE VIEW queue AS
 SELECT s.session_id, s.tmux_pane, s.cwd, s.transcript_path,
        e.event_type, e.state AS raw_state, e.payload, e.created_at
@@ -151,7 +166,12 @@ INSERT INTO sessions(session_id, transcript_path) VALUES
   ('cccccccc-1111-2222-3333-444444444444', '$asked'),
   ('dddddddd-1111-2222-3333-444444444444', '$quiet'),
   ('eeeeeeee-1111-2222-3333-444444444444', '$quiet'),
-  ('ffffffff-1111-2222-3333-444444444444', '$asked_meta');
+  ('ffffffff-1111-2222-3333-444444444444', '$asked_meta'),
+  ('12121212-1111-2222-3333-444444444444', '$asked'),
+  ('34343434-1111-2222-3333-444444444444', '$asked'),
+  ('56565656-1111-2222-3333-444444444444', '$quiet'),
+  ('78787878-1111-2222-3333-444444444444', '$tmp/never-written.jsonl'),
+  ('90909090-1111-2222-3333-444444444444', '$asked');
 
 -- ripe: stopped 40 minutes ago. fresh: 2 minutes ago (under the threshold).
 INSERT INTO events(session_id, event_type, state, created_at) VALUES
@@ -160,7 +180,19 @@ INSERT INTO events(session_id, event_type, state, created_at) VALUES
   ('cccccccc-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
   ('dddddddd-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
   ('eeeeeeee-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
-  ('ffffffff-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400);
+  ('ffffffff-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
+  ('12121212-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
+  ('34343434-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
+  ('56565656-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 120),
+  ('78787878-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400),
+  ('90909090-1111-2222-3333-444444444444', 'Stop', 'idle_done', unixepoch() - 2400);
+
+INSERT INTO session_links(child_short, parent_session_id) VALUES
+  ('12121212', '99999999-1111-2222-3333-444444444444'),
+  ('56565656', '99999999-1111-2222-3333-444444444444'),
+  ('78787878', '99999999-1111-2222-3333-444444444444'),
+  ('34343434', 'eeeeeeee-1111-2222-3333-444444444444'),
+  ('90909090', '11111111-1111-2222-3333-444444444444');
 SQL
 
 # The removal command claude-reap-bg prints for a stale job record (see the
@@ -375,6 +407,62 @@ out="$(run --dry-run 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'stale job records (2)' <<<"$out"; then
   echo "ok: --dry-run reports stale records the same way"
 else echo "FAIL: dry-run stale section rc=$rc out=$out"; fail=1; fi
+
+# --- orphans (session_links) --------------------------------------------------
+out="$(run 2>&1)"; rc=$?
+
+# The reason for the exception: the orphan's last turn asked its delegator a
+# question, but the delegator is gone, so the reply the SendMessage gate waits
+# for can never come. It is stopped, and the report says why.
+if [ "$rc" -eq 0 ] && stopped 12121212 \
+   && ! grep -q 'could not read session_links' <<<"$out" \
+   && grep -q '12121212.*stopped (idle 40m; orphan: parent 99999999 gone)' <<<"$out"; then
+  echo "ok: an orphan whose last turn sent a SendMessage is stopped, reported as an orphan"
+else echo "FAIL: orphan with SendMessage not stopped rc=$rc out=$out"; fail=1; fi
+
+# The transcript is only read for the SendMessage gate, so an orphan with none
+# on disk is not blocked by its absence.
+if stopped 78787878 && grep -q '78787878.*orphan: parent 99999999 gone' <<<"$out"; then
+  echo "ok: an orphan is not blocked by a missing transcript"
+else echo "FAIL: orphan without transcript not stopped out=$out"; fail=1; fi
+
+# A live parent keeps the gate: that delegator may still answer.
+if ! stopped 34343434 && grep -q '34343434.*SendMessage' <<<"$out"; then
+  echo "ok: a delegate whose parent is alive keeps the SendMessage gate"
+else echo "FAIL: child of a live parent not skipped out=$out"; fail=1; fi
+
+# A parent that survives only as a pid-less stale job record still counts as
+# present: the orphan test leans conservative.
+if ! stopped 90909090 && grep -q '90909090.*SendMessage' <<<"$out"; then
+  echo "ok: a parent listed only as a stale job record is not treated as gone"
+else echo "FAIL: stale-record parent treated as gone out=$out"; fail=1; fi
+
+# Being an orphan lifts nothing else: under the idle threshold is still a skip.
+if ! stopped 56565656 && grep -q '56565656.*threshold' <<<"$out"; then
+  echo "ok: an orphan under the idle threshold is still skipped"
+else echo "FAIL: fresh orphan not skipped out=$out"; fail=1; fi
+
+# --dry-run carries the orphan note too, and stops nothing.
+out="$(run --dry-run 12121212 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -s "$stoplog" ] \
+   && grep -q '12121212.*would stop (idle 40m; orphan: parent 99999999 gone)' <<<"$out"; then
+  echo "ok: --dry-run reports the orphan note and stops nothing"
+else echo "FAIL: dry-run orphan rc=$rc out=$out"; fail=1; fi
+
+# An unreadable session_links (a database from before the table existed) warns
+# and falls back to the unlinked behaviour: the would-be orphan is skipped by
+# the SendMessage gate again, and the ordinary reap still happens.
+nolinks="$tmp/nolinks.db"
+sqlite3 "$db" ".dump" | sqlite3 "$nolinks"
+sqlite3 "$nolinks" "DROP TABLE session_links;"
+: >"$stoplog"
+out="$(PATH="$stubpath" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" \
+  CLAUDE_STUB_RMLOG="$rmlog" CLAUDE_QUEUE_DB="$nolinks" "$src" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'could not read session_links' <<<"$out" \
+   && ! stopped 12121212 && grep -q '12121212.*SendMessage' <<<"$out" \
+   && ! stopped 78787878 && stopped aaaaaaaa; then
+  echo "ok: an unreadable session_links warns and reaps as if nothing were linked"
+else echo "FAIL: unreadable session_links rc=$rc out=$out"; fail=1; fi
 
 # A missing database aborts for the same reason.
 : >"$stoplog"
