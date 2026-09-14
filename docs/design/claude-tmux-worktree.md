@@ -91,6 +91,9 @@ worktree は `<repo>/.worktrees/<name>` にあり、ghq が repo として列挙
   `--git-common-dir` を共有する session だけに絞る（メイン checkout + その `.worktrees/*` が 1 グループ
   になる）。`C-q Q` は絞り込みを外し、working / stale と、終了済みだが resume で拾い直せる row
   （`--show-resumable`）も出す
+- ④の bg 経路が `claude-queue link` で委譲の親子関係を記録し、picker はそれを木として表示する。
+  親を失った委譲先（孤児）には印が付き、`claude-reap-bg` も孤児を拾える
+  （→ `docs/design/claude-queue-session-tree.md`）
 - **L3 自己修復**: 新規 `SessionStart` 時、同一 `$TMUX_PANE` 上の生存 session を `ForcedEnd`
   （`/exit`・`/clear` で `SessionEnd` が飛ばないバグの後始末）
 
