@@ -33,7 +33,9 @@ type forestOpts struct {
 	// ancestors are listed whether or not they pass it.
 	Keep func(db.Row) bool
 	// InScope is the repo filter, applied after ancestors are pulled back. nil
-	// keeps every row.
+	// keeps every row. A pulled-back ancestor left with no child in the listing
+	// once this has taken its scope-filtered rows is pruned along with them
+	// (see the loop in buildForest).
 	InScope func(db.Row) bool
 	// ParentLive reports whether the ledger still considers a session running.
 	ParentLive func(sessionID string) bool
@@ -53,7 +55,8 @@ type treeRow struct {
 // usually `working` while its delegates wait, and the default listing hides
 // `working`: filtering them would flatten exactly the trees worth showing. The
 // repo filter is applied after that and is not undone, so a row whose parent
-// lives in another repo is shown as a root, marked.
+// lives in another repo is shown as a root, marked. A pulled-back row left
+// with no child in the listing after the repo filter is dropped.
 //
 // Siblings -- roots included -- are ordered by the most urgent priority in
 // their subtree, then its most recent event, then session id, so a delegate
@@ -65,11 +68,13 @@ func buildForest(rows []db.Row, o forestOpts) []treeRow {
 	}
 
 	listed := map[string]bool{}
+	kept := map[string]bool{}
 	for _, r := range rows {
 		if !o.Keep(r) {
 			continue
 		}
 		listed[r.SessionID] = true
+		kept[r.SessionID] = true
 		seen := map[string]bool{r.SessionID: true}
 		for cur := r; cur.ParentSessionID.Valid; {
 			pid := cur.ParentSessionID.String
@@ -86,6 +91,30 @@ func buildForest(rows []db.Row, o forestOpts) []treeRow {
 		for id := range listed {
 			if !o.InScope(byID[id]) {
 				delete(listed, id)
+			}
+		}
+		// A row that is listed only because it was pulled back is there to hold
+		// a child still in the listing. Once the repo filter (or an earlier pass
+		// of this same loop) has taken every child it had, it is noise in a
+		// listing of this repo's sessions. The check below is by direct child,
+		// not full descent: if the repo filter drops an intermediate pulled-back
+		// row in one step, a kept row further down no longer saves the row above
+		// it, even though that kept row is itself still listed. Dropping one row
+		// here can leave its own pulled-back parent childless in turn, so repeat
+		// until nothing changes.
+		for changed := true; changed; {
+			changed = false
+			hasChild := map[string]bool{}
+			for id := range listed {
+				if p := byID[id].ParentSessionID; p.Valid && p.String != id {
+					hasChild[p.String] = true
+				}
+			}
+			for id := range listed {
+				if !kept[id] && !hasChild[id] {
+					delete(listed, id)
+					changed = true
+				}
 			}
 		}
 	}
