@@ -76,10 +76,14 @@ set -euo pipefail
 # path and `git-reap-gone` still sees a clean worktree.
 #
 # Usage:
-#   claude-worktree [--self] [--tmux] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
+#   claude-worktree [--global] [--tmux] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
 #
-#   --self         anchor the worktree to the repo this script lives in (e.g.
+#   --global       anchor the worktree to the repo this script lives in (e.g.
 #                  your dotfiles repo), not cwd. Use for repo-independent work.
+#                  Named for the intent, not for the mechanism that serves it:
+#                  the caller is choosing the global layer, the way
+#                  harness-from-feedback and claude-settings.md already name it.
+#                  `--self` is the old spelling, still accepted (it warns).
 #   --tmux         launch the delegate in a detached tmux session running an
 #                  INTERACTIVE claude instead of a background agent. Use when a
 #                  human is meant to sit with it (working a design out together);
@@ -100,7 +104,7 @@ set -euo pipefail
 #                  seeded on top of these, without being asked for; unlike an
 #                  explicit --seed, a listed path that is missing is skipped
 #                  rather than fatal. That default list only applies when cwd's
-#                  repo IS the one being anchored to (see --self): an unrelated
+#                  repo IS the one being anchored to (see --global): an unrelated
 #                  cwd repo's list is not read.
 #   name           worktree label (suffix after the underscore); also the new
 #                  branch name when -b is omitted
@@ -133,7 +137,7 @@ usage() {
 name=""
 branch=""
 prompt=""
-self=0
+anchor_global=0
 use_tmux=0
 model=""
 seeds=()
@@ -151,7 +155,13 @@ while [ $# -gt 0 ]; do
       [ -n "$1" ] || { echo "claude-worktree: --model needs a non-empty alias" >&2; exit 1; }
       model="$1"; shift ;;
     --seed) shift; [ $# -gt 0 ] || usage 1; seeds+=("$1"); shift ;;
-    --self) self=1; shift ;;
+    --global) anchor_global=1; shift ;;
+    # Deprecated spelling of --global, kept working so existing call sites and
+    # muscle memory do not break. It warns rather than failing: a delegation
+    # fired from a script nobody is watching must not die over a rename.
+    --self)
+      echo "claude-worktree: --self is deprecated; use --global" >&2
+      anchor_global=1; shift ;;
     --tmux) use_tmux=1; shift ;;
     --) shift; prompt="$*"; break ;;
     -*) echo "claude-worktree: unknown flag: $1" >&2; usage 1 ;;
@@ -169,11 +179,11 @@ if [[ ! "$name" =~ ^[A-Za-z0-9_-]+$ ]]; then
 fi
 branch="${branch:-$name}"
 
-# By default anchor to cwd's repo; with --self anchor to the repo this script
+# By default anchor to cwd's repo; with --global anchor to the repo this script
 # itself lives in (resolving any PATH symlink), so global harnesses land in the
 # dotfiles repo even when cwd is an unrelated project.
 repo_dir="."
-if [ "$self" = 1 ]; then
+if [ "$anchor_global" = 1 ]; then
   repo_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 fi
 common_git="$(git -C "$repo_dir" rev-parse --path-format=absolute --git-common-dir)"
@@ -181,7 +191,7 @@ main_top="$(dirname "$common_git")"
 wt_path="${main_top}/.worktrees/${name}"
 
 # Seed sources are always resolved against cwd's checkout (the one holding the
-# uncommitted files), even under --self. Resolved leniently because --self is
+# uncommitted files), even under --global. Resolved leniently because --global is
 # meant to be usable from anywhere, including outside any checkout -- there is
 # then simply nothing to seed from, which only the explicit --seed path treats
 # as an error.
@@ -226,12 +236,12 @@ fi
 # Entries also passed as --seed are skipped, so nothing is copied or logged twice.
 #
 # Scoped to same-repo only: apply the DEFAULT list only when cwd's repo is the
-# same repo the worktree is being anchored to (main_top). `--self` exists
+# same repo the worktree is being anchored to (main_top). `--global` exists
 # precisely so cwd can be an unrelated project repo (see usage) -- without this
 # guard, that unrelated repo's own `.claude/worktree-seed` would be read and its
 # entries copied into the anchor repo's worktree with no explicit request from
 # the caller (confirmed by reproduction: an unrelated cwd repo's listed secret
-# ended up seeded into the anchor repo's worktree under --self). Compare via
+# ended up seeded into the anchor repo's worktree under --global). Compare via
 # --git-common-dir (not toplevel) so a cwd that is itself a linked worktree of
 # the SAME repo as main_top still counts as same-repo. Explicit --seed is
 # unaffected: the caller named that path, so it stays honored regardless.
@@ -533,6 +543,11 @@ resolve_delegator
 # the skill cannot derive. Appending to the prompt (rather than exporting an env
 # var) is deliberate: `claude --bg` starts via a background service, so env
 # inheritance is not guaranteed, whereas the prompt is the one channel that is.
+# Inheritance has been measured to happen (a delegate's GH_TOKEN matched its
+# delegator's), but one observation does not make it a contract. And what is
+# inherited is the delegator's launch-time env, not the repo's mise config, so
+# per-repo env such as GH_TOKEN still has to be loaded with `mise exec` at call
+# time (bin/lib/gh-mise.sh) whether or not inheritance happens.
 if [ -n "$delegator" ]; then
   prompt="${prompt}
 

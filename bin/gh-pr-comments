@@ -26,7 +26,12 @@ if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-exec gh pr view "$pr" --json reviews,comments --jq '{
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+gh_mise pr view "$pr" --json reviews,comments --jq '{
   reviews:  [.reviews[]?  | {author: .author.login, state: .state, body: .body, submittedAt: .submittedAt}],
   comments: [.comments[]? | {author: .author.login, body: .body, createdAt: .createdAt}]
 }'

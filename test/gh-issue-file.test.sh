@@ -3,6 +3,9 @@
 # element per bracketed line) so we can assert both what the wrapper asks gh to
 # do and -- for the dedup gate -- that it does NOT reach `gh issue create` at
 # all. No test framework; run with bash.
+#
+# gh is reached through `mise exec -C <root> -- gh` (bin/lib/gh-mise.sh), so a
+# mise stub sits next to the gh stub and moves gh's cwd the same way mise does.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -38,12 +41,47 @@ cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$1 ${2:-}" in
-  "issue list") printf '%s' "${GH_LIST_TSV:-}" ;;
-  "issue create") echo "https://github.com/o/r/issues/1" ;;
+  "issue list")
+    # Which repo the dedup query runs against is decided by gh's cwd, so the
+    # --global cases below need to see it.
+    [ -z "${GH_PWD_FILE:-}" ] || pwd -P >"$GH_PWD_FILE"
+    [ -z "${GH_EXIT_LIST:-}" ] || exit "$GH_EXIT_LIST"
+    printf '%s' "${GH_LIST_TSV:-}" ;;
+  "issue create")
+    # Read the body through the path gh was actually handed, from the cwd gh was
+    # actually run in -- that is the whole point of the relative --body-file
+    # case below, so the stub must not shortcut it.
+    if [ -n "${GH_BODY_OUT:-}" ]; then
+      prev=""
+      for a in "$@"; do
+        [ "$prev" != "--body-file" ] || cat -- "$a" >"$GH_BODY_OUT" 2>/dev/null || echo UNREADABLE >"$GH_BODY_OUT"
+        prev="$a"
+      done
+    fi
+    [ -z "${GH_EXIT_CREATE:-}" ] || exit "$GH_EXIT_CREATE"
+    echo "https://github.com/o/r/issues/1" ;;
 esac
 exit 0
 STUB
 chmod +x "$stubdir/gh"
+
+# Stands in for `mise exec -C <dir> -- <cmd> [args...]`, which every gh call now
+# goes through (bin/lib/gh-mise.sh). Without it these tests would fall through
+# to the real mise on PATH. It moves gh's cwd exactly as mise does, which is
+# what the relative --body-file case below depends on.
+cat >"$stubdir/mise" <<'STUB'
+#!/usr/bin/env bash
+dir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -C) dir="$2"; shift 2 ;;
+    --) shift; break ;;
+    *)  shift ;;
+  esac
+done
+cd "${dir:-.}" && exec "$@"
+STUB
+chmod +x "$stubdir/mise"
 
 run() {  # run gh-issue-file with a fresh argv log; echoes nothing, sets $rc
   : >"$tmp/args"
@@ -250,5 +288,146 @@ GH_LIST_TSV="$list_tsv_fence" run --kind task --title t --body-file "$full_body"
 if [ "$rc" -eq 2 ] && ! grep -qxF '[create]' "$tmp/args"; then
   echo "ok: --not-dup-of 12 does not also cover candidates 1 and 2 by substring"
 else echo "FAIL: comma-fencing rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# --- Case N: a relative --body-file survives the cwd move -------------------
+# gh now runs with the repo root as its cwd (mise exec -C "$root"), not the
+# caller's, so a relative --body-file handed straight to gh would be resolved
+# against the root. The wrapper absolutises it first. The fixture makes the
+# failure mode visible rather than merely absent: a DECOY body.md sits at the
+# root, so dropping the absolutisation does not error out -- it quietly files
+# the wrong file, which is exactly the silent class this guards.
+relrepo="$tmp/relrepo"
+mkdir -p "$relrepo/.github/ISSUE_TEMPLATE" "$relrepo/sub"
+git init -q "$relrepo"
+cat >"$relrepo/.github/ISSUE_TEMPLATE/task.md" <<'TMPL'
+---
+name: task
+---
+## やること（WHAT）
+TMPL
+printf '## やること（WHAT）\nDECOY-BODY\n' >"$relrepo/body.md"
+printf '## やること（WHAT）\nREAL-BODY\n' >"$relrepo/sub/body.md"
+
+relrun() {  # relrun <bindir>; runs from $relrepo/sub with a RELATIVE --body-file
+  : >"$tmp/args"; : >"$tmp/body"
+  ( cd "$relrepo/sub" && env GH_ARGS_FILE="$tmp/args" GH_LIST_TSV='' \
+      GH_BODY_OUT="$tmp/body" PATH="$stubdir:$PATH" \
+      "$1/gh-issue-file" --kind task --title t --body-file body.md ) \
+    >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+}
+
+relrun "$bindir"
+if [ "$rc" -eq 0 ] && grep -q 'REAL-BODY' "$tmp/body"; then
+  echo "ok: a relative --body-file still reaches gh as the caller's file, not the repo root's"
+else echo "FAIL: relative --body-file rc=$rc body=$(cat "$tmp/body" 2>/dev/null) err=$(cat "$tmp/err")"; fail=1; fi
+
+# Discrimination (evidence-over-guesswork §4): with the absolutisation removed
+# the same run must file the DECOY. The tagged line is stripped the way
+# test/deploy.test.sh builds its guard-less control, and `cmp` keeps the check
+# from rotting into a no-op if the tag ever disappears.
+mutantbin="$tmp/mutantbin"
+rm -rf "$mutantbin"; mkdir -p "$mutantbin"
+cp -a "$bindir/." "$mutantbin/"
+grep -v 'abs-body-file@dotrc' "$bindir/gh-issue-file" >"$mutantbin/gh-issue-file"
+chmod +x "$mutantbin/gh-issue-file"
+if cmp -s "$bindir/gh-issue-file" "$mutantbin/gh-issue-file"; then
+  echo "FAIL: the mutant is identical to gh-issue-file; the check above is a no-op"; fail=1
+fi
+relrun "$mutantbin"
+if grep -q 'DECOY-BODY' "$tmp/body"; then
+  echo "ok: dropping the absolutisation files the repo root's file instead (the case above is discriminating)"
+else echo "FAIL: mutant did not file the decoy body=$(cat "$tmp/body" 2>/dev/null) rc=$rc"; fail=1; fi
+
+# --- Case O: gh's exit code still arrives unchanged -------------------------
+# dot/claude/rules/issue-workflow.md §2 documents gh's own exit code reaching
+# the caller unrounded, from either gh call. Routing through `mise exec` puts a
+# process in between, so the contract is re-measured here rather than assumed
+# (mise propagates its child's status; the pre-existing exec did so trivially).
+# 4 is the code a real unauthenticated `gh issue list` returns.
+GH_EXIT_LIST=4 GH_LIST_TSV='' run --kind task --title t --body-file "$full_body"
+if [ "$rc" -eq 4 ]; then
+  echo "ok: a failing gh issue list propagates its own exit code through mise exec"
+else echo "FAIL: gh issue list exit code rc=$rc (want 4)"; fail=1; fi
+
+GH_EXIT_CREATE=4 GH_LIST_TSV='' run --kind task --title t --body-file "$full_body"
+if [ "$rc" -eq 4 ]; then
+  echo "ok: a failing gh issue create propagates its own exit code through mise exec"
+else echo "FAIL: gh issue create exit code rc=$rc (want 4)"; fail=1; fi
+
+# --- Case P: --global files into the script's own repo ----------------------
+# An agent working in an unrelated project still has to be able to open a
+# harness issue where the harness lives. Without --global there is no path at
+# all: cwd's repo carries no .github/ISSUE_TEMPLATE/<kind>.md. The fixture is
+# two throwaway repos -- a "script repo" holding a copy of bin/ (stands in for
+# dotrc) and an unrelated cwd repo -- mirroring test/claude-worktree.test.sh.
+#
+# The gate is only exercised as far as exit 2: no issue is ever created, here
+# or against a real repo.
+scriptrepo="$tmp/scriptrepo"
+mkdir -p "$scriptrepo/.github/ISSUE_TEMPLATE" "$scriptrepo/bin"
+cp -a "$bindir/." "$scriptrepo/bin/"
+git init -q "$scriptrepo"
+cat >"$scriptrepo/.github/ISSUE_TEMPLATE/harness.md" <<'TMPL'
+---
+name: harness
+---
+## やること（WHAT）
+TMPL
+scriptrepo_real="$(cd "$scriptrepo" && pwd -P)"
+
+otherrepo="$tmp/otherrepo"
+mkdir -p "$otherrepo"
+git init -q "$otherrepo"
+
+global_body="$tmp/global_body.md"
+printf '## やること（WHAT）\nsomething\n' >"$global_body"
+
+globalrun() {  # globalrun <bindir> [extra flags...]; runs from the unrelated repo
+  : >"$tmp/args"; : >"$tmp/pwd"
+  ( cd "$otherrepo" && env GH_ARGS_FILE="$tmp/args" GH_PWD_FILE="$tmp/pwd" \
+      GH_LIST_TSV="$global_tsv" PATH="$stubdir:$PATH" \
+      "$1/gh-issue-file" --kind harness --title t --body-file "$global_body" "${@:2}" ) \
+    >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+}
+
+global_tsv="$(printf '%s\t%s\t%s\t%s\n' 42 OPEN kind/harness 'an existing dotrc agent task')"
+
+# Without --global the wrapper stops on the missing template -- and says how to
+# reach the repo that does have one.
+globalrun "$scriptrepo/bin"
+if [ "$rc" -eq 1 ] && grep -q 'no template at' "$tmp/err" && grep -q -- '--global' "$tmp/err"; then
+  echo "ok: without --global an unrelated repo fails on the missing template and names --global"
+else echo "FAIL: no-global rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+# With --global: the script repo's template validates the body, and the dedup
+# query runs in the script repo (gh's cwd) and shows its candidates -- all three
+# of template, dedup and filing target resolved against the same root.
+globalrun "$scriptrepo/bin" --global
+if [ "$rc" -eq 2 ] \
+  && [ "$(cat "$tmp/pwd" 2>/dev/null)" = "$scriptrepo_real" ] \
+  && grep -q 'an existing dotrc agent task' "$tmp/err" \
+  && ! grep -qxF '[create]' "$tmp/args"; then
+  echo "ok: --global reads the script repo's template and dedups against that repo"
+else echo "FAIL: --global rc=$rc pwd=$(cat "$tmp/pwd" 2>/dev/null) err=$(cat "$tmp/err")"; fail=1; fi
+
+# Discrimination (evidence-over-guesswork §4): --global is a new flag, so the
+# pre-change wrapper would only reject it as unknown. The new code is mutated
+# instead -- its root resolution is put back to cwd's repo -- and the case above
+# must break. `cmp` keeps the check from rotting into a no-op if the tag goes.
+globalmutant="$tmp/globalmutant"
+rm -rf "$globalmutant"; mkdir -p "$globalmutant"
+cp -a "$bindir/." "$globalmutant/"
+sed 's|^.*global-root@dotrc$|  root="$(git rev-parse --show-toplevel)"|' \
+  "$bindir/gh-issue-file" >"$globalmutant/gh-issue-file"
+chmod +x "$globalmutant/gh-issue-file"
+if cmp -s "$bindir/gh-issue-file" "$globalmutant/gh-issue-file"; then
+  echo "FAIL: the --global mutant is identical to gh-issue-file; the check above is a no-op"; fail=1
+fi
+globalrun "$globalmutant" --global
+if [ "$rc" -eq 1 ] && grep -q 'no template at' "$tmp/err"; then
+  echo "ok: resolving --global's root from cwd instead loses the template (the case above is discriminating)"
+else echo "FAIL: --global mutant rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 
 exit "$fail"

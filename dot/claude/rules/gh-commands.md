@@ -75,7 +75,8 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 
 上記方針により、`settings.json` では以下の最小ポリシーで足りる：
 
-- **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`）
+- **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`, `gh-pr-create *`）
+  - `gh-pr-create *` は §5 のラッパー用。素の `gh pr create *` も残す（ラッパーが env を載せるだけで権限は同じなので、どちらが通っても grant の広さは変わらない）
   - CI 状態の確認は `gh pr checks *` を allow しない。pattern 自体は正しくマッチするが、fine-grained PAT では実行すれば必ず失敗する（§1 / §5 の理由）ので、allow しておいても許可する意味が無い（`claude-settings.md` が定義する「pattern がマッチしない dead rule」とは別物）。代わりに §5 の `gh-pr-checks *` を allow する
   - コメント取得の `gh pr view <N> --comments` も `gh pr view *` の pattern にはマッチするが、fine-grained PAT では失敗しうる（§1）。ただし `gh pr view *` は他の read 用途で必要なので allow は維持し、コメント取得には §5 の `gh-pr-comments *` を使う
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ
@@ -96,9 +97,13 @@ prompt injection / 権限バイパスの経路になる。
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
 | CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
+| PR 作成 | `gh-pr-create [flags]` | `gh pr create`（フラグは素通し） | `Bash(gh-pr-create *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>`、clean 拒否のときだけ `gh pr merge --merge <PR>` へ fallback | `Bash(gh-automerge *)` |
 
-- ラッパーはフラグ素通しをしない。特に `gh-automerge` は `--admin` 等の protection バイパス
+- ラッパーはフラグ素通しをしない（**`gh-pr-create` だけは例外**で全フラグを素通しする。
+  あれが包んでいるのは grant の広さではなく env で、`Bash(gh pr create *)` が既に allow 済み
+  である以上 `Bash(gh-pr-create *)` は権限を広げない。base 決定や diff の作法は `my-create-pr`
+  側に残る）。特に `gh-automerge` は `--admin` 等の protection バイパス
   フラグを付けられない。auto-merge 有効化前に skill 自身が `gh-pr-checks` で
   **fail が無いこと**を確認する（二重化）。pending は待たずに auto-merge へ委ねる。merge method は
   `--merge`（merge commit）で logical commits を潰さない。

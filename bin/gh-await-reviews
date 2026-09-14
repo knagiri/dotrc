@@ -40,6 +40,11 @@ if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
 timeout_s=${GH_AWAIT_REVIEWS_TIMEOUT:-600}   # overall ceiling
 quiet_s=${GH_AWAIT_REVIEWS_QUIET:-30}        # silence after the last activity
 grace_s=${GH_AWAIT_REVIEWS_GRACE:-60}        # floor when nothing is expected and nothing posted
@@ -66,7 +71,7 @@ expected_floor_s=${GH_AWAIT_REVIEWS_EXPECTED_FLOOR:-90}
 #   REQ<TAB><login>              a pending review request (pre-arrival signal)
 #   ACT<TAB><login><TAB><iso8601> a review or comment by someone other than the author
 snapshot() {
-  gh pr view "$pr" --json author,createdAt,reviewRequests,reviews,comments --jq '
+  gh_mise pr view "$pr" --json author,createdAt,reviewRequests,reviews,comments --jq '
     .author.login as $a
     | "CRT\t" + (.createdAt // ""),
       ([.reviewRequests[]?.login // empty] | .[] | "REQ\t" + .),

@@ -70,6 +70,7 @@
       "Bash(gh-pr-checks *)",
       "Bash(gh-automerge *)",
       "Bash(gh-issue-file *)",
+      "Bash(gh-pr-create *)",
       "Bash(node --version)",
       "Bash(yarn --version)",
       "Bash(uv run ruff format)",

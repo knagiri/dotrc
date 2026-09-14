@@ -23,6 +23,11 @@ if [[ ! "$tid" =~ ^[-A-Za-z0-9_=]+$ ]]; then
   exit 1
 fi
 
-exec gh api graphql \
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+gh_mise api graphql \
   -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){ thread{ isResolved } } }' \
   -f threadId="$tid"

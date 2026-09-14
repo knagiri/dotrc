@@ -102,4 +102,21 @@ check "an unrelated ~/.bashrc keeps its content and gains exactly one block" \
        && [ "$(blocks "$home_c/.bashrc")" -eq 1 ]
      then echo 0; else echo 1; fi)"
 
+# --- Case D: a subdirectory under bin/ --------------------------------------
+# bin/lib/ (the gh wrappers' shared helper) is the first non-executable
+# subdirectory to live under bin/. deploy.sh only puts bin/ on PATH -- it never
+# links bin/ entry by entry, and its symlink loop walks dot/ -- so the
+# subdirectory should be invisible to it. Asserted rather than assumed: the
+# failure mode would be a stray ~/.lib symlink, or the dot/ expansion breaking.
+mkdir -p "$repo/bin/lib"
+: >"$repo/bin/lib/gh-mise.sh"
+check "the fixture really has a subdirectory under bin/" \
+  "$(if [ -d "$repo/bin/lib" ]; then echo 0; else echo 1; fi)"
+home_d="$sandbox/home_d"; mkdir -p "$home_d"
+run "$repo/bin/deploy.sh" "$home_d"; rc_d=$?
+check "a subdirectory under bin/ leaves deploy.sh's block and dot/ expansion intact" \
+  "$(if [ "$rc_d" -eq 0 ] && [ "$(blocks "$home_d/.bashrc")" -eq 1 ] \
+       && [ -L "$home_d/.example" ] && [ ! -e "$home_d/.lib" ] && [ ! -e "$home_d/.bin" ]
+     then echo 0; else echo 1; fi)"
+
 exit "$fail"
