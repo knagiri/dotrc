@@ -139,6 +139,24 @@ func TestBuildForest(t *testing.T) {
 		live:    liveOf("G", "P", "C"),
 		want:    nil,
 	}, {
+		// The prune check is by direct child in the listing, not by descent:
+		// the repo filter removes P (out of scope) directly, severing the link
+		// before the fixed-point loop runs. C's own recorded parent is still
+		// P, so it does nothing to show G has a listed child, and G goes too --
+		// even though C, a kept row, is still listed. G cannot hang C under it
+		// (C's parent field still says P), so dropping G here is correct: the
+		// alternative would be a listed G with no children at all. C surfaces
+		// as its own root, detached because P is alive but not listed.
+		name: "pulled-back ancestor goes when the repo filter cuts its direct child, even with a kept row further down",
+		rows: []db.Row{
+			trow("G", "working", 300, ""),
+			trow("P", "working", 200, "G"),
+			trow("C", "idle_done", 100, "P"),
+		},
+		inScope: func(r db.Row) bool { return r.SessionID != "P" },
+		live:    liveOf("G", "P", "C"),
+		want:    []line{{"C", "↑ "}},
+	}, {
 		// A parent that passes the state filter itself was never pulled back,
 		// so losing its child to the repo filter does not remove it.
 		name: "kept parent stays when repo scope removes its child",
