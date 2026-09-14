@@ -52,7 +52,7 @@ claude-digest --generate --dry-run [<date>]
 テストはすべてこの出力に対して書かれている。
 
 表示は stdout が tty のときだけページャに渡し、`bat` → `less` → `cat` の順で選ぶ
-（選択理由は `bin/claude-digest` の `show()` 内コメントを参照）。ページャの選択は
+（選択理由は `bin/claude-digest` の `page()` 直前のコメントを参照）。ページャの選択は
 claude-digest 側に一本化しており、`dot/tmux.conf` の binding はページャを指定しない。
 
 `--pick` は表示モードの一形態で、日付引数・`--generate`・`--dry-run` とは併用できない。
