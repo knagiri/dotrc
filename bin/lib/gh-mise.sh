@@ -4,14 +4,18 @@
 #
 # Sourced by every gh wrapper in bin/. `mise activate` installs a shell prompt
 # hook, so it never fires in a non-interactive process: a delegated background
-# agent (`claude --bg`, started through a background service that does not
-# inherit the delegator's env) gets no GH_TOKEN from mise, and `gh pr create` /
-# `gh-automerge` then fail with "Resource not accessible by personal access
-# token" against whatever stale PAT gh's hosts.yml still holds. That cannot be
-# fixed at launch time -- see the note in bin/claude-worktree about `claude --bg`
-# not inheriting env -- so it is fixed here, inside the tools the agent calls.
-# Measured in a worktree of this repo: a plain child sees an empty GH_TOKEN
-# while `mise exec -C <repo> --` sees the one the repo's mise config supplies.
+# agent (`claude --bg`) never gets GH_TOKEN from the repo's mise config. What it
+# does get is whatever its env happens to carry. A delegate has been measured
+# inheriting the delegator's env (its GH_TOKEN matched the delegator's), but that
+# is the value the delegator's process started with, not what the config says
+# now: a long-lived delegator keeps a pre-rotation token and hands that stale
+# value straight down. With nothing inherited, gh falls back to hosts.yml.
+# Either way `gh pr create` / `gh-automerge` can fail with "Resource not
+# accessible by personal access token" or "Bad credentials". Launch time cannot
+# fix this -- inheritance is not guaranteed, and when it happens it carries the
+# wrong source (see the note in bin/claude-worktree) -- so it is fixed here,
+# inside the tools the agent calls. `mise exec -C <repo> --` reads the config at
+# call time, which makes it the one path that always yields the current token.
 #
 # `-C "$dir"` carries both halves of the fix: mise resolves that directory's
 # config AND runs gh there, so a wrapper aimed at another repo (gh-issue-file
