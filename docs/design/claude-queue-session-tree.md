@@ -73,6 +73,11 @@ link の循環は `claude-worktree` からは生じないが、テーブルは�
 孤児 = link が在り、かつ roster のどの entry の `sessionId` も親と一致しない session。pid の無い
 stale job record も「居る」に数え、判定を保守側に倒す。
 
+`/clear` は session を終わらせ、別の session id で新しい session を始める。委譲元が `/clear` すると
+その子は ledger でも roster でも親を失って孤児になる。新しい session は子の報告を受け取らず、子を
+閉じることもないので、閉じ手が居ないという孤児の状態に合う。compact は session id を変えないので、
+長く動く委譲元が compact を挟んでも link は切れない。
+
 `SendMessage` gate は委譲元へ質問して返信待ちの委譲先を殺さないためにある。委譲元が消えていれば
 その返信は来ないので、孤児に限りこの gate と、それが前提にしている transcript の存在・parse の検査を
 省く。roster の bg + idle、queue の `idle_done` と `--idle-minutes` の閾値、`claude-stop-bg` 経由の
