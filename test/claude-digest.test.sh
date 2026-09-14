@@ -638,7 +638,96 @@ check "show falls back to cat when neither pager exists" \
   "$(if [ ! -s "$sandbox/pager.log" ] && grep -q 'STUB-DIGEST' <<<"$pty_out"
      then echo 0; else echo 1; fi)"
 
+# --- pick mode --------------------------------------------------------------
+# fzf is a stub. On each call it saves the candidates it was fed on stdin,
+# runs the --preview command the way fzf would (through a shell, with {}
+# replaced by the single-quoted item), and then either prints CD_FZF_SELECT or
+# exits 130 as Esc does. Only the first call can select, so the pick loop is
+# bounded: select, page, back to the list, quit.
+fzfdir="$sandbox/fzf_stub"; mkdir -p "$fzfdir"
+cat >"$fzfdir/fzf" <<'STUB'
+#!/usr/bin/env bash
+n=$(( $(cat "$CD_FZF_LOG.count" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"$CD_FZF_LOG.count"
+cat >"$CD_FZF_LOG.candidates.$n"
+prev=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = --preview ]; then prev="$2"; shift; fi
+  shift
+done
+item="${CD_FZF_SELECT:-$(head -1 "$CD_FZF_LOG.candidates.$n")}"
+q="'$item'"
+[ -z "$prev" ] || bash -c "${prev//'{}'/$q}" >"$CD_FZF_LOG.preview.$n" 2>&1
+if [ "$n" -eq 1 ] && [ -n "${CD_FZF_SELECT:-}" ]; then
+  printf '%s\n' "$CD_FZF_SELECT"; exit 0
+fi
+exit 130
+STUB
+chmod +x "$fzfdir/fzf"
+
+# A space in the directory, so a preview command that splices the path into
+# its command string unquoted is caught.
+pickdir="$sandbox/pick digests"; mkdir -p "$pickdir/2026-03-02"
+printf 'PICK-0210\n' >"$pickdir/2026-02-10.md"
+printf 'PICK-0301\n' >"$pickdir/2026-03-01.md"
+printf 'PICK-0303\n' >"$pickdir/2026-03-03.md"
+# Stage 1 intermediates with no final digest: a day that is not readable yet.
+# The .md.part is what a reduce killed before its mv leaves behind -- a plain
+# file, so a directory test alone would not keep it out of the list.
+printf 'INTERMEDIATE\n' >"$pickdir/2026-03-02/$early.md"
+printf 'PARTIAL\n' >"$pickdir/2026-03-02.md.part"
+
+# PATH carries no bat, so both the preview and the pager are plain cat, and
+# no host fzf can stand in for the stub.
+pickbin="$sandbox/pickbin"; mkdir -p "$pickbin"
+for t in bash sort cat head; do ln -sf "$(command -v "$t")" "$pickbin/$t"; done
+
+pick_run() {  # pick_run <digest-dir> <fzf-select-or-empty> [<extra PATH dir>]
+  rm -f "$sandbox"/fzf.*
+  env PATH="${3:+$3:}$pickbin" CLAUDE_DIGEST_DIR="$1" CD_FZF_SELECT="$2" \
+      CD_FZF_LOG="$sandbox/fzf" "$bin" --pick 2>"$sandbox/pick_err"
+}
+
+pick_out="$(pick_run "$pickdir" 2026-03-01 "$fzfdir")"; pick_rc=$?
+check "pick offers only days with a final digest, newest first" \
+  "$(if [ "$(cat "$sandbox/fzf.candidates.1")" = $'2026-03-03\n2026-03-01\n2026-02-10' ]
+     then echo 0; else echo 1; fi)"
+# The control for the check above: the intermediate-only day really is on
+# disk, so its absence from the list is the filter's doing.
+check "...and a day holding only intermediates is not offered" \
+  "$(if [ -d "$pickdir/2026-03-02" ] && [ -f "$pickdir/2026-03-02.md.part" ] \
+       && ! grep -q '2026-03-02' "$sandbox/fzf.candidates.1"
+     then echo 0; else echo 1; fi)"
+check "pick shows the chosen day's digest" \
+  "$(if [ "$pick_rc" -eq 0 ] && grep -q 'PICK-0301' <<<"$pick_out" \
+       && ! grep -q 'PICK-0303' <<<"$pick_out"
+     then echo 0; else echo 1; fi)"
+check "after the pager closes, pick returns to the list" \
+  "$(if [ "$(cat "$sandbox/fzf.count")" -eq 2 ]; then echo 0; else echo 1; fi)"
+check "the preview shows the highlighted day's digest, from a path with a space" \
+  "$(if grep -q 'PICK-0301' "$sandbox/fzf.preview.1"; then echo 0; else echo 1; fi)"
+
+pick_out="$(pick_run "$pickdir" '' "$fzfdir")"; pick_rc=$?
+check "leaving fzf (Esc) ends pick with exit 0 and shows nothing" \
+  "$(if [ "$pick_rc" -eq 0 ] && [ -z "$pick_out" ] && [ "$(cat "$sandbox/fzf.count")" -eq 1 ]
+     then echo 0; else echo 1; fi)"
+
+if pick_run "$pickdir" 2026-03-01 >/dev/null; then rc=1; else rc=0; fi
+check "pick without fzf fails with a message" \
+  "$(if [ "$rc" = 0 ] && grep -q 'needs fzf' "$sandbox/pick_err"; then echo 0; else echo 1; fi)"
+if pick_run "$empty_dir" 2026-03-01 "$fzfdir" >/dev/null; then rc=1; else rc=0; fi
+check "pick with no digest at all fails like show does" \
+  "$(if [ "$rc" = 0 ] && grep -q 'no digest generated yet' "$sandbox/pick_err"
+     then echo 0; else echo 1; fi)"
+
 # --- argument handling ------------------------------------------------------
+for args in '--pick --generate' '--pick --dry-run' '--pick 2026-03-01' '2026-03-01 --pick'; do
+  # shellcheck disable=SC2086  # word splitting of $args is the point
+  if env PATH="$fzfdir:$PATH" CLAUDE_DIGEST_DIR="$pickdir" CD_FZF_LOG="$sandbox/fzf_args" \
+       CLAUDE_PROJECTS_DIR="$sandbox/no_such_projects" "$bin" $args >/dev/null 2>&1
+  then rc=1; else rc=0; fi
+  check "$args is rejected" "$rc"
+done
 if "$bin" 2026-3-1 >/dev/null 2>&1; then rc=1; else rc=0; fi
 check "a malformed date is rejected" "$rc"
 if "$bin" --dry-run >/dev/null 2>&1; then rc=1; else rc=0; fi

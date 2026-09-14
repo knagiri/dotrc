@@ -51,6 +51,10 @@ set -euo pipefail
 # Usage:
 #   claude-digest                       show the most recent digest
 #   claude-digest <YYYY-MM-DD>          show that day's digest
+#   claude-digest --pick                pick a past day with fzf (newest first,
+#                                       preview on the right); Enter pages it
+#                                       and returns to the list, Esc quits.
+#                                       Read-only: never generates anything
 #   claude-digest --generate [<date>]   generate; date defaults to the most
 #                                       recently closed day
 #   claude-digest --generate --dry-run [<date>]
@@ -75,11 +79,13 @@ US=$'\001'
 
 generate=0
 dry_run=0
+pick=0
 day=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
     --generate) generate=1; shift ;;
+    --pick) pick=1; shift ;;
     --dry-run) dry_run=1; shift ;;
     -*) echo "claude-digest: unknown flag: $1" >&2; usage 1 ;;
     *)
@@ -87,6 +93,11 @@ while [ $# -gt 0 ]; do
       day="$1"; shift ;;
   esac
 done
+
+if [ "$pick" = 1 ] && { [ "$generate" = 1 ] || [ "$dry_run" = 1 ] || [ -n "$day" ]; }; then
+  echo "claude-digest: --pick takes no date and cannot be combined with --generate or --dry-run" >&2
+  exit 1
+fi
 
 if [ "$dry_run" = 1 ] && [ "$generate" = 0 ]; then
   echo "claude-digest: --dry-run only applies to --generate" >&2
@@ -117,6 +128,25 @@ fi
 
 # --------------------------------------------------------------- show mode --
 
+no_digest_yet() {
+  echo "claude-digest: no digest generated yet (looked in $digest_dir)" >&2
+  exit 1
+}
+
+# Only page when a human is watching; anything post-processing the output
+# gets the plain file. The fallback goes through less before cat because the
+# tmux popup (`display-popup -E`) closes the instant the command exits, so a
+# digest handed straight to cat would flash past unread.
+page() {
+  if [ -t 1 ] && command -v bat >/dev/null 2>&1; then
+    bat --style=plain --paging=always "$1"
+  elif [ -t 1 ] && command -v less >/dev/null 2>&1; then
+    less "$1"
+  else
+    cat "$1"
+  fi
+}
+
 show() {
   local file
   if [ -n "$day" ]; then
@@ -129,20 +159,42 @@ show() {
     # message. That is exactly the "no digest yet" case, so it must reach the
     # check instead of aborting past it.
     file="$(ls -1 "$digest_dir"/[0-9]*.md 2>/dev/null | sort | tail -1)" || true
-    [ -n "$file" ] || { echo "claude-digest: no digest generated yet (looked in $digest_dir)" >&2; exit 1; }
+    [ -n "$file" ] || no_digest_yet
   fi
-  # Only page when a human is watching; anything post-processing the output
-  # gets the plain file. The fallback goes through less before cat because the
-  # tmux popup (`display-popup -E`) closes the instant the command exits, so a
-  # digest handed straight to cat would flash past unread.
-  if [ -t 1 ] && command -v bat >/dev/null 2>&1; then
-    bat --style=plain --paging=always "$file"
-  elif [ -t 1 ] && command -v less >/dev/null 2>&1; then
-    less "$file"
-  else
-    cat "$file"
-  fi
+  page "$file"
 }
+
+# Lists only days whose final digest exists. A day directory holding stage 1
+# intermediates but no <day>.md is a generation that never finished; offering
+# it would need an LLM call to open, and the picker is read-only.
+pick() {
+  command -v fzf >/dev/null 2>&1 || { echo "claude-digest: --pick needs fzf" >&2; exit 1; }
+  local f days="" sel preview=cat
+  for f in "$digest_dir"/[0-9]*.md; do
+    [ -f "$f" ] || continue
+    f="${f##*/}"; days="$days${f%.md}"$'\n'
+  done
+  [ -n "$days" ] || no_digest_yet
+  # The glob expands oldest first; the newest day is the one wanted most often.
+  days="$(printf '%s' "$days" | sort -r)"
+  command -v bat >/dev/null 2>&1 && preview="bat --style=plain --color=always"
+  # fzf runs the preview through $SHELL and quotes {} itself, so the directory
+  # travels as an environment variable rather than being spliced into the
+  # command string, where a space or quote in the path would break it.
+  export CLAUDE_DIGEST_DIR="$digest_dir"
+  while :; do
+    # Esc / Ctrl-C leave fzf non-zero; that is how the user closes the picker.
+    sel="$(fzf --no-sort --prompt='digest> ' \
+             --preview "$preview \"\$CLAUDE_DIGEST_DIR\"/{}.md" <<<"$days")" || return 0
+    [ -n "$sel" ] || return 0
+    page "$digest_dir/$sel.md"
+  done
+}
+
+if [ "$pick" = 1 ]; then
+  pick
+  exit 0
+fi
 
 if [ "$generate" = 0 ]; then
   show
