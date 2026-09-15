@@ -207,6 +207,72 @@ PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 9z >/dev/null 2>&1; [ $? -ne 0 ] 
 PATH="$stubdir:$PATH" "$bindir/gh-pr-comments" 42 --comments >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-pr-comments rejects extra flag arg" || { echo "FAIL: gh-pr-comments extra flag"; fail=1; }
 
+# --- gh-pr-edit-body --------------------------------------------------------
+# The whole argv is compared, not grepped element by element: the point of the
+# wrapper is that nothing beyond `pr edit <PR> --body-file <file>` reaches gh.
+# It runs from a subdirectory with a DECOY of the same name at the repo root,
+# because gh's cwd moves to the root and a relative path would read the DECOY.
+pedir="$stubdir/predit"; mkdir -p "$pedir/sub"
+git -C "$pedir" init -q 2>/dev/null || true
+pedir_real="$(cd "$pedir" && pwd -P)"
+printf 'REAL\n' >"$pedir/sub/body.md"
+printf 'DECOY\n' >"$pedir/body.md"
+
+pe_run() {  # pe_run <bindir> [args...]; runs from $pedir/sub, returns the wrapper's rc
+  : >"$stubdir/args"
+  ( cd "$pedir/sub" && env GH_ARGS_FILE="$stubdir/args" \
+      PATH="$stubdir:$PATH" "$1/gh-pr-edit-body" "${@:2}" ) >/dev/null 2>&1
+}
+pe_expected="$(printf '[%s]\n' pr edit 42 --body-file "$pedir_real/sub/body.md")"
+pe_exact() { [ "$(cat "$stubdir/args")" = "$pe_expected" ]; }
+
+pe_run "$bindir" 42 body.md; rc=$?
+if [ "$rc" -eq 0 ] && pe_exact; then
+  echo "ok: gh-pr-edit-body issues exactly gh pr edit <PR> --body-file <abs file>"
+else echo "FAIL: gh-pr-edit-body rc=$rc args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
+# Rejections: each must fail AND leave gh uncalled.
+pe_rejects() {  # pe_rejects <bindir> -> 0 iff every bad call fails without reaching gh
+  local bad=0
+  pe_run "$1"                       && bad=1; [ -s "$stubdir/args" ] && bad=1
+  pe_run "$1" 42                    && bad=1; [ -s "$stubdir/args" ] && bad=1
+  pe_run "$1" 4x2 body.md           && bad=1; [ -s "$stubdir/args" ] && bad=1
+  pe_run "$1" 42 missing.md         && bad=1; [ -s "$stubdir/args" ] && bad=1
+  pe_run "$1" 42 body.md --title t  && bad=1; [ -s "$stubdir/args" ] && bad=1
+  return "$bad"
+}
+pe_rejects "$bindir" \
+  && echo "ok: gh-pr-edit-body rejects missing args, a non-numeric PR, a missing file and extra args" \
+  || { echo "FAIL: gh-pr-edit-body accepted a bad call args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; }
+
+# Discrimination (evidence-over-guesswork §4). gh-pr-edit-body is a new file, so
+# the NEW code is mutated: each argument check is neutralised on its own, and
+# the flag handed to gh is changed. Each mutant must break the case that covers
+# it. `cmp` keeps a sed that matched nothing from turning these into no-ops.
+pe_mutant() {  # pe_mutant <name> <sed expression>; the mutant bindir is $stubdir/pemutant-<name>
+  local d="$stubdir/pemutant-$1"
+  rm -rf "$d"; mkdir -p "$d"; cp -a "$bindir/." "$d/"
+  sed "$2" "$bindir/gh-pr-edit-body" >"$d/gh-pr-edit-body"
+  chmod +x "$d/gh-pr-edit-body"
+  if cmp -s "$bindir/gh-pr-edit-body" "$d/gh-pr-edit-body"; then
+    echo "FAIL: gh-pr-edit-body mutant '$1' is identical; the check is a no-op"; fail=1
+  fi
+}
+pe_mutant noargc 's|\[ \$# -eq 2 \] |true |'
+pe_mutant nonumeric 's|\[\[ ! "\$pr" =~ ^\[0-9\]+\$ \]\]|false|'
+pe_mutant nofile 's|\[ ! -f "\$2" \]|false|'
+for m in noargc nonumeric nofile; do
+  if ! pe_rejects "$stubdir/pemutant-$m"; then
+    echo "ok: mutant '$m' lets a bad call reach gh (the rejection case is discriminating)"
+  else echo "FAIL: gh-pr-edit-body mutant '$m' still rejected every bad call"; fail=1; fi
+done
+
+pe_mutant flag 's|pr edit "\$pr" --body-file "\$body"|pr edit "$pr" --body "$body"|'
+pe_run "$stubdir/pemutant-flag" 42 body.md
+if ! pe_exact && grep -qxF '[--body]' "$stubdir/args"; then
+  echo "ok: changing the flag handed to gh fails the exact-argv case (it is discriminating)"
+else echo "FAIL: gh-pr-edit-body flag mutant args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
 # --- gh-pr-checks -----------------------------------------------------------
 # gh-pr-checks consumes gh's *output*, so it needs a stub that answers each call
 # with a fixture. The stub does not implement --jq, so every fixture holds what
@@ -692,20 +758,26 @@ git -C "$miserepo" init -q
 miserepo_real="$(cd "$miserepo" && pwd -P)"
 miseargs="$stubdir/miseargs"
 
-wrappers="gh-automerge gh-await-reviews gh-list-threads gh-pr-checks gh-pr-comments gh-resolve-thread"
-wrapper_arg() {  # the one argument each wrapper's validation accepts
-  case "$1" in gh-resolve-thread) echo 'PRRT_kwABC' ;; *) echo 42 ;; esac
+wrappers="gh-automerge gh-await-reviews gh-list-threads gh-pr-checks gh-pr-comments gh-pr-edit-body gh-resolve-thread"
+printf 'body\n' >"$miserepo/sub/body.md"
+wrapper_arg() {  # the arguments each wrapper's validation accepts
+  case "$1" in
+    gh-resolve-thread) echo 'PRRT_kwABC' ;;
+    gh-pr-edit-body) echo 42 body.md ;;
+    *) echo 42 ;;
+  esac
 }
 
 # Runs <wrapper> from a subdirectory of $miserepo with the stubs on PATH.
 # $2 (optional) overrides PATH, which the no-mise cases below need.
 mise_run() {  # mise_run <bindir> <wrapper> [path]
   : >"$miseargs"; : >"$stubdir/args"; : >"$stubdir/pwd"
+  local wargs; read -ra wargs <<<"$(wrapper_arg "$2")"
   ( cd "$miserepo/sub" && env -u MISE_ENV GH_ARGS_FILE="$stubdir/args" \
       MISE_ARGS_FILE="$miseargs" GH_PWD_FILE="$stubdir/pwd" \
       GH_AWAIT_REVIEWS_TIMEOUT=1 GH_AWAIT_REVIEWS_QUIET=0 \
       GH_AWAIT_REVIEWS_GRACE=0 GH_AWAIT_REVIEWS_POLL=1 \
-      PATH="${3:-$stubdir:$PATH}" "$1/$2" "$(wrapper_arg "$2")" ) >/dev/null 2>&1
+      PATH="${3:-$stubdir:$PATH}" "$1/$2" "${wargs[@]}" ) >/dev/null 2>&1
 }
 
 # True when the recorded mise argv is exactly the `exec -C <toplevel> -- gh`
