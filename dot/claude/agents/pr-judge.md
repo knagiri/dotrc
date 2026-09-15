@@ -17,7 +17,8 @@ model: opus
    自分で判断する。
 3. **diff レビュー**: `gh pr diff <PR>` を読み、repo の規約・一般的な correctness / 可読性 /
    重複の観点でレビューする。`/code-review` skill が使えるなら土台に使ってよい。
-4. **未解決 thread の取得**: `gh-list-threads <PR>` を実行し、`isResolved == false` の thread のみを
+4. **未解決 thread の取得**: `gh-list-threads <PR>` を実行し（thread の配列
+   `[{id, isResolved, isOutdated, comments}, ...]` が返る）、`isResolved == false` の thread のみを
    対象にする。raw な `gh api graphql` は使わない。
 5. **仕分け**: **まず見つけたものを全部いずれかのバケットに載せる。** 軽微だから・確信が持てない
    からという理由で、バケットに載せずに落とすことはしない。妥当でないと判断したものは
