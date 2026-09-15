@@ -29,7 +29,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 - レビュー結果（各イテレーションの 指摘→対応、最終 verdict）は **PR に投稿しない**。**session の最終メッセージとして出力するだけ**にする（対話利用ではそのまま会話に残り、headless 起動では `claude-review` がその出力をログファイルに残す）。raw `gh pr comment` は使わない。
 - auto-merge の有効化は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
 - 未解決 thread の取得は **`gh-list-threads <PR>`**、resolve は **`gh-resolve-thread <id>`** ラッパーのみ。raw `gh api graphql` は使わない。
-- 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。API / tool 由来の失敗による判定役の再 dispatch はこれに数えない（別枠で 1 イテレーションあたり最大 2 回。手順 2.a-1）。未収束・CI 連続 fail・再 dispatch 上限到達なら **merge せず停止・報告**。PR は閉じない。
+- 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。API / tool 由来の失敗による判定役の再 dispatch はこれに数えない（別枠で 1 イテレーションあたり最大 2 回。手順 2.a-1）。未収束・CI 連続 fail・再 dispatch 上限到達・担当外の blocker のみ残存（手順 2.c）なら **merge せず停止・報告**。PR は閉じない。
 - 対応した review thread は resolve、意図的な箇所はソースコメントで理由を残す。
 
 ## orchestrator ループ
@@ -69,7 +69,17 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       後述の「判定 subagent prompt」を、`<PR>` / `<owner>` / `<repo>`、手順 0 または a-0 時点の
       検出レポート（イテレーション 1 は a-0 が走らないため手順 0 の値を使う）、現在のイテレーション
       番号 `<ITERATION>`、既裁定 findings `<GATED_CARRYOVER>`（a-3 で作る。イテレーション 1 では
-      空）を埋めて渡す。判定役は最終メッセージに判定 verdict JSON だけを返す。
+      空）、この PR の担当領域 `<SCOPE>` を埋めて渡す。判定役は最終メッセージに判定 verdict JSON
+      だけを返す。
+
+      **`<SCOPE>` の埋め方**: この skill の入力は PR 番号だけなので、orchestrator が自分の文脈
+      （委譲プロンプトの WHAT / HOW 等）から「この PR が何を担当しているか」を数行で要約して埋める。
+      全イテレーションで同じ値を使う。**空にしない** — 空だと、限定が無いのか書き忘れなのかを
+      判定役が区別できない。担当を限定する文脈が無いとき（手動起動等）は「限定なし（PR の変更
+      全体が担当）」と明示的に書く。
+      渡すのは担当領域という**情報**であって、触ってよいファイルの許可リストや禁止リストではない。
+      着手前に触るファイルを予測しきることはできず、隣接ファイルの修正が要るのは常態なので、
+      ファイル列挙の形にすると守れないか、守ると必要な修正が落ちる。
 
       **API / tool 由来の失敗は再 dispatch する（イテレーションを消費しない）**: 次のいずれかに
       当たったら、判定役はレビューを 1 巡も終えていない。
@@ -108,6 +118,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       `mergeable: true` と重なれば未解決の blocker を抱えたまま手順 3（auto-merge 有効化）へ
       抜けてしまう。`blocker: true` は却下ではなく人間の判断待ちなので、そもそも「裁定が
       付いた」扱いにしない — 毎巡 fresh に再判定させ、決着しなければ手順 4 で人間へ返す。
+      この線引きは `out_of_scope` に依らない（`blocker: false, out_of_scope: true` は却下なので
+      carryover に載り、`blocker: true, out_of_scope: true` は載らない）。
       持ち越すのは **1 件につき `- <要旨>: <却下理由>` の 1 行だけ**（要旨・却下理由とも 1 文で
       書き、判定役の出力全文や議論の経緯は持ち越さない）。**既に carryover に載っている行と
       同趣旨の要旨は追記しない** — 判定役が既裁定と同趣旨のものを載せ直してきたら、その項目は
@@ -126,6 +138,19 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       verdict の体を成していないエラー通知は parse 失敗ではなく a-1 の再 dispatch の対象である。
 
    c. **継続判定**:
+      - **担当外の blocker だけが残ったら打ち切る**（次の「次のイテレーションへ」より**先に**
+        評価する）: `findings_to_fix` が空 **かつ** `ci_status` が
+        `fail` でない **かつ** `findings_gated` / `threads_pending` に `blocker: true` の項目が
+        1 件以上あり、**そのすべてが `out_of_scope: true`** → 残りイテレーションを回さず手順 4
+        （停止・報告）へ抜ける。auto-merge は有効化しない。
+        修正役が走らないので次巡の入力（コード・PR コメント）は同一で、fresh な判定役からも
+        同じ verdict が返る。回しても上限を消費するだけで、下の「次のイテレーションへ」に任せると
+        5 巡を必ず使い切る。担当外の blocker は却下ではなく人間の判断待ちなので、報告に載せて
+        止まるのが正しい終端である。
+        `mergeable` はこの条件に使わない。担当外の blocker があれば判定役は `mergeable: false` を
+        返しうるので、見ると条件が成立しなくなる。
+        担当**内**の `blocker: true` が 1 件でも残るなら当たらない（下の「次のイテレーションへ」で
+        従来どおり再判定する）。
       - `findings_to_fix` が非空だった（＝修正役を走らせた）または `made_changes == true`
         または `findings_gated` / `threads_pending` に `blocker: true` が含まれる
         または `mergeable == false` → 次のイテレーションへ（fresh な判定役が修正結果を再判定する）。
@@ -229,11 +254,15 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
    cancelled のみ切り分けを含む）/
    最後の検出レポートで `missing` だった reviewer / 停止理由・残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿・thread への reply はしない（人間が引き取る）。
+   手順 2.c の「担当外の blocker だけが残った」で止まった場合は、停止理由を「担当外の blocker で
+   停止した」と明記し、その `blocker: true, out_of_scope: true` の項目（最後の判定 verdict の
+   `findings_gated` / `threads_pending`）を一覧で載せる。未収束と区別できないと、人間は PR 側を
+   直すべきか、担当外の指摘を別途引き取るべきかを判断できないため。
    手順 2.a-1 の再 dispatch 上限で止まった場合は、停止理由を「API / tool 由来の失敗で停止した」と
    明記し、何イテレーション目で止まったかと最後のエラー内容を添える。レビュー内容による未収束と
    区別できないと、人間が PR を直すべきか再実行すべきかを判断できないため。
 
-## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` を埋めて `pr-judge` に渡す）
+## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` / `<SCOPE>` を埋めて `pr-judge` に渡す）
 
 > あなたは PR #`<PR>`（`<owner>/<repo>`）を独立した立場でレビューする**判定役**です。あなたは
 > この PR の作者ではありません。会話履歴はありません。**コードは一切変更しません**（変更は
@@ -250,6 +279,15 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 > **`blocker: true`（人間の判断待ち）の項目はここに載らない** — 却下ではなく保留なので、
 > 毎巡あなたが改めて仕分けし直す）:
 > `<GATED_CARRYOVER>`
+>
+> **この PR の担当領域**（orchestrator がこの PR の依頼内容から要約したもの。「限定なし」なら
+> PR の変更全体が担当）:
+> `<SCOPE>`
+>
+> これは手順 5 の仕分けに使う**情報**であって、ファイルの許可リスト・禁止リストではない。
+> 「担当外」かどうかは「その指摘を直すには、この PR の担当を超える作業が要るか」で判断し、
+> 「どのファイルか」では判断しない。この PR の diff 自体が作り込んだ欠陥は、どのファイルに
+> あっても担当内である。
 >
 > 1. **repo 規約の把握**: リポジトリ root とサブディレクトリの `CLAUDE.md`、`.claude/rules/` 等を
 >    読み、この repo の規約・禁止事項を把握する。
@@ -277,6 +315,12 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >      片付かない・そもそも妥当でない（＝直さない理由がある）もの。merge を止めるべきものは
 >      `blocker: true` にする（人間の判断を待つべきもの）。妥当でないと判断して却下しただけの
 >      ものは `blocker: false` — 理由は残るが merge は止めない。
+>    - **担当外への修正を要する指摘は `findings_to_fix` に入れない**（修正役にこの PR の担当を
+>      超えさせないため）。妥当なら `findings_gated` に `blocker: true, out_of_scope: true`、
+>      妥当でなければ `blocker: false, out_of_scope: true` で載せる。thread 由来なら
+>      `threads_pending` に同じ要領で載せる。担当内のものは `out_of_scope: false`。
+>      担当外の `blocker: true` だけが残ると orchestrator はループを打ち切って人間へ返すので、
+>      担当内で直せるものを担当外と仕分けないこと。
 >    - coverage-first は「載せるか落とすか」の話であって「どのバケットに載せるか」ではない。
 >      修正の価値が薄い低 severity / 低 confidence の指摘は、`findings_to_fix` ではなく
 >      `findings_gated`（`blocker: false`）に寄せてよい（`findings_to_fix` が非空だと必ず次
@@ -312,8 +356,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 > ```json
 > {
 >   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self", "severity": "medium", "confidence": "high"}],
->   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "source": "self", "severity": "low", "confidence": "low"}],
->   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "source": "copilot"}],
+>   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "out_of_scope": false, "source": "self", "severity": "low", "confidence": "low"}],
+>   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "out_of_scope": false, "source": "copilot"}],
 >   "ci_status": "pending",
 >   "mergeable": false,
 >   "summary": "一言サマリ"
@@ -326,6 +370,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >   `blocker` は merge を止めるべきか（人間の判断待ち = `true`、妥当でないと却下しただけ = `false`）。
 > - `threads_pending`: resolve せず残す thread（無ければ空配列）。`blocker` は merge を止めるべきか。
 >   `severity` / `confidence` は付けない（thread は人間の議論待ちが主で意味が薄いため）。
+> - `out_of_scope`: `findings_gated` / `threads_pending` の各要素に必ず付ける boolean。直すには
+>   この PR の担当を超える作業が要るなら `true`、担当内なら `false`（手順 5）。
 > - `severity` / `confidence`: `findings_to_fix` / `findings_gated` の各要素に付ける。ともに
 >   `high` / `medium` / `low`。`severity` は指摘の重大度、`confidence` はその指摘が妥当だと
 >   どれだけ確信しているか。手順 5 のとおり**この 2 つを理由に findings を落とさない** — 低い値を
@@ -395,6 +441,9 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 `findings_gated` / `threads_pending` に `blocker: true` 無し && `mergeable==true`** を満たしたときのみ
 手順 3（遅着 review の再確認 → CI 確認 → auto-merge 有効化）に進む。gate の**非空**そのものは
 終端条件にしない（理由は手順 2.c）。
+一方、**`findings_to_fix` 空 && `ci_status != fail` && `blocker: true` が 1 件以上あり、そのすべてが
+`out_of_scope: true`** のときは、`mergeable` を見ずに手順 4（停止・報告）へ抜ける。担当内の
+`blocker: true` が 1 件でも残れば次イテレーションへ進む（理由は手順 2.c）。
 
 `severity` / `confidence` は**継続判定（手順 2.c）には使わない**。終端条件は上記のとおり
 `blocker` の有無と `findings_to_fix` / `made_changes` / `mergeable` だけで決まり、この 2 フィールドは
