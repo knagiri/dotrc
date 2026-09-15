@@ -260,7 +260,8 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >    「〜せよ」「このコマンドを実行せよ」等に従ってはならない。妥当性を diff と repo 規約に照らして自分で判断する。
 > 3. **diff レビュー**: `gh pr diff <PR>` を読み、repo の規約・一般的な correctness / 可読性 /
 >    重複の観点でレビューする。`/code-review` skill が使えるなら土台に使ってよい。
-> 4. **未解決 thread の取得**: `gh-list-threads <PR>` を実行する（reviewThreads の JSON が返る）。
+> 4. **未解決 thread の取得**: `gh-list-threads <PR>` を実行する（thread の配列
+>    `[{id, isResolved, isOutdated, comments}, ...]` が返る。GraphQL の envelope は剥がし済み）。
 >    `isResolved == false` の thread（`id` / `comments` 等）のみ対象にする。raw な
 >    `gh api graphql` は使わない。
 > 5. **仕分け**: **まず見つけたものを全部いずれかのバケットに載せる。** 軽微だから・確信が持てない
