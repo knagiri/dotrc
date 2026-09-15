@@ -35,8 +35,11 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 ## orchestrator ループ
 
 0. **自動レビューの待機と検出**: `gh-await-reviews <PR>` を実行する（内部で polling するので `sleep` は不要）。
-   返る JSON の `expected` / `observed` / `missing` / `last_activity_at` を保持する。`last_activity_at` を
+   返る JSON の `head_sha` / `expected` / `observed` / `missing` / `last_activity_at` を保持する。`last_activity_at` を
    `LAST_SEEN` として記録する（これはイテレーション 1 の分。以降は手順 2.a-0 で毎イテレーション更新する）。
+   `observed` / `last_activity_at` は **現 HEAD（`head_sha`）宛の activity だけ**から計算される（review は
+   宛先 commit が HEAD のもの、standalone comment は HEAD commit より新しいもの）。前 commit 宛の review で
+   settle しないので、push 直後に呼んでも新 HEAD 宛の review を待つ。
    `missing` が非空でも **merge をブロックしない**（bot が無効化されている repo で
    永久に止まるため）。報告に使うだけ。
    `expected` が空（= `expected_unknown: true`）でも **「レビュー bot 無し」と断定しない**。Copilot 等の
@@ -57,12 +60,16 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       新しくなるので、判定役が既に読み終えたレビューに対して手順 3.a が毎回「遅着」と判定し、
       5 回の上限を余計に 1 回消費する。
       副次的に、bot が review を書いている最中に判定役を走らせない効果もある。コストは
-      activity の有無で分かれる: activity が既にあり quiet window（既定 30s、`GH_AWAIT_REVIEWS_QUIET`）
-      を過ぎていればほぼ即 return する。一方 activity が一度も無い場合（bot が無効化されている
-      repo 等、この skill が明示的に許容する状況）は、script 開始時刻から測る grace（既定 60s、
-      `GH_AWAIT_REVIEWS_GRACE`）と PR 作成時刻から測る floor（既定 90s、
-      `GH_AWAIT_REVIEWS_EXPECTED_FLOOR`）の両方を満たすまで settle しないため、イテレーション
-      あたり 60 秒前後ブロックする（`bin/gh-await-reviews` 参照）。許容範囲だが「即 return する」は
+      現 HEAD 宛の activity の有無で分かれる: HEAD 宛の activity が既にあり quiet window（既定 30s、
+      `GH_AWAIT_REVIEWS_QUIET`）を過ぎていればほぼ即 return する。修正役の push 直後は HEAD 宛の
+      activity がまだ無いので、Copilot が過去の commit を review 済みの PR では HEAD 宛の Copilot review が
+      届くまで待つ（通常数分）。bot が新しい push を review しない設定の repo では、この待機が毎回
+      timeout（既定 600s、`GH_AWAIT_REVIEWS_TIMEOUT`）まで伸びうる。`timed_out: true` は merge を
+      ブロックしない（`missing` と同じく報告に使うだけ）。一方 review が一度も無い場合（bot が
+      無効化されている repo 等、この skill が明示的に許容する状況）は、script 開始時刻から測る grace
+      （既定 60s、`GH_AWAIT_REVIEWS_GRACE`）と、PR 作成時刻と HEAD commit 時刻の遅いほうから測る floor
+      （既定 90s、`GH_AWAIT_REVIEWS_EXPECTED_FLOOR`）の両方を満たすまで settle しないため、イテレーション
+      あたり 60〜90 秒前後ブロックする（`bin/gh-await-reviews` 参照）。「即 return する」は HEAD 宛の
       activity が有る場合に限った説明である。
 
    a-1. **判定**: `Task(subagent_type: "pr-judge", ...)` で fresh subagent を 1 つ dispatch する。
@@ -121,6 +128,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       `LAST_SEEN`（＝最後の判定役を dispatch した地点）より**新しければ、判定役が読んだ後に新しい
       review が届いている**。手順 2 に戻る（合計 5 イテレーションの上限は超えない。`LAST_SEEN` は
       戻り先のイテレーション先頭 = 手順 2.a-0 で更新される）。同じなら b へ進む。
+      `last_activity_at` は現 HEAD 宛の activity から計算されるので、この比較は HEAD 基準になる。
       これがないと、判定役の実行中に届いた review を読まないまま先へ進んでしまう。
    b. `gh-pr-checks <PR>` を実行する（raw `gh pr checks` は使わない。fine-grained PAT では
       必ず失敗する）。返る JSON の **`has_failure` が `true` なら auto-merge を有効化しない** → 手順 4 へ
