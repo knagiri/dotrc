@@ -19,6 +19,20 @@ set -euo pipefail
 # Quiet is measured from real submittedAt/createdAt timestamps rather than from
 # when this script started, so an already-reviewed PR returns immediately.
 #
+# Only activity aimed at the current HEAD counts. Right after a fix push, the
+# PR still carries the previous commit's review, already old enough to pass the
+# quiet window; counting it would settle instantly, and the new commit's review
+# would land minutes later as a "late" review that costs the caller a whole
+# extra review round. So a review counts only when its commit.oid equals
+# headRefOid, and a standalone comment (which carries no commit) only when it
+# is newer than the HEAD commit's committedDate. headRefOid is re-read every
+# poll so a push made while waiting is followed. Presence is judged separately
+# from arrival: a Copilot review on *any* commit means this PR has Copilot, so
+# `expected` stays non-empty until a HEAD-targeted Copilot review arrives or
+# the timeout fires. A repo whose bot does not re-review new pushes therefore
+# waits out the full timeout on every call after a push; the caller treats
+# `timed_out` as information, not as a merge blocker.
+#
 # An empty `expected` is ambiguous: it can mean "no review bot on this repo" or
 # "a bot is present but hasn't posted anything yet (an unpredictable reviewer
 # may still be booting)". Settling on it right after PR creation is therefore
@@ -49,8 +63,12 @@ timeout_s=${GH_AWAIT_REVIEWS_TIMEOUT:-600}   # overall ceiling
 quiet_s=${GH_AWAIT_REVIEWS_QUIET:-30}        # silence after the last activity
 grace_s=${GH_AWAIT_REVIEWS_GRACE:-60}        # floor when nothing is expected and nothing posted
 poll_s=${GH_AWAIT_REVIEWS_POLL:-15}
-# Floor, measured from PR creation, below which an empty `expected` may not be
-# settled on. As the header comment says, Copilot's pending review never
+# Floor, measured from the later of PR creation and the HEAD commit's
+# committedDate, below which an empty `expected` may not be settled on. The HEAD
+# commit time is only a proxy for the push (a commit made well before its push
+# already satisfies the floor on arrival), so the HEAD-targeted activity filter
+# described in the header is what actually closes the post-push gap; the floor
+# just keeps a freshly pushed PR from being declared bot-free instantly. As the header comment says, Copilot's pending review never
 # surfaces in reviewRequests in this repo, so an empty `expected` never means
 # "registration hasn't finished" -- it means nothing has been observed *yet*.
 # The floor exists so the script doesn't conclude "no automated review" before
@@ -68,15 +86,30 @@ expected_floor_s=${GH_AWAIT_REVIEWS_EXPECTED_FLOOR:-90}
 
 # One gh call per poll. Emits, per line:
 #   CRT<TAB><iso8601>            when the PR was created
+#   HED<TAB><sha>                headRefOid
+#   HDT<TAB><iso8601>            the HEAD commit's committedDate
 #   REQ<TAB><login>              a pending review request (pre-arrival signal)
-#   ACT<TAB><login><TAB><iso8601> a review or comment by someone other than the author
+#   RVW<TAB><login>              someone other than the author reviewed *some* commit
+#   ACT<TAB><login><TAB><iso8601> a HEAD-targeted review, or a comment newer than
+#                                the HEAD commit, by someone other than the author
+# The HEAD commit is looked up by oid and falls back to the last listed commit.
+# An empty headRefOid / committedDate disables the corresponding filter (fail
+# open to counting everything) rather than dropping every activity.
 snapshot() {
-  gh_mise pr view "$pr" --json author,createdAt,reviewRequests,reviews,comments --jq '
+  gh_mise pr view "$pr" --json author,createdAt,headRefOid,commits,reviewRequests,reviews,comments --jq '
     .author.login as $a
+    | (.headRefOid // "") as $h
+    | ((.commits // []) | ((map(select(.oid == $h)) | last) // last)) as $hc
+    | (($hc // {}).committedDate // "") as $hd
     | "CRT\t" + (.createdAt // ""),
+      "HED\t" + $h,
+      "HDT\t" + $hd,
       ([.reviewRequests[]?.login // empty] | .[] | "REQ\t" + .),
-      (([.reviews[]?  | {l: .author.login, t: .submittedAt}]
-      + [.comments[]? | {l: .author.login, t: .createdAt}])
+      ([.reviews[]? | .author.login | select(. != $a)] | unique | .[] | "RVW\t" + .),
+      (([.reviews[]?  | select($h == "" or .commit.oid == $h)
+                      | {l: .author.login, t: .submittedAt}]
+      + [.comments[]? | select($hd == "" or (.createdAt // "") > $hd)
+                      | {l: .author.login, t: .createdAt}])
        | .[] | select(.l != $a) | "ACT\t" + .l + "\t" + (.t // ""))
   '
 }
@@ -85,6 +118,8 @@ started=$(date -u +%s)
 expect_copilot=0
 copilot_at=""
 created_at=""
+head_sha=""
+head_at=""
 last_ts=""
 observed=""   # "<login><TAB><ts>" per line, may repeat a login
 
@@ -96,7 +131,8 @@ emit() {  # $1 = settled|timed_out
     --arg status "$1" \
     --argjson waited "$(( $(date -u +%s) - started ))" \
     --argjson expect_copilot "$expect_copilot" \
-    --arg copilot_at "$copilot_at" '
+    --arg copilot_at "$copilot_at" \
+    --arg head_sha "$head_sha" '
     (split("\n") | map(select(. != "") | split("\t") | {login: .[0], at: .[1]})
       | group_by(.login) | map(max_by(.at))) as $observed
     | (if $expect_copilot == 1
@@ -105,6 +141,7 @@ emit() {  # $1 = settled|timed_out
               at: (if $copilot_at == "" then null else $copilot_at end)}]
        else [] end) as $expected
     | {pr: $pr,
+       head_sha: (if $head_sha == "" then null else $head_sha end),
        settled: ($status == "settled"),
        timed_out: ($status == "timed_out"),
        waited_seconds: $waited,
@@ -134,25 +171,39 @@ emit() {  # $1 = settled|timed_out
 # loop below -- see the comment there instead of duplicating it here.)
 expected_settled() {
   [ "$expect_copilot" -eq 0 ] || return 0
-  [ -n "$created_at" ] || return 0
-  local created_epoch
-  created_epoch=$(date -u -d "$created_at" +%s 2>/dev/null) || return 0
-  [ -n "$created_epoch" ] || return 0
-  [ $(( now - created_epoch )) -ge "$expected_floor_s" ]
+  local created_epoch="" head_epoch="" base_epoch
+  if [ -n "$created_at" ]; then
+    created_epoch=$(date -u -d "$created_at" +%s 2>/dev/null) || created_epoch=""
+  fi
+  if [ -n "$head_at" ]; then
+    head_epoch=$(date -u -d "$head_at" +%s 2>/dev/null) || head_epoch=""
+  fi
+  # Whichever of the two parsed; the later one when both did.
+  base_epoch=${created_epoch:-$head_epoch}
+  if [ -n "$head_epoch" ] && [ "$head_epoch" -gt "$base_epoch" ]; then
+    base_epoch=$head_epoch
+  fi
+  [ -n "$base_epoch" ] || return 0
+  [ $(( now - base_epoch )) -ge "$expected_floor_s" ]
 }
 
 while :; do
   observed=""
+  head_sha=""
+  head_at=""
   while IFS=$'\t' read -r kind login ts; do
     case "$kind" in
       CRT) created_at="$login" ;;
-      REQ) case "$login" in *[Cc]opilot*) expect_copilot=1 ;; esac ;;
+      HED) head_sha="$login" ;;
+      HDT) head_at="$login" ;;
+      REQ|RVW) case "$login" in *[Cc]opilot*) expect_copilot=1 ;; esac ;;
       ACT) observed+="$login"$'\t'"$ts"$'\n' ;;
     esac
   done < <(snapshot)
 
   # A copilot review that already landed proves copilot was expected, even
-  # though the review request has since disappeared from reviewRequests.
+  # though the review request has since disappeared from reviewRequests. RVW
+  # above covers reviews on earlier commits; copilot_at below is HEAD-only.
   copilot_at=$(printf '%s' "$observed" | awk -F'\t' 'tolower($1) ~ /copilot/ {print $2}' | sort | tail -n1)
   if [ -n "$copilot_at" ]; then expect_copilot=1; fi
 
