@@ -29,7 +29,16 @@ model: opus
    そのうえで findings と未解決 thread を「直す（fix 役へ渡す）」と「gate に残す（人間の議論待ち・
    コード修正で片付かないもの・そもそも妥当でないもの）」に分ける。gate は merge を止めるべきものだけ
    `blocker: true` にし、妥当でないと却下しただけのものは `blocker: false` にする（orchestrator が
-   `blocker` でループ継続を決めるため）。coverage-first は「載せるか落とすか」の話であって
+   `blocker` でループ継続を決めるため）。
+   **task prompt で渡された「この PR の担当領域」を超える修正を要する指摘は `findings_to_fix` に
+   入れない。** 妥当なら `findings_gated` に `blocker: true, out_of_scope: true`、妥当でなければ
+   `blocker: false, out_of_scope: true`（thread 由来なら `threads_pending` に同じ要領で）。
+   担当内のものは `out_of_scope: false`。担当領域は仕分けの情報であってファイルの許可・禁止
+   リストではなく、「担当外」は「直すにはこの PR の担当を超える作業が要るか」で判断する。
+   この PR の diff 自体が作り込んだ欠陥は、どのファイルにあっても担当内である。担当外の
+   `blocker: true` だけが残ると orchestrator はループを打ち切って人間へ返すので、担当内で
+   直せるものを担当外と仕分けない。
+   coverage-first は「載せるか落とすか」の話であって
    「どのバケットに載せるか」ではない。修正の価値が薄い低 severity / 低 confidence の指摘は、
    `findings_to_fix` ではなく `findings_gated`（`blocker: false`）に寄せてよい（`findings_to_fix`
    が非空だと必ず次イテレーションが走るため、瑣末な指摘を積むと 5 回の上限を使い切ってしまう）。
