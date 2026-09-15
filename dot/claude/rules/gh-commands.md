@@ -92,7 +92,7 @@ prompt injection / 権限バイパスの経路になる。
 
 | 操作 | ラッパー | 内部コマンド | allowlist |
 |---|---|---|---|
-| 自動レビューの待機・検出 | `gh-await-reviews <PR>` | read-only `gh pr view`（polling） | `Bash(gh-await-reviews *)` |
+| 自動レビューの待機・検出（現 HEAD 宛の activity のみ数える） | `gh-await-reviews <PR>` | read-only `gh pr view`（polling） | `Bash(gh-await-reviews *)` |
 | review body / standalone コメントの取得 | `gh-pr-comments <PR>` | read-only `gh pr view --json reviews,comments` | `Bash(gh-pr-comments *)` |
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |

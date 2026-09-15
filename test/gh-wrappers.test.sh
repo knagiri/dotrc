@@ -391,8 +391,10 @@ PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" 42 --watch >/dev/null 2>&1; [ $?
 # --- gh-await-reviews -------------------------------------------------------
 # A second stub: ignores argv and prints the Nth fixture on the Nth call (the
 # last fixture repeats). gh-await-reviews consumes gh's *output*, so the argv
-# recorder above is not enough. The stub emits the REQ/ACT tab-separated lines
-# that the wrapper's --jq expression produces against real gh.
+# recorder above is not enough. A fixture is either the REQ/ACT tab-separated
+# lines the wrapper's --jq expression produces against real gh (printed as is),
+# or, when it starts with `{`, the raw `gh pr view --json` document, which the
+# stub runs through the wrapper's own --jq so the filter itself is exercised.
 awaitstub="$(mktemp -d)"
 trap 'rm -rf "$stubdir" "$checksstub" "$awaitstub"' EXIT
 cat >"$awaitstub/gh" <<'STUB'
@@ -401,7 +403,15 @@ n=$(( $(cat "$GH_STUB_COUNT" 2>/dev/null || echo 0) + 1 ))
 printf '%s' "$n" >"$GH_STUB_COUNT"
 f="$GH_STUB_DIR/$n"
 [ -f "$f" ] || f="$GH_STUB_DIR/$(ls "$GH_STUB_DIR" | sort -n | tail -1)"
-cat "$f"
+if [ "$(head -c1 "$f")" = "{" ]; then
+  expr=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --jq) expr="$2"; shift 2 ;; *) shift ;; esac
+  done
+  jq -r "$expr" "$f"
+else
+  cat "$f"
+fi
 STUB
 chmod +x "$awaitstub/gh"
 install_mise_stub "$awaitstub"
@@ -534,6 +544,92 @@ if [ "$rc" -eq 0 ] \
   && printf '%s' "$out" | grep -q '"login":"coderabbitai"'; then
   echo "ok: gh-await-reviews emits JSON instead of crashing on an unparseable ACT timestamp"
 else echo "FAIL: gh-await-reviews unparseable timestamp rc=$rc out=$out"; fail=1; fi
+
+# The cases below feed raw `gh pr view --json` documents so the wrapper's --jq
+# filter (HEAD-targeted activity) is exercised, not bypassed. Commit `aaa` was
+# reviewed; `bbb` is the fix pushed on top of it and is the current HEAD.
+# pr_json <reviews-json> <comments-json> [head-committedDate]
+pr_json() {
+  jq -n --argjson reviews "$1" --argjson comments "$2" --arg hd "${3:-2020-01-02T00:00:00Z}" '
+    {author: {login: "me"}, createdAt: "2020-01-01T00:00:00Z", headRefOid: "bbb",
+     commits: [{oid: "aaa", committedDate: "2020-01-01T00:00:00Z"},
+               {oid: "bbb", committedDate: $hd}],
+     reviewRequests: [], reviews: $reviews, comments: $comments}'
+}
+cop_old='{"author":{"login":"copilot-pull-request-reviewer"},"submittedAt":"2020-01-01T00:10:00Z","commit":{"oid":"aaa"}}'
+cop_new='{"author":{"login":"copilot-pull-request-reviewer"},"submittedAt":"2020-01-02T00:10:00Z","commit":{"oid":"bbb"}}'
+
+# Case I: right after a push. The only review targets the previous commit and
+# is far past the quiet window; a Copilot comment also predates HEAD. Neither
+# is activity on HEAD, and Copilot is known to review this PR, so this must
+# wait for a HEAD-targeted review and time out rather than settle at once.
+fx="$awaitstub/i"; mkdir -p "$fx"
+pr_json "[$cop_old]" '[{"author":{"login":"copilot-pull-request-reviewer"},"createdAt":"2020-01-01T00:11:00Z"}]' >"$fx/1"
+out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"timed_out":true' \
+  && printf '%s' "$out" | grep -q '"settled":false' \
+  && printf '%s' "$out" | grep -q '"head_sha":"bbb"' \
+  && printf '%s' "$out" | grep -q '"missing":\["copilot"\]' \
+  && printf '%s' "$out" | grep -q '"observed":\[\]' \
+  && printf '%s' "$out" | grep -q '"last_activity_at":null'; then
+  echo "ok: gh-await-reviews does not settle on the previous commit's review right after a push"
+else echo "FAIL: gh-await-reviews post-push stale review rc=$rc out=$out"; fail=1; fi
+
+# Case J: same PR once the HEAD-targeted Copilot review is past the quiet
+# window -> settled, and only that review is reported.
+fx="$awaitstub/j"; mkdir -p "$fx"
+pr_json "[$cop_old,$cop_new]" '[]' >"$fx/1"
+out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"settled":true' \
+  && printf '%s' "$out" | grep -q '"head_sha":"bbb"' \
+  && printf '%s' "$out" | grep -q '"arrived":true' \
+  && printf '%s' "$out" | grep -q '"last_activity_at":"2020-01-02T00:10:00Z"'; then
+  echo "ok: gh-await-reviews settles once the HEAD-targeted review is quiet"
+else echo "FAIL: gh-await-reviews HEAD review settles rc=$rc out=$out"; fail=1; fi
+
+# Case K: standalone comments carry no commit, so only those newer than the
+# HEAD commit count: the pre-push comment is dropped, the post-push one kept.
+fx="$awaitstub/k"; mkdir -p "$fx"
+pr_json '[]' '[{"author":{"login":"coderabbitai"},"createdAt":"2020-01-01T00:12:00Z"},{"author":{"login":"alice"},"createdAt":"2020-01-02T00:20:00Z"}]' >"$fx/1"
+out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"settled":true' \
+  && printf '%s' "$out" | grep -q '"login":"alice"' \
+  && ! printf '%s' "$out" | grep -q 'coderabbitai' \
+  && printf '%s' "$out" | grep -q '"last_activity_at":"2020-01-02T00:20:00Z"'; then
+  echo "ok: gh-await-reviews counts only comments newer than the HEAD commit"
+else echo "FAIL: gh-await-reviews comment HEAD filter rc=$rc out=$out"; fail=1; fi
+
+# Case L: no review bot at all (no reviews, no comments, ever) on an old PR ->
+# settles through grace/floor instead of waiting for the timeout.
+fx="$awaitstub/l"; mkdir -p "$fx"
+pr_json '[]' '[]' >"$fx/1"
+out=$(awaitenv "$fx" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"settled":true' \
+  && printf '%s' "$out" | grep -q '"timed_out":false' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true' \
+  && printf '%s' "$out" | grep -q '"head_sha":"bbb"'; then
+  echo "ok: gh-await-reviews without any review bot settles via grace, not timeout"
+else echo "FAIL: gh-await-reviews no-bot grace rc=$rc out=$out"; fail=1; fi
+
+# Case M: an old PR whose HEAD commit was just made, no bot. The floor runs
+# from the HEAD commit time too, so with a floor longer than TIMEOUT an empty
+# `expected` is not believed and this times out; measured from PR creation
+# alone it would settle after grace.
+fx="$awaitstub/m"; mkdir -p "$fx"
+pr_json '[]' '[]' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$fx/1"
+out=$(env GH_AWAIT_REVIEWS_TIMEOUT=3 GH_AWAIT_REVIEWS_QUIET=1 GH_AWAIT_REVIEWS_GRACE=1 \
+  GH_AWAIT_REVIEWS_POLL=1 GH_AWAIT_REVIEWS_EXPECTED_FLOOR=90 \
+  GH_STUB_DIR="$fx" GH_STUB_COUNT="$fx/.count" PATH="$awaitstub:$PATH" \
+  "$bindir/gh-await-reviews" 42 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q '"timed_out":true' \
+  && printf '%s' "$out" | grep -q '"expected_unknown":true'; then
+  echo "ok: gh-await-reviews floor also runs from the HEAD commit time"
+else echo "FAIL: gh-await-reviews floor from HEAD commit rc=$rc out=$out"; fail=1; fi
 
 # gh-await-reviews: missing / non-numeric / extra-flag arg fail (no flag passthrough).
 PATH="$awaitstub:$PATH" "$bindir/gh-await-reviews" >/dev/null 2>&1; [ $? -ne 0 ] \
