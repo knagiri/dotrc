@@ -103,7 +103,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       2 回再 dispatch しても verdict が得られなければ、残りイテレーションを回さず手順 4（停止・報告）へ
       抜ける（auto-merge は有効化しない）。
       再 dispatch は即時でよい。rate limit が明示されているときは、間に `gh-await-reviews <PR>` を
-      1 回挟んで時間を置いてよい（activity が既にあればほぼ即 return するので待機時間は保証されない。
+      1 回挟んで時間を置いてよい（現 HEAD 宛の activity が既にあればほぼ即 return するので待機時間は保証されない。
       `sleep` の grant は無いのでそれ以上は求めない）。挟んだ場合は 2.a-0 と同じく `LAST_SEEN` と
       `<DETECTION_REPORT>` を返った値へ差し替える — 再 dispatch した判定役はその時点の PR を読むため。
 
