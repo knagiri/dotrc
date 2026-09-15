@@ -29,7 +29,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 - レビュー結果（各イテレーションの 指摘→対応、最終 verdict）は **PR に投稿しない**。**session の最終メッセージとして出力するだけ**にする（対話利用ではそのまま会話に残り、headless 起動では `claude-review` がその出力をログファイルに残す）。raw `gh pr comment` は使わない。
 - auto-merge の有効化は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
 - 未解決 thread の取得は **`gh-list-threads <PR>`**、resolve は **`gh-resolve-thread <id>`** ラッパーのみ。raw `gh api graphql` は使わない。
-- 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。API / tool 由来の失敗による判定役の再 dispatch はこれに数えない（別枠で 1 イテレーションあたり最大 2 回。手順 2.a-1）。未収束・CI 連続 fail・再 dispatch 上限到達・担当外の blocker のみ残存（手順 2.c）なら **merge せず停止・報告**。PR は閉じない。
+- 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。API / tool 由来の失敗による判定役の再 dispatch はこれに数えない（別枠で 1 イテレーションあたり最大 2 回。手順 2.a-1）。修正役の同種の失敗は再 dispatch せず、1 イテレーションとして消費する（手順 2.a-2）。未収束・CI 連続 fail・再 dispatch 上限到達・担当外の blocker のみ残存（手順 2.c）・修正役の API / tool 由来の失敗の 2 イテレーション連続（手順 2.a-2）なら **merge せず停止・報告**。PR は閉じない。
 - 対応した review thread は resolve、意図的な箇所はソースコメントで理由を残す。
 
 ## orchestrator ループ
@@ -107,14 +107,27 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       `sleep` の grant は無いのでそれ以上は求めない）。挟んだ場合は 2.a-0 と同じく `LAST_SEEN` と
       `<DETECTION_REPORT>` を返った値へ差し替える — 再 dispatch した判定役はその時点の PR を読むため。
 
-      この扱いは判定役に限る。修正役（a-2）の dispatch 失敗は途中まで push している可能性があり、
-      同じ findings で撃ち直すと二重適用になりうるので、再 dispatch しない。
+      この扱いは判定役に限る。修正役の API / tool 由来の失敗は再 dispatch せず、a-2 の規定で扱う。
 
    a-2. **修正**: 判定の `findings_to_fix` が**非空のときだけ** `Task(subagent_type: "pr-fix", ...)` で
       fresh subagent を 1 つ dispatch する。後述の「修正 subagent prompt」に `<PR>` と
       **`findings_to_fix` だけ**を埋めて渡す。**`findings_gated` は渡さない**（人間の議論待ち等を
       勝手に直させないため）。修正役は修正 verdict JSON だけを返す。`findings_to_fix` が空なら
       この手順はスキップし、`made_changes` は `false` として扱う。
+
+      **API / tool 由来の失敗は再 dispatch しない（イテレーションを消費する）**: 修正役が a-1 と同じ
+      3 条件（`Task` の dispatch 自体のエラー・最終メッセージ無し・rate limit / overload / timeout 等の
+      エラー通知だけ）のいずれかに当たったら、同じイテレーション内で修正役を撃ち直さない。修正役は
+      途中まで commit / push している可能性があり、同じ findings を再度渡すと二重適用や、push 済みの
+      状態の読み違いが起きうるため。代わりにそのイテレーションは消費して次へ進む。a-1 と違って
+      消費扱いにするのは、判定役が 1 巡実際に走っているため。途中まで入った修正は、次巡の fresh な
+      判定役が push 済みの実際の状態を読んで再判定するので取りこぼさない。
+      この回の `made_changes` は**不明**として扱い、`true` とも `false` とも読まない（2.c の扱いを参照）。
+      そのイテレーションの 指摘→対応 には、修正役が失敗したこととそのエラー内容を記録する。
+      修正役の API / tool 由来の失敗が **2 イテレーション連続**したら、残りイテレーションを回さず
+      手順 4（停止・報告）へ抜ける（auto-merge は有効化しない）。恒常的に落ちている API に対して
+      残りの上限を空費しないため。連続の数は、修正役が verdict を返したイテレーション（parse 失敗を
+      含む）と、`findings_to_fix` が空で修正役を走らせなかったイテレーションで 0 に戻す。
 
    a-3. **既裁定 findings の累積**: このイテレーションの判定 verdict の `findings_gated` のうち
       **`blocker: false` のものだけ**を `GATED_CARRYOVER` へ**追記**する（次イテレーションの
@@ -142,9 +155,16 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       後述スキーマ）。JSON の parse に失敗した場合（verdict を返そうとした最終メッセージが壊れている・
       スキーマを満たさない）は当イテレーションを失敗扱いとし、次イテレーションへ進む（5 回上限を
       1 消費する）。こちらを消費扱いにするのは、判定役がレビューを 1 巡実際に走らせているため。
-      verdict の体を成していないエラー通知は parse 失敗ではなく a-1 の再 dispatch の対象である。
+      verdict の体を成していないエラー通知は parse 失敗ではなく、判定役なら a-1 の再 dispatch、
+      修正役なら a-2 の「API / tool 由来の失敗」の対象である。
 
    c. **継続判定**:
+      - **修正役が API / tool 由来で失敗した回は、以下のどの条件よりも先に評価する**（手順 2.a-2）:
+        それが 2 イテレーション連続なら手順 4（停止・報告）へ抜ける。そうでなければ次のイテレーションへ
+        進み、以下の条件は評価しない。この回の `made_changes` は不明なので、下の「デッドロック時は
+        打ち切る」（`made_changes == false` かつ `unfixed` 非空）や「担当外の blocker だけが残ったら
+        打ち切る」の根拠にしない。修正 verdict が無いのに `false` と読むと、実際には push が入って
+        いるかもしれない回を「何も進んでいない」と誤認して止まり、人間へ誤った停止理由を返すため。
       - **担当外の blocker だけが残ったら打ち切る**（次の「次のイテレーションへ」より**先に**
         評価する）: `findings_to_fix` が空 **かつ** `ci_status` が
         `fail` でない **かつ** `findings_gated` / `threads_pending` に `blocker: true` の項目が
@@ -269,6 +289,9 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
    手順 2.a-1 の再 dispatch 上限で止まった場合は、停止理由を「API / tool 由来の失敗で停止した」と
    明記し、何イテレーション目で止まったかと最後のエラー内容を添える。レビュー内容による未収束と
    区別できないと、人間が PR を直すべきか再実行すべきかを判断できないため。
+   手順 2.a-2 の修正役の連続失敗で止まった場合も同じ理由で、停止理由を「修正役の API / tool 由来の
+   失敗で停止した」と明記し、失敗した 2 イテレーションの番号と最後のエラー内容を添える。修正役が
+   途中まで push している可能性があるので、その旨も添える。
 
 ## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` / `<SCOPE>` を埋めて `pr-judge` に渡す）
 
