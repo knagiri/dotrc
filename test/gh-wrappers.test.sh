@@ -149,6 +149,39 @@ if [ "$rc" -eq 0 ] \
   echo "ok: gh-list-threads issues reviewThreads query for the PR"
 else echo "FAIL: gh-list-threads rc=$rc args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
 
+# gh-list-threads: output is the bare thread array, so the obvious unresolved
+# count is the real one. The stub prints the GraphQL envelope and, unlike the
+# recorder above, honours --jq (via system jq) -- the unwrap under test *is* the
+# --jq, so a stub that ignored it could not tell the two shapes apart. Against
+# the envelope the same filter yields 0 without an error, which is the failure
+# this guards: an "all resolved" that looks safe.
+ltdir="$stubdir/lt"; mkdir -p "$ltdir"
+cat >"$ltdir/gh" <<'STUB'
+#!/usr/bin/env bash
+jqexpr=""
+prev=""
+for a in "$@"; do
+  [ "$prev" = "--jq" ] && jqexpr="$a"
+  prev="$a"
+done
+case "$1" in
+  repo) out='{"owner":{"login":"o"},"name":"r"}' ;;
+  api)  out='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+          {"id":"PRRT_1","isResolved":false,"isOutdated":false,"comments":{"nodes":[]}},
+          {"id":"PRRT_2","isResolved":true,"isOutdated":false,"comments":{"nodes":[]}},
+          {"id":"PRRT_3","isResolved":false,"isOutdated":true,"comments":{"nodes":[]}}]}}}}}' ;;
+esac
+if [ -n "$jqexpr" ]; then printf '%s' "$out" | jq -r "$jqexpr"; else printf '%s\n' "$out"; fi
+STUB
+chmod +x "$ltdir/gh"
+install_mise_stub "$ltdir"
+out="$(PATH="$ltdir:$PATH" "$bindir/gh-list-threads" 7 2>/dev/null)"; rc=$?
+unresolved="$(printf '%s' "$out" | jq '[.[] | select(.isResolved == false)] | length' 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$unresolved" = 2 ] \
+  && printf '%s' "$out" | jq -e 'type == "array" and length == 3' >/dev/null; then
+  echo "ok: gh-list-threads prints the thread array, so the unresolved count is real"
+else echo "FAIL: gh-list-threads shape rc=$rc unresolved=$unresolved out=$out"; fail=1; fi
+
 # gh-list-threads: missing / non-numeric arg fail.
 PATH="$stubdir:$PATH" "$bindir/gh-list-threads" >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-list-threads missing arg fails" || { echo "FAIL: gh-list-threads missing arg"; fail=1; }

@@ -94,7 +94,7 @@ prompt injection / 権限バイパスの経路になる。
 |---|---|---|---|
 | 自動レビューの待機・検出 | `gh-await-reviews <PR>` | read-only `gh pr view`（polling） | `Bash(gh-await-reviews *)` |
 | review body / standalone コメントの取得 | `gh-pr-comments <PR>` | read-only `gh pr view --json reviews,comments` | `Bash(gh-pr-comments *)` |
-| 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query | `Bash(gh-list-threads *)` |
+| 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query。envelope を剥がした thread の配列を返す | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
 | CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
 | PR 作成 | `gh-pr-create [flags]` | `gh pr create`（フラグは素通し） | `Bash(gh-pr-create *)` |
