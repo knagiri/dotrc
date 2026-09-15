@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# gh-list-threads <PR#> -- print the PR's review threads as JSON.
+# gh-list-threads <PR#> -- print the PR's review threads as a JSON array.
 #
-# Read-only reviewThreads GraphQL query (id / isResolved / isOutdated / comments).
+# Read-only reviewThreads GraphQL query. Output is the bare thread list, not the
+# GraphQL envelope:
+#
+#   [{"id": ..., "isResolved": ..., "isOutdated": ...,
+#     "comments": {"nodes": [{"author": {"login": ...}, "body": ..., "path": ..., "line": ...}]}}, ...]
+#
+# so `[.[] | select(.isResolved == false)] | length` counts unresolved threads.
+# Against the envelope that same filter raises no error and yields 0: `.[]` walks
+# into the single `data` object, which has no `.isResolved`, and `null == false`
+# is false -- an "all resolved" that looks safe and is wrong. The unwrap lives
+# here so the obvious filter is the correct one.
+#
 # Wrapped so the reviewer can enumerate threads without a broad `gh api graphql *`
-# grant; allowlist as `Bash(gh-list-threads *)`. owner/repo are derived from the
-# current repo via gh's built-in --jq (no system jq needed).
+# grant; allowlist as `Bash(gh-list-threads *)`. owner/repo and the unwrap both use
+# gh's built-in --jq (no system jq needed).
 #
 # Usage: gh-list-threads <PR-number>
 
@@ -34,4 +45,5 @@ gh_mise api graphql \
     repository(owner:$owner,name:$repo){ pullRequest(number:$pr){
       reviewThreads(first:100){ nodes{ id isResolved isOutdated
         comments(first:30){ nodes{ author{login} body path line } } } } } } }' \
-  -f owner="$owner" -f repo="$repo" -F pr="$pr"
+  -f owner="$owner" -f repo="$repo" -F pr="$pr" \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes'
