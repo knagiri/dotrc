@@ -29,7 +29,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 - レビュー結果（各イテレーションの 指摘→対応、最終 verdict）は **PR に投稿しない**。**session の最終メッセージとして出力するだけ**にする（対話利用ではそのまま会話に残り、headless 起動では `claude-review` がその出力をログファイルに残す）。raw `gh pr comment` は使わない。
 - auto-merge の有効化は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
 - 未解決 thread の取得は **`gh-list-threads <PR>`**、resolve は **`gh-resolve-thread <id>`** ラッパーのみ。raw `gh api graphql` は使わない。
-- 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。未収束・CI 連続 fail なら **merge せず停止・報告**。PR は閉じない。
+- 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。API / tool 由来の失敗による判定役の再 dispatch はこれに数えない（別枠で 1 イテレーションあたり最大 2 回。手順 2.a-1）。未収束・CI 連続 fail・再 dispatch 上限到達なら **merge せず停止・報告**。PR は閉じない。
 - 対応した review thread は resolve、意図的な箇所はソースコメントで理由を残す。
 
 ## orchestrator ループ
@@ -78,6 +78,28 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       番号 `<ITERATION>`、既裁定 findings `<GATED_CARRYOVER>`（a-3 で作る。イテレーション 1 では
       空）を埋めて渡す。判定役は最終メッセージに判定 verdict JSON だけを返す。
 
+      **API / tool 由来の失敗は再 dispatch する（イテレーションを消費しない）**: 次のいずれかに
+      当たったら、判定役はレビューを 1 巡も終えていない。
+      - `Task` の dispatch 自体がエラーで返った
+      - 判定役の最終メッセージが得られなかった
+      - 最終メッセージが rate limit / overload / timeout 等のエラー通知だけで、verdict の体を
+        成していない（JSON を書こうとした形跡が無い）
+
+      このときは `i` を進めず、同じ `<ITERATION>`・同じ `<GATED_CARRYOVER>` のまま判定役を fresh に
+      再 dispatch する。レビュー内容と無関係な失敗で 5 回の上限を減らすと、レビューが進んでいない
+      のに残機だけが減り、収束できたはずの PR が上限切れで停止するため。
+      再 dispatch は **1 イテレーションあたり最大 2 回**で、5 回の上限とは別枠に数える（イテレーションが
+      進めば回数は 0 に戻る）。上限を別に切るのは、恒常的に落ちている API へ無限に撃ち続けないため。
+      2 回再 dispatch しても verdict が得られなければ、残りイテレーションを回さず手順 4（停止・報告）へ
+      抜ける（auto-merge は有効化しない）。
+      再 dispatch は即時でよい。rate limit が明示されているときは、間に `gh-await-reviews <PR>` を
+      1 回挟んで時間を置いてよい（activity が既にあればほぼ即 return するので待機時間は保証されない。
+      `sleep` の grant は無いのでそれ以上は求めない）。挟んだ場合は 2.a-0 と同じく `LAST_SEEN` と
+      `<DETECTION_REPORT>` を返った値へ差し替える — 再 dispatch した判定役はその時点の PR を読むため。
+
+      この扱いは判定役に限る。修正役（a-2）の dispatch 失敗は途中まで push している可能性があり、
+      同じ findings で撃ち直すと二重適用になりうるので、再 dispatch しない。
+
    a-2. **修正**: 判定の `findings_to_fix` が**非空のときだけ** `Task(subagent_type: "pr-fix", ...)` で
       fresh subagent を 1 つ dispatch する。後述の「修正 subagent prompt」に `<PR>` と
       **`findings_to_fix` だけ**を埋めて渡す。**`findings_gated` は渡さない**（人間の議論待ち等を
@@ -105,7 +127,10 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       消えて再生産が復活するため。5 回の上限があるので累積しても嵩は知れている。
 
    b. 返ってきた JSON を parse する（判定 verdict と、修正役を走らせたならその修正 verdict の両方。
-      後述スキーマ）。JSON の parse に失敗した場合は当イテレーションを失敗扱いとし、次イテレーションへ進む（5 回上限は維持）。
+      後述スキーマ）。JSON の parse に失敗した場合（verdict を返そうとした最終メッセージが壊れている・
+      スキーマを満たさない）は当イテレーションを失敗扱いとし、次イテレーションへ進む（5 回上限を
+      1 消費する）。こちらを消費扱いにするのは、判定役がレビューを 1 巡実際に走らせているため。
+      verdict の体を成していないエラー通知は parse 失敗ではなく a-1 の再 dispatch の対象である。
 
    c. **継続判定**:
       - `findings_to_fix` が非空だった（＝修正役を走らせた）または `made_changes == true`
@@ -212,6 +237,9 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
    cancelled のみ切り分けを含む）/
    最後の検出レポートで `missing` だった reviewer / 停止理由・残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿・thread への reply はしない（人間が引き取る）。
+   手順 2.a-1 の再 dispatch 上限で止まった場合は、停止理由を「API / tool 由来の失敗で停止した」と
+   明記し、何イテレーション目で止まったかと最後のエラー内容を添える。レビュー内容による未収束と
+   区別できないと、人間が PR を直すべきか再実行すべきかを判断できないため。
 
 ## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` を埋めて `pr-judge` に渡す）
 
