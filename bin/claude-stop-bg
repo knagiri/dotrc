@@ -17,6 +17,14 @@ set -euo pipefail
 # interactive one. The guard refuses anything that is not kind=="background",
 # and refuses ids that do not resolve to exactly one live session.
 #
+# Both the roster and the stop are run under the session's OWN config dir, read
+# out of the claude-queue ledger (bin/lib/claude-configdir.sh). The roster and
+# the daemon behind it are per CLAUDE_CONFIG_DIR, so asking under this process's
+# environment would report a session in another dir as simply not there -- a
+# refusal indistinguishable from "no such session". An id the ledger does not
+# know falls back to the default dir; an id whose rows span two dirs is refused,
+# since pointing the stop at one of them would be a guess.
+#
 # There is deliberately no bulk sweep: `idle` also covers a delegate that asked a
 # question and is waiting for the reply, so sweeping would kill live work.
 #
@@ -50,11 +58,23 @@ command -v jq >/dev/null 2>&1 || {
   exit 1
 }
 
+# sqlite3 is NOT required: without it (or without a ledger) every lookup answers
+# with the default config dir, which is what every session ran under before a
+# second one existed. A session in another dir then fails the uniqueness check
+# below and is refused -- never silently stopped in the wrong place.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/claude-configdir.sh"
+
+if ! config_dir="$(cq_config_dir_for "$id")"; then
+  echo "claude-stop-bg: $id matches sessions under more than one CLAUDE_CONFIG_DIR; not guessing" >&2
+  exit 1
+fi
+export CLAUDE_CONFIG_DIR="$config_dir"
+
 # Fetch the roster and parse it as two separate steps (rather than piping
 # straight into jq) so a roster-fetch failure gets its own diagnostic instead
 # of `set -e` exiting silently with no output at all.
 roster="$(claude agents --json 2>/dev/null)" || {
-  echo "claude-stop-bg: could not read the session roster" >&2
+  echo "claude-stop-bg: could not read the session roster under $config_dir" >&2
   exit 1
 }
 
@@ -67,7 +87,7 @@ kind="$(jq -r --arg id "$id" \
 
 case "$kind" in
   background) ;;
-  "") echo "claude-stop-bg: no unique live session matching: $id" >&2; exit 1 ;;
+  "") echo "claude-stop-bg: no unique live session matching $id under $config_dir" >&2; exit 1 ;;
   *)  echo "claude-stop-bg: refusing to stop a $kind session: $id" >&2; exit 1 ;;
 esac
 

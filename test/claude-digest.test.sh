@@ -735,4 +735,61 @@ check "--dry-run without --generate is rejected" "$rc"
 if "$bin" --nope >/dev/null 2>&1; then rc=1; else rc=0; fi
 check "an unknown flag is rejected" "$rc"
 
+# --- transcripts under more than one config dir ------------------------------
+#
+# Transcripts live under <config dir>/projects, and the ledger is the only place
+# the config dirs in use are written down. Without the discovery a session run
+# under a second dir is simply absent from the digest -- no warning, no empty
+# section, nothing that says it was ever there.
+
+if command -v sqlite3 >/dev/null 2>&1; then
+  cfg_home="$sandbox/cfghome"
+  work_cfg="$cfg_home/.claude"
+  personal_cfg="$cfg_home/.claude-personal"
+  mkdir -p "$work_cfg/projects/-proj-a" "$personal_cfg/projects/-proj-a"
+
+  work_sid=11111111-aaaa-bbbb-cccc-000000000001
+  personal_sid=22222222-aaaa-bbbb-cccc-000000000002
+  for pair in "$work_cfg/projects/-proj-a/$work_sid.jsonl:work side" \
+              "$personal_cfg/projects/-proj-a/$personal_sid.jsonl:personal side"; do
+    jq -cn --arg cwd "$repo_a" --arg text "${pair#*:}" \
+      '{type:"assistant", entrypoint:"cli", isSidechain:false,
+        timestamp:"2026-03-01T03:20:00.100Z", cwd:$cwd, gitBranch:"main",
+        message:{role:"assistant", content:[{type:"text", text:$text}]}}' \
+      >"${pair%%:*}"
+  done
+
+  # Only the personal session is recorded with a config dir; the work one has
+  # none, standing in for a row written before the column existed. The default
+  # dir has to be in the list regardless of what the ledger says.
+  cfg_queue="$sandbox/cfg-queue.db"
+  sqlite3 "$cfg_queue" "
+    CREATE TABLE sessions (session_id TEXT PRIMARY KEY, config_dir TEXT);
+    INSERT INTO sessions VALUES ('$work_sid', NULL);
+    INSERT INTO sessions VALUES ('$personal_sid', '$personal_cfg');
+  "
+
+  # CLAUDE_PROJECTS_DIR is deliberately NOT set here: setting it is the pin that
+  # skips discovery, so a test that set it would assert nothing about this.
+  cfg_facts="$(env -u CLAUDE_PROJECTS_DIR HOME="$cfg_home" CLAUDE_QUEUE_DB="$cfg_queue" \
+      CLAUDE_DIGEST_DIR="$digests" CD_ROSTER="$sandbox/roster.json" CD_CALLS="$sandbox/calls" \
+      PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>"$sandbox/cfg_err")"
+
+  check "a session under the default config dir is in the digest" \
+    "$(if grep -q "SESSION $work_sid" <<<"$cfg_facts"; then echo 0; else echo 1; fi)"
+  check "a session under a second config dir is in the digest" \
+    "$(if grep -q "SESSION $personal_sid" <<<"$cfg_facts"; then echo 0; else echo 1; fi)"
+
+  # A config dir the ledger names but whose projects/ is gone must be skipped,
+  # not treated as "no transcripts anywhere".
+  sqlite3 "$cfg_queue" "INSERT INTO sessions VALUES ('33333333-dead-beef-cafe-000000000003', '$cfg_home/.claude-reaped');"
+  gone_facts="$(env -u CLAUDE_PROJECTS_DIR HOME="$cfg_home" CLAUDE_QUEUE_DB="$cfg_queue" \
+      CLAUDE_DIGEST_DIR="$digests" CD_ROSTER="$sandbox/roster.json" CD_CALLS="$sandbox/calls" \
+      PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>/dev/null)"
+  check "a config dir with no projects/ is skipped, not fatal" \
+    "$(if grep -q "SESSION $personal_sid" <<<"$gone_facts"; then echo 0; else echo 1; fi)"
+else
+  echo "skip: sqlite3 not available; multi config dir discovery not exercised"
+fi
+
 exit "$fail"
