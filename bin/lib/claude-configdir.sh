@@ -73,23 +73,37 @@ cq_config_dirs() {
 # resumed keeps its id, and an id colliding with itself must not read as a
 # conflict.
 cq_config_dir_for() {
-  local short="$1" dirs="" line out=""
+  local short="$1" line out=""
   # The id is spliced into the query, so its shape is checked here rather than
   # trusted from the caller: every caller already validates it, and this keeps
   # the one place that builds SQL from being the place that assumes they did.
   # Anything else answers with the default, which resolves nothing and lets the
   # caller's own refusal do the talking.
   if [[ "$short" =~ ^[0-9a-f]{8}$ ]] && cq_sqlite_available; then
-    dirs="$(sqlite3 "$(cq_db_path)" \
+    # A recorded empty string reads as the default, the same as NULL does on
+    # the Go side. Substituting here rather than in SQL keeps $HOME out of the
+    # query.
+    #
+    # sqlite3's output is read directly off process substitution rather than
+    # captured into a variable first (i.e. NOT `dirs="$(sqlite3 ...)"` here).
+    # Command substitution strips ALL trailing newlines, so when the row whose
+    # dir is the default (COALESCE -> '') happens to sort last in the result
+    # set, its blank output line is swallowed before this loop ever runs --
+    # and dropping that line drops that row out of the DISTINCT set the
+    # ambiguity check below counts over. A ledger holding one row explicitly
+    # pinned to a dir and one row recorded as NULL (-> default) for the SAME
+    # 8-char prefix must then read as two distinct dirs and refuse (exit 2);
+    # with the trailing blank line eaten, only the explicit dir survived and
+    # the cross-dir case returned it with exit 0 instead of refusing. Process
+    # substitution hands `read` the stream unmodified, so a trailing blank
+    # line still arrives as one more (empty) iteration.
+    while IFS= read -r line; do
+      [ -n "$line" ] || line="$(cq_default_config_dir)"
+      out="$out$line"$'\n'
+    done < <(sqlite3 "$(cq_db_path)" \
       "SELECT DISTINCT COALESCE(config_dir, '')
-         FROM sessions WHERE substr(session_id, 1, 8) = '$short'" 2>/dev/null || true)"
+         FROM sessions WHERE substr(session_id, 1, 8) = '$short'" 2>/dev/null || true)
   fi
-  # A recorded empty string reads as the default, the same as NULL does on the
-  # Go side. Substituting here rather than in SQL keeps $HOME out of the query.
-  while IFS= read -r line; do
-    [ -n "$line" ] || line="$(cq_default_config_dir)"
-    out="$out$line"$'\n'
-  done < <(printf '%s' "$dirs" | grep . || true)
   out="$(printf '%s' "$out" | sort -u)"
 
   case "$(printf '%s' "$out" | grep -c .)" in

@@ -188,6 +188,25 @@ if command -v sqlite3 >/dev/null 2>&1; then
      && grep -qF 'more than one CLAUDE_CONFIG_DIR' <<<"$out"; then
     echo "ok: an id spanning two config dirs is refused before any claude call"
   else echo "FAIL: cross-dir id not refused rc=$rc out=$out"; fail=1; fi
+
+  # One row of the shared prefix names a dir explicitly; the other recorded no
+  # dir at all (config_dir IS NULL), which the ledger and the Go side both read
+  # as the default dir. That must be just as ambiguous as two named dirs: this
+  # regression-tests a bug where the NULL row's blank query-result line, when
+  # it sorted last, was silently dropped by a bare `dirs="$(sqlite3 ...)"`
+  # capture (command substitution strips ALL trailing newlines), collapsing
+  # the two distinct dirs down to one and returning the explicit dir with
+  # exit 0 instead of refusing.
+  sqlite3 "$cqdb" "
+    INSERT INTO sessions VALUES ('ffffffff-1111-2222-3333-444444444444', '$tmp/.claude-other');
+    INSERT INTO sessions VALUES ('ffffffff-9999-2222-3333-444444444444', NULL);
+  "
+  : >"$stoplog"; : >"$envlog"
+  out="$(runcfg ffffffff 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && [ ! -s "$envlog" ] \
+     && grep -qF 'more than one CLAUDE_CONFIG_DIR' <<<"$out"; then
+    echo "ok: a NULL row and an explicit-dir row sharing a prefix are refused"
+  else echo "FAIL: NULL-vs-explicit-dir prefix not refused rc=$rc out=$out"; fail=1; fi
 else
   echo "skip: sqlite3 not available; config dir resolution not exercised"
 fi
