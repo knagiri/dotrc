@@ -11,6 +11,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
+	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/label"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
@@ -26,6 +27,7 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 		Cwd:            sql.NullString{String: "/home/x/projects/everysteel-api", Valid: true},
 		EffectiveState: "awaiting_approval",
 		TranscriptPath: sql.NullString{String: "/home/x/.claude/projects/enc/s1.jsonl", Valid: true},
+		ConfigDir:      sql.NullString{String: "/home/x/.claude-personal", Valid: true},
 		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"pnpm prisma migrate"}}`, Valid: true},
 		CreatedAt:      nowMinus(120),
 	}
@@ -65,6 +67,24 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 	if fields[colTranscript] != "/home/x/.claude/projects/enc/s1.jsonl" {
 		t.Errorf("hidden transcript_path = %q, want the full path", fields[colTranscript])
 	}
+	// Every command a pick runs is pointed at this dir, so it has to survive the
+	// render just like the id does. A row that recorded one carries it verbatim;
+	// see TestFormatLine_ConfigDirFallsBackToDefault for the row that did not.
+	if fields[colConfigDir] != "/home/x/.claude-personal" {
+		t.Errorf("hidden config_dir = %q, want /home/x/.claude-personal", fields[colConfigDir])
+	}
+}
+
+// A row from before the column existed still has to render a usable dir: the
+// pick needs SOME dir to run under, and the default is what those sessions ran
+// in. An empty column here would also be read back as a missing field.
+func TestFormatLine_ConfigDirFallsBackToDefault(t *testing.T) {
+	t.Setenv("HOME", "/home/probe")
+	row := db.Row{SessionID: "sid", EffectiveState: "working", CreatedAt: nowMinus(10)}
+	fields := strings.Split(FormatLine(row, "t", "w", nowUnix(), true), "\t")
+	if got := fields[colConfigDir]; got != "/home/probe/.claude" {
+		t.Errorf("hidden config_dir = %q, want the default /home/probe/.claude", got)
+	}
 }
 
 // The column order itself, asserted once so a reshuffle has to come here
@@ -77,11 +97,12 @@ func TestFormatLine_ColumnOrder(t *testing.T) {
 		TmuxPane:       sql.NullString{String: "%4", Valid: true},
 		Cwd:            sql.NullString{String: "/w/a", Valid: true},
 		TranscriptPath: sql.NullString{String: "/t/a.jsonl", Valid: true},
+		ConfigDir:      sql.NullString{String: "/cfg/a", Valid: true},
 		EffectiveState: "working",
 		CreatedAt:      nowMinus(60),
 	}
 	fields := strings.Split(FormatLine(row, "title", "wt", nowUnix(), true), "\t")
-	want := []string{"[*]", "title", "wt", "60s", "working", "sid", "%4", "/w/a", "/t/a.jsonl"}
+	want := []string{"[*]", "title", "wt", "60s", "working", "sid", "%4", "/w/a", "/t/a.jsonl", "/cfg/a"}
 	if len(fields) != len(want) {
 		t.Fatalf("got %d columns, want %d", len(fields), len(want))
 	}
@@ -177,6 +198,7 @@ func TestParseSelection(t *testing.T) {
 		TmuxPane:       sql.NullString{String: "%12", Valid: true},
 		Cwd:            sql.NullString{String: "/home/x/ghq/dotrc_wt", Valid: true},
 		TranscriptPath: sql.NullString{String: "/home/x/.claude/projects/enc/s.jsonl", Valid: true},
+		ConfigDir:      sql.NullString{String: "/home/x/.claude-personal", Valid: true},
 		EffectiveState: "awaiting_approval",
 		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"go test ./..."}}`, Valid: true},
 		CreatedAt:      nowMinus(30),
@@ -192,6 +214,7 @@ func TestParseSelection(t *testing.T) {
 		Pane:       "%12",
 		Cwd:        "/home/x/ghq/dotrc_wt",
 		Transcript: "/home/x/.claude/projects/enc/s.jsonl",
+		ConfigDir:  "/home/x/.claude-personal",
 	}
 	if sel != want {
 		t.Errorf("parseSelection = %+v, want %+v", sel, want)
@@ -769,7 +792,9 @@ func (f *fakeMux) CurrentPane() string        { return "" }
 func (f *fakeMux) RefreshStatus()             {}
 func (f *fakeMux) Switch(target string) error { return nil }
 
-func (f *fakeMux) OpenSession(name, cwd, window, originPane string, a []string) error { return nil }
+func (f *fakeMux) OpenSession(name, cwd, window, originPane string, env map[string]string, a []string) error {
+	return nil
+}
 
 // The window-naming methods are equally unused here: picker.Run drives them,
 // and Run is the exec boundary these tests stay on the near side of.
@@ -1016,4 +1041,84 @@ func TestWindowNameFor(t *testing.T) {
 			t.Errorf("windowNameFor = %q, want %q", got, want)
 		}
 	})
+}
+
+// The config dir has to survive the routing, not just the render: an attach that
+// reaches the wrong daemon answers "No job matching <id>", and a resume that
+// finds no transcript silently opens an EMPTY session under that id -- losing
+// the conversation the pick was trying to reach.
+func TestDecideAction_CarriesConfigDir(t *testing.T) {
+	const dir = "/home/x/.claude-personal"
+
+	attach := DecideAction(Target{
+		SessionID: testUUID,
+		InRoster:  true,
+		RosterOK:  true, RosterMatches: 1,
+		Kind:      roster.KindBackground,
+		Cwd:       "/w/a",
+		ConfigDir: dir,
+	})
+	if attach.Kind != "attach" || attach.ConfigDir != dir {
+		t.Errorf("attach action = %+v, want kind attach with config dir %s", attach, dir)
+	}
+
+	resume := DecideAction(Target{
+		SessionID: testUUID,
+		RosterOK:  true,
+		Cwd:       "/w/a", CwdExists: true,
+		TranscriptPath: "/t/a.jsonl", TranscriptExists: true,
+		ConfigDir: dir,
+	})
+	if resume.Kind != "resume" || resume.ConfigDir != dir {
+		t.Errorf("resume action = %+v, want kind resume with config dir %s", resume, dir)
+	}
+}
+
+// actionEnv is what turns that dir into something the opened window sees. It is
+// always set, never left to be inherited: the popup runs under whatever
+// CLAUDE_CONFIG_DIR the tmux server was started with, so an omitted variable
+// means "use the server's", not "use the default".
+func TestActionEnv(t *testing.T) {
+	got := actionEnv(Action{Kind: "attach", ConfigDir: "/home/x/.claude-personal"})
+	if got[configdir.EnvVar] != "/home/x/.claude-personal" {
+		t.Errorf("actionEnv = %v, want %s set", got, configdir.EnvVar)
+	}
+	if got := actionEnv(Action{Kind: "attach"}); len(got) != 0 {
+		t.Errorf("actionEnv with no dir = %v, want nothing set", got)
+	}
+}
+
+// Which config dir the roster is asked about is the whole point: a popup carries
+// the tmux server's CLAUDE_CONFIG_DIR, and asking under that one reports every
+// session of every other dir as absent -- routing a live background session to
+// the resume path, which opens an empty session under its id rather than
+// failing. So the dir the lookup is made with is asserted directly.
+func TestDescribeTarget_AsksTheRowsConfigDir(t *testing.T) {
+	const dir = "/home/x/.claude-personal"
+	sel := selection{SessionID: testUUID, Cwd: "/w/a", Transcript: "/t/a.jsonl", ConfigDir: dir}
+
+	var asked []string
+	list := func(d string) ([]roster.Agent, error) {
+		asked = append(asked, d)
+		// The row is live only in its own dir; anything else answers empty, the
+		// way another dir's daemon would.
+		if d != dir {
+			return nil, nil
+		}
+		return []roster.Agent{{SessionID: testUUID, PID: 42, Kind: roster.KindBackground, Cwd: "/w/a"}}, nil
+	}
+
+	got := describeTarget(&fakeMux{}, sel, list)
+	if !slices.Equal(asked, []string{dir}) {
+		t.Fatalf("roster was asked for %v, want exactly [%s]", asked, dir)
+	}
+	if !got.InRoster || got.Kind != roster.KindBackground {
+		t.Errorf("target = %+v, want the session found as a background agent", got)
+	}
+	if got.ConfigDir != dir {
+		t.Errorf("target config dir = %q, want %q", got.ConfigDir, dir)
+	}
+	if act := DecideAction(got); act.Kind != "attach" {
+		t.Errorf("action = %+v, want attach: a session live in its own dir must not fall through to resume", act)
+	}
 }

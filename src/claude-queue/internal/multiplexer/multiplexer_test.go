@@ -40,7 +40,7 @@ func TestDetect_NoMultiplexer(t *testing.T) {
 	}
 	// Unlike Switch, OpenSession must return an error: the picker's attach path
 	// relies on this to decide whether to print a manual-fallback hint.
-	if err := m.OpenSession("dotrc_wt", "/w/a", "some-window", "%3", []string{"claude", "attach", "abc"}); err == nil {
+	if err := m.OpenSession("dotrc_wt", "/w/a", "some-window", "%3", nil, []string{"claude", "attach", "abc"}); err == nil {
 		t.Errorf("noop OpenSession err = nil, want non-nil")
 	}
 	// With no server there is no pane to confirm and no server pid to compare
