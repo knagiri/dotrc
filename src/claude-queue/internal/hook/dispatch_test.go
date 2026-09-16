@@ -407,3 +407,63 @@ func TestDispatch_SessionEnd_TriggersGC(t *testing.T) {
 		t.Errorf("ancient should be gc'd; count = %d", n)
 	}
 }
+
+// The config dir is what every other tool matches a row against, so it has to
+// land on the row -- and keep landing on it, since a session that resumes under
+// a different dir is a session the old value would send its callers to the wrong
+// daemon for.
+func TestDispatch_RecordsConfigDir(t *testing.T) {
+	conn := openTestDB(t).DB
+	d := &Deps{DB: conn, Pane: "%1", ConfigDir: "/home/x/.claude-personal"}
+
+	in := &Input{
+		SessionID:      "s1",
+		Cwd:            "/w/a",
+		TranscriptPath: "/home/x/.claude-personal/projects/-w-a/s1.jsonl",
+	}
+	if err := Dispatch(d, "SessionStart", in); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if got := configDirOf(t, conn, "s1"); got != "/home/x/.claude-personal" {
+		t.Errorf("config_dir = %q, want /home/x/.claude-personal", got)
+	}
+
+	// A later event under a different dir moves the row: the dir a session is
+	// running under now is the one its roster lookup has to use.
+	d2 := &Deps{DB: conn, Pane: "%1", ConfigDir: "/home/x/.claude"}
+	if err := Dispatch(d2, "Stop", in); err != nil {
+		t.Fatalf("Dispatch Stop: %v", err)
+	}
+	if got := configDirOf(t, conn, "s1"); got != "/home/x/.claude" {
+		t.Errorf("config_dir after a second dir = %q, want /home/x/.claude", got)
+	}
+}
+
+// A caller that cannot tell must not overwrite what is already recorded with a
+// blank: "I don't know" is not the same claim as "the default", and the row
+// already holds a better answer.
+func TestDispatch_EmptyConfigDirKeepsTheRecordedOne(t *testing.T) {
+	conn := openTestDB(t).DB
+	in := &Input{SessionID: "s1", Cwd: "/w/a"}
+
+	if err := Dispatch(&Deps{DB: conn, Pane: "%1", ConfigDir: "/home/x/.claude-personal"}, "SessionStart", in); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if err := Dispatch(&Deps{DB: conn, Pane: "%1"}, "Stop", in); err != nil {
+		t.Fatalf("Dispatch Stop: %v", err)
+	}
+	if got := configDirOf(t, conn, "s1"); got != "/home/x/.claude-personal" {
+		t.Errorf("config_dir = %q, want the recorded /home/x/.claude-personal to survive", got)
+	}
+}
+
+func configDirOf(t *testing.T, conn *sql.DB, sessionID string) string {
+	t.Helper()
+	var dir sql.NullString
+	if err := conn.QueryRow(
+		"SELECT config_dir FROM sessions WHERE session_id = ?", sessionID,
+	).Scan(&dir); err != nil {
+		t.Fatalf("read config_dir: %v", err)
+	}
+	return dir.String
+}

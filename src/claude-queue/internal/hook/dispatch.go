@@ -13,6 +13,11 @@ import (
 type Deps struct {
 	DB   *sql.DB
 	Pane string // tmux pane id, may be empty
+	// ConfigDir is the CLAUDE_CONFIG_DIR this session runs under, resolved by
+	// Run (see configdir.Resolve). Empty leaves the column as it was, which is
+	// what keeps a caller that cannot tell from overwriting a recorded dir with
+	// a guess.
+	ConfigDir string
 }
 
 // Dispatch applies the state transition for the given event.
@@ -33,7 +38,7 @@ func Dispatch(d *Deps, event string, in *Input) error {
 	// Upsert on every event: when SessionStart hook is dropped (e.g.
 	// /resume, hook registered mid-session) later events still need to
 	// populate tmux_pane so the picker can switch to the live pane.
-	if err := upsertSession(tx, in, d.Pane); err != nil {
+	if err := upsertSession(tx, in, d.Pane, d.ConfigDir); err != nil {
 		return err
 	}
 	if event == "SessionStart" && d.Pane != "" {
@@ -81,20 +86,21 @@ func Dispatch(d *Deps, event string, in *Input) error {
 //
 // Dispatch relies on running this BEFORE it re-sets terminated_at for SessionEnd
 // -- both happen in the same transaction, so a genuine end still lands closed.
-func upsertSession(tx *sql.Tx, in *Input, pane string) error {
+func upsertSession(tx *sql.Tx, in *Input, pane, cfgDir string) error {
 	var paneVal interface{}
 	if pane != "" {
 		paneVal = pane
 	}
 	_, err := tx.Exec(`
-		INSERT INTO sessions(session_id, tmux_pane, cwd, transcript_path)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO sessions(session_id, tmux_pane, cwd, transcript_path, config_dir)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			tmux_pane       = COALESCE(excluded.tmux_pane, sessions.tmux_pane),
 			cwd             = COALESCE(excluded.cwd, sessions.cwd),
 			transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path),
+			config_dir      = COALESCE(excluded.config_dir, sessions.config_dir),
 			terminated_at   = NULL
-	`, in.SessionID, paneVal, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath))
+	`, in.SessionID, paneVal, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath), nullIfEmpty(cfgDir))
 	if err != nil {
 		return fmt.Errorf("upsert session: %w", err)
 	}

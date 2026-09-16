@@ -37,8 +37,18 @@ stubbin="$tmp/stubbin"
 mkdir -p "$stubbin"
 cat >"$stubbin/claude" <<'EOF'
 #!/usr/bin/env bash
+# `agents` answers per CLAUDE_CONFIG_DIR when a per-dir fixture exists, which is
+# what the real daemon does: each config dir has its own, and one dir's roster
+# never mentions another's sessions. Without such a fixture it falls back to the
+# single shared roster, so the tests that predate config dirs are unaffected.
 case "$1" in
-  agents) cat "$CLAUDE_STUB_ROSTER" ;;
+  agents)
+    if [ -n "${CLAUDE_STUB_ROSTER_DIR:-}" ] && [ -f "$CLAUDE_STUB_ROSTER_DIR/${CLAUDE_CONFIG_DIR//\//_}.json" ]; then
+      cat "$CLAUDE_STUB_ROSTER_DIR/${CLAUDE_CONFIG_DIR//\//_}.json"
+    else
+      cat "$CLAUDE_STUB_ROSTER"
+    fi
+    ;;
   stop)   printf '%s\n' "$2" >>"$CLAUDE_STUB_STOPLOG" ;;
   *)      exit 1 ;;
 esac
@@ -334,14 +344,18 @@ if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ]; then
 else echo "FAIL: unreadable roster swept rc=$rc out=$out"; fail=1; fi
 
 # A roster entry with no `pid` is a stale job record: the process behind the job
-# is gone but ~/.claude/jobs/<id>/state.json keeps it listed. It has no
+# is gone but <config dir>/jobs/<id>/state.json keeps it listed. It has no
 # `status`, so no gate above can ever see it; it must surface in its own
 # section, with `state` as a diagnostic, and be left strictly alone.
+#
+# The hint names the resolved dir rather than a literal "~/.claude": with more
+# than one config dir in play the tilde form is right only for the default one,
+# and a copied command that removes the wrong path is worse than a long one.
 out="$(run 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -q 'stale job records (2)' <<<"$out" \
    && grep -q '11111111  no process (state: blocked)' <<<"$out" \
-   && grep -qF '→ rm -rf ~/.claude/jobs/11111111' <<<"$out"; then
+   && grep -qF "→ rm -rf $HOME/.claude/jobs/11111111" <<<"$out"; then
   echo "ok: a roster entry with no pid is reported as a stale job record"
 else echo "FAIL: stale record not reported rc=$rc out=$out"; fail=1; fi
 
@@ -372,7 +386,7 @@ else echo "FAIL: rm stub did not capture a direct call -- the above ok proves no
 # A stale entry without `state` prints no empty parenthesis, and still gets its
 # removal hint.
 if grep -q '22222222  no process$' <<<"$out" \
-   && grep -qF '→ rm -rf ~/.claude/jobs/22222222' <<<"$out"; then
+   && grep -qF "→ rm -rf $HOME/.claude/jobs/22222222" <<<"$out"; then
   echo "ok: a stale record with no state omits the empty parenthesis"
 else echo "FAIL: stateless stale record misformatted out=$out"; fail=1; fi
 
@@ -471,5 +485,65 @@ out="$(PATH="$stubbin:$bindir:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_ST
 if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && grep -q 'no claude-queue database' <<<"$out"; then
   echo "ok: a missing claude-queue database is refused"
 else echo "FAIL: missing db rc=$rc out=$out"; fail=1; fi
+
+# --- more than one config dir ------------------------------------------------
+#
+# The ledger records every session on the host, but the roster and the daemon
+# answering it are per CLAUDE_CONFIG_DIR. Reading the roster once, under this
+# process's own environment, would leave every session of every other dir
+# invisible -- not skipped with a reason, simply never considered -- so the
+# roster is read once per dir the ledger names, plus the default.
+
+personal="$tmp/.claude-personal"
+mkdir -p "$tmp/rosters"
+dirkey() { printf '%s' "${1//\//_}"; }
+
+# The default dir knows only the work session; the personal dir only the
+# personal one. Each is idle, background, and long past the threshold.
+cat >"$tmp/rosters/$(dirkey "$HOME/.claude").json" <<'EOF'
+[{"pid":111,"cwd":"/w/a","kind":"background","sessionId":"a1a1a1a1-1111-2222-3333-444444444444","status":"idle"}]
+EOF
+cat >"$tmp/rosters/$(dirkey "$personal").json" <<EOF
+[{"pid":222,"cwd":"/w/b","kind":"background","sessionId":"b2b2b2b2-1111-2222-3333-444444444444","status":"idle"},
+ {"kind":"background","id":"c3c3c3c3","sessionId":"c3c3c3c3-1111-2222-3333-444444444444","state":"blocked"}]
+EOF
+
+cfgdb="$tmp/cfg-queue.db"
+old_epoch=$(( $(date +%s) - 2400 ))
+sqlite3 "$cfgdb" "
+  CREATE TABLE sessions (session_id TEXT PRIMARY KEY, config_dir TEXT, terminated_at INTEGER);
+  CREATE TABLE events (session_id TEXT, raw_state TEXT, created_at INTEGER, transcript_path TEXT);
+  CREATE VIEW queue AS SELECT session_id, raw_state, created_at, transcript_path FROM events;
+  CREATE TABLE session_links (child_short TEXT, parent_session_id TEXT);
+  INSERT INTO sessions VALUES ('a1a1a1a1-1111-2222-3333-444444444444', NULL, NULL);
+  INSERT INTO sessions VALUES ('b2b2b2b2-1111-2222-3333-444444444444', '$personal', NULL);
+  INSERT INTO events VALUES ('a1a1a1a1-1111-2222-3333-444444444444', 'idle_done', $old_epoch, '$tmp/quiet.jsonl');
+  INSERT INTO events VALUES ('b2b2b2b2-1111-2222-3333-444444444444', 'idle_done', $old_epoch, '$tmp/quiet.jsonl');
+"
+
+# shellcheck disable=SC2120  # called with no arguments here; the "$@" is the
+# same shape as run() above, so a later case can restrict the sweep by id.
+runcfg() {
+  : >"$stoplog"
+  PATH="$stubpath" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" \
+    CLAUDE_STUB_RMLOG="$rmlog" CLAUDE_STUB_ROSTER_DIR="$tmp/rosters" \
+    CLAUDE_QUEUE_DB="$cfgdb" "$src" "$@"
+}
+
+# Both sessions are swept, each found in its own dir's roster. Reading only one
+# dir leaves the other's session unlisted, and an unlisted session is never a
+# candidate -- so the failure is a sweep that quietly does half the job.
+out="$(runcfg 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && stopped a1a1a1a1 && stopped b2b2b2b2; then
+  echo "ok: sessions in both config dirs are swept"
+else echo "FAIL: cross-dir sweep rc=$rc stopped=$(cat "$stoplog") out=$out"; fail=1; fi
+
+# A stale job record found in the personal dir must name THAT dir's jobs path:
+# the hint is a command the human copies, and the default dir's path would point
+# at a directory that does not hold this job.
+if grep -qF "→ rm -rf $personal/jobs/c3c3c3c3" <<<"$out"; then
+  echo "ok: a stale job record names the config dir it came from"
+else echo "FAIL: stale hint used the wrong config dir: $out"; fail=1; fi
 
 exit "$fail"
