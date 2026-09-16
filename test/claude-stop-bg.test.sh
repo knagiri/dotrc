@@ -192,11 +192,12 @@ if command -v sqlite3 >/dev/null 2>&1; then
   # One row of the shared prefix names a dir explicitly; the other recorded no
   # dir at all (config_dir IS NULL), which the ledger and the Go side both read
   # as the default dir. That must be just as ambiguous as two named dirs: this
-  # regression-tests a bug where the NULL row's blank query-result line, when
-  # it sorted last, was silently dropped by a bare `dirs="$(sqlite3 ...)"`
-  # capture (command substitution strips ALL trailing newlines), collapsing
-  # the two distinct dirs down to one and returning the explicit dir with
-  # exit 0 instead of refusing.
+  # regression-tests a bug where the NULL row's blank query-result line was
+  # silently dropped by capturing sqlite3's output into a variable and
+  # filtering it through `grep .` (what the code used to do) -- `grep .` drops
+  # blank lines unconditionally, regardless of where they sort, collapsing the
+  # two distinct dirs down to one and returning the explicit dir with exit 0
+  # instead of refusing.
   sqlite3 "$cqdb" "
     INSERT INTO sessions VALUES ('ffffffff-1111-2222-3333-444444444444', '$tmp/.claude-other');
     INSERT INTO sessions VALUES ('ffffffff-9999-2222-3333-444444444444', NULL);
