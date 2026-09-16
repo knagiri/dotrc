@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-pr-edit-body <PR#> <body-file> -- replace a pull request's body.
+#
+# Runs EXACTLY `gh pr edit <PR> --body-file <body-file>` with no flag
+# passthrough, so the grant can be allowlisted narrowly as
+# `Bash(gh-pr-edit-body *)`: the title, labels, base branch, reviewers and every
+# other field `gh pr edit` could touch stay out of reach. Going through
+# bin/lib/gh-mise.sh is what makes this work at all from a delegated agent -- a
+# bare `gh pr edit` falls back to hosts.yml's token, and GitHub refuses
+# updatePullRequest with "Resource not accessible by personal access token".
+#
+# The body is always REPLACED; there is no append mode. To add to the current
+# body, fetch it, edit the file, and hand that file back:
+#
+#   gh pr view <PR> --json body --jq .body >body.md
+#   # ...edit body.md...
+#   gh-pr-edit-body <PR> body.md
+#
+# gh_mise runs gh with the repo root as its cwd, so the body-file is
+# absolutised first; a relative path would otherwise be resolved against the
+# root and quietly read a different file, or none. "-" (stdin) is not accepted:
+# the file must exist.
+#
+# Usage: gh-pr-edit-body <PR-number> <body-file>
+
+usage() { echo "usage: gh-pr-edit-body <PR-number> <body-file>" >&2; exit "${1:-1}"; }
+
+case "${1:-}" in -h|--help) usage 0 ;; esac
+[ $# -eq 2 ] || usage 1
+pr="$1"
+if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+  echo "gh-pr-edit-body: PR number must be numeric (got: $pr)" >&2
+  exit 1
+fi
+if [ ! -f "$2" ]; then
+  echo "gh-pr-edit-body: body file not found: $2" >&2
+  exit 1
+fi
+body="$(realpath -- "$2")"
+
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+gh_mise pr edit "$pr" --body-file "$body"
