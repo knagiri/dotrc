@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 )
 
 // Row is one session as surfaced by the queue view.
@@ -11,6 +13,9 @@ type Row struct {
 	TmuxPane       sql.NullString
 	Cwd            sql.NullString
 	TranscriptPath sql.NullString
+	// ConfigDir is the CLAUDE_CONFIG_DIR the session runs under. NULL is a row
+	// written before the column existed; ConfigDirOf reads that as the default.
+	ConfigDir      sql.NullString
 	EventType      string
 	RawState       string
 	EffectiveState string
@@ -97,7 +102,7 @@ func (o ListOpts) Includes(effectiveState string) bool {
 // opts.Includes, each carrying its recorded delegation parent (if any).
 func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	rows, err := conn.Query(`
-		SELECT q.session_id, q.tmux_pane, q.cwd, q.transcript_path,
+		SELECT q.session_id, q.tmux_pane, q.cwd, q.transcript_path, q.config_dir,
 		       q.event_type, q.raw_state, q.effective_state, q.payload, q.created_at, q.priority,
 		       NULL AS prior_state, l.parent_session_id
 		FROM queue q
@@ -168,7 +173,7 @@ func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
 // from its ancestry, so nothing is lost by withholding this column.
 func ResumableCandidates(conn *sql.DB) ([]Row, error) {
 	rows, err := conn.Query(`
-		SELECT s.session_id, NULL AS tmux_pane, s.cwd, s.transcript_path,
+		SELECT s.session_id, NULL AS tmux_pane, s.cwd, s.transcript_path, s.config_dir,
 		       e.event_type, e.state AS raw_state, ? AS effective_state,
 		       e.payload, e.created_at,
 		       CASE WHEN p.state IN ('working', 'awaiting_approval') THEN ? ELSE ? END AS priority,
@@ -203,7 +208,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 	for rows.Next() {
 		var r Row
 		if err := rows.Scan(
-			&r.SessionID, &r.TmuxPane, &r.Cwd, &r.TranscriptPath,
+			&r.SessionID, &r.TmuxPane, &r.Cwd, &r.TranscriptPath, &r.ConfigDir,
 			&r.EventType, &r.RawState, &r.EffectiveState, &r.Payload, &r.CreatedAt, &r.Priority,
 			&r.PriorState, &r.ParentSessionID,
 		); err != nil {
@@ -214,24 +219,74 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 	return out, rows.Err()
 }
 
-// LiveSessionIDs returns the session ids the ledger still considers running,
-// i.e. every row that never got a terminated_at. Ordered oldest first so a
-// reconcile pass reports in a stable order.
-func LiveSessionIDs(conn *sql.DB) ([]string, error) {
+// LiveSession is one row the ledger still considers running, paired with the
+// config dir whose roster can confirm or deny that.
+type LiveSession struct {
+	SessionID string
+	ConfigDir string
+}
+
+// LiveSessions returns the sessions the ledger still considers running, i.e.
+// every row that never got a terminated_at, each with its config dir resolved.
+// Ordered oldest first so a reconcile pass reports in a stable order.
+//
+// The dir rides along rather than being looked up per row because it decides
+// WHICH roster the row is checked against: matching a session from one config
+// dir against another dir's roster finds nothing, and "not in the roster" is
+// precisely the signal that closes a row.
+func LiveSessions(conn *sql.DB) ([]LiveSession, error) {
 	rows, err := conn.Query(
-		"SELECT session_id FROM sessions WHERE terminated_at IS NULL ORDER BY started_at, session_id",
+		"SELECT session_id, config_dir FROM sessions WHERE terminated_at IS NULL ORDER BY started_at, session_id",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("live sessions: %w", err)
 	}
 	defer rows.Close()
-	var out []string
+	var out []LiveSession
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var dir sql.NullString
+		if err := rows.Scan(&id, &dir); err != nil {
 			return nil, err
 		}
-		out = append(out, id)
+		out = append(out, LiveSession{SessionID: id, ConfigDir: ConfigDirOf(dir)})
+	}
+	return out, rows.Err()
+}
+
+// ConfigDirOf unwraps a nullable config_dir into the dir a caller should use.
+// NULL -- every row written before the column existed -- reads as the default,
+// which is what those sessions ran under unless they set the env, and the env is
+// what the column was added to stop guessing about going forward.
+func ConfigDirOf(v sql.NullString) string {
+	if v.Valid && v.String != "" {
+		return v.String
+	}
+	return configdir.Default()
+}
+
+// RecordedConfigDirs returns the distinct non-empty config dirs the ledger
+// holds, live rows and ended ones alike. Callers pass it through
+// configdir.Union to get the list of dirs to consult.
+//
+// Ended rows count because a tool can be asked about a day, or a session, that
+// is already over -- and because the ledger is the only place the set of dirs in
+// use is written down at all.
+func RecordedConfigDirs(conn *sql.DB) ([]string, error) {
+	rows, err := conn.Query(
+		"SELECT DISTINCT config_dir FROM sessions WHERE config_dir IS NOT NULL AND config_dir != '' ORDER BY config_dir",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("recorded config dirs: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var dir string
+		if err := rows.Scan(&dir); err != nil {
+			return nil, err
+		}
+		out = append(out, dir)
 	}
 	return out, rows.Err()
 }

@@ -10,7 +10,10 @@ package roster
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+
+	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 )
 
 // The two values Agent.Kind takes. They are named because the distinction
@@ -31,14 +34,34 @@ type Agent struct {
 	Cwd       string `json:"cwd"`
 }
 
-// List runs `claude agents --json` and returns the agents it reports.
+// List runs `claude agents --json` under the inherited environment and returns
+// the agents it reports. Callers that hold a session's config dir want ListIn.
 //
 // An error is always a failure to read the roster, never "nothing is running":
 // reconcile relies on that distinction to avoid terminating every tracked
 // session when the command itself breaks.
 func List() ([]Agent, error) {
-	out, err := exec.Command("claude", "agents", "--json").Output()
+	return ListIn("")
+}
+
+// ListIn reads the roster of one config dir, by running `claude agents --json`
+// with CLAUDE_CONFIG_DIR set to it. "" inherits the environment instead.
+//
+// The roster is per config dir because the daemon that answers for it is: each
+// dir has its own, and asking one about another dir's sessions returns nothing
+// -- indistinguishable, to a caller matching ids, from those sessions having
+// ended. Every caller that acts on a session's absence therefore has to ask the
+// dir that session actually belongs to.
+func ListIn(dir string) ([]Agent, error) {
+	cmd := exec.Command("claude", "agents", "--json")
+	if dir != "" {
+		cmd.Env = append(os.Environ(), configdir.EnvVar+"="+dir)
+	}
+	out, err := cmd.Output()
 	if err != nil {
+		if dir != "" {
+			return nil, fmt.Errorf("claude agents --json (%s=%s): %w", configdir.EnvVar, dir, err)
+		}
 		return nil, fmt.Errorf("claude agents --json: %w", err)
 	}
 	return parse(out)

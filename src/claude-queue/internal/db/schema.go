@@ -1,14 +1,28 @@
 package db
 
-// Schema is the full DDL applied at Open. Idempotent (IF NOT EXISTS).
-const Schema = `
+// Tables is the table + index DDL applied at Open. Idempotent (IF NOT EXISTS).
+//
+// Split from View because migrate() has to run between the two: the view selects
+// sessions.config_dir, which on a database created before that column existed is
+// only there once the ALTER in migrate() has run.
+const Tables = `
 CREATE TABLE IF NOT EXISTS sessions (
   session_id      TEXT PRIMARY KEY,
   tmux_pane       TEXT,
   cwd             TEXT,
   transcript_path TEXT,
   started_at      INTEGER NOT NULL DEFAULT (unixepoch()),
-  terminated_at   INTEGER
+  terminated_at   INTEGER,
+  -- Which CLAUDE_CONFIG_DIR this session runs under. This one ledger records
+  -- every session on the host (its path is keyed off $HOME), but the agent
+  -- roster, the daemon behind it and the transcripts are all per config dir, so
+  -- a row that does not say which dir it belongs to cannot be matched against
+  -- any of them. NULL is every row written before the column existed, and reads
+  -- as configdir.Default().
+  --
+  -- Added by migrate() as well, because CREATE TABLE IF NOT EXISTS is a no-op on
+  -- an existing database and would leave the column off it forever.
+  config_dir      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_pane_live
@@ -36,14 +50,18 @@ CREATE TABLE IF NOT EXISTS session_links (
   parent_session_id TEXT NOT NULL,
   created_at        INTEGER NOT NULL DEFAULT (unixepoch())
 );
+`
 
-DROP VIEW IF EXISTS queue;
+// View is the queue view, recreated at Open (DROP VIEW IF EXISTS) so a changed
+// definition takes effect on an existing database.
+const View = `DROP VIEW IF EXISTS queue;
 CREATE VIEW queue AS
 SELECT
   s.session_id,
   s.tmux_pane,
   s.cwd,
   s.transcript_path,
+  s.config_dir,
   e.event_type,
   e.state AS raw_state,
   e.payload,

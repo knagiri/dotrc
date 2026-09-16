@@ -30,8 +30,12 @@ type Multiplexer interface {
 	// internal/label) -- the implementation only sanitizes it, it never
 	// invents one. originPane is the pane the client is returned to once argv
 	// finishes cleanly, from a prior CurrentPane() call; "" skips the return.
+	// env is set on the window, for the variables argv must see regardless of
+	// what the caller's own process inherited -- the picker runs inside a tmux
+	// popup, whose environment is the tmux server's rather than the selected
+	// session's. nil sets nothing.
 	// Returns an error when there is no multiplexer to open a session in.
-	OpenSession(name, cwd, window, originPane string, argv []string) error
+	OpenSession(name, cwd, window, originPane string, env map[string]string, argv []string) error
 	// RenameWindow renames the window holding pane. Used to keep a window's
 	// name following the conversation running in it, so it is best-effort:
 	// callers ignore the error rather than fail the operation they were in.
@@ -87,7 +91,7 @@ func (noopImpl) Switch(target string) error { return nil }
 // OpenSession cannot succeed without a multiplexer, and callers need to know:
 // unlike Switch, there is no silent degradation that still gets the user to
 // their session. The error is what makes the caller print a manual fallback.
-func (noopImpl) OpenSession(name, cwd, window, originPane string, argv []string) error {
+func (noopImpl) OpenSession(name, cwd, window, originPane string, env map[string]string, argv []string) error {
 	return errors.New("no multiplexer detected")
 }
 
