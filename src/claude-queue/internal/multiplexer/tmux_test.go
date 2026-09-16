@@ -57,7 +57,7 @@ func TestNewSessionArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := newSessionArgs(tt.sess, tt.window, tt.cwd, originPane, tt.argv)
+			got := newSessionArgs(tt.sess, tt.window, tt.cwd, originPane, nil, tt.argv)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("newSessionArgs(%q, %q, %q, %v) = %v, want %v", tt.sess, tt.window, tt.cwd, tt.argv, got, tt.want)
 			}
@@ -81,8 +81,8 @@ func TestNewSessionArgsWindowNameMatchesNewWindow(t *testing.T) {
 	argv := []string{"claude", "attach", "abc"}
 	window := "claude-attach-abc"
 
-	sessionArgs := newSessionArgs("dotrc_wt", window, "/w/a", originPane, argv)
-	windowArgs := newWindowArgs("dotrc_wt", window, "/w/a", originPane, argv)
+	sessionArgs := newSessionArgs("dotrc_wt", window, "/w/a", originPane, nil, argv)
+	windowArgs := newWindowArgs("dotrc_wt", window, "/w/a", originPane, nil, argv)
 
 	sessionWindowName := sessionArgs[slices.Index(sessionArgs, "-n")+1]
 	targetWindowName := windowArgs[slices.Index(windowArgs, "-n")+1]
@@ -136,7 +136,7 @@ func TestNewWindowArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := newWindowArgs(tt.sess, tt.window, tt.cwd, originPane, tt.argv)
+			got := newWindowArgs(tt.sess, tt.window, tt.cwd, originPane, nil, tt.argv)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("newWindowArgs(...) = %v, want %v", got, tt.want)
 			}
@@ -343,8 +343,8 @@ func TestWindowCommandReleasesTheDedupeName(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"new-session", newSessionArgs("dotrc_wt", window, "/w/a", originPane, argv)},
-		{"new-window", newWindowArgs("dotrc_wt", window, "/w/a", originPane, argv)},
+		{"new-session", newSessionArgs("dotrc_wt", window, "/w/a", originPane, nil, argv)},
+		{"new-window", newWindowArgs("dotrc_wt", window, "/w/a", originPane, nil, argv)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			named := tt.args[slices.Index(tt.args, "-n")+1]
@@ -387,7 +387,7 @@ func TestWindowCommandUsesTheGivenName(t *testing.T) {
 		t.Errorf("windowCommand(...) = %q, must release exactly %q", got[0], window+exitedSuffix)
 	}
 	// The caller's name is what -n installs, unchanged.
-	args := newWindowArgs("dotrc_wt", window, "/w/a", originPane, []string{"claude", "attach", "abc"})
+	args := newWindowArgs("dotrc_wt", window, "/w/a", originPane, nil, []string{"claude", "attach", "abc"})
 	if named := args[slices.Index(args, "-n")+1]; named != window {
 		t.Errorf("newWindowArgs named the window %q, want the caller's %q", named, window)
 	}
@@ -722,5 +722,57 @@ func TestCountLines(t *testing.T) {
 				t.Errorf("countLines(%q) = %d, want %d", tt.out, got, tt.want)
 			}
 		})
+	}
+}
+
+// -e is the only way to set a variable for the window tmux is about to open:
+// the pane inherits the tmux SERVER's environment, not this process's, so an
+// os.Setenv here would never reach it. Verified against tmux 3.6b -- a window
+// opened with `-e PROBEVAR=...` saw the value and one opened without it saw an
+// empty string.
+func TestEnvArgs(t *testing.T) {
+	// Sorted by name, so the argv for a given map is the same every time.
+	got := envArgs(map[string]string{"ZZZ": "last", "CLAUDE_CONFIG_DIR": "/home/x/.claude-personal"})
+	want := []string{"-e", "CLAUDE_CONFIG_DIR=/home/x/.claude-personal", "-e", "ZZZ=last"}
+	if !slices.Equal(got, want) {
+		t.Errorf("envArgs = %v, want %v", got, want)
+	}
+
+	if got := envArgs(nil); got != nil {
+		t.Errorf("envArgs(nil) = %v, want nil", got)
+	}
+
+	// tmux splits -e on the first "=", so a name carrying one would set a
+	// variable nobody asked for. Dropping it is the conservative answer: the
+	// command still runs, just without a value it could not have set correctly.
+	if got := envArgs(map[string]string{"A=B": "x", "": "y"}); len(got) != 0 {
+		t.Errorf("envArgs with unusable names = %v, want no flags", got)
+	}
+}
+
+// Both builders have to carry the env, since which one runs depends only on
+// whether the tmux session already exists -- and a pick that happened to be the
+// first one for a worktree must not be the one that loses the config dir.
+func TestBothBuildersCarryEnv(t *testing.T) {
+	env := map[string]string{"CLAUDE_CONFIG_DIR": "/home/x/.claude-personal"}
+	argv := []string{"claude", "attach", "abc"}
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"new-session", newSessionArgs("wt", "win", "/w/a", "%1", env, argv)},
+		{"new-window", newWindowArgs("wt", "win", "/w/a", "%1", env, argv)},
+	} {
+		joined := strings.Join(tt.args, " ")
+		if !strings.Contains(joined, "-e CLAUDE_CONFIG_DIR=/home/x/.claude-personal") {
+			t.Errorf("%s args = %v, want an -e for the config dir", tt.name, tt.args)
+		}
+		// The -e has to precede the command: tmux reads everything after the
+		// last flag as the shell-command, so an -e placed behind it would be
+		// passed to the command rather than parsed as a flag.
+		eIdx, cmdIdx := slices.Index(tt.args, "-e"), len(tt.args)-1
+		if eIdx < 0 || eIdx > cmdIdx {
+			t.Errorf("%s: -e at %d, command at %d: the flag must come first", tt.name, eIdx, cmdIdx)
+		}
 	}
 }

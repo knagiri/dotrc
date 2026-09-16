@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -78,13 +79,20 @@ func (tmuxImpl) Switch(target string) error {
 // see windowCommand. "" disables the return, which is what happens when there
 // is no client pane to name.
 //
+// env becomes tmux's -e on whichever of new-session / new-window runs, which is
+// the only way to set a variable for the new window: the pane inherits the tmux
+// SERVER's environment otherwise, not this process's, so exporting it here would
+// not reach it. It is deliberately not merged into the command string either --
+// a `VAR=value cmd` prefix would be undone by the wrapper's fallback shell,
+// which execs without it.
+//
 // The window's command starts running at new-window/new-session time, so an argv
 // that exits 0 immediately can close the window -- and a just-created session
 // with it -- before the switch-client below runs, making that switch fail and
 // the caller print a fallback hint for a session that did exactly what it was
 // asked. Reaching this needs a clean exit before a single tmux round trip, which
 // the commands the picker opens do not do.
-func (tmuxImpl) OpenSession(name, cwd, window, originPane string, argv []string) error {
+func (tmuxImpl) OpenSession(name, cwd, window, originPane string, env map[string]string, argv []string) error {
 	if name == "" {
 		return errors.New("no session name")
 	}
@@ -104,10 +112,10 @@ func (tmuxImpl) OpenSession(name, cwd, window, originPane string, argv []string)
 		// over that popup's terminal; switch-client below moves the client
 		// deliberately instead. This is why -d is right here and wrong for
 		// new-window, where it would leave the pick looking like a no-op.
-		if err := exec.Command("tmux", newSessionArgs(name, window, cwd, originPane, argv)...).Run(); err != nil {
+		if err := exec.Command("tmux", newSessionArgs(name, window, cwd, originPane, env, argv)...).Run(); err != nil {
 			return err
 		}
-	} else if err := exec.Command("tmux", newWindowArgs(name, window, cwd, originPane, argv)...).Run(); err != nil {
+	} else if err := exec.Command("tmux", newWindowArgs(name, window, cwd, originPane, env, argv)...).Run(); err != nil {
 		return err
 	}
 	return exec.Command("tmux", "switch-client", "-t="+name).Run()
@@ -123,11 +131,12 @@ func (tmuxImpl) OpenSession(name, cwd, window, originPane string, argv []string)
 // the same target (a second window would stack instead of -S selecting the
 // first one). Naming it here also disables tmux's automatic-rename for the
 // window, so the name -S depends on cannot drift later.
-func newSessionArgs(name, window, cwd, originPane string, argv []string) []string {
+func newSessionArgs(name, window, cwd, originPane string, env map[string]string, argv []string) []string {
 	args := []string{"new-session", "-d", "-s", name, "-n", window}
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
+	args = append(args, envArgs(env)...)
 	return append(args, windowCommand(window, originPane, argv)...)
 }
 
@@ -139,12 +148,46 @@ func newSessionArgs(name, window, cwd, originPane string, argv []string) []strin
 // unused index -- naming an index instead would error out once it is taken.
 // -S selects an existing window of the same name rather than stacking another,
 // so picking the same session twice is idempotent.
-func newWindowArgs(name, window, cwd, originPane string, argv []string) []string {
+func newWindowArgs(name, window, cwd, originPane string, env map[string]string, argv []string) []string {
 	args := []string{"new-window", "-S", "-n", window, "-t", "=" + name + ":"}
 	if cwd != "" {
 		args = append(args, "-c", cwd)
 	}
+	args = append(args, envArgs(env)...)
 	return append(args, windowCommand(window, originPane, argv)...)
+}
+
+// envArgs renders env as tmux -e flags, one per variable, sorted by name so the
+// argv a given map produces is the same every time -- otherwise the two builders
+// could not be asserted against a fixed expectation.
+//
+// Values are passed as their own argv element, never spliced into a string, so
+// no quoting question arises: exec.Command hands each one to tmux verbatim.
+// Names with "=" in them are dropped rather than passed, because tmux splits -e
+// on the first "=" and would otherwise set a variable nobody asked for.
+//
+// -S on new-window means a window of the same name already there is SELECTED
+// instead of created, and nothing new is run -- so these values reach only a
+// window this call actually opens. That is the same limit the -c and the command
+// itself already have; a pick that lands on an existing window lands on one
+// opened for the same session, whose environment was set from the same row.
+func envArgs(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(env))
+	for k := range env {
+		if k == "" || strings.Contains(k, "=") {
+			continue
+		}
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	args := make([]string, 0, 2*len(names))
+	for _, k := range names {
+		args = append(args, "-e", k+"="+env[k])
+	}
+	return args
 }
 
 // exitedSuffix marks a window whose command failed and which now holds nothing

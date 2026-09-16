@@ -594,3 +594,101 @@ func TestListOptsIncludes(t *testing.T) {
 		}
 	}
 }
+
+// The migration exists because CREATE TABLE IF NOT EXISTS is a no-op on an
+// existing database: without it, every ledger already on disk would stay one
+// column short forever and every row in it would keep being matched against the
+// wrong config dir's roster.
+//
+// The fixture is a sessions table in its pre-migration shape, which is why the
+// DDL is written out here rather than derived from Tables -- deriving it would
+// make the test follow the schema it is supposed to be pinning.
+func TestOpenMigratesAnExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := old.Exec(`
+		CREATE TABLE sessions (
+		  session_id      TEXT PRIMARY KEY,
+		  tmux_pane       TEXT,
+		  cwd             TEXT,
+		  transcript_path TEXT,
+		  started_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+		  terminated_at   INTEGER
+		);
+		INSERT INTO sessions(session_id, cwd) VALUES ('legacy', '/w/a');
+	`); err != nil {
+		t.Fatalf("seed pre-migration database: %v", err)
+	}
+	old.Close()
+
+	conn, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on a pre-migration database: %v", err)
+	}
+	defer conn.Close()
+
+	// The column is there, the pre-existing row survived, and its config_dir is
+	// NULL -- which ConfigDirOf reads as the default.
+	var dir sql.NullString
+	if err := conn.QueryRow("SELECT config_dir FROM sessions WHERE session_id = 'legacy'").Scan(&dir); err != nil {
+		t.Fatalf("read migrated column: %v", err)
+	}
+	if dir.Valid {
+		t.Errorf("config_dir = %q, want NULL on a row written before the column existed", dir.String)
+	}
+	if got := ConfigDirOf(dir); got == "" {
+		t.Error("ConfigDirOf(NULL) = \"\", want the default dir")
+	}
+
+	// And the whole thing is idempotent: Open runs on every hook invocation, so
+	// a migration that fails the second time would take the ledger down with it.
+	conn2, err := Open(path)
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	conn2.Close()
+}
+
+// The view has to select the column too, or the picker reads every row as the
+// default dir no matter what the hook recorded.
+func TestQueueViewCarriesConfigDir(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Exec(
+		"INSERT INTO sessions(session_id, config_dir) VALUES ('s1', '/home/x/.claude-personal')",
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if _, err := conn.Exec(
+		"INSERT INTO events(session_id, event_type, state) VALUES ('s1', 'Stop', 'idle_done')",
+	); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	rows, err := ListRows(conn, ListOpts{})
+	if err != nil {
+		t.Fatalf("ListRows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	if got := ConfigDirOf(rows[0].ConfigDir); got != "/home/x/.claude-personal" {
+		t.Errorf("row config dir = %q, want /home/x/.claude-personal", got)
+	}
+
+	dirs, err := RecordedConfigDirs(conn)
+	if err != nil {
+		t.Fatalf("RecordedConfigDirs: %v", err)
+	}
+	if len(dirs) != 1 || dirs[0] != "/home/x/.claude-personal" {
+		t.Errorf("RecordedConfigDirs = %v, want [/home/x/.claude-personal]", dirs)
+	}
+}

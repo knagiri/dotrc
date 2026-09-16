@@ -290,6 +290,7 @@ func TestParseSelection_PrefixedTitle(t *testing.T) {
 		TmuxPane:       sql.NullString{String: "%3", Valid: true},
 		Cwd:            sql.NullString{String: "/w/tree", Valid: true},
 		TranscriptPath: sql.NullString{String: "/t/tree.jsonl", Valid: true},
+		ConfigDir:      sql.NullString{String: "/cfg/tree", Valid: true},
 		EffectiveState: "idle_done",
 		CreatedAt:      nowMinus(30),
 	}
@@ -304,7 +305,7 @@ func TestParseSelection_PrefixedTitle(t *testing.T) {
 			t.Errorf("%q: title column %q lost its prefix", prefix, fields[colTitle])
 		}
 		sel, ok := parseSelection(line)
-		want := selection{SessionID: testUUID, Pane: "%3", Cwd: "/w/tree", Transcript: "/t/tree.jsonl"}
+		want := selection{SessionID: testUUID, Pane: "%3", Cwd: "/w/tree", Transcript: "/t/tree.jsonl", ConfigDir: "/cfg/tree"}
 		if !ok || sel != want {
 			t.Errorf("%q: parseSelection = %+v (ok=%v), want %+v", prefix, sel, ok, want)
 		}
