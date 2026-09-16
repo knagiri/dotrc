@@ -85,18 +85,18 @@ cq_config_dir_for() {
     # query.
     #
     # sqlite3's output is read directly off process substitution rather than
-    # captured into a variable first (i.e. NOT `dirs="$(sqlite3 ...)"` here).
-    # Command substitution strips ALL trailing newlines, so when the row whose
-    # dir is the default (COALESCE -> '') happens to sort last in the result
-    # set, its blank output line is swallowed before this loop ever runs --
-    # and dropping that line drops that row out of the DISTINCT set the
-    # ambiguity check below counts over. A ledger holding one row explicitly
-    # pinned to a dir and one row recorded as NULL (-> default) for the SAME
-    # 8-char prefix must then read as two distinct dirs and refuse (exit 2);
-    # with the trailing blank line eaten, only the explicit dir survived and
-    # the cross-dir case returned it with exit 0 instead of refusing. Process
-    # substitution hands `read` the stream unmodified, so a trailing blank
-    # line still arrives as one more (empty) iteration.
+    # captured into a variable and filtered through `grep .` first (which is
+    # what this used to do). `grep .` drops blank lines unconditionally --
+    # regardless of where they sort in the result set, not only when one
+    # happens to land last -- so it drops the row whose dir is the default
+    # (COALESCE -> ''), taking that row out of the DISTINCT set the ambiguity
+    # check below counts over. A ledger holding one row explicitly pinned to a
+    # dir and one row recorded as NULL (-> default) for the SAME 8-char prefix
+    # must then read as two distinct dirs and refuse (exit 2); with the blank
+    # line filtered out, only the explicit dir survived and the cross-dir case
+    # returned it with exit 0 instead of refusing. Skipping `grep .` here lets
+    # a blank line arrive as one more (empty) iteration, whatever position it
+    # sorts to.
     while IFS= read -r line; do
       [ -n "$line" ] || line="$(cq_default_config_dir)"
       out="$out$line"$'\n'
