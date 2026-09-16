@@ -195,8 +195,8 @@ corpus 全体では、body transcript 1009 ファイルのうち compaction 済�
 ## 冪等キーは `uuid`。パスをキーにしてはいけない
 
 transcript ファイルは cwd の relocate に追随して project ディレクトリ間を移動する。
-実測: 調査中に同一 session の jsonl が `-…-hw-infrastructure/` から
-`-…-work-backend/` へ移った。`relocated` という entry type が存在するのもこのため。
+実測: 調査中に同一 session の jsonl が、ある repo の project ディレクトリから別 repo の
+project ディレクトリへ移った。`relocated` という entry type が存在するのもこのため。
 
 `uuid`（= ファイル名の basename、`.sessionId` と一致することを 50 ファイル抽出で確認）は
 全ファイル横断で重複が無い。したがって収集の重複排除は uuid で行い、パスは一切キーにしない。
@@ -217,9 +217,9 @@ transcript ファイルは cwd の relocate に追随して project ディレク
 「着地した PR」も「残骸ブランチ」も git だけから取る。gh を必須依存にしない理由は 2 つ、
 いずれも実測:
 
-- 手元の token は work-org org を解決できない
-  （`gh pr list --repo work-org/work-backend` が `Could not resolve to a Repository`）
-- 業務リポジトリの PR author は GitHub App（`app/backend-api-ci`）なので `--author=@me` が 0 件になる
+- 手元の token で解決できない org の repo がある（`gh pr list --repo <org>/<repo>` が
+  `Could not resolve to a Repository` で落ちる）
+- CI が GitHub App 名義で PR を作る repo では、PR author が App なので `--author=@me` が 0 件になる
 
 `gh` に頼れば PR のタイトル・レビュー状態まで取れるが、上の 2 点で**動かない環境がある**以上、
 朝 5 時に無人で走るツールの依存にはできない。必要な情報は git から全部取れる。
@@ -271,13 +271,13 @@ noreply 形式（`<数値ID>+<login>@users.noreply.github.com`）でないリポ
 はメタ文字なので、メールアドレスへフォールバックした側（`plain@example.com`）は今この瞬間
 `plain@exampleXcom` にマッチする。`-F` はその両方を同時に塞ぐ。
 
-対照込みの実測（`work-backend`、2026-09-08 の 1 日）:
+対照込みの実測（複数人が commit する repo、2026-09-08 の 1 日）:
 
 ```
 全 commit                52 件
 -F --author='<65004703+' 19 件（表示名 3 通り・メール 2 通りを一括で拾う）
 偽 ID '<99999999+'        0 件（空振りで真になっていない）
-他メンバー '<53592008+'   3 件（機構は動作しており、かつ上の 19 には含まれない）
+他メンバーの ID           3 件（機構は動作しており、かつ上の 19 には含まれない）
 ```
 
 過去 90 日の全 author 25 identity を確認し、`65004703` を含むのは自分の 3 つだけで他人と
@@ -295,12 +295,8 @@ git log -F --author="$pat" --no-merges "<merge>^1..<merge>^2"
 が 1 件以上ある merge だけを「自分の PR」とする。merge commit 自身の author はボタンを押した
 人（多くの場合 bot）なので、**マージされた側に自分の commit があるか**で判定する。
 
-実測（2026-09-08、`work-backend`）で 7 本。実装後の再実行でも同じ 7 本が出た:
-
-```
-#6817 mine=5  / #6844 mine=13 / #6885 mine=5 / #6888 mine=6
-#6928 mine=1  / #6929 mine=3  / #6924 mine=1
-```
+上と同じ repo・同じ 1 日の実測で 7 本が該当し、実装後の再実行でも同じ 7 本が出た。
+マージされた側に含まれる自分の commit は 1〜13 件だった。
 
 ### session ↔ PR の紐付けは交差で取る
 
@@ -401,16 +397,16 @@ session をキーにした 1 本のリスト。優先度順に並べ、「残り
 
 ## 確認すべき session（優先度順）
 
-### f13a218f  site_a svc-gateway RTSP停止        [LIVE]
-着地  work-backend #6885 fix(svc-gateway): 上流の切断を検知して… (commit 5)
-      work-backend #6844 ci(svc-gateway): イメージの push 先を修正… (13)
-残り  work-backend agent/fix/svc-gateway-fix が ahead=4 で未統合
+### f13a218f  svc-a のストリーム停止を直す              [LIVE]
+着地  example-repo #1234 fix(svc-a): 上流の切断を検知して再接続する… (commit 5)
+      example-repo #1221 ci(svc-a): multi-arch イメージをビルドして push する… (13)
+残り  example-repo agent/fix/svc-a-reconnect-adr が ahead=4 で未統合
       委譲先が「ADR は follow-up に分離」と報告、未着手
 
-### f2a48cfd  feature-x access control          [RESUMABLE]
+### f2a48cfd  svc-b のアクセス制御                      [RESUMABLE]
 着地  なし
-残り  work-backend agent/feature/feature-x が ahead=7 で未統合
-→ claude --resume f2a48cfd-…  (cwd: …/.worktrees/feature-x)
+残り  example-repo agent/feature/svc-b-access-control が ahead=7 で未統合
+→ claude --resume f2a48cfd-…  (cwd: …/.worktrees/svc-b-access-control)
 
 ## 紐付かなかった着地
 ## 片付け（git-reap-gone 対象）
