@@ -159,16 +159,11 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    `gh pr create` を使っていた。
 
    **ただし実行先 repo が PR 作成のレーンを定めているなら、そちらが優先される。** repo の
-   doc（`docs/pr-creation-lanes.md` 等）や CLAUDE.md がブランチ名で PR 作成の経路を分けて
-   いれば、その規約に従う。レーンを混ぜると同一 head に対して open PR が重複し、片方が
-   失敗してブランチに赤バツが付くため。実例: work-org のモノレポは `agent/**` で始まる
-   ブランチへ push すると GitHub App 名義で PR を作る仕組みが起動し、同 repo の
-   `docs/pr-creation-lanes.md` が「es-create-pr はこのレーンを扱わない」と明記している。
-   この skill の指示だけを見て `my-create-pr` / `es-create-pr` を撃つと衝突するので、PR を
-   出す前に実行先 repo の規約を確認する。由来: 2 つの委譲先がこれに遭遇した。片方は自力で
-   repo doc を読んで回避し、もう片方は委譲元がプロンプトで明示したので回避できた
-   — どちらも skill の指示を上書きする何かがあったから助かっただけで、skill 自身は
-   無条件の指示のままだった。
+   doc や CLAUDE.md がブランチ名で PR 作成の経路を分けていれば、その規約に従う。レーンを
+   混ぜると同一 head に対して open PR が重複し、片方が失敗してブランチに赤バツが付くため。
+   典型は、特定の prefix を持つブランチへ push すると自動で PR を作る仕組みを持つ repo で、
+   そこでこの skill の指示だけを見て `my-create-pr` を撃つと PR が二重に立つ。PR を出す前に
+   実行先 repo の規約を確認する。
 
    PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
    レビュー・required CI 確認を経て自律 merge する。
