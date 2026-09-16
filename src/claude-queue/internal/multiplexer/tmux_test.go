@@ -408,8 +408,8 @@ func TestSanitizeSessionName(t *testing.T) {
 			// tmux reads "." as the window.pane separator in -t targets, and
 			// silently stores the session under the substituted name anyway.
 			name: "dot becomes underscore",
-			in:   "eversteel.api",
-			want: "eversteel_api",
+			in:   "acme.api",
+			want: "acme_api",
 		},
 		{
 			// ":" is the session:window separator.
