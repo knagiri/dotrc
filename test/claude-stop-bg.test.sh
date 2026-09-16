@@ -15,6 +15,11 @@ stubbin="$tmp/stubbin"
 mkdir -p "$stubbin"
 cat >"$stubbin/claude" <<'EOF'
 #!/usr/bin/env bash
+# Both calls record the CLAUDE_CONFIG_DIR they saw. A session in another config
+# dir is invisible to the default dir's daemon, so pointing either call at the
+# wrong dir is a silent wrong answer, not an error -- which is why the dir is
+# recorded rather than assumed.
+[ -n "${CLAUDE_STUB_ENVLOG:-}" ] && printf '%s %s\n' "$1" "${CLAUDE_CONFIG_DIR:-UNSET}" >>"$CLAUDE_STUB_ENVLOG"
 case "$1" in
   agents) cat "$CLAUDE_STUB_ROSTER" ;;
   stop)   printf '%s\n' "$2" >"$CLAUDE_STUB_STOPLOG" ;;
@@ -131,5 +136,60 @@ PATH="$stubbin:$PATH" CLAUDE_STUB_ROSTER="$tmp/dup.json" CLAUDE_STUB_STOPLOG="$s
 if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ]; then
   echo "ok: ambiguous short id is refused"
 else echo "FAIL: ambiguous id accepted rc=$rc"; fail=1; fi
+
+# --- config dir resolution --------------------------------------------------
+#
+# The ledger records every session on the host, but the roster and the daemon
+# behind it are per CLAUDE_CONFIG_DIR. Asking under this process's own
+# environment would report a session in another dir as simply absent, so the dir
+# comes off the row and is exported for both the roster read and the stop.
+
+if command -v sqlite3 >/dev/null 2>&1; then
+  personal="$tmp/.claude-personal"
+  cqdb="$tmp/queue.db"
+  sqlite3 "$cqdb" "
+    CREATE TABLE sessions (session_id TEXT PRIMARY KEY, config_dir TEXT);
+    INSERT INTO sessions VALUES ('aaaaaaaa-1111-2222-3333-444444444444', '$personal');
+    INSERT INTO sessions VALUES ('eeeeeeee-1111-2222-3333-444444444444', '$personal');
+    INSERT INTO sessions VALUES ('eeeeeeee-9999-2222-3333-444444444444', '$tmp/.claude-other');
+  "
+
+  envlog="$tmp/env.log"
+  runcfg() {
+    PATH="$stubbin:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" \
+      CLAUDE_STUB_ENVLOG="$envlog" CLAUDE_QUEUE_DB="$cqdb" HOME="$tmp" "$src" "$@"
+  }
+
+  # A session the ledger places in a second config dir: BOTH the roster read and
+  # the stop must run under that dir, not under the caller's environment.
+  : >"$stoplog"; : >"$envlog"
+  CLAUDE_CONFIG_DIR="$tmp/.claude-wrong" runcfg aaaaaaaa >/dev/null 2>&1; rc=$?
+  if [ "$rc" -eq 0 ] \
+     && [ "$(cat "$stoplog")" = "aaaaaaaa" ] \
+     && [ "$(grep -c "^agents $personal\$" "$envlog")" -eq 1 ] \
+     && [ "$(grep -c "^stop $personal\$" "$envlog")" -eq 1 ]; then
+    echo "ok: the roster read and the stop both run under the row's config dir"
+  else echo "FAIL: config dir not applied rc=$rc envlog=$(cat "$envlog")"; fail=1; fi
+
+  # An id the ledger does not know falls back to the default dir ($HOME/.claude),
+  # which is what every session ran under before a second dir existed.
+  : >"$stoplog"; : >"$envlog"
+  runcfg bbbbbbbb >/dev/null 2>&1
+  if grep -qF "agents $tmp/.claude" "$envlog"; then
+    echo "ok: an id the ledger does not know falls back to the default dir"
+  else echo "FAIL: no default-dir fallback: $(cat "$envlog")"; fail=1; fi
+
+  # Rows under two different dirs share the prefix: refuse rather than guess,
+  # since pointing the stop at one of them could stop nothing -- or, once the
+  # dirs hold ids in common, the wrong thing.
+  : >"$stoplog"; : >"$envlog"
+  out="$(runcfg eeeeeeee 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && [ ! -s "$envlog" ] \
+     && grep -qF 'more than one CLAUDE_CONFIG_DIR' <<<"$out"; then
+    echo "ok: an id spanning two config dirs is refused before any claude call"
+  else echo "FAIL: cross-dir id not refused rc=$rc out=$out"; fail=1; fi
+else
+  echo "skip: sqlite3 not available; config dir resolution not exercised"
+fi
 
 exit "$fail"

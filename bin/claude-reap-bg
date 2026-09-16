@@ -31,13 +31,22 @@ set -euo pipefail
 #     it; every other gate still applies, and the report says `orphan: parent
 #     <id> gone`. See docs/design/claude-queue-session-tree.md.
 #
+# The roster is read once PER CLAUDE_CONFIG_DIR, over the dirs the claude-queue
+# ledger names plus the default (bin/lib/claude-configdir.sh). The ledger records
+# every session on the host, but the roster and the daemon answering it are per
+# dir, so a single read under this process's own environment would report every
+# session of every other dir as absent -- and absence is not a gate here, it is
+# simply invisibility, so those sessions would never be swept at all. A dir whose
+# roster cannot be read is reported and skipped rather than treated as empty.
+#
 # Stopping goes through claude-stop-bg, never `claude stop` directly, so that
 # wrapper's guard (refuse anything not kind=="background", refuse ambiguous
-# ids) still applies on top of the checks here.
+# ids) still applies on top of the checks here. It resolves the config dir from
+# the same ledger, so the stop lands in the dir the session actually runs in.
 #
 # Separately, the roster also reports background jobs whose process is already
 # gone: a kind=="background" entry with no `pid`. Its source is
-# ~/.claude/jobs/<id>/state.json, and a job left at state `blocked` never
+# <config dir>/jobs/<id>/state.json, and a job left at state `blocked` never
 # transitions to `stopped`, so the entry outlives the process forever. Such an
 # entry has no `status` either, so the gates above can never see it -- it is a
 # stale record, not a session. Those are REPORTED in a third section and
@@ -115,12 +124,45 @@ declare -a skipped=()
 reap_ok()   { reaped+=("$1"$'\t'"$2"); }
 reap_skip() { skipped+=("$1"$'\t'"$2"); }
 
-# Fetch the roster as its own step (rather than piping into jq) so a fetch
-# failure gets a diagnostic instead of `set -e` exiting silently.
-roster="$(claude agents --json 2>/dev/null)" || {
-  echo "claude-reap-bg: could not read the session roster" >&2
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/claude-configdir.sh"
+
+# Fetch each config dir's roster as its own step (rather than piping into jq) so
+# a fetch failure gets a diagnostic instead of `set -e` exiting silently, and so
+# one unreadable dir does not cost the sweep the readable ones. The entries are
+# concatenated into one array, since every gate below keys off the session id
+# and claude-stop-bg re-derives the dir from the ledger anyway.
+declare -a config_dirs=()
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  config_dirs+=("$d")
+done < <(cq_config_dirs)
+
+# Each dir's entries are tagged with the dir they came from before being merged,
+# so the stale-job section below can name the right <config dir>/jobs/<id> path.
+# Nothing else needs the tag: every gate keys off the session id, and
+# claude-stop-bg re-derives the dir from the ledger itself.
+roster="[]"
+read_any=0
+for d in "${config_dirs[@]}"; do
+  if ! dir_roster="$(CLAUDE_CONFIG_DIR="$d" claude agents --json 2>/dev/null)"; then
+    echo "claude-reap-bg: could not read the session roster under $d; its sessions are not swept" >&2
+    continue
+  fi
+  # A merge that fails leaves the accumulated roster untouched rather than
+  # overwriting it with jq's partial output, so one malformed dir costs only its
+  # own entries.
+  if ! merged="$(jq -s --arg dir "$d" '.[0] + [ .[1][] | .configDir = $dir ]' \
+                   <<<"$roster"$'\n'"$dir_roster" 2>/dev/null)"; then
+    echo "claude-reap-bg: could not parse the session roster under $d; its sessions are not swept" >&2
+    continue
+  fi
+  roster="$merged"
+  read_any=1
+done
+if [ "$read_any" = 0 ]; then
+  echo "claude-reap-bg: could not read the session roster under any config dir" >&2
   exit 1
-}
+fi
 
 # Read the whole queue view once and match ids in bash afterwards. Building a
 # per-session SQL string would mean interpolating roster-supplied text into a
@@ -199,16 +241,25 @@ for sid in "${candidates[@]}"; do shorts+=("${sid:0:8}"); done
 # `pid`; ~/.claude/jobs/<id> is a background-job concept, not a general claude
 # one, so a pid-less interactive entry is not a stale job record at all. These
 # are reported, never acted on, so they are collected apart from the reap
-# accumulators. Each entry is "<job-id>\t<state>".
+# accumulators. Each entry is "<job-id>\t<config dir>\t<state>" -- the dir is
+# carried because the job directory the report names lives under whichever config
+# dir the entry came from, not necessarily the default one.
+#
+# The possibly-empty `state` is LAST in both the TSV and the entry. bash treats
+# tab as IFS *whitespace*, so `read` collapses a run of them into one separator:
+# an empty field in the middle would shift every field after it left, and the
+# dir would silently be read as the state. A trailing one just leaves its
+# variable empty, which is the intended reading.
 declare -a stale=()
-while IFS=$'\t' read -r job_id job_state; do
+while IFS=$'\t' read -r job_id job_dir job_state; do
   [ -n "$job_id" ] || continue
   if [ "${#filters[@]}" -gt 0 ] && ! in_list "$job_id" "${filters[@]}"; then
     continue
   fi
-  stale+=("$job_id"$'\t'"$job_state")
+  stale+=("$job_id"$'\t'"$job_dir"$'\t'"$job_state")
 done < <(jq -r '.[] | select(.kind == "background" and .pid == null)
-                    | [ ((.id // .sessionId // "") | .[0:8]), (.state // "") ] | @tsv' <<<"$roster")
+                    | [ ((.id // .sessionId // "") | .[0:8]), (.configDir // ""), (.state // "") ]
+                    | @tsv' <<<"$roster")
 
 declare -a stale_ids=()
 for e in "${stale[@]}"; do stale_ids+=("${e%%$'\t'*}"); done
@@ -319,13 +370,12 @@ fi
 if [ "${#stale[@]}" -gt 0 ]; then
   echo "stale job records (${#stale[@]}):"
   for e in "${stale[@]}"; do
-    job_id="${e%%$'\t'*}"
-    job_state="${e#*$'\t'}"
+    IFS=$'\t' read -r job_id job_dir job_state <<<"$e"
     if [ -n "$job_state" ]; then
       printf '  %s  no process (state: %s)\n' "$job_id" "$job_state"
     else
       printf '  %s  no process\n' "$job_id"
     fi
-    printf '    → rm -rf ~/.claude/jobs/%s\n' "$job_id"
+    printf '    → rm -rf %s/jobs/%s\n' "${job_dir:-$(cq_default_config_dir)}" "$job_id"
   done
 fi

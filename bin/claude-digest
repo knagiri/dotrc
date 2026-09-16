@@ -61,9 +61,27 @@ set -euo pipefail
 #                                       print the collected facts and stop:
 #                                       no LLM call, nothing written
 #
+# Transcripts are read from EVERY known CLAUDE_CONFIG_DIR, not just ~/.claude:
+# they live under <config dir>/projects, and a session run under another dir
+# would otherwise be missing from the digest with no sign it was ever there. The
+# list of dirs comes from the claude-queue ledger plus the default
+# (bin/lib/claude-configdir.sh), because the sessions themselves are the only
+# place the dirs in use are written down -- a second list would be a second place
+# to forget, and forgetting drops a dir silently.
+#
+# KNOWN LIMIT: ledger rows are GC'd 7 days after a session ends, so that list
+# shrinks back to the default dir once a day's rows are gone. Generating a day
+# OLDER THAN 7 DAYS after the fact can therefore miss a config dir that had no
+# other session recorded since -- its transcripts are still on disk, but nothing
+# left names the dir to look in. The timer's normal run (05:10 JST, the previous
+# day) is well inside the window, so this only bites a manual backfill of an old
+# date. Setting CLAUDE_PROJECTS_DIR pins the search to one directory and skips
+# the discovery entirely, which is also the escape hatch for that case.
+#
 # Environment:
 #   CLAUDE_DIGEST_DIR     where digests live (default ~/.claude/digests)
-#   CLAUDE_PROJECTS_DIR   where transcripts live (default ~/.claude/projects)
+#   CLAUDE_PROJECTS_DIR   pin transcripts to ONE directory, skipping the
+#                         per-config-dir discovery above
 
 usage() {
   awk '/^#!/ {next} /^#/ {sub(/^# ?/, ""); print; seen=1; next} seen {exit}' "$0"
@@ -71,7 +89,6 @@ usage() {
 }
 
 digest_dir="${CLAUDE_DIGEST_DIR:-$HOME/.claude/digests}"
-projects_dir="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 
 # Field separator inside the associative-array keys below (cwd + branch, repo +
 # branch). SOH cannot appear in a path or a ref name, so no key is ambiguous.
@@ -209,7 +226,37 @@ done
 if [ "$dry_run" = 0 ]; then
   command -v claude >/dev/null 2>&1 || { echo "claude-digest: claude is required to summarise" >&2; exit 1; }
 fi
-[ -d "$projects_dir" ] || { echo "claude-digest: no transcripts at $projects_dir" >&2; exit 1; }
+# The directories to scan for transcripts, resolved here rather than at the top
+# of the script: only generate mode reads a transcript, and the discovery costs
+# subprocesses (sqlite3, sort) plus a sourced library that show and --pick would
+# otherwise have to carry on their PATH for nothing.
+#
+# CLAUDE_PROJECTS_DIR pins the search to ONE directory, skipping discovery. That
+# is what the tests use, and the escape hatch for backfilling a day older than
+# the ledger's 7-day GC window (see the header).
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/claude-configdir.sh"
+
+declare -a projects_dirs=()
+if [ -n "${CLAUDE_PROJECTS_DIR:-}" ]; then
+  projects_dirs=("$CLAUDE_PROJECTS_DIR")
+else
+  while IFS= read -r cfg_dir; do
+    [ -n "$cfg_dir" ] || continue
+    projects_dirs+=("$cfg_dir/projects")
+  done < <(cq_config_dirs)
+fi
+
+# At least one of them has to exist. A config dir the ledger named but whose
+# projects/ is gone is skipped silently below; all of them missing is the old
+# "no transcripts" refusal, which names what was actually looked at.
+declare -a present_dirs=()
+for d in "${projects_dirs[@]}"; do
+  [ -d "$d" ] && present_dirs+=("$d")
+done
+[ "${#present_dirs[@]}" -gt 0 ] || {
+  echo "claude-digest: no transcripts at ${projects_dirs[*]}" >&2
+  exit 1
+}
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -313,7 +360,7 @@ while IFS= read -r file; do
                            elif (.first_prompt // "") != "" then (.first_prompt[0:60])
                            else "(no title)" end' <<<"$rec")"
   s_pairs[$uuid]="$(jq -r '.pairs[]' <<<"$rec")"
-done < <(find "$projects_dir" -name '*.jsonl' -not -path '*/subagents/*' \
+done < <(find "${present_dirs[@]}" -name '*.jsonl' -not -path '*/subagents/*' \
            -newermt "$start_iso" -printf '%T@\t%p\n' 2>/dev/null | sort -rn | cut -f2-)
 
 # --- repositories -----------------------------------------------------------
