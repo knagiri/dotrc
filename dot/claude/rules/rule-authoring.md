@@ -93,3 +93,38 @@ skill / agent 定義に置いてよいのは、その skill 固有の手順・�
 
 **別の台帳ファイルを新設しない。** 保存先としては PR が既にあり、新設すると二重管理になって
 更新されなくなる。
+
+### skill の frontmatter に `effort:` を無自覚に置かない
+
+長い自律 turn の途中で呼ばれる skill の frontmatter には、一般に `effort:` を置かない。
+置くなら、下の 2 つの影響を見積もってからにする。
+
+**効く範囲が skill の外へ出る。** effort の上書きは skill の実行中で終わらず、その turn の
+残りに効き、次の prompt で session の effort に戻る（Claude Code 公式 docs の skills の記述）。
+自律 turn では「次の prompt」がなかなか来ないので、skill の後に続く作業がまとめて上書き後の
+effort で走る。機械的な作業向けの skill に `effort: low` が付いていた委譲 session の実測では、
+その skill の後の PR 作成・自動レビューの待機・レビュー判定役の起動・自己内省・完了報告まで
+low effort で走っており、低 effort の区間は 8〜24 リクエスト、最長 78 リクエストに達した。
+skill 名からは「その skill だけ安く回す」としか読めないので、書き手も読み手も気づかない。
+
+**切り替えが prompt cache を壊す。** effort が切り替わるリクエストは、その時点までの文脈を
+cache から外して書き直す。実測では 100〜200k token の文脈が対象になった。1 時間 TTL の
+cache write の単価は cache read の 20 倍なので、切り替え 1 回で同じ文脈を読む場合の約 20 倍を
+払う。skill を 1 回呼ぶと、入るときと戻るときの 2 回切り替わる。
+
+見分けるには、effort 以外を同一にした skill と比べる。`effort:` が付いている側だけ、skill
+呼び出し直後のリクエストで cache read が prefix まで落ち（実測 96k → 18〜24k）、cache write が
+文脈の約 8 割へ跳ねる（実測 72〜78k）。付いていない側は cache read を保ち、write は数百 token に
+収まる。既存 session の transcript で確かめるときは、隣接リクエスト間で `perTurnEffort`
+（無ければ `effort`）が変わっていないか、`cache_creation_input_tokens` が大きいのに
+`cache_read_input_tokens` が prefix 相当まで落ちたリクエストが無いかを見る。1 時間以上の待機に
+よる TTL 切れでも後者は起きるので、effort の切り替えを伴うかで切り分ける。
+
+理由が当てはまらない場合もある。
+
+- skill の実行で session が実質的に終わる（後続作業が無い）なら、はみ出す先が無いので
+  1 つ目の影響は小さい
+- 機械的な作業を低 effort で安く回したいなら、その作業を低 effort の subagent へ切り出せば
+  親の cache を壊さない。ただし文脈の再構築コストが乗るので、数リクエストで終わる作業では
+  割に合わない
+- effort を上げる方向（`max` 等）でも同じ 2 つの影響が出る。上げるときも同様に見積もる
