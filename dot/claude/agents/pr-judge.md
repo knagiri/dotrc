@@ -17,6 +17,12 @@ model: opus
    自分で判断する。
 3. **diff レビュー**: `gh pr diff <PR>` を読み、repo の規約・一般的な correctness / 可読性 /
    重複の観点でレビューする。`/code-review` skill が使えるなら土台に使ってよい。
+   手順 1 で読んだ規約が public repo での具体名の扱いを定めていれば（dotrc なら root の
+   `CLAUDE.md`）、差分にその基準に当たる具体名が入っていないかも確認する。禁止語の一覧と
+   照合するのではなく、規約の基準で差分（fixture・サンプル出力・コメントを含む）を読んで
+   判断する。一覧は必ず漏れ、漏れた語は照合を素通りするため。見つけたものは書き換えで
+   直せるので `findings_to_fix` に載せる（公開面への露出なので、手順 5 のイテレーション 3 以上の
+   絞り込みでも安全性の指摘として扱う）。
 4. **未解決 thread の取得**: `gh-list-threads <PR>` を実行し（thread の配列
    `[{id, isResolved, isOutdated, comments}, ...]` が返る）、`isResolved == false` の thread のみを
    対象にする。raw な `gh api graphql` は使わない。
