@@ -7,10 +7,11 @@ set -euo pipefail
 # Worktree path is <main-repo-toplevel>/.worktrees/<name>, a hidden subdirectory
 # of the main checkout (globally gitignored via ~/.config/git/ignore). Living
 # inside the checkout keeps worktrees out of `ghq list` -- so `gts` only offers
-# repositories -- and lets mise walk up into the checkout's own already-trusted
-# config instead of needing one seeded per worktree. It anchors to the MAIN
-# repository toplevel so the layout stays flat even when invoked from inside
-# another worktree.
+# repositories -- and lets mise walk up into the checkout's own config instead of
+# needing one seeded per worktree. A config the worktree carries itself (dotrc's
+# tracked mise.toml) needs trust of its own; bin/deploy.sh grants it by path
+# prefix. It anchors to the MAIN repository toplevel so the layout stays flat
+# even when invoked from inside another worktree.
 #
 # When a prompt is given, the default is a BACKGROUND agent (`claude --bg`,
 # permission mode `auto`) started with the worktree as its cwd. Reach it with
@@ -556,6 +557,29 @@ if [ -n "$delegator" ]; then
 報告先 name: ${delegator}"
 fi
 
+# Which Claude Code account the delegate runs under follows the worktree, never
+# the caller. CLAUDE_CONFIG_DIR selects the account (credentials, transcripts,
+# the bg daemon and its roster), and a repo that wants a non-default one says so
+# in its mise config (dotrc's mise.toml). So the launch reads the worktree's
+# config at call time with `mise exec -C`, the same shape as bin/lib/gh-mise.sh.
+#
+# `env -u` is what makes a repo WITHOUT that setting land on the default: mise
+# only adds what the config names and passes an inherited value straight
+# through (measured: `mise exec -C <repo with no mise.toml>` kept the caller's
+# CLAUDE_CONFIG_DIR; prefixed with `env -u` it arrived unset). Without it, a
+# delegation from a dotrc session to any other repo would silently run under
+# dotrc's account. With no mise on PATH the prefix is `env -u` alone, i.e. the
+# default dir.
+#
+# Both launch modes use the prefix. --tmux needs it too: its pane runs claude
+# directly, with no interactive shell for `mise activate` to set anything in.
+# A config the worktree carries but mise does not trust makes `mise exec` fail;
+# that surfaces as a failed launch rather than a launch under the wrong account.
+launch_env=(env -u CLAUDE_CONFIG_DIR)
+if command -v mise >/dev/null 2>&1; then
+  launch_env+=(mise exec -C "$wt_path" --)
+fi
+
 if [ "$use_tmux" = 0 ]; then
   # Background agent (default). It does NOT exit on its own when the task
   # completes -- see the header for that. It's preferred over an interactive
@@ -578,7 +602,7 @@ if [ "$use_tmux" = 0 ]; then
   # would read back 0 even though claude failed. Falling through to `else`
   # keeps `$?` as claude's real exit code.
   if [ -n "$model" ]; then
-    if launch_out="$(cd "$wt_path" && claude --bg --permission-mode auto --model "$model" "$prompt" 2>&1)"; then
+    if launch_out="$(cd "$wt_path" && "${launch_env[@]}" claude --bg --permission-mode auto --model "$model" "$prompt" 2>&1)"; then
       :
     else
       rc=$?
@@ -587,7 +611,7 @@ if [ "$use_tmux" = 0 ]; then
       exit "$rc"
     fi
   else
-    if launch_out="$(cd "$wt_path" && claude --bg --permission-mode auto "$prompt" 2>&1)"; then
+    if launch_out="$(cd "$wt_path" && "${launch_env[@]}" claude --bg --permission-mode auto "$prompt" 2>&1)"; then
       :
     else
       rc=$?
@@ -675,14 +699,14 @@ fi
 # launch shape branches on it and omits the flag entirely when it is unset.
 if [ -n "${TMUX:-}" ]; then
   tmux new-session -d -s "$session" -c "$wt_path" \
-    bash -c 'if [ -n "$3" ]; then claude --permission-mode acceptEdits --model "$3" "$1"; else claude --permission-mode acceptEdits "$1"; fi; tmux switch-client -t "$2" 2>/dev/null' \
+    "${launch_env[@]}" bash -c 'if [ -n "$3" ]; then claude --permission-mode acceptEdits --model "$3" "$1"; else claude --permission-mode acceptEdits "$1"; fi; tmux switch-client -t "$2" 2>/dev/null' \
     bash "$prompt" "$TMUX_PANE" "$model"
 elif [ -n "$model" ]; then
   tmux new-session -d -s "$session" -c "$wt_path" \
-    claude --permission-mode acceptEdits --model "$model" "$prompt"
+    "${launch_env[@]}" claude --permission-mode acceptEdits --model "$model" "$prompt"
 else
   tmux new-session -d -s "$session" -c "$wt_path" \
-    claude --permission-mode acceptEdits "$prompt"
+    "${launch_env[@]}" claude --permission-mode acceptEdits "$prompt"
 fi
 
 attach="gts $session"
