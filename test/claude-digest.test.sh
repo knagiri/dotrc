@@ -29,7 +29,15 @@ stubdir="$sandbox/stub"; mkdir -p "$stubdir"
 cat >"$stubdir/claude" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
-  agents) cat "${CD_ROSTER:-/dev/null}"; exit 0 ;;
+  agents)
+    # Per CLAUDE_CONFIG_DIR when a per-dir fixture exists, as the real daemon
+    # answers: each config dir has its own roster.
+    if [ -n "${CD_ROSTER_DIR:-}" ] && [ -f "$CD_ROSTER_DIR/${CLAUDE_CONFIG_DIR//\//_}.json" ]; then
+      cat "$CD_ROSTER_DIR/${CLAUDE_CONFIG_DIR//\//_}.json"
+    else
+      cat "${CD_ROSTER:-/dev/null}"
+    fi
+    exit 0 ;;
   -p)
     body="$(cat)"
     printf '%s\n' "$*" >>"${CD_CALLS:-/dev/null}"
@@ -788,6 +796,23 @@ if command -v sqlite3 >/dev/null 2>&1; then
       PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>/dev/null)"
   check "a config dir with no projects/ is skipped, not fatal" \
     "$(if grep -q "SESSION $personal_sid" <<<"$gone_facts"; then echo 0; else echo 1; fi)"
+
+  # The roster is per config dir too. The personal session is live only in the
+  # personal dir's roster; the default dir's is empty. Reading one roster under
+  # the process's own dir would report it RESUMABLE, not LIVE.
+  cfg_rosters="$sandbox/cfg-rosters"; mkdir -p "$cfg_rosters"
+  echo '[]' >"$cfg_rosters/${work_cfg//\//_}.json"
+  jq -n --arg id "$personal_sid" '[{sessionId:$id, kind:"background", status:"idle"}]' \
+    >"$cfg_rosters/${personal_cfg//\//_}.json"
+  live_facts="$(env -u CLAUDE_PROJECTS_DIR -u CLAUDE_CONFIG_DIR HOME="$cfg_home" CLAUDE_QUEUE_DB="$cfg_queue" \
+      CLAUDE_DIGEST_DIR="$digests" CD_ROSTER="$sandbox/roster.json" CD_ROSTER_DIR="$cfg_rosters" \
+      CD_CALLS="$sandbox/calls" PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>/dev/null)"
+  check "a session live under a second config dir is reported LIVE" \
+    "$(if grep -A3 "SESSION $personal_sid" <<<"$live_facts" | grep -qx 'REACH: LIVE'
+       then echo 0; else echo 1; fi)"
+  check "a session absent from every roster is not reported LIVE" \
+    "$(if grep -A3 "SESSION $work_sid" <<<"$live_facts" | grep -qx 'REACH: RESUMABLE'
+       then echo 0; else echo 1; fi)"
 else
   echo "skip: sqlite3 not available; multi config dir discovery not exercised"
 fi
