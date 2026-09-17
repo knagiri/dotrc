@@ -35,11 +35,13 @@ blocks() {  # blocks <bashrc>; how many DOTRC blocks it holds
 # A minimal checkout: just enough for deploy.sh to have something to link and
 # a bashrc path to substitute into the block.
 repo="$sandbox/repo"
-mkdir -p "$repo/bin" "$repo/rc" "$repo/dot/example"
+mkdir -p "$repo/bin" "$repo/rc" "$repo/dot/example" "$repo/dot/claude/rules"
 : >"$repo/rc/bashrc"
 : >"$repo/dot/example/file"
+: >"$repo/dot/claude/rules/rule.md"
 cp "$src" "$repo/bin/deploy.sh"
 chmod +x "$repo/bin/deploy.sh"
+repo="$(cd "$repo" && pwd -P)"  # deploy.sh resolves REPO_DIR with realpath
 
 # The control: the same script with its guard removed.
 grep -v 'guard@dotrc' "$repo/bin/deploy.sh" >"$repo/bin/deploy-noguard.sh"
@@ -48,15 +50,26 @@ check "the guard-less control really differs from the script under test" \
   "$(if ! cmp -s "$repo/bin/deploy.sh" "$repo/bin/deploy-noguard.sh"
      then echo 0; else echo 1; fi)"
 
+# Everything deploy.sh resolves off the environment has to land in the sandbox.
+# HOME alone is not enough: mise honours XDG_* and its own MISE_* overrides, and
+# an inherited one would point `mise settings add` at the real global config.
+sandboxed() {  # sandboxed <home> <cmd...>
+  local h="$1"; shift
+  env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+      -u MISE_GLOBAL_CONFIG_FILE -u MISE_CONFIG_DIR -u MISE_DATA_DIR -u MISE_STATE_DIR \
+      -u MISE_CACHE_DIR -u MISE_TRUSTED_CONFIG_PATHS -u MISE_ENV -u CLAUDE_CONFIG_DIR \
+      HOME="$h" "$@"
+}
+
 run() {  # run <script> <home>
-  ( HOME="$2" "$1" ) >/dev/null 2>&1
+  sandboxed "$2" "$1" >/dev/null 2>&1
 }
 
 # Separate from run(): captures stderr instead of discarding it, to check the
 # skip notice the guard prints on its else branch (a stale block pointing at
 # another checkout should not go silently unnoticed -- dotrc-deploy.md §4).
 run_capture_stderr() {  # run_capture_stderr <script> <home> <stderr-out-file>
-  ( HOME="$2" "$1" ) >/dev/null 2>"$3"
+  sandboxed "$2" "$1" >/dev/null 2>"$3"
 }
 
 # --- Case A: a first-time home, then a re-run -------------------------------
@@ -118,5 +131,95 @@ check "a subdirectory under bin/ leaves deploy.sh's block and dot/ expansion int
   "$(if [ "$rc_d" -eq 0 ] && [ "$(blocks "$home_d/.bashrc")" -eq 1 ] \
        && [ -L "$home_d/.example" ] && [ ! -e "$home_d/.lib" ] && [ ! -e "$home_d/.bin" ]
      then echo 0; else echo 1; fi)"
+
+# --- Case E: dot/claude goes to both config dirs ----------------------------
+# ~/.claude is the default account's config dir and ~/.claude-personal the one
+# dotrc's mise.toml selects. Each reads its own rules/skills/settings, so both
+# must get the links, and a re-run must leave them links (not a nested
+# rules/rules, which is what `ln -snvf` onto an existing real dir would make).
+# The control is the same script with the personal destination removed.
+sed 's|^MergeLinkMap\["claude"\]=.*$|MergeLinkMap["claude"]="${HOME}/.claude"|' \
+  "$repo/bin/deploy.sh" >"$repo/bin/deploy-onedir.sh"
+chmod +x "$repo/bin/deploy-onedir.sh"
+check "the one-dir control really differs from the script under test" \
+  "$(if ! cmp -s "$repo/bin/deploy.sh" "$repo/bin/deploy-onedir.sh"; then echo 0; else echo 1; fi)"
+
+linked_to_rules() {  # linked_to_rules <path>
+  [ -L "$1" ] && [ "$(readlink "$1")" = "$repo/dot/claude/rules" ]
+}
+home_e="$sandbox/home_e"; mkdir -p "$home_e"
+run "$repo/bin/deploy.sh" "$home_e"
+run "$repo/bin/deploy.sh" "$home_e"
+check "dot/claude entries are linked into ~/.claude and ~/.claude-personal, idempotently" \
+  "$(if linked_to_rules "$home_e/.claude/rules" && linked_to_rules "$home_e/.claude-personal/rules" \
+       && [ ! -e "$repo/dot/claude/rules/rules" ]
+     then echo 0; else echo 1; fi)"
+home_e2="$sandbox/home_e2"; mkdir -p "$home_e2"
+run "$repo/bin/deploy-onedir.sh" "$home_e2"
+check "without the personal destination, ~/.claude-personal gets nothing" \
+  "$(if linked_to_rules "$home_e2/.claude/rules" && [ ! -e "$home_e2/.claude-personal/rules" ]
+     then echo 0; else echo 1; fi)"
+
+# --- Case F: personal.env and mise.gh.local.toml templates -------------------
+# Created when absent, owner-only; never overwritten, since by the second run
+# the token has been filled in. The control drops the absence check.
+home_f="$sandbox/home_f"; mkdir -p "$home_f"
+rm -f "$repo/mise.gh.local.toml"
+run "$repo/bin/deploy.sh" "$home_f"
+penv="$home_f/.config/gh/personal.env"
+check "a missing personal.env is created, mode 600, with an empty GH_TOKEN key" \
+  "$(if [ "$(stat -c %a "$penv" 2>/dev/null)" = 600 ] && grep -qx 'GH_TOKEN=' "$penv"
+     then echo 0; else echo 1; fi)"
+check "a missing mise.gh.local.toml is created pointing at personal.env" \
+  "$(if grep -qF '_.file = "~/.config/gh/personal.env"' "$repo/mise.gh.local.toml" 2>/dev/null
+     then echo 0; else echo 1; fi)"
+printf 'GH_TOKEN=filled\n' >"$penv"
+printf '# hand-edited\n' >"$repo/mise.gh.local.toml"
+run "$repo/bin/deploy.sh" "$home_f"
+check "a re-run leaves a filled-in personal.env and mise.gh.local.toml alone" \
+  "$(if grep -qx 'GH_TOKEN=filled' "$penv" && grep -qx '# hand-edited' "$repo/mise.gh.local.toml"
+     then echo 0; else echo 1; fi)"
+sed 's|^if \[ ! -e "${__personal_env}" \]; then$|if true; then|' \
+  "$repo/bin/deploy.sh" >"$repo/bin/deploy-clobber.sh"
+chmod +x "$repo/bin/deploy-clobber.sh"
+run "$repo/bin/deploy-clobber.sh" "$home_f"
+check "without the absence check, the filled-in token would be overwritten" \
+  "$(if ! grep -qx 'GH_TOKEN=filled' "$penv"; then echo 0; else echo 1; fi)"
+
+# --- Case G: the checkout is trusted by path prefix, once --------------------
+# A worktree's own mise.toml is not covered by `mise trust` on the checkout, so
+# deploy.sh adds the checkout to trusted_config_paths. `mise settings add`
+# appends a duplicate per call, so two runs must still leave one entry; the
+# control without the check-first leaves two.
+if command -v mise >/dev/null 2>&1; then
+  mise_cfg() { printf '%s\n' "$1/.config/mise/config.toml"; }
+  trusted_count() {  # trusted_count <home>
+    grep -oF "\"$repo\"" "$(mise_cfg "$1")" 2>/dev/null | wc -l
+  }
+  home_g="$sandbox/home_g"; mkdir -p "$home_g"
+  run "$repo/bin/deploy.sh" "$home_g"
+  run "$repo/bin/deploy.sh" "$home_g"
+  check "two runs leave the checkout in trusted_config_paths exactly once" \
+    "$(if [ "$(trusted_count "$home_g")" -eq 1 ]; then echo 0; else echo 1; fi)"
+  mkdir -p "$repo/.worktrees/wt"
+  printf '[env]\nDEPLOY_TEST = "yes"\n' >"$repo/.worktrees/wt/mise.toml"
+  check "the control: without deploy.sh, that worktree mise.toml is untrusted" \
+    "$(home_g0="$sandbox/home_g0"; mkdir -p "$home_g0"
+       if ! sandboxed "$home_g0" mise env -C "$repo/.worktrees/wt" >/dev/null 2>&1
+       then echo 0; else echo 1; fi)"
+  check "a worktree's own mise.toml is trusted after deploy.sh" \
+    "$(if sandboxed "$home_g" mise env -C "$repo/.worktrees/wt" 2>/dev/null | grep -qF 'DEPLOY_TEST=yes'
+       then echo 0; else echo 1; fi)"
+  grep -v '^    if ! mise settings get trusted_config_paths' "$repo/bin/deploy.sh" \
+    | sed '/^        mise settings add trusted_config_paths/{n;d}' >"$repo/bin/deploy-dup.sh"
+  chmod +x "$repo/bin/deploy-dup.sh"
+  home_g2="$sandbox/home_g2"; mkdir -p "$home_g2"
+  run "$repo/bin/deploy-dup.sh" "$home_g2"
+  run "$repo/bin/deploy-dup.sh" "$home_g2"
+  check "without the check-first, two runs leave a duplicate entry" \
+    "$(if [ "$(trusted_count "$home_g2")" -eq 2 ]; then echo 0; else echo 1; fi)"
+else
+  echo "skip: mise not available; trusted_config_paths not exercised"
+fi
 
 exit "$fail"
