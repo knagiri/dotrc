@@ -434,9 +434,15 @@ chmod +x "$stubbin/claude-queue"
 # read the host's global config and possibly install tools, so it is stubbed too:
 # the argv goes to $MISE_STUB_LOG, and the command runs in <dir>, as mise does.
 # The one case that needs mise's real env resolution builds its own PATH.
+#
+# Appended (`>>`), not overwritten: a single `claude-worktree` run can invoke
+# mise more than once now that the attach-hint helper also resolves the
+# worktree's CLAUDE_CONFIG_DIR through it (see claude-worktree's attach_hint),
+# so a test asserting on the FIRST invocation (the actual launch) reads the
+# leading lines rather than assuming the log holds exactly one call.
 cat >"$stubbin/mise" <<'EOF'
 #!/usr/bin/env bash
-[ -z "${MISE_STUB_LOG:-}" ] || printf '%s\n' "$@" >"$MISE_STUB_LOG"
+[ -z "${MISE_STUB_LOG:-}" ] || printf '%s\n' "$@" >>"$MISE_STUB_LOG"
 [ "${1:-}" = exec ] || exit 0
 shift
 dir=.
@@ -990,6 +996,45 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
 if [ "$rc" -ne 0 ] && [ ! -s "$log" ] && grep -q 'feedface' <<<"$out"; then
   echo "ok: an existing bg session in the same worktree blocks a second launch"
 else echo "FAIL: bg collision rc=$rc out=$out"; fail=1; fi
+
+# The guard above must catch a session under the WORKTREE's own account, not
+# just the caller's: which account a repo's delegate runs under follows the
+# worktree's mise config (see claude-worktree's launch_env), so the two can
+# differ -- a company-dir session delegating with --global into dotrc, whose
+# mise config selects the personal dir, is one direction; a personal-dir
+# session delegating into a repo with no such config, landing back on the
+# default dir, is the other. A bare `claude agents --json` only ever sees the
+# CALLER's own roster, so it misses a live session recorded under the OTHER
+# account. Simulated with the real stub mise (`cd "$dir" && exec "$@"`, no
+# account switching of its own): the stub `claude` tells the two queries apart
+# by whether CLAUDE_CONFIG_DIR reached it -- unset means it came through
+# launch_env's `env -u` (the worktree's own account), still set means it was
+# invoked bare (the caller's). The worktree dir is pre-created (a plain
+# directory suffices; the guard only checks `-d`) since `mise exec -C` needs a
+# real target and, in reality, a live session's cwd could not exist otherwise.
+delegateroster="$tmp/roster-delegate-busy.json"
+mkdir -p "${cwdrepo}/.worktrees/bgcrossacct"
+cat >"$delegateroster" <<EOF
+[{"pid":1,"cwd":"${cwdrepo}/.worktrees/bgcrossacct","kind":"background","sessionId":"cafefeed-1111-2222-3333-444444444444","status":"working"}]
+EOF
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then cat "$CLAUDE_STUB_ROSTER"; else cat "$CLAUDE_STUB_DELEGATE_ROSTER"; fi
+  exit 0
+fi
+printf '%s\n' "$@" >"$CLAUDE_STUB_LOG"
+printf 'backgrounded · abcd1234\n'
+EOF
+chmod +x "$stubbin/claude"
+log="$tmp/bg-crossacct"; : >"$log"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$emptyroster" \
+         CLAUDE_STUB_DELEGATE_ROSTER="$delegateroster" CLAUDE_CONFIG_DIR="$tmp/caller-crossacct"
+  "$wt" bgcrossacct -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$log" ] && grep -q 'cafefeed' <<<"$out"; then
+  echo "ok: the guard checks the worktree's own account roster, catching a session invisible to the caller's bare roster"
+else echo "FAIL: cross-account bg collision rc=$rc out=$out"; fail=1; fi
 
 # --- delegator name injection -------------------------------------------------
 # The delegate has no conversation history, so it can only report back if it is
