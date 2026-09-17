@@ -114,8 +114,9 @@ session の model に戻る」と明記している（`effort` フィールド�
 時点までの文脈を cache から外して書き直す。実測では 100〜200k token の文脈が対象になった。
 cache write の単価は cache read の 12.5〜20 倍（5 分 TTL は write が base の 1.25 倍で read 比
 12.5 倍、1 時間 TTL は write が base の 2 倍で read 比 20 倍）で、切り替え 1 回で同じ文脈を
-読む場合の 12.5〜20 倍を払う。1 時間 TTL が付くのは Claude subscription の主 conversation に
-限られ、API key・cloud provider 経由や subagent の request は既定 5 分 TTL になる。skill を
+読む場合の 12.5〜20 倍を払う。既定では、1 時間 TTL は Claude subscription の利用枠内の主
+conversation にだけ付き、それ以外（API key・cloud provider 経由、usage credits 使用時、
+subagent の request）は 5 分になる（`promptCacheTtl` 等で変更可）。skill を
 1 回呼ぶと、入るときと戻るときの 2 回切り替わる。Fable 5.1 を API key か Claude subscription で
 使う場合は既定でこの cache 破棄自体が起きない（v2.1.260 以降。Amazon Bedrock・Google Cloud の
 Agent Platform・Claude apps gateway 経由や `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` 設定時、
