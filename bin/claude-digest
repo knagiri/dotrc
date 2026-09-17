@@ -555,7 +555,19 @@ done
 
 # --- reachability -----------------------------------------------------------
 
-roster="$(claude agents --json 2>/dev/null || echo '[]')"
+# The roster is per config dir, like the transcripts above, so it is read once
+# per dir the ledger knows and merged. Reading only this process's own dir would
+# file a live session under another dir as RESUMABLE or CWD_GONE. This loop runs
+# even when CLAUDE_PROJECTS_DIR pins the transcript search, since that pin says
+# where to read transcripts, not which daemons are up. A dir whose roster cannot
+# be read or parsed costs only its own entries, the same as in claude-reap-bg.
+roster="[]"
+while IFS= read -r cfg_dir; do
+  [ -n "$cfg_dir" ] || continue
+  dir_roster="$(CLAUDE_CONFIG_DIR="$cfg_dir" claude agents --json 2>/dev/null)" || continue
+  merged="$(jq -s '.[0] + .[1]' <<<"$roster"$'\n'"$dir_roster" 2>/dev/null)" || continue
+  roster="$merged"
+done < <(cq_config_dirs)
 declare -A s_reach=() s_state=() s_cwd=()
 
 for uuid in "${session_ids[@]}"; do

@@ -81,7 +81,7 @@ permission rule の置き場所は 3 つあり、伝播の経路がそれぞれ�
 
 | 置き場所 | 伝播経路 | 何を置くか |
 |---|---|---|
-| `~/.claude/settings.json`（dotrc の `dot/claude/settings.json`） | dotrc の git 管理下だが、効くのは `bin/deploy.sh` が張る symlink 経由（[dotrc-deploy.md](./dotrc-deploy.md) 参照）。linked worktree で編集しても、そのまま委譲先には効かない | 複数 repo で使うもの |
+| `~/.claude/settings.json` と `~/.claude-personal/settings.json`（どちらも dotrc の `dot/claude/settings.json`） | dotrc の git 管理下だが、効くのは `bin/deploy.sh` が両 config dir へ張る symlink 経由（[dotrc-deploy.md](./dotrc-deploy.md) §6 参照）。linked worktree で編集しても、そのまま委譲先には効かない | 複数 repo で使うもの |
 | `<repo>/.claude/settings.json` | **repo の git 管理下**。branch を checkout すれば載る | repo 固有で、worktree へ伝播させたいもの |
 | `<repo>/.claude/settings.local.json` | 管理外 | その checkout 限りの一時的なもの |
 

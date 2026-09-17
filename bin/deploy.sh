@@ -69,7 +69,13 @@ CustomLocationMap["nvim"]="${HOME}/.config/nvim"
 declare -A MergeLinkMap
 # For directories where individual files should be linked INTO
 # an existing directory (instead of replacing the whole directory).
-MergeLinkMap["claude"]="${HOME}/.claude"
+# Several destinations are separated by ':' and each gets the same links.
+#
+# claude: ~/.claude is the default account's config dir and ~/.claude-personal
+# the one dotrc's mise.toml selects through CLAUDE_CONFIG_DIR. CLAUDE.md, rules,
+# skills, agents and settings.json are all read per config dir, so both dirs get
+# them. Plugins are not deployed: install them into each dir by hand.
+MergeLinkMap["claude"]="${HOME}/.claude:${HOME}/.claude-personal"
 # ~/.config/systemd and its user/ subdirectory already exist as real directories
 # (systemd keeps its own state there, e.g. *.target.wants), so a whole-directory
 # link would land inside them instead of replacing them.
@@ -77,10 +83,12 @@ MergeLinkMap["systemd-user"]="${HOME}/.config/systemd/user"
 
 for dotname in $(ls "$__dotfiles_path"); do
     if [ -n "${MergeLinkMap["${dotname}"]}" ]; then
-        merge_target="${MergeLinkMap["${dotname}"]}"
-        mkdir -p "$merge_target"
-        for file in "${__dotfiles_path}/${dotname}"/*; do
-            dotlink "$file" "${merge_target}/$(basename "$file")"
+        IFS=: read -r -a merge_targets <<<"${MergeLinkMap["${dotname}"]}"
+        for merge_target in "${merge_targets[@]}"; do
+            mkdir -p "$merge_target"
+            for file in "${__dotfiles_path}/${dotname}"/*; do
+                dotlink "$file" "${merge_target}/$(basename "$file")"
+            done
         done
     elif [ -n "${CustomLocationMap["${dotname}"]}" ]; then
         dotlink "${__dotfiles_path}/${dotname}" "${CustomLocationMap["${dotname}"]}"
@@ -88,6 +96,35 @@ for dotname in $(ls "$__dotfiles_path"); do
         dotlink "${__dotfiles_path}/${dotname}" "${HOME}/.${dotname}"
     fi
 done
+
+# mise: trust this checkout's configs, including those of every worktree under
+# it. The tracked mise.toml is checked out into each worktree as its own file,
+# and `mise trust` on the checkout does not cover a config in a subdirectory
+# (measured: the checkout read trusted, <checkout>/.worktrees/<name>/mise.toml
+# still untrusted, so `mise exec -C` there failed). trusted_config_paths
+# matches by path prefix, which does. `mise settings add` appends a duplicate on
+# every call, hence the check first.
+if command -v mise >/dev/null 2>&1; then
+    if ! mise settings get trusted_config_paths 2>/dev/null | grep -qF "\"${REPO_DIR}\""; then
+        mise settings add trusted_config_paths "${REPO_DIR}"
+    fi
+fi
+
+# Personal GitHub PAT. mise.gh.local.toml (gitignored, read only under
+# MISE_ENV=gh -- see bin/lib/gh-mise.sh) loads ~/.config/gh/personal.env. Both
+# are created only when absent, so a re-run never touches a filled-in token.
+# The template holds the keys alone; an empty GH_TOKEN makes gh fall back to
+# hosts.yml, and a missing personal.env does not make mise fail either.
+__personal_env="${HOME}/.config/gh/personal.env"
+if [ ! -e "${__personal_env}" ]; then
+    mkdir -p "$(dirname "${__personal_env}")"
+    (umask 077 && printf '%s\n' '# Personal GitHub PAT for dotrc (read via mise.gh.local.toml)' 'GH_TOKEN=' >"${__personal_env}")
+    chmod 600 "${__personal_env}"
+    echo "deploy.sh: created ${__personal_env}; fill in GH_TOKEN" >&2
+fi
+if [ ! -e "${REPO_DIR}/mise.gh.local.toml" ]; then
+    printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"${REPO_DIR}/mise.gh.local.toml"
+fi
 
 # Build claude-queue if Go is available
 if command -v go >/dev/null 2>&1 && [ -d "${REPO_DIR}/src/claude-queue" ]; then
