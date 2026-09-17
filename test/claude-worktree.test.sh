@@ -429,6 +429,24 @@ exit "${CQ_STUB_RC:-0}"
 EOF
 chmod +x "$stubbin/claude-queue"
 
+# Every launch goes through `mise exec -C <worktree> --` when mise is on PATH
+# (the account the delegate runs under follows the worktree). The real mise would
+# read the host's global config and possibly install tools, so it is stubbed too:
+# the argv goes to $MISE_STUB_LOG, and the command runs in <dir>, as mise does.
+# The one case that needs mise's real env resolution builds its own PATH.
+cat >"$stubbin/mise" <<'EOF'
+#!/usr/bin/env bash
+[ -z "${MISE_STUB_LOG:-}" ] || printf '%s\n' "$@" >"$MISE_STUB_LOG"
+[ "${1:-}" = exec ] || exit 0
+shift
+dir=.
+while [ $# -gt 0 ]; do
+  case "$1" in -C) dir="$2"; shift 2 ;; --) shift; break ;; *) shift ;; esac
+done
+cd "$dir" && exec "$@"
+EOF
+chmod +x "$stubbin/mise"
+
 # Prompt carrying a space plus both quote kinds -- must survive as ONE argv
 # element (the whole point of passing it separately, not folded into a string).
 prompt='say "hi" it'\''s here'
@@ -1158,7 +1176,7 @@ else echo "FAIL: link failure rc=$rc out=$out"; fail=1; fi
 # and the stubs other than claude-queue are copied ahead of it.
 nocqbin="$tmp/nocqbin"
 mkdir -p "$nocqbin"
-cp "$stubbin/claude" "$stubbin/tmux" "$nocqbin/"
+cp "$stubbin/claude" "$stubbin/tmux" "$stubbin/mise" "$nocqbin/"
 nocqpath="$nocqbin"
 IFS=: read -r -a pathdirs <<<"$PATH"
 for d in "${pathdirs[@]}"; do
@@ -1175,6 +1193,86 @@ if [ "$rc" -eq 0 ] && grep -q 'claude-queue not on PATH' <<<"$out" \
    && grep -q 'session  : abcd1234' <<<"$out"; then
   echo "ok: a missing claude-queue warns and the launch still exits 0"
 else echo "FAIL: absent claude-queue rc=$rc out=$out"; fail=1; fi
+
+# --- account: CLAUDE_CONFIG_DIR follows the worktree, not the caller ---------
+# CLAUDE_CONFIG_DIR picks the Claude Code account. A repo that wants a non-default
+# one sets it in its mise config, and the launch must take it from the worktree
+# rather than inherit the caller's: a dotrc session (personal account) delegating
+# to another repo must not hand that repo its account. The stub claude records
+# the value it was started with.
+cat >"$stubbin/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+printf '%s\n' "${CLAUDE_CONFIG_DIR-<unset>}" >"$CLAUDE_STUB_CCDLOG"
+printf 'backgrounded · %s\n' "${CLAUDE_STUB_ID:-abcd1234}"
+EOF
+chmod +x "$stubbin/claude"
+
+ccdlog="$tmp/acct-ccd"; misel="$tmp/acct-mise"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_CCDLOG="$ccdlog" MISE_STUB_LOG="$misel" \
+         CLAUDE_STUB_ROSTER="$emptyroster" CLAUDE_CONFIG_DIR="$tmp/caller-personal"
+  "$wt" acctbg -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$ccdlog" 2>/dev/null)" = "<unset>" ] \
+   && [ "$(head -n 4 "$misel" 2>/dev/null | tr '\n' ' ')" = "exec -C ${cwdrepo}/.worktrees/acctbg -- " ] \
+   && [ "$(sed -n 5p "$misel" 2>/dev/null)" = claude ]; then
+  echo "ok: bg launch drops the caller's CLAUDE_CONFIG_DIR and reads the worktree's mise config"
+else echo "FAIL: bg account rc=$rc ccd=$(cat "$ccdlog" 2>/dev/null) mise=$(tr '\n' ' ' <"$misel" 2>/dev/null) out=$out"; fail=1; fi
+
+# --tmux: the pane runs claude with no shell for `mise activate` to act in, so
+# the prefix has to be on the tmux command itself, ahead of both launch shapes.
+for mode in in out; do
+  log="$tmp/acct-tmux-$mode"
+  out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+    export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
+    [ "$mode" = out ] || export TMUX=fake TMUX_PANE=%9
+    "$wt" --tmux "accttmux$mode" -- "$prompt"; } 2>&1)"; rc=$?
+  want="-c ${cwdrepo}/.worktrees/accttmux$mode env -u CLAUDE_CONFIG_DIR mise exec -C ${cwdrepo}/.worktrees/accttmux$mode -- "
+  [ "$mode" = out ] && want="${want}claude " || want="${want}bash -c "
+  if [ "$rc" -eq 0 ] && grep -Fq -- "$want" <<<"$(tr '\n' ' ' <"$log" 2>/dev/null)"; then
+    echo "ok: --tmux ($mode of tmux) launch carries the env -u / mise exec prefix"
+  else echo "FAIL: --tmux $mode account prefix rc=$rc argv=$(tr '\n' ' ' <"$log" 2>/dev/null)"; fail=1; fi
+done
+
+# The same through the REAL mise, since the stub above cannot show what mise does
+# with an inherited value -- which is the whole reason for `env -u`. A repo that
+# carries dotrc's mise.toml stands in for dotrc; the plain cwd repo carries none.
+# HOME points into $tmp so neither the host's mise config nor its trust store is
+# read, and trust is granted by path prefix the way bin/deploy.sh grants it.
+if command -v mise >/dev/null 2>&1; then
+  accthome="$tmp/accthome"; mkdir -p "$accthome"
+  acctrepo="$tmp/acctrepo"
+  mkdir -p "$acctrepo/bin"
+  cp "$src" "$acctrepo/bin/claude-worktree"; chmod +x "$acctrepo/bin/claude-worktree"
+  cp "$here/../mise.toml" "$acctrepo/mise.toml"
+  git -C "$acctrepo" init -q
+  git -C "$acctrepo" add mise.toml
+  git -C "$acctrepo" -c user.email=t@t -c user.name=t commit -q -m init
+  realmisebin="$tmp/realmisebin"; mkdir -p "$realmisebin"
+  cp "$stubbin/claude" "$stubbin/claude-queue" "$realmisebin/"
+  acct_run() {  # acct_run <ccd-or-empty> <args...>
+    local ccd="$1"; shift
+    ( cd "$cwdrepo" && unset TMUX TMUX_PANE XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME \
+        XDG_CACHE_HOME MISE_GLOBAL_CONFIG_FILE MISE_CONFIG_DIR MISE_DATA_DIR MISE_STATE_DIR \
+        MISE_CACHE_DIR MISE_ENV CLAUDE_CONFIG_DIR
+      export HOME="$accthome" PATH="$realmisebin:$PATH" CLAUDE_STUB_CCDLOG="$ccdlog" \
+             CLAUDE_STUB_ROSTER="$emptyroster" MISE_TRUSTED_CONFIG_PATHS="$acctrepo"
+      [ -z "$ccd" ] || export CLAUDE_CONFIG_DIR="$ccd"
+      "$acctrepo/bin/claude-worktree" "$@" )
+  }
+  : >"$ccdlog"
+  out="$(acct_run "" --global acctglobal -- "$prompt" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$(cat "$ccdlog")" = "$accthome/.claude-personal" ]; then
+    echo "ok: real mise: a delegate into a repo with the mise.toml runs under the personal dir"
+  else echo "FAIL: real mise --global rc=$rc ccd=$(cat "$ccdlog") out=$out"; fail=1; fi
+  : >"$ccdlog"
+  out="$(acct_run "$accthome/.claude-personal" acctother -- "$prompt" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$(cat "$ccdlog")" = "<unset>" ]; then
+    echo "ok: real mise: a personal-dir caller delegating to a repo without it lands on the default dir"
+  else echo "FAIL: real mise other repo rc=$rc ccd=$(cat "$ccdlog") out=$out"; fail=1; fi
+else
+  echo "skip: mise not available; the real-mise account cases are not exercised"
+fi
 
 # --- fetch guard: BatchMode survives a caller-supplied GIT_SSH_COMMAND ---------
 # The leading fetch runs inside an unattended `claude --bg` delegation, so ssh
