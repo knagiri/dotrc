@@ -29,10 +29,8 @@ allowed-tools: Bash(git status *), Bash(git diff *), Bash(git log *), Bash(git a
 ## 1 ファイルに別々の論理変更が混ざったとき
 
 分割が要る状態を作らないのが第一。論理変更を 1 つ書いたら commit してから次へ進む。混ぜてから
-分けるのは避けられる手戻りである。
-
-混ざってしまったら、patch を経由して hunk 単位で stage する（`git add -p` / `-i` は対話 UI の
-ため使えない）。
+分けるのは避けられる手戻りである。混ざってしまったら、patch を経由して hunk 単位で stage する
+（`git add -p` / `-i` は対話 UI のため使えない）。
 
 ```
 git diff -- <file> > "$(git rev-parse --git-path split.patch)"
@@ -41,18 +39,14 @@ git apply --cached "$(git rev-parse --git-path split.patch)"
 git diff --cached                        # この論理変更だけが stage されたか確認
 ```
 
-patch は `git rev-parse --git-path` で解決した `.git` 配下に置く。main working tree では
-`.git` は repo 内のディレクトリなので、これは repo 内への書き出しになる。**linked
-worktree では話が違う**: `--git-path` は worktree のルートの外（`<main>/.git/worktrees/<name>/`、
-実測）を返すため、書き込み先は worktree の working directory の外になる。`--git-path` が
-指す先のパス解決が正しいこと（worktree-scope.md §1）と、その書き込み先が worktree 内で
-完結するかは別の話なので混同しない。`$VAR` に代入せず command substitution をそのまま
-埋め込んでいるのは bash-command-constraints.md の理由による。hunk の削除は Edit ツールで
-行う（`sed` は command-selection.md により使わない。Edit は Bash の allowlist とは別の
-permission family だが、対象パスが worktree 外にあることは変わらない）。
-
-`--cached` は index にだけ適用するので working tree は変わらず、削った hunk は unstaged の
-まま残る。commit したら、残りの変更に同じ手順を繰り返す。
+patch は `git rev-parse --git-path` が返す `.git` 配下に置く。main working tree ではこれは
+repo 内だが、linked worktree では `<main>/.git/worktrees/<name>/` が返るので worktree の外への
+書き込みになる。Bash の allowlist とは別の permission family である Edit でも、この点は同じ。
+`--git-path` のパス解決が正しいこと（worktree-scope.md §1）と、書き込み先が worktree 内に
+収まるかは別の話である。command substitution を `$VAR` に代入せず埋め込むのは
+bash-command-constraints.md の理由により、hunk の削除に `sed` でなく Edit を使うのは
+command-selection.md による。`--cached` は index にだけ適用するので working tree は変わらず、
+削った hunk は unstaged のまま残る。commit したら、残りの変更に同じ手順を繰り返す。
 
 `git checkout -- <file>` で working tree を HEAD へ戻し、論理変更を 1 つずつ書き直して commit
 する手順は取らない。working tree を捨てる破壊的な操作なので、退避が不完全なら作業を失い、
