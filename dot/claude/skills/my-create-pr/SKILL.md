@@ -1,7 +1,7 @@
 ---
 name: my-create-pr
 description: コンテキストに基づいた説明付きで GitHub Pull Request を作成する
-allowed-tools: Bash(git status *), Bash(git diff *), Bash(git log *), Bash(git rev-parse *), Bash(git fetch origin *), Bash(git push *), Bash(git ls-files *), Bash(gh repo view *), Bash(gh-pr-create *), Bash(echo *), Read, Glob, Grep, AskUserQuestion
+allowed-tools: Bash(git status *), Bash(git diff *), Bash(git log *), Bash(git rev-parse *), Bash(git fetch origin *), Bash(git push *), Bash(git ls-files *), Bash(gh repo view *), Bash(gh-pr-create *), Bash(node_modules/.bin/textlint *), Bash(echo *), Read, Write, Glob, Grep, AskUserQuestion
 ---
 
 ## Pre-fetched context
@@ -48,7 +48,22 @@ Pull Request を作成する。以下のフローに従うこと。本文確認�
    - **会話依存スキャン**: 「あの」「例の」「先ほど」「セッション中で議論した」のような会話前提を示す表現が残っていないか確認。残っていれば独立して読める形に書き直す。
    - **why の有無**: diff からは読み取れないが書ける why があれば補う。無理に書かない。
 
-6. **表示 → Push → 作成**:
+6. **文体 lint**: repo が textlint の設定を tracked で持つときだけ、本文を textlint に掛ける。手順 5 と同じく block しない、ユーザーには確認しない。
+   - **発火条件**: `git ls-files ':(top).textlintrc*'` の出力が空なら段ごと飛ばす。`:(top)` で repo root 基準に固定する（Pre-fetched context の PR テンプレート検出と同じ書き方）。
+   - **検査**: repo root から、本文を標準入力で渡す。本文をファイルとして repo 内に置くと作業ツリーを汚すため。
+
+     ```
+     node_modules/.bin/textlint --stdin --stdin-filename pr-body.md --ignore-path /dev/null <<'PR_BODY_EOF'
+     <body>
+     PR_BODY_EOF
+     ```
+
+     `--stdin-filename` の拡張子で本文が Markdown として解釈される。インストール済みの版が `--stdin` / `--stdin-filename` を受け付けない場合は、本文を `$CLAUDE_JOB_DIR` 配下の一時ファイルに `Write` で書き、`node_modules/.bin/textlint --ignore-path /dev/null <そのパス>` で検査する。repo 内には書かない。
+   - **`--ignore-path /dev/null` は必ず付ける**: repo の ignore 設定（`.textlintignore`）が本文のファイル名を除外対象に含むと、textlint は何も検査せず指摘ゼロ・終了コード 0 を返す。「検査したつもりで何も検査されていない」状態になり、出力からは区別できない。ファイルを渡す形で実際に起きるので、標準入力の形でも揃えて付ける。
+   - **指摘の直し方**: 指摘があれば本文を自分で直す。`--fix` は使わない（ひらき系のルールが品詞を取り違えて置換することがあり、置換後の語を文に戻して読み直す必要があるため）。指摘に従わない箇所があれば、その理由を最終応答に書く。
+   - **実行できなかった場合**: `node_modules/.bin/textlint` が無い（依存が入っていない worktree 等）、または終了コードが 2 以上（設定・ルールの読み込み失敗等の fatal）なら、検査を飛ばして先へ進み、飛ばした事実を最終応答に書く。検査していない本文を「指摘なし」と報告しない。
+
+7. **表示 → Push → 作成**:
    - 完成した本文を画面に表示する（情報提供。block しない）。
    - 未プッシュのコミットがある場合（`git log @{upstream}..HEAD`）のみ `git push -u origin HEAD` を実行する。
    - `gh-pr-create --title ... --body ... --base <手順 1 で決めた base>` で PR を作成し、URL を返す。`gh-pr-create` は `gh pr create` を包む薄いラッパーで、フラグを素通ししたうえで repo の mise env（`GH_TOKEN`）だけを載せる（repo の個人 PAT は `MISE_ENV=gh` のときだけ読まれる `mise.gh.local.toml` にあり shell の env には載らないので、素の `gh pr create` は hosts.yml の token を使って権限エラーになるため。背景は `bin/lib/gh-mise.sh` のヘッダ。[gh-commands.md](../../rules/gh-commands.md) §5）。手順 1 で決めた base は既定ブランチを採った場合も含め常に明示する（省略すると base の決定が `gh pr create` 側の既定解決に委ねられ、手順 1 で集めた diff の基準と PR の base が一致する保証が無くなるため。明示しておけば gh 側の解決規則に依存せず両者が必ず揃う。既定ブランチと一致するケースでも明示は無害）。
