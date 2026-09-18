@@ -1,7 +1,7 @@
 ---
 name: es-create-pr
 description: コンテキストに基づいた説明付きで GitHub Pull Request を作成する
-allowed-tools: Bash(git status *), Bash(git diff *), Bash(git log *), Bash(git rev-parse *), Bash(git fetch origin *), Bash(git push *), Bash(git branch -m *), Bash(git branch --set-upstream-to=*), Bash(git ls-files *), Bash(gh repo view *), Bash(gh pr create *), Bash(gh pr edit *), Bash(gh pr list *), Bash(gh pr close *), Bash(gh run list *), Bash(./scripts/agent_pr/run.sh *), Bash(echo *), Read, Glob, Grep, AskUserQuestion
+allowed-tools: Bash(git status *), Bash(git diff *), Bash(git log *), Bash(git rev-parse *), Bash(git fetch origin *), Bash(git push *), Bash(git branch -m *), Bash(git branch --set-upstream-to=*), Bash(git ls-files *), Bash(gh repo view *), Bash(gh pr create *), Bash(gh pr edit *), Bash(gh pr list *), Bash(gh pr close *), Bash(gh run list *), Bash(./scripts/agent_pr/run.sh *), Bash(node_modules/.bin/textlint *), Bash(echo *), Read, Write, Glob, Grep, AskUserQuestion
 ---
 
 # es-create-pr
@@ -29,13 +29,13 @@ personal が project を上書きするので、repo の CLAUDE.md が名指し�
 
 ## 手順
 
-1. **`~/.claude/skills/my-create-pr/SKILL.md` を Read し、その手順 1〜5 に従う**（コンテキスト
-   収集 → 未コミット変更の確認 → PR テンプレート → 本文ドラフト → self-check）。手順 6 の
-   「Push → 作成」だけを以下で置き換える。
+1. **`~/.claude/skills/my-create-pr/SKILL.md` を Read し、その手順に従う**。ただし「表示 →
+   Push → 作成」の段だけを以下で置き換え、それ以外の段には従う。段は番号ではなく名前で
+   指す（`my-create-pr` 側で段が増減すると番号は黙ってずれるため）。
 
 2. **レーンの自己判定**: `git ls-files ':(top)scripts/agent_pr/run.sh'` の出力が空なら、この
-   repo に agent レーンは無い。`my-create-pr` の手順 6 をそのまま実行して終わる（`gh pr
-   create`）。`:(top)` で repo root 基準の存在確認に固定する。手順 4 で叩く
+   repo に agent レーンは無い。`my-create-pr` の「表示 → Push → 作成」の段をそのまま実行して
+   終わる（`gh pr create`）。`:(top)` で repo root 基準の存在確認に固定する。手順 4 で叩く
    `./scripts/agent_pr/run.sh` 自体も repo root からの相対パスなので、cwd は repo root に
    保つこと。
 
@@ -45,7 +45,7 @@ personal が project を上書きするので、repo の CLAUDE.md が名指し�
    |---|---|
    | `agent/` で始まる | そのまま agent レーン（手順 4） |
    | `agent/` 以外 **かつ未 push**（upstream 未設定） | `git branch -m agent/<type>/<topic>` でリネームしてから agent レーン |
-   | `agent/` 以外 **かつ push 済み** | 通常レーン（`my-create-pr` 手順 6） |
+   | `agent/` 以外 **かつ push 済み** | 通常レーン（`my-create-pr` の「表示 → Push → 作成」） |
 
    push 済みかは `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}` が成功するかで見る。
 
