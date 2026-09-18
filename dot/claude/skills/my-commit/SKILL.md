@@ -35,11 +35,19 @@ allowed-tools: Bash(git status *), Bash(git diff *), Bash(git log *), Bash(git a
 ため使えない）。
 
 ```
-git diff -- <file> > <tmp>/split.patch   # patch は repo の外に置く（commit に巻き込まないため）
-# split.patch から、この commit に含めない hunk（@@ 行から次の @@ 行の手前まで）を削る
-git apply --cached <tmp>/split.patch
+git diff -- <file> > "$(git rev-parse --git-path split.patch)"
+# split.patch を Edit ツールで開き、この commit に含めない hunk（@@ 行から次の @@ 行の手前まで）を削る
+git apply --cached "$(git rev-parse --git-path split.patch)"
 git diff --cached                        # この論理変更だけが stage されたか確認
 ```
+
+patch は `git rev-parse --git-path` で解決した `.git` 配下に置く。repo の外へ書き出すと
+承認プロンプトが出うるが、`.git` 配下は repo の内側なので出ない。`$VAR` に代入せず
+command substitution をそのまま埋め込んでいるのも同じ理由（bash-command-constraints.md
+参照）。`--git-path` は linked worktree でも正しい実パスを解決する（`.git` がファイルの
+worktree でも安全。worktree-scope.md §1）。hunk の削除は Edit ツールで行う（`sed` は
+command-selection.md により使わない。Edit は Bash の allowlist と無関係に動くので、この
+編集自体は承認が要らない）。
 
 `--cached` は index にだけ適用するので working tree は変わらず、削った hunk は unstaged の
 まま残る。commit したら、残りの変更に同じ手順を繰り返す。
