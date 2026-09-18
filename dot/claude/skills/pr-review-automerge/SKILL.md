@@ -218,7 +218,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       `contains(needs.*.result, 'cancelled')` を見る result ジョブが exit 1 した。再実行 1 回で
       success）。
       **ただしこの skill は再実行を自分では撃たない。** 許可されたラッパー（`gh-await-reviews` /
-      `gh-pr-comments` / `gh-list-threads` / `gh-resolve-thread` / `gh-pr-checks` / `gh-automerge`）に
+      `gh-pr-comments` / `gh-list-threads` / `gh-resolve-thread` / `gh-pr-checks` / `gh-pr-edit-body` / `gh-automerge`）に
       run の再実行に当たるものが無く、raw な `gh run rerun` は allowlist に無いので撃てば承認
       プロンプトで止まる。この skill は人間不在の委譲先で走ることがあり、そこでは誰も承認できず
       凍結する。したがって cancelled のみでも auto-merge は有効化せず手順 4 へ抜けるが、報告は
@@ -237,14 +237,23 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
       そこで人間へ返すのが正しい。
    c. `has_failure` が `false` なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`。
       clean 拒否のときだけ `gh pr merge --merge` へ fallback する）。
-      **撃つ前に、PR 本文の実測値を現在の HEAD で測り直す** — PR 本文が実測値を持ち、かつ
-      この run で修正 commit が入っている場合。`gh-automerge` は即時 merge が成立しうる
-      （3.d の 2 経路）ので、ここが値を訂正できる最後の地点であり、通り過ぎると誤った値が
-      そのまま正典になる。**ただし本文を書き換える手段は allowlist に無い**（`gh pr edit` は
-      未許可で、撃てば人間不在の session は承認プロンプトで凍結する。3.b の `gh run rerun` と
-      同じ形）。したがって既定は本文を撃たず、測り直した値を 3.e の最終サマリと委譲元への
-      報告に載せ、値を訂正できる人間へ届ける — merge 前に読まれれば直してから merge でき、
-      即時 merge に落ちていれば merge 後の訂正になる。
+      **撃つ前に、PR 本文が現在の HEAD と整合しているかを確かめる。** 本文は PR 作成時点の状態を
+      記述しており、修正役は diff だけを直して本文には触れない。修正 commit が入っていなくても、
+      base 側の PR が merge される等で本文の前提は動く。`gh-automerge` は即時 merge が成立しうる
+      （3.d の 2 経路）ので、ここが本文を直せる最後の地点であり、通り過ぎると古い記述がそのまま
+      正典になる。`gh pr view <PR> --json body,baseRefName` と `gh pr diff <PR>` を突き合わせ、
+      次を確かめる。
+      - 実測値（削減量・ベンチ結果・カバレッジ等）: 現在の HEAD で測り直した値と一致するか
+      - 構造・命名への言及（節見出し名・シンボル名・ファイル名）: レビュー対応で改称・削除した
+        ものを旧名のまま指していないか
+      - base やブランチ運用への言及: 現在の base と、参照している PR の状態（merge 済みか）に
+        合っているか
+      - 設計判断の説明: レビューで判断が変わったなら、変わった後の判断を述べているか
+
+      食い違いがあれば、`gh pr view <PR> --json body --jq .body` で現本文をファイルへ書き出し、
+      該当箇所だけを直して `gh-pr-edit-body <PR> <body-file>` で置き換える（置換のみで、追記の
+      モードは無い）。raw `gh pr edit` は使わない（未許可で、撃てば人間不在の session は承認
+      プロンプトで凍結する）。直した箇所は 3.e の最終サマリに載せる。
    d. 次を実行し、**終端種別を機械的に判定できる文字列**（`MERGED` / `AUTO_MERGE_PENDING` /
       `NOT_TERMINAL`）を得る（散文での判定ではなく、コマンド自体が判定値を返す形にする）。
 
