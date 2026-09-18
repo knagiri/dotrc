@@ -41,13 +41,15 @@ git apply --cached "$(git rev-parse --git-path split.patch)"
 git diff --cached                        # この論理変更だけが stage されたか確認
 ```
 
-patch は `git rev-parse --git-path` で解決した `.git` 配下に置く。repo の外へ書き出すと
-承認プロンプトが出うるが、`.git` 配下は repo の内側なので出ない。`$VAR` に代入せず
-command substitution をそのまま埋め込んでいるのも同じ理由（bash-command-constraints.md
-参照）。`--git-path` は linked worktree でも正しい実パスを解決する（`.git` がファイルの
-worktree でも安全。worktree-scope.md §1）。hunk の削除は Edit ツールで行う（`sed` は
-command-selection.md により使わない。Edit は Bash の allowlist と無関係に動くので、この
-編集自体は承認が要らない）。
+patch は `git rev-parse --git-path` で解決した `.git` 配下に置く。main working tree では
+`.git` は repo 内のディレクトリなので、これは repo 内への書き出しになる。**linked
+worktree では話が違う**: `--git-path` は worktree のルートの外（`<main>/.git/worktrees/<name>/`、
+実測）を返すため、書き込み先は worktree の working directory の外になる。`--git-path` が
+指す先のパス解決が正しいこと（worktree-scope.md §1）と、その書き込み先が worktree 内で
+完結するかは別の話なので混同しない。`$VAR` に代入せず command substitution をそのまま
+埋め込んでいるのは bash-command-constraints.md の理由による。hunk の削除は Edit ツールで
+行う（`sed` は command-selection.md により使わない。Edit は Bash の allowlist とは別の
+permission family だが、対象パスが worktree 外にあることは変わらない）。
 
 `--cached` は index にだけ適用するので working tree は変わらず、削った hunk は unstaged の
 まま残る。commit したら、残りの変更に同じ手順を繰り返す。
