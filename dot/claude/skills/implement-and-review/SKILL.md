@@ -169,8 +169,8 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    レビュー・required CI 確認を経て自律 merge する。
 
    このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しは
-   `pr-review-automerge` 手順 3.c が `gh-automerge` の直前に行い、値は最終サマリと委譲元への
-   報告に載る（本文の書き換えは allowlist の制約により行われない）。戻った時点では既に
+   `pr-review-automerge` 手順 3.c が `gh-automerge` の直前に行い、PR 本文との食い違いは
+   `gh-pr-edit-body` で直して、直した箇所を最終サマリに載せる。戻った時点では既に
    merge 済みでありうるので、ここで直せる前提に立たない。
 5. **自己内省（末尾ハーネス）**: `pr-review-automerge` から戻ったら（auto-merge 有効化に至らず
    停止・報告して終わった場合も、停止理由を問わず含む。停止経路は同 skill の手順 4）、委譲プロンプトに
