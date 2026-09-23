@@ -35,5 +35,8 @@ local ファイルだけで、どちらも `bin/deploy.sh` が無ければ雛形
 聞かれない。実行すると雛形生成と同時に checkout が `trusted_config_paths` に path prefix で
 登録されるので、生成された config にも `.worktrees/*` 配下からの解決にも trust が効く。
 account を分けないマシンで deploy した後は、`mise.local.toml` を空にしておけばよい
-（消すと再実行で再生成されるが、既にあるファイルは触らない）。worktree から親の config がどう解決されるかは `dot/claude/rules/worktree-scope.md` §6、
-新しいマシンでの手順は `dot/claude/rules/dotrc-deploy.md` §6 を参照。
+（消すと再実行で再生成されるが、既にあるファイルは触らない）。config が無いのは trust を
+聞かれないだけでなく `CLAUDE_CONFIG_DIR` も付かないことを意味し、その帰結は
+`dot/claude/rules/dotrc-deploy.md` §6 が持つ。worktree から親の config がどう解決されるかは
+`dot/claude/rules/worktree-scope.md` §6、新しいマシンでの手順は
+`dot/claude/rules/dotrc-deploy.md` §6 を参照。

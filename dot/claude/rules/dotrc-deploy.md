@@ -132,6 +132,11 @@ config dir を使い、他 repo は既定の `~/.claude` のままになる。tr
 - `~/.config/gh/personal.env`（権限 600、`GH_TOKEN=` のみ）と `mise.gh.local.toml` を、
   無ければ雛形として作る。既にあれば触らない
 
+`mise.local.toml` は gitignore 済みなので、`bin/deploy.sh` を（再）実行していない checkout には
+存在しない。その checkout では `CLAUDE_CONFIG_DIR` が付かず、dotrc 配下の claude はエラーも出さず
+既定の `~/.claude`（別 account）で動く。account を分けたいマシンでは `bin/deploy.sh` を実行する
+（symlink 張りと同じく冪等なので、既に実行済みでも再実行して害は無い）。
+
 新しい環境の手順:
 
 ```
