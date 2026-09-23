@@ -226,6 +226,14 @@ if command -v mise >/dev/null 2>&1; then
     "$(if [ "$(trusted_count "$home_g")" -eq 1 ]; then echo 0; else echo 1; fi)"
   mkdir -p "$repo/.worktrees/wt"
   printf '[env]\nDEPLOY_TEST = "yes"\n' >"$repo/.worktrees/wt/mise.toml"
+  # The two deploy.sh runs above already created $repo/mise.local.toml on
+  # disk (that file lives under REPO_DIR, not under $HOME, so it survives
+  # across sandboxes). Left in place, the control below would fail even if
+  # the worktree's own mise.toml were trusted, because mise also walks up
+  # to this untrusted parent config -- the control would no longer isolate
+  # what it claims to isolate (evidence-over-guesswork #5). Remove it so the
+  # control's only remaining untrusted config is the worktree's own.
+  rm -f "$repo/mise.local.toml"
   check "the control: without deploy.sh, that worktree mise.toml is untrusted" \
     "$(home_g0="$sandbox/home_g0"; mkdir -p "$home_g0"
        if ! sandboxed "$home_g0" mise env -C "$repo/.worktrees/wt" >/dev/null 2>&1
