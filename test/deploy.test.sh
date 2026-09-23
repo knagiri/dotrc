@@ -134,8 +134,8 @@ check "a subdirectory under bin/ leaves deploy.sh's block and dot/ expansion int
 
 # --- Case E: dot/claude goes to both config dirs ----------------------------
 # ~/.claude is the default account's config dir and ~/.claude-personal the one
-# dotrc's mise.toml selects. Each reads its own rules/skills/settings, so both
-# must get the links, and a re-run must leave them links (not a nested
+# dotrc's mise.local.toml selects. Each reads its own rules/skills/settings, so
+# both must get the links, and a re-run must leave them links (not a nested
 # rules/rules, which is what `ln -snvf` onto an existing real dir would make).
 # The control is the same script with the personal destination removed.
 sed 's|^MergeLinkMap\["claude"\]=.*$|MergeLinkMap["claude"]="${HOME}/.claude"|' \
@@ -185,6 +185,29 @@ chmod +x "$repo/bin/deploy-clobber.sh"
 run "$repo/bin/deploy-clobber.sh" "$home_f"
 check "without the absence check, the filled-in token would be overwritten" \
   "$(if ! grep -qx 'GH_TOKEN=filled' "$penv"; then echo 0; else echo 1; fi)"
+
+# --- Case H: mise.local.toml template ---------------------------------------
+# Selects the personal config dir for claude runs under the checkout. Created
+# when absent; never overwritten, since the file may have been edited or
+# deliberately emptied on a machine that needs no account split. The control
+# drops the absence check.
+home_h="$sandbox/home_h"; mkdir -p "$home_h"
+rm -f "$repo/mise.local.toml"
+run "$repo/bin/deploy.sh" "$home_h"
+check "a missing mise.local.toml is created selecting ~/.claude-personal" \
+  "$(if grep -qxF 'CLAUDE_CONFIG_DIR = "{{env.HOME}}/.claude-personal"' "$repo/mise.local.toml" 2>/dev/null
+     then echo 0; else echo 1; fi)"
+printf '# hand-edited\n' >"$repo/mise.local.toml"
+run "$repo/bin/deploy.sh" "$home_h"
+check "a re-run leaves an existing mise.local.toml alone" \
+  "$(if [ "$(cat "$repo/mise.local.toml")" = '# hand-edited' ]; then echo 0; else echo 1; fi)"
+sed 's|^if \[ ! -e "${REPO_DIR}/mise.local.toml" \]; then$|if true; then|' \
+  "$repo/bin/deploy.sh" >"$repo/bin/deploy-clobber-local.sh"
+chmod +x "$repo/bin/deploy-clobber-local.sh"
+run "$repo/bin/deploy-clobber-local.sh" "$home_h"
+check "without the absence check, an existing mise.local.toml would be overwritten" \
+  "$(if [ "$(cat "$repo/mise.local.toml")" != '# hand-edited' ]; then echo 0; else echo 1; fi)"
+rm -f "$repo/mise.local.toml"
 
 # --- Case G: the checkout is trusted by path prefix, once --------------------
 # A worktree's own mise.toml is not covered by `mise trust` on the checkout, so

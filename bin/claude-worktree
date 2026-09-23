@@ -8,8 +8,8 @@ set -euo pipefail
 # of the main checkout (globally gitignored via ~/.config/git/ignore). Living
 # inside the checkout keeps worktrees out of `ghq list` -- so `gts` only offers
 # repositories -- and lets mise walk up into the checkout's own config instead of
-# needing one seeded per worktree. A config the worktree carries itself (dotrc's
-# tracked mise.toml) needs trust of its own; bin/deploy.sh grants it by path
+# needing one seeded per worktree. A config the worktree carries itself (a tracked
+# mise.toml) needs trust of its own; bin/deploy.sh grants it by path
 # prefix. It anchors to the MAIN repository toplevel so the layout stays flat
 # even when invoked from inside another worktree.
 #
@@ -276,7 +276,7 @@ fi
 # Which Claude Code account the delegate runs under follows the worktree, never
 # the caller. CLAUDE_CONFIG_DIR selects the account (credentials, transcripts,
 # the bg daemon and its roster), and a repo that wants a non-default one says so
-# in its mise config (dotrc's mise.toml). So the launch reads the worktree's
+# in its mise config (dotrc's mise.local.toml). So the launch reads the worktree's
 # config at call time with `mise exec -C`, the same shape as bin/lib/gh-mise.sh.
 #
 # `env -u` is what makes a repo WITHOUT that setting land on the default: mise
