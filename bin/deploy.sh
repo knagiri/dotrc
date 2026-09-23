@@ -72,9 +72,9 @@ declare -A MergeLinkMap
 # Several destinations are separated by ':' and each gets the same links.
 #
 # claude: ~/.claude is the default account's config dir and ~/.claude-personal
-# the one dotrc's mise.toml selects through CLAUDE_CONFIG_DIR. CLAUDE.md, rules,
-# skills, agents and settings.json are all read per config dir, so both dirs get
-# them. Plugins are not deployed: install them into each dir by hand.
+# the one dotrc's mise.local.toml selects through CLAUDE_CONFIG_DIR. CLAUDE.md,
+# rules, skills, agents and settings.json are all read per config dir, so both
+# dirs get them. Plugins are not deployed: install them into each dir by hand.
 MergeLinkMap["claude"]="${HOME}/.claude:${HOME}/.claude-personal"
 # ~/.config/systemd and its user/ subdirectory already exist as real directories
 # (systemd keeps its own state there, e.g. *.target.wants), so a whole-directory
@@ -98,12 +98,13 @@ for dotname in $(ls "$__dotfiles_path"); do
 done
 
 # mise: trust this checkout's configs, including those of every worktree under
-# it. The tracked mise.toml is checked out into each worktree as its own file,
-# and `mise trust` on the checkout does not cover a config in a subdirectory
+# it. dotrc tracks no mise config of its own; what needs trust is the local
+# mise.local.toml created below and any config a worktree carries locally.
+# `mise trust` on the checkout does not cover a config in a subdirectory
 # (measured: the checkout read trusted, <checkout>/.worktrees/<name>/mise.toml
 # still untrusted, so `mise exec -C` there failed). trusted_config_paths
-# matches by path prefix, which does. `mise settings add` appends a duplicate on
-# every call, hence the check first.
+# matches by path prefix, which covers both. `mise settings add` appends a
+# duplicate on every call, hence the check first.
 if command -v mise >/dev/null 2>&1; then
     if ! mise settings get trusted_config_paths 2>/dev/null | grep -qF "\"${REPO_DIR}\""; then
         mise settings add trusted_config_paths "${REPO_DIR}"
@@ -124,6 +125,15 @@ if [ ! -e "${__personal_env}" ]; then
 fi
 if [ ! -e "${REPO_DIR}/mise.gh.local.toml" ]; then
     printf '[env]\n_.file = "~/.config/gh/personal.env"\n' >"${REPO_DIR}/mise.gh.local.toml"
+fi
+
+# Personal Claude Code account. mise.local.toml (gitignored, always loaded)
+# points CLAUDE_CONFIG_DIR at ~/.claude-personal for everything run under the
+# checkout. Created only when absent, so an edited or emptied file stays as is.
+# Why it is local rather than tracked: docs/design/mise-config-layering.md.
+if [ ! -e "${REPO_DIR}/mise.local.toml" ]; then
+    printf '%s\n' '# Personal Claude Code account for dotrc (see docs/design/mise-config-layering.md)' \
+        '[env]' 'CLAUDE_CONFIG_DIR = "{{env.HOME}}/.claude-personal"' >"${REPO_DIR}/mise.local.toml"
 fi
 
 # Build claude-queue if Go is available

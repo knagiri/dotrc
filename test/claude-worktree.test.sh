@@ -1280,8 +1280,10 @@ for mode in in out; do
 done
 
 # The same through the REAL mise, since the stub above cannot show what mise does
-# with an inherited value -- which is the whole reason for `env -u`. A repo that
-# carries dotrc's mise.toml stands in for dotrc; the plain cwd repo carries none.
+# with an inherited value -- which is the whole reason for `env -u`. A repo whose
+# untracked mise.local.toml selects the personal dir stands in for dotrc after
+# bin/deploy.sh (the worktree does not get the file; mise finds it by walking up
+# from <repo>/.worktrees/<name>); the plain cwd repo carries none.
 # HOME points into $tmp so neither the host's mise config nor its trust store is
 # read, and trust is granted by path prefix the way bin/deploy.sh grants it.
 if command -v mise >/dev/null 2>&1; then
@@ -1289,10 +1291,9 @@ if command -v mise >/dev/null 2>&1; then
   acctrepo="$tmp/acctrepo"
   mkdir -p "$acctrepo/bin"
   cp "$src" "$acctrepo/bin/claude-worktree"; chmod +x "$acctrepo/bin/claude-worktree"
-  cp "$here/../mise.toml" "$acctrepo/mise.toml"
+  printf '[env]\nCLAUDE_CONFIG_DIR = "{{env.HOME}}/.claude-personal"\n' >"$acctrepo/mise.local.toml"
   git -C "$acctrepo" init -q
-  git -C "$acctrepo" add mise.toml
-  git -C "$acctrepo" -c user.email=t@t -c user.name=t commit -q -m init
+  git -C "$acctrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   realmisebin="$tmp/realmisebin"; mkdir -p "$realmisebin"
   cp "$stubbin/claude" "$stubbin/claude-queue" "$realmisebin/"
   acct_run() {  # acct_run <ccd-or-empty> <args...>
@@ -1308,7 +1309,7 @@ if command -v mise >/dev/null 2>&1; then
   : >"$ccdlog"
   out="$(acct_run "" --global acctglobal -- "$prompt" 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ] && [ "$(cat "$ccdlog")" = "$accthome/.claude-personal" ]; then
-    echo "ok: real mise: a delegate into a repo with the mise.toml runs under the personal dir"
+    echo "ok: real mise: a delegate into a repo with the mise.local.toml runs under the personal dir"
   else echo "FAIL: real mise --global rc=$rc ccd=$(cat "$ccdlog") out=$out"; fail=1; fi
   : >"$ccdlog"
   out="$(acct_run "$accthome/.claude-personal" acctother -- "$prompt" 2>&1)"; rc=$?

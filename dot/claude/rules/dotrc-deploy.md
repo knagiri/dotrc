@@ -117,18 +117,25 @@ find src/claude-queue -name '*.go' -newer bin/claude-queue   # 出力が空な�
 
 ### 6. 個人 config dir（`~/.claude-personal`）— dotrc だけ別 account で動かす
 
-dotrc の tracked `mise.toml` が `CLAUDE_CONFIG_DIR=~/.claude-personal` を置くので、dotrc 配下
-（`.worktrees/*` を含む）で起動した claude は個人 account の config dir を使い、他 repo は既定の
-`~/.claude` のままになる。認証・transcript・background daemon と roster はこの dir ごとに分かれる。
+dotrc の `mise.local.toml`（gitignore 済み）が `CLAUDE_CONFIG_DIR=~/.claude-personal` を置くので、
+dotrc 配下（`.worktrees/*` を含む。mise が親方向へ辿って拾う）で起動した claude は個人 account の
+config dir を使い、他 repo は既定の `~/.claude` のままになる。tracked な `mise.toml` に置かない
+理由は `docs/design/mise-config-layering.md`。認証・transcript・background daemon と roster はこの dir ごとに分かれる。
 
 `bin/deploy.sh` が担うもの:
 
 - `dot/claude/*` を `~/.claude` と `~/.claude-personal` の両方へ link する（§2）。plugins は対象外で、
   個人 dir へは手で入れ直す
-- checkout を mise の `trusted_config_paths` に登録する。`mise trust` では worktree ごとに
-  checkout される `mise.toml` が untrusted のまま残るため、path prefix で覆う
+- `mise.local.toml` を、無ければ上記の `CLAUDE_CONFIG_DIR` を置く雛形として作る。既にあれば触らない
+- checkout を mise の `trusted_config_paths` に登録する。`mise.local.toml` と、worktree が
+  ローカルに持つ config を path prefix でまとめて覆う（`mise trust` は subdirectory の config を覆わない）
 - `~/.config/gh/personal.env`（権限 600、`GH_TOKEN=` のみ）と `mise.gh.local.toml` を、
   無ければ雛形として作る。既にあれば触らない
+
+`mise.local.toml` は gitignore 済みなので、`bin/deploy.sh` を（再）実行していない checkout には
+存在しない。その checkout では `CLAUDE_CONFIG_DIR` が付かず、dotrc 配下の claude はエラーも出さず
+既定の `~/.claude`（別 account）で動く。account を分けたいマシンでは `bin/deploy.sh` を実行する
+（symlink 張りと同じく冪等なので、既に実行済みでも再実行して害は無い）。
 
 新しい環境の手順:
 
