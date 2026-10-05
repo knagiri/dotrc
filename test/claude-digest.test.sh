@@ -31,9 +31,11 @@ cat >"$stubdir/claude" <<'STUB'
 case "${1:-}" in
   agents)
     # Per CLAUDE_CONFIG_DIR when a per-dir fixture exists, as the real daemon
-    # answers: each config dir has its own roster.
-    if [ -n "${CD_ROSTER_DIR:-}" ] && [ -f "$CD_ROSTER_DIR/${CLAUDE_CONFIG_DIR//\//_}.json" ]; then
-      cat "$CD_ROSTER_DIR/${CLAUDE_CONFIG_DIR//\//_}.json"
+    # answers: each config dir has its own roster. The default dir is reached
+    # with CLAUDE_CONFIG_DIR unset, which reads the UNSET fixture.
+    key="${CLAUDE_CONFIG_DIR-UNSET}"; key="${key//\//_}"
+    if [ -n "${CD_ROSTER_DIR:-}" ] && [ -f "$CD_ROSTER_DIR/$key.json" ]; then
+      cat "$CD_ROSTER_DIR/$key.json"
     else
       cat "${CD_ROSTER:-/dev/null}"
     fi
@@ -801,7 +803,7 @@ if command -v sqlite3 >/dev/null 2>&1; then
   # personal dir's roster; the default dir's is empty. Reading one roster under
   # the process's own dir would report it RESUMABLE, not LIVE.
   cfg_rosters="$sandbox/cfg-rosters"; mkdir -p "$cfg_rosters"
-  echo '[]' >"$cfg_rosters/${work_cfg//\//_}.json"
+  echo '[]' >"$cfg_rosters/UNSET.json"
   jq -n --arg id "$personal_sid" '[{sessionId:$id, kind:"background", status:"idle"}]' \
     >"$cfg_rosters/${personal_cfg//\//_}.json"
   live_facts="$(env -u CLAUDE_PROJECTS_DIR -u CLAUDE_CONFIG_DIR HOME="$cfg_home" CLAUDE_QUEUE_DB="$cfg_queue" \

@@ -564,7 +564,7 @@ done
 roster="[]"
 while IFS= read -r cfg_dir; do
   [ -n "$cfg_dir" ] || continue
-  dir_roster="$(CLAUDE_CONFIG_DIR="$cfg_dir" claude agents --json 2>/dev/null)" || continue
+  dir_roster="$(cq_in_config_dir "$cfg_dir" claude agents --json 2>/dev/null)" || continue
   merged="$(jq -s '.[0] + .[1]' <<<"$roster"$'\n'"$dir_roster" 2>/dev/null)" || continue
   roster="$merged"
 done < <(cq_config_dirs)

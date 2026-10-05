@@ -144,7 +144,7 @@ done < <(cq_config_dirs)
 roster="[]"
 read_any=0
 for d in "${config_dirs[@]}"; do
-  if ! dir_roster="$(CLAUDE_CONFIG_DIR="$d" claude agents --json 2>/dev/null)"; then
+  if ! dir_roster="$(cq_in_config_dir "$d" claude agents --json 2>/dev/null)"; then
     echo "claude-reap-bg: could not read the session roster under $d; its sessions are not swept" >&2
     continue
   fi

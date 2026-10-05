@@ -41,10 +41,13 @@ cat >"$stubbin/claude" <<'EOF'
 # what the real daemon does: each config dir has its own, and one dir's roster
 # never mentions another's sessions. Without such a fixture it falls back to the
 # single shared roster, so the tests that predate config dirs are unaffected.
+# An unset CLAUDE_CONFIG_DIR -- how the default dir must be reached -- reads the
+# UNSET fixture; ~/.claude spelled out does not.
+key="${CLAUDE_CONFIG_DIR-UNSET}"; key="${key//\//_}"
 case "$1" in
   agents)
-    if [ -n "${CLAUDE_STUB_ROSTER_DIR:-}" ] && [ -f "$CLAUDE_STUB_ROSTER_DIR/${CLAUDE_CONFIG_DIR//\//_}.json" ]; then
-      cat "$CLAUDE_STUB_ROSTER_DIR/${CLAUDE_CONFIG_DIR//\//_}.json"
+    if [ -n "${CLAUDE_STUB_ROSTER_DIR:-}" ] && [ -f "$CLAUDE_STUB_ROSTER_DIR/$key.json" ]; then
+      cat "$CLAUDE_STUB_ROSTER_DIR/$key.json"
     else
       cat "$CLAUDE_STUB_ROSTER"
     fi
@@ -499,8 +502,10 @@ mkdir -p "$tmp/rosters"
 dirkey() { printf '%s' "${1//\//_}"; }
 
 # The default dir knows only the work session; the personal dir only the
-# personal one. Each is idle, background, and long past the threshold.
-cat >"$tmp/rosters/$(dirkey "$HOME/.claude").json" <<'EOF'
+# personal one. Each is idle, background, and long past the threshold. The
+# default dir's roster is filed under UNSET: it must be read with
+# CLAUDE_CONFIG_DIR unset, not set to ~/.claude (see cq_in_config_dir).
+cat >"$tmp/rosters/UNSET.json" <<'EOF'
 [{"pid":111,"cwd":"/w/a","kind":"background","sessionId":"a1a1a1a1-1111-2222-3333-444444444444","status":"idle"}]
 EOF
 cat >"$tmp/rosters/$(dirkey "$personal").json" <<EOF
@@ -527,7 +532,7 @@ runcfg() {
   : >"$stoplog"
   PATH="$stubpath" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" \
     CLAUDE_STUB_RMLOG="$rmlog" CLAUDE_STUB_ROSTER_DIR="$tmp/rosters" \
-    CLAUDE_QUEUE_DB="$cfgdb" "$src" "$@"
+    CLAUDE_CONFIG_DIR="$HOME/.claude" CLAUDE_QUEUE_DB="$cfgdb" "$src" "$@"
 }
 
 # Both sessions are swept, each found in its own dir's roster. Reading only one

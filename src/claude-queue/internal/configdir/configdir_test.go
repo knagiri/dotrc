@@ -93,3 +93,37 @@ func TestUnion(t *testing.T) {
 		t.Errorf("Union(nil) = %v, want [%s]", got, def)
 	}
 }
+
+// The default dir is spelled by leaving the variable unset -- set to ~/.claude
+// explicitly, claude reads a different global config file -- so an inherited
+// value must be stripped, not just left alone. Any other dir appears exactly
+// once, replacing whatever was inherited.
+func TestEnv(t *testing.T) {
+	t.Setenv("HOME", "/home/probe")
+	base := []string{"PATH=/bin", EnvVar + "=/home/probe/.claude", "TERM=xterm", EnvVar + "=/elsewhere"}
+
+	countVar := func(env []string) (n int, val string) {
+		for _, kv := range env {
+			if len(kv) > len(EnvVar) && kv[:len(EnvVar)+1] == EnvVar+"=" {
+				n++
+				val = kv[len(EnvVar)+1:]
+			}
+		}
+		return n, val
+	}
+
+	for _, dir := range []string{"/home/probe/.claude", "/home/probe/.claude/", "/home/probe//.claude"} {
+		got := Env(base, dir)
+		if n, _ := countVar(got); n != 0 {
+			t.Errorf("Env(base, %q) = %v, want no %s entry", dir, got, EnvVar)
+		}
+		if !reflect.DeepEqual(got, []string{"PATH=/bin", "TERM=xterm"}) {
+			t.Errorf("Env(base, %q) = %v, want the other entries kept in order", dir, got)
+		}
+	}
+
+	got := Env(base, "/home/probe/.claude-personal")
+	if n, val := countVar(got); n != 1 || val != "/home/probe/.claude-personal" {
+		t.Errorf("Env(base, personal) = %v, want exactly one %s=/home/probe/.claude-personal", got, EnvVar)
+	}
+}

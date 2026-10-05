@@ -151,3 +151,10 @@ account が cwd ではなく起動元で決まってしまう経路は 2 つあ�
   （[worktree-scope.md](./worktree-scope.md) §6）
 - `dot/tmux.conf` が server の global env から `CLAUDE_CONFIG_DIR` を落とす。変更前から動いている
   server には `tmux source-file ~/.tmux.conf` するまで効かない
+
+既定 dir（`~/.claude`）を指して claude を起動するときは、`CLAUDE_CONFIG_DIR=~/.claude` を
+明示せず変数を unset する（継承した値も消す）。claude は両者を区別し、明示すると global config
+ファイルが `~/.claude.json` から `~/.claude/.claude.json` へ替わる。後者には workspace trust も
+オンボーディング完了状態も無く、`claude --bg` が "Workspace not trusted" で拒否された（実測）。
+claude-queue（`internal/configdir` の `Env` / `IsDefault`）と `bin/lib/claude-configdir.sh`
+（`cq_in_config_dir`）がこの判定を持つので、row の config dir で claude を呼ぶ箇所はそこを通す。
