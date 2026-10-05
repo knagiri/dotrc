@@ -37,6 +37,34 @@ cq_default_config_dir() {
   printf '%s\n' "$HOME/.claude"
 }
 
+# cq_is_default_config_dir <dir> -- true when dir names the default one, after
+# stripping trailing slashes (the ledger stores cleaned paths already).
+cq_is_default_config_dir() {
+  local d="$1" def
+  def="$(cq_default_config_dir)"
+  while [ "${#d}" -gt 1 ] && [ "${d%/}" != "$d" ]; do d="${d%/}"; done
+  [ "$d" = "$def" ]
+}
+
+# cq_in_config_dir <dir> <cmd>... -- run cmd pointed at config dir <dir>.
+#
+# The default dir is expressed by UNSETTING CLAUDE_CONFIG_DIR (an inherited
+# value included), never by setting it to ~/.claude. claude tells the two apart:
+# transcripts, jobs and the roster land in ~/.claude either way, but the global
+# config file moves from ~/.claude.json (unset) to ~/.claude/.claude.json (set),
+# and the latter was observed to hold neither workspace trust nor onboarding
+# state. A `claude agents` run under it can on-demand start a daemon that keeps
+# the explicit value, and bg sessions from that daemon were observed to leave no
+# hook events in the ledger. Same rule as configdir.Env on the Go side.
+cq_in_config_dir() {
+  local d="$1"; shift
+  if cq_is_default_config_dir "$d"; then
+    env -u CLAUDE_CONFIG_DIR "$@"
+  else
+    CLAUDE_CONFIG_DIR="$d" "$@"
+  fi
+}
+
 # cq_sqlite_available -- true when the ledger can be read at all.
 cq_sqlite_available() {
   command -v sqlite3 >/dev/null 2>&1 && [ -f "$(cq_db_path)" ]

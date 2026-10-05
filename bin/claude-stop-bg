@@ -68,7 +68,12 @@ if ! config_dir="$(cq_config_dir_for "$id")"; then
   echo "claude-stop-bg: $id matches sessions under more than one CLAUDE_CONFIG_DIR; not guessing" >&2
   exit 1
 fi
-export CLAUDE_CONFIG_DIR="$config_dir"
+# Unset rather than exported for the default dir: see cq_in_config_dir.
+if cq_is_default_config_dir "$config_dir"; then
+  unset CLAUDE_CONFIG_DIR
+else
+  export CLAUDE_CONFIG_DIR="$config_dir"
+fi
 
 # Fetch the roster and parse it as two separate steps (rather than piping
 # straight into jq) so a roster-fetch failure gets its own diagnostic instead

@@ -1316,6 +1316,27 @@ if command -v mise >/dev/null 2>&1; then
   if [ "$rc" -eq 0 ] && [ "$(cat "$ccdlog")" = "<unset>" ]; then
     echo "ok: real mise: a personal-dir caller delegating to a repo without it lands on the default dir"
   else echo "FAIL: real mise other repo rc=$rc ccd=$(cat "$ccdlog") out=$out"; fail=1; fi
+
+  # A worktree whose mise config names the default dir (~/.claude) spelled out:
+  # the attach hint must reach it with the variable unset, never as
+  # CLAUDE_CONFIG_DIR=~/.claude, which makes claude read a different global
+  # config file (~/.claude/.claude.json) lacking workspace trust.
+  defrepo="$tmp/acctdefrepo"
+  mkdir -p "$defrepo/bin"
+  cp "$src" "$defrepo/bin/claude-worktree"; chmod +x "$defrepo/bin/claude-worktree"
+  printf '[env]\nCLAUDE_CONFIG_DIR = "{{env.HOME}}/.claude"\n' >"$defrepo/mise.local.toml"
+  git -C "$defrepo" init -q
+  git -C "$defrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  out="$( ( cd "$cwdrepo" && unset TMUX TMUX_PANE XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME \
+        XDG_CACHE_HOME MISE_GLOBAL_CONFIG_FILE MISE_CONFIG_DIR MISE_DATA_DIR MISE_STATE_DIR \
+        MISE_CACHE_DIR MISE_ENV
+      export HOME="$accthome" PATH="$realmisebin:$PATH" CLAUDE_STUB_CCDLOG="$ccdlog" \
+             CLAUDE_STUB_ROSTER="$emptyroster" MISE_TRUSTED_CONFIG_PATHS="$defrepo" \
+             CLAUDE_CONFIG_DIR="$accthome/.claude-personal"
+      "$defrepo/bin/claude-worktree" --global acctdefault -- "$prompt" ) 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && grep -qxF 'attach   : env -u CLAUDE_CONFIG_DIR claude attach abcd1234' <<<"$out"; then
+    echo "ok: real mise: a delegate under an explicit default dir is hinted with the variable unset"
+  else echo "FAIL: real mise default-dir hint rc=$rc out=$out"; fail=1; fi
 else
   echo "skip: mise not available; the real-mise account cases are not exercised"
 fi

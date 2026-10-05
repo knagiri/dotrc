@@ -172,11 +172,14 @@ if command -v sqlite3 >/dev/null 2>&1; then
   else echo "FAIL: config dir not applied rc=$rc envlog=$(cat "$envlog")"; fail=1; fi
 
   # An id the ledger does not know falls back to the default dir ($HOME/.claude),
-  # which is what every session ran under before a second dir existed.
+  # which is what every session ran under before a second dir existed. The
+  # default dir is reached by UNSETTING the variable -- even one inherited as an
+  # explicit $HOME/.claude -- since claude reads a different global config file
+  # when ~/.claude is spelled out.
   : >"$stoplog"; : >"$envlog"
-  runcfg bbbbbbbb >/dev/null 2>&1
-  if grep -qF "agents $tmp/.claude" "$envlog"; then
-    echo "ok: an id the ledger does not know falls back to the default dir"
+  CLAUDE_CONFIG_DIR="$tmp/.claude" runcfg bbbbbbbb >/dev/null 2>&1
+  if [ "$(cat "$envlog")" = "agents UNSET" ]; then
+    echo "ok: an id the ledger does not know falls back to the default dir, unset"
   else echo "FAIL: no default-dir fallback: $(cat "$envlog")"; fail=1; fi
 
   # Rows under two different dirs share the prefix: refuse rather than guess,

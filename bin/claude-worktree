@@ -315,11 +315,19 @@ fi
 # exist yet: launch_env's `mise exec -C` has no directory to resolve against
 # then, and (at the guard below) a collision found via the caller's own BARE
 # roster query is, by construction, already under the caller's own account.
+#
+# A delegate whose dir is the default (~/.claude, spelled out or not) is hinted
+# with the variable unset, never as CLAUDE_CONFIG_DIR=~/.claude: claude reads a
+# different global config file under the explicit form (see
+# bin/lib/claude-configdir.sh, cq_in_config_dir), so a caller that carries an
+# explicit ~/.claude gets the `env -u` form too.
 attach_hint() {  # attach_hint <short-id> -> command text, printed on stdout
   local id="$1" dir=""
   if [ -d "$wt_path" ]; then
     dir="$("${launch_env[@]}" printenv CLAUDE_CONFIG_DIR 2>/dev/null)" || dir=""
   fi
+  dir="${dir%/}"
+  [ "$dir" != "$HOME/.claude" ] || dir=""
   if [ "$dir" = "${CLAUDE_CONFIG_DIR:-}" ]; then
     printf 'claude attach %s' "$id"
   elif [ -n "$dir" ]; then
