@@ -424,18 +424,40 @@ func windowNameFor(transcript, sessionID, kind string) string {
 	return kind + "-" + shortID(sessionID)
 }
 
-// actionEnv is the environment the window an action opens must carry: the row's
-// config dir, always set rather than inherited.
+// actionLaunch is how the window an action opens gets the row's config dir:
+// the -e env to pass to the multiplexer, and the argv to run there.
 //
-// Always, even when the row's dir is the default one, because the popup's own
-// environment is not a safe thing to fall through to -- a tmux server started
-// under one config dir hands that value to every popup it runs, so an omitted
+// Nothing is ever left to be inherited, because the popup's own environment is
+// not a safe thing to fall through to -- a tmux server started under one config
+// dir hands that value to every popup and window it runs, so an omitted
 // variable is not "use the default", it is "use whatever the server had".
-func actionEnv(act Action) map[string]string {
-	if act.ConfigDir == "" {
-		return nil
+//
+// For the default dir that rules out setting CLAUDE_CONFIG_DIR=~/.claude (claude
+// then reads a different global config file; see configdir.Env), and tmux's -e
+// cannot unset a variable. So the default dir runs argv under `env -u
+// CLAUDE_CONFIG_DIR` with no -e at all, which removes whatever the server env
+// supplied. Any other dir is set with -e as before. A row with no dir recorded
+// is left as it was: no env, argv untouched.
+func actionLaunch(act Action, argv []string) (map[string]string, []string) {
+	switch {
+	case act.ConfigDir == "":
+		return nil, argv
+	case configdir.IsDefault(act.ConfigDir):
+		return nil, append([]string{"env", "-u", configdir.EnvVar}, argv...)
+	default:
+		return map[string]string{configdir.EnvVar: act.ConfigDir}, argv
 	}
-	return map[string]string{configdir.EnvVar: act.ConfigDir}
+}
+
+// runHint is the command line to print when opening the window failed, built
+// by the same rule as actionLaunch so the manual fallback launches the same way.
+func runHint(act Action, argv []string) string {
+	env, argv := actionLaunch(act, argv)
+	line := strings.Join(argv, " ")
+	if dir, ok := env[configdir.EnvVar]; ok {
+		line = configdir.EnvVar + "=" + dir + " " + line
+	}
+	return line
 }
 
 // shortID truncates a session id to the 8 chars `claude attach` takes, and the
@@ -735,8 +757,10 @@ func Run(args []string) {
 		// Do NOT terminate the session on failure the way the pane path does:
 		// a failed window open says nothing about whether the session is alive,
 		// and the manual command still works.
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), originPane, actionEnv(act), []string{"claude", "attach", act.Short}); err != nil {
-			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: %s=%s claude attach %s\n", err, configdir.EnvVar, act.ConfigDir, act.Short)
+		argv := []string{"claude", "attach", act.Short}
+		env, launch := actionLaunch(act, argv)
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), originPane, env, launch); err != nil {
+			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: %s\n", err, runHint(act, argv))
 		}
 	case "resume":
 		// Reopen the conversation from its transcript. `claude --resume` keeps
@@ -749,8 +773,10 @@ func Run(args []string) {
 				return
 			}
 		}
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), originPane, actionEnv(act), []string{"claude", "--resume", act.Resume}); err != nil {
-			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && %s=%s claude --resume %s\n", err, act.Cwd, configdir.EnvVar, act.ConfigDir, act.Resume)
+		argv := []string{"claude", "--resume", act.Resume}
+		env, launch := actionLaunch(act, argv)
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), originPane, env, launch); err != nil {
+			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && %s\n", err, act.Cwd, runHint(act, argv))
 		}
 	default:
 		fmt.Fprintln(os.Stderr, act.Reason)

@@ -1074,17 +1074,48 @@ func TestDecideAction_CarriesConfigDir(t *testing.T) {
 	}
 }
 
-// actionEnv is what turns that dir into something the opened window sees. It is
-// always set, never left to be inherited: the popup runs under whatever
-// CLAUDE_CONFIG_DIR the tmux server was started with, so an omitted variable
-// means "use the server's", not "use the default".
-func TestActionEnv(t *testing.T) {
-	got := actionEnv(Action{Kind: "attach", ConfigDir: "/home/x/.claude-personal"})
-	if got[configdir.EnvVar] != "/home/x/.claude-personal" {
-		t.Errorf("actionEnv = %v, want %s set", got, configdir.EnvVar)
+// actionLaunch is what turns that dir into something the opened window sees.
+// Nothing is left to be inherited: the popup runs under whatever
+// CLAUDE_CONFIG_DIR the tmux server was started with. For the default dir that
+// means unsetting it with `env -u` (tmux's -e cannot unset, and setting it to
+// ~/.claude makes claude read a different global config file); any other dir is
+// set with -e.
+func TestActionLaunch(t *testing.T) {
+	t.Setenv("HOME", "/home/x")
+	argv := []string{"claude", "attach", "abcd1234"}
+
+	env, got := actionLaunch(Action{Kind: "attach", ConfigDir: "/home/x/.claude-personal"}, argv)
+	if len(env) != 1 || env[configdir.EnvVar] != "/home/x/.claude-personal" {
+		t.Errorf("other dir: env = %v, want only %s=/home/x/.claude-personal", env, configdir.EnvVar)
 	}
-	if got := actionEnv(Action{Kind: "attach"}); len(got) != 0 {
-		t.Errorf("actionEnv with no dir = %v, want nothing set", got)
+	if !slices.Equal(got, argv) {
+		t.Errorf("other dir: argv = %v, want %v", got, argv)
+	}
+
+	env, got = actionLaunch(Action{Kind: "attach", ConfigDir: "/home/x/.claude"}, argv)
+	if len(env) != 0 {
+		t.Errorf("default dir: env = %v, want no -e at all", env)
+	}
+	want := append([]string{"env", "-u", configdir.EnvVar}, argv...)
+	if !slices.Equal(got, want) {
+		t.Errorf("default dir: argv = %v, want %v", got, want)
+	}
+
+	env, got = actionLaunch(Action{Kind: "attach"}, argv)
+	if len(env) != 0 || !slices.Equal(got, argv) {
+		t.Errorf("no dir: env = %v argv = %v, want nothing set and argv untouched", env, got)
+	}
+}
+
+// The fallback printed when the window cannot be opened follows the same rule.
+func TestRunHint(t *testing.T) {
+	t.Setenv("HOME", "/home/x")
+	argv := []string{"claude", "attach", "abcd1234"}
+	if got, want := runHint(Action{ConfigDir: "/home/x/.claude"}, argv), "env -u CLAUDE_CONFIG_DIR claude attach abcd1234"; got != want {
+		t.Errorf("default dir hint = %q, want %q", got, want)
+	}
+	if got, want := runHint(Action{ConfigDir: "/home/x/.claude-personal"}, argv), "CLAUDE_CONFIG_DIR=/home/x/.claude-personal claude attach abcd1234"; got != want {
+		t.Errorf("other dir hint = %q, want %q", got, want)
 	}
 }
 

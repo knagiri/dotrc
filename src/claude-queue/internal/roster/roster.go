@@ -36,7 +36,8 @@ type Agent struct {
 }
 
 // ListIn reads the roster of one config dir, by running `claude agents --json`
-// with CLAUDE_CONFIG_DIR set to it. "" inherits the environment instead, which
+// with CLAUDE_CONFIG_DIR set to it (or unset, for the default dir -- see
+// configdir.Env). "" inherits the environment instead, which
 // no caller here wants -- see below -- but is what a bare read would do.
 //
 // The roster is per config dir because the daemon that answers for it is: each
@@ -53,7 +54,7 @@ type Agent struct {
 func ListIn(dir string) ([]Agent, error) {
 	cmd := exec.Command("claude", "agents", "--json")
 	if dir != "" {
-		cmd.Env = append(os.Environ(), configdir.EnvVar+"="+dir)
+		cmd.Env = configdir.Env(os.Environ(), dir)
 	}
 	out, err := cmd.Output()
 	if err != nil {

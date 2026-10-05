@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // EnvVar is the variable claude itself reads to pick a config dir, and the one
@@ -35,6 +36,41 @@ func Default() string {
 		return ".claude"
 	}
 	return filepath.Join(home, ".claude")
+}
+
+// IsDefault reports whether dir names Default(), after cleaning both sides.
+func IsDefault(dir string) bool {
+	return filepath.Clean(dir) == filepath.Clean(Default())
+}
+
+// Env returns base with any CLAUDE_CONFIG_DIR entry removed, and then
+// CLAUDE_CONFIG_DIR=<dir> appended unless dir is the default one.
+//
+// The default dir is expressed by leaving the variable unset, never by setting
+// it to ~/.claude. claude tells the two apart: transcripts, jobs and the roster
+// land in ~/.claude either way, but the global config file moves from
+// ~/.claude.json (unset) to ~/.claude/.claude.json (set explicitly). The latter
+// was observed to hold neither workspace trust nor onboarding state -- `claude
+// --bg` refused a repo trusted under the unset form with "Workspace not
+// trusted", an interactive claude stopped on the first-run theme picker, and a
+// daemon that inherited the explicit value ran bg sessions whose hooks never
+// reached the ledger. So the inherited value is stripped too: an explicit
+// ~/.claude coming down from the caller is exactly what has to be undone.
+//
+// This is the one place that decision is made; every launch on a row's behalf
+// goes through it (or, where an env slice cannot unset, through IsDefault).
+func Env(base []string, dir string) []string {
+	out := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, EnvVar+"=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	if !IsDefault(dir) {
+		out = append(out, EnvVar+"="+filepath.Clean(dir))
+	}
+	return out
 }
 
 // FromTranscript reads the config dir back out of a transcript path, reporting
