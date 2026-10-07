@@ -392,7 +392,7 @@ fresh subagent に委譲**する。これが「修正適用後にコンテキス
 >    `[{id, isResolved, isOutdated, comments}, ...]` が返る。GraphQL の envelope は剥がし済み）。
 >    `isResolved == false` の thread（`id` / `comments` 等）のみ対象にする。raw な
 >    `gh api graphql` は使わない。
-> 5. **仕分け**: 対象は手順 2〜4 で得たものと専門レビュー agent の findings。**まず見つけたものを全部いずれかのバケットに載せる。** 軽微だから・確信が持てない
+> 5. **仕分け**: **まず見つけたものを全部いずれかのバケットに載せる。** 軽微だから・確信が持てない
 >    からという理由で、バケットに載せずに落とすことはしない。妥当でないと判断したものは
 >    `findings_gated` に `blocker: false` で載せ、`reason_gated` に却下理由を書く。仕分けは
 >    「載せた後」に行う。理由: 報告の取捨選択をこの工程でやると、実際には妥当だった指摘が記録に
