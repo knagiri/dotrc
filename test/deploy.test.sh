@@ -22,6 +22,10 @@ fail=0
 
 sandbox="$(mktemp -d)"
 trap 'rm -rf "$sandbox"' EXIT
+# mise walks up from cwd for .config/mise/config.toml and reads it as project
+# config, so a cwd under the real HOME (a dotrc checkout) picks up the real
+# global trusted_config_paths over the sandbox's. Pin cwd outside HOME.
+cd "$sandbox" || exit 1
 
 check() {  # check <description> <0-or-1>
   if [ "$2" = 0 ]; then echo "ok: $1"; else echo "FAIL: $1"; fail=1; fi

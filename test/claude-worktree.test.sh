@@ -11,6 +11,11 @@ here="$(cd "$(dirname "$0")" && pwd)"
 src="$here/../bin/claude-worktree"
 fail=0
 
+# The cases assume the caller has no CLAUDE_CONFIG_DIR; one inherited from a
+# session running under a non-default config dir (e.g. ~/.claude-personal)
+# breaks that. Cases that need it set it explicitly.
+unset CLAUDE_CONFIG_DIR
+
 tmp="$(mktemp -d)"
 trap 'git -C "$tmp" worktree prune 2>/dev/null; rm -rf "$tmp"' EXIT
 
