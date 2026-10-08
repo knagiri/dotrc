@@ -5,8 +5,9 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
-# The wrapper resolves its repo from cwd (git rev-parse --show-toplevel), so
-# pin cwd to this checkout instead of wherever the test was launched from.
+# The wrapper derives the repo name (origin URL, else --show-toplevel) and the
+# branch from cwd's git repo, so pin cwd to this checkout instead of wherever
+# the test was launched from.
 cd "$here/.." || exit 1
 script="$here/../bin/claude-review"
 fail=0
