@@ -209,11 +209,13 @@ const exitedSuffix = "~exited"
 // Esc out of the agent view, and Ctrl+Z all exit 0), while the failures -- a
 // short id that matches no job, say -- do not. So:
 //
-//   - exit 0: switch-client moves the attached client back to the pane the
-//     picker was invoked from, and the shell string ends. The pane's process
+//   - exit 0: every client showing this window is switched back to the pane
+//     the picker was invoked from (returnClause), and the shell string ends.
+//     Clients looking at anything else are left alone. The pane's process
 //     exits, so the window closes, and the session closes with it when that was
-//     its only window. The client is already elsewhere by then, which is what
-//     makes the vanishing session harmless. Returning the client is the point:
+//     its only window. A client that was showing it is already elsewhere by
+//     then, which is what makes the vanishing session harmless. Returning the
+//     client is the point:
 //     a window left behind is one the user has to close by hand, and the pane
 //     they were working in is where they wanted to end up.
 //   - non-zero: exec a shell so the pane stays open with the error still on it.
@@ -271,18 +273,42 @@ func windowCommand(window, originPane string, argv []string) []string {
 		shellQuote(window+exitedSuffix) +
 		`; exec "${SHELL:-/bin/bash}"; fi`
 	if originPane != "" {
-		// 2>/dev/null: a pane that has since closed, or no client at all, leaves
-		// nothing to return and nothing worth reporting into a closing pane.
-		//
-		// No -c, so tmux picks the client itself. With none attached that is the
-		// no-op above, but tmux falls back to the last active client rather than
-		// only considering ones on this session, so a client that has since moved
-		// elsewhere can be the one pulled back here. claude-worktree's --tmux
-		// wrapper has always had this shape; naming the client would mean
-		// capturing it at pick time.
-		cmd += `; tmux switch-client -t ` + shellQuote(originPane) + ` 2>/dev/null`
+		cmd += returnClause(originPane)
 	}
 	return []string{cmd}
+}
+
+// returnClause is the tail of windowCommand's clean path: it sends back to
+// originPane only the clients that are showing this window when it ends.
+//
+// A bare `switch-client -t` would let tmux pick the client, and tmux falls
+// back to the most recently active one even when that client is on another
+// session entirely (observed against tmux 3.6b: with no client showing the
+// window, a client sitting in an unrelated session was pulled to the origin
+// pane). That is the user working elsewhere while a picked `claude attach`
+// is stopped from outside -- the clean exit would yank them away. Naming each
+// client with -c leaves everyone not looking at this window where they are.
+//
+// The window is looked up from "$TMUX_PANE" at exit, not captured when the
+// window opened, so a window moved in the meantime is still found. The -t is
+// what matters: a targetless `display-message` resolves to this pane via
+// $TMUX_PANE regardless of what any client shows, so it says nothing about
+// the clients. list-clients' #{window_id} is the window each client currently
+// shows (its session's current window, confirmed against tmux 3.6b with two
+// clients on different windows), which is the value the comparison needs.
+//
+// 2>/dev/null throughout: a pane that has since closed, or no client showing
+// this window, leaves nothing to return and nothing worth reporting into a
+// closing pane. The loop simply finds no match.
+//
+// bin/claude-worktree's --tmux wrapper carries the same clause, with the
+// origin pane as a positional arg instead of a quoted literal; keep the two in
+// step.
+func returnClause(originPane string) string {
+	return `; w=$(tmux display-message -p -t "$TMUX_PANE" "#{window_id}" 2>/dev/null) && ` +
+		`tmux list-clients -F "#{client_name} #{window_id}" 2>/dev/null | ` +
+		`while read -r c cw; do if [ "$cw" = "$w" ]; then ` +
+		`tmux switch-client -c "$c" -t ` + shellQuote(originPane) + ` 2>/dev/null; fi; done`
 }
 
 // shellQuote renders s as a single literal word for a POSIX shell. argv reaches
