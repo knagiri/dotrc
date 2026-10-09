@@ -197,7 +197,7 @@ func envArgs(env map[string]string) []string {
 const exitedSuffix = "~exited"
 
 // windowCommand renders argv as the one trailing argument tmux runs in the new
-// window, wrapped so that a clean exit returns the client to originPane and a
+// window, wrapped so that a clean exit returns the clients showing the window to originPane and a
 // failure leaves the window open to be read.
 //
 // Passing a single argument is what makes the wrap possible at all: tmux runs a
@@ -291,9 +291,11 @@ func windowCommand(window, originPane string, argv []string) []string {
 //
 // The window is looked up from "$TMUX_PANE" at exit, not captured when the
 // window opened, so a window moved in the meantime is still found. The -t is
-// what matters: a targetless `display-message` resolves to this pane via
-// $TMUX_PANE regardless of what any client shows, so it says nothing about
-// the clients. list-clients' #{window_id} is the window each client currently
+// what matters: a targetless `display-message` does not resolve to this pane
+// but to its session's current window (confirmed against tmux 3.6b: from a
+// pane of a window opened with new-window -d, it returned the session's
+// current window, not the pane's own), so without -t the comparison's other
+// side would be whichever window is current at that moment. list-clients' #{window_id} is the window each client currently
 // shows (its session's current window, confirmed against tmux 3.6b with two
 // clients on different windows), which is the value the comparison needs.
 //

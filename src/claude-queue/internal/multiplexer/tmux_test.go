@@ -297,14 +297,14 @@ func TestWindowCommandBranchesOnExitStatus(t *testing.T) {
 		t.Errorf("command = %q, execs the fallback shell outside the failure branch; a clean exit would keep the window open", cmd)
 	}
 
-	// switch-client is the last thing in the string, and outside the branch: it
+	// The return clause is the last thing in the string, and outside the branch: it
 	// is only reached when the command exited 0, because the failure branch
 	// execs and never returns.
-	wantSwitch := returnClause(originPane)
-	if !strings.HasSuffix(cmd, wantSwitch) {
-		t.Errorf("command = %q, must end with %q so a clean exit returns the client to the origin pane", cmd, wantSwitch)
+	wantReturn := returnClause(originPane)
+	if !strings.HasSuffix(cmd, wantReturn) {
+		t.Errorf("command = %q, must end with %q so a clean exit returns the client to the origin pane", cmd, wantReturn)
 	}
-	if strings.Index(cmd, wantSwitch) < fiAt {
+	if strings.Index(cmd, wantReturn) < fiAt {
 		t.Errorf("command = %q, returns the client inside the failure branch, where the exec would have consumed the process first", cmd)
 	}
 }

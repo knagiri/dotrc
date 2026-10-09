@@ -147,4 +147,40 @@ func TestWindowCommandReturnsOnlyViewingClient(t *testing.T) {
 			}
 		})
 	}
+	// A client on the same session but another window must not move either.
+	// claude-queue adds windows to an existing session (new-window -t =name:),
+	// so this happens in use; comparing #{session_id} instead of #{window_id}
+	// would pull that client away and only this case notices.
+	t.Run("sibling window", func(t *testing.T) {
+		s := newE2EServer(t)
+		gate := filepath.Join(filepath.Dir(s.sock), "gate")
+
+		s.tmux("new-session", "-d", "-s", "home", "-x", "80", "-y", "24")
+		origin := s.tmux("display-message", "-p", "-t", "home", "#{pane_id}")
+		// "work" keeps its first window, which is the one the client shows.
+		s.tmux("new-session", "-d", "-s", "work")
+		argv := []string{"sh", "-c", "while [ ! -e " + gate + " ]; do sleep 0.05; done"}
+		s.tmux(append([]string{"new-window", "-d", "-t", "=work:", "-n", "w"}, windowCommand("w", origin, argv)...)...)
+		if got := s.tmux("list-windows", "-t", "=work", "-F", "#{window_name}"); !strings.Contains(got, "w") || strings.Count(got, "\n") != 1 {
+			t.Fatalf("work windows = %q, want two with the new one named w", got)
+		}
+
+		s.attach("work")
+		s.waitFor("the client to attach", func() bool { return slices.Equal(s.clientSessions(), []string{"work"}) })
+		shown := s.tmux("list-clients", "-F", "#{window_name}")
+		if shown == "w" {
+			t.Fatalf("client shows the window that is about to close; the case needs it on another")
+		}
+
+		if err := os.WriteFile(gate, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s.waitFor("the window to close", func() bool {
+			out, err := exec.Command("tmux", "-S", s.sock, "list-windows", "-t", "=work", "-F", "#{window_name}").Output()
+			return err == nil && strings.Count(string(out), "\n") == 1
+		})
+		if got := s.clientSessions(); !slices.Equal(got, []string{"work"}) {
+			t.Errorf("client on %v after a window it was not showing exited 0, want it to stay on work", got)
+		}
+	})
 }

@@ -541,7 +541,7 @@ fi
 #             recently active client and pulls it away from where it was.
 # Skipped where tmux or util-linux script is missing.
 return_e2e() { # <A's session> <A's session afterwards>
-  local sock="$tmp/e2e.sock" gate="$tmp/e2e.gate" ebin="$tmp/e2ebin" wrapper origin want got s
+  local gone sock="$tmp/e2e.sock" gate="$tmp/e2e.gate" ebin="$tmp/e2ebin" wrapper origin want got s
   local -a T=(tmux -S "$sock" -f /dev/null) pids=()
   wrapper="$(grep -F 'switch-client' "$tmp/ns-in")"
   mkdir -p "$ebin"; rm -f "$gate"
@@ -568,14 +568,20 @@ return_e2e() { # <A's session> <A's session afterwards>
     got="$(env -u TMUX "${T[@]}" list-clients -F '#{client_session}' 2>/dev/null | sort | paste -sd' ')"
     [ "$got" = "$want" ] && break; sleep 0.05
   done
+  # A timeout must fail: the unviewed case expects nobody to move, which is also
+  # true if the clients never attached or the clause never ran.
+  [ "$got" = "$want" ] || { echo "  clients never attached: on [$got], want [$want]"
+    kill "${pids[@]}" 2>/dev/null; env -u TMUX "${T[@]}" kill-server 2>/dev/null; wait 2>/dev/null; return 1; }
   : >"$gate"
   # The window closes only after the return clause finishes, so its absence is
   # when the clients are final.
   for _ in $(seq 200); do
     env -u TMUX "${T[@]}" has-session -t =work 2>/dev/null || break; sleep 0.05
   done
+  gone=0; env -u TMUX "${T[@]}" has-session -t =work 2>/dev/null || gone=1
   got="$(env -u TMUX "${T[@]}" list-clients -F '#{client_session}' 2>/dev/null | sort | paste -sd' ')"
   kill "${pids[@]}" 2>/dev/null; env -u TMUX "${T[@]}" kill-server 2>/dev/null; wait 2>/dev/null
+  [ "$gone" = 1 ] || { echo "  the work session never closed: the return clause did not finish"; return 1; }
   [ -e "$gate.ran" ] || { echo "  the claude stub never ran in the pane"; return 1; }
   want="$(printf '%s\n' "$2" away | sort | paste -sd' ')"
   [ "$got" = "$want" ] || { echo "  clients on [$got], want [$want]"; return 1; }

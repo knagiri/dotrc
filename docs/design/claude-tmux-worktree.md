@@ -251,7 +251,7 @@ pane を残してエラーを読ませる。`bin/claude-worktree` の `--tmux` �
 どちらも戻すのは、終了時点でその window を表示している client だけである。`list-clients` で各
 client が表示中の window を引き、一致した client を `switch-client -c` で名指しして戻す。client を
 名指ししない `switch-client -t` だと tmux が最後にアクティブな client を選び、無関係な session で
-作業中の client まで引き戻す（実測: 誰も表示していない window から client が引き戻された）。
+作業中の client まで引き戻す（実測: 誰も表示していない window の終了で、無関係な session にいた client が起動元 pane へ引き寄せられた）。
 委譲元が `claude-stop-bg` で委譲先を止めると、picker で開いた `claude attach` はユーザーの操作と
 無関係なタイミングで exit 0 するので、この形がそのまま踏まれる。
 

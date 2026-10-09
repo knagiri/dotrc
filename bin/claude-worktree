@@ -741,8 +741,9 @@ fi
 # a bare `switch-client -t` lets tmux pick one, and it falls back to the most
 # recently active client even when that client is in an unrelated session, so
 # a user working elsewhere when claude exits would be yanked back. The window is
-# looked up via -t "$TMUX_PANE" (a targetless display-message resolves to this
-# pane whatever the clients show) and compared with each client's #{window_id}
+# looked up via -t "$TMUX_PANE" (required: a targetless display-message resolves
+# to the session's current window, not to this pane, so without -t the comparison
+# would be against whichever window is current then) and compared with each client's #{window_id}
 # from list-clients (the window that client currently shows). claude-queue's
 # windowCommand (src/claude-queue/internal/multiplexer/tmux.go, returnClause)
 # carries the same clause; keep the two in step.
@@ -750,8 +751,9 @@ fi
 # The prompt and pane id ride in as positional args ($1/$2) -- never folded into
 # the command string -- so quotes in the prompt can't break the chain. If no
 # client shows the window, or the origin pane is already gone, nothing is
-# switched (2>/dev/null) and the single-pane session just dies quietly when the
-# inner bash exits.
+# switched (2>/dev/null). The single-pane session dies when the inner bash exits,
+# and any client still showing it is detached back to its terminal (the same
+# limit as claude-queue's windowCommand, "Two limits").
 #
 # --model rides in as a positional arg too ($3, empty when unset) rather than
 # being interpolated into the command string, for the same quoting reason. An
