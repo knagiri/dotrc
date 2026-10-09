@@ -6,6 +6,7 @@ import (
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hook"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/link"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/mark"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/picker"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reset"
@@ -18,6 +19,7 @@ var version = "dev"
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: claude-queue {hook <event>|status|picker|reconcile|reset} [flags]")
 	fmt.Fprintln(os.Stderr, "       claude-queue link --parent <session-id> --child <short-id>")
+	fmt.Fprintln(os.Stderr, "       claude-queue mark <session-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue --version")
 }
 
@@ -47,6 +49,8 @@ func main() {
 		reset.Run(os.Args[2:])
 	case "link":
 		link.Run(os.Args[2:])
+	case "mark":
+		mark.Run(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		usage()

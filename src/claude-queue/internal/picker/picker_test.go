@@ -237,8 +237,8 @@ func TestFzfShowsExactlyTheVisibleColumns(t *testing.T) {
 	if got, want := visibleColumns(), "1,2,3,4,5"; got != want {
 		t.Errorf("visibleColumns = %q, want %q", got, want)
 	}
-	if !slices.Contains(fzfArgs(), "--with-nth=1,2,3,4,5") {
-		t.Errorf("fzfArgs = %v, want it to carry --with-nth=1,2,3,4,5", fzfArgs())
+	if !slices.Contains(fzfArgs(""), "--with-nth=1,2,3,4,5") {
+		t.Errorf("fzfArgs = %v, want it to carry --with-nth=1,2,3,4,5", fzfArgs(""))
 	}
 	// The list has to stop before the first hidden column, whose contents are
 	// paths and ids no one wants in the popup.

@@ -644,6 +644,16 @@ func TestOpenMigratesAnExistingDatabase(t *testing.T) {
 		t.Error("ConfigDirOf(NULL) = \"\", want the default dir")
 	}
 
+	// waiting_event_id came in the same way, and the queue view that selects it
+	// has to be creatable on the migrated table.
+	var mark sql.NullInt64
+	if err := conn.QueryRow("SELECT waiting_event_id FROM sessions WHERE session_id = 'legacy'").Scan(&mark); err != nil {
+		t.Fatalf("read migrated waiting_event_id: %v", err)
+	}
+	if mark.Valid {
+		t.Errorf("waiting_event_id = %d, want NULL on a row written before the column existed", mark.Int64)
+	}
+
 	// And the whole thing is idempotent: Open runs on every hook invocation, so
 	// a migration that fails the second time would take the ledger down with it.
 	conn2, err := Open(path)
@@ -690,5 +700,147 @@ func TestQueueViewCarriesConfigDir(t *testing.T) {
 	}
 	if len(dirs) != 1 || dirs[0] != "/home/x/.claude-personal" {
 		t.Errorf("RecordedConfigDirs = %v, want [/home/x/.claude-personal]", dirs)
+	}
+}
+
+// markedOf returns the Marked flag ListRows reports for sid.
+func markedOf(t *testing.T, conn *sql.DB, sid string) bool {
+	t.Helper()
+	rows, err := ListRows(conn, ListOpts{ShowWorking: true, ShowStale: true})
+	if err != nil {
+		t.Fatalf("ListRows: %v", err)
+	}
+	for _, r := range rows {
+		if r.SessionID == sid {
+			return r.Marked
+		}
+	}
+	t.Fatalf("session %s not listed", sid)
+	return false
+}
+
+func TestToggleMark_SetsAndClears(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	insertSession(t, conn, "a", "%1")
+	insertSession(t, conn, "b", "%2")
+	insertEvent(t, conn, "a", "Stop", "idle_done", 10)
+	insertEvent(t, conn, "b", "Stop", "idle_done", 10)
+
+	if markedOf(t, conn, "a") {
+		t.Fatal("a marked before any toggle")
+	}
+	on, err := ToggleMark(conn, "a")
+	if err != nil || !on {
+		t.Fatalf("first ToggleMark = %v, %v; want true, nil", on, err)
+	}
+	if !markedOf(t, conn, "a") {
+		t.Error("a not marked after the first toggle")
+	}
+	if markedOf(t, conn, "b") {
+		t.Error("b marked by a toggle on a")
+	}
+	off, err := ToggleMark(conn, "a")
+	if err != nil || off {
+		t.Fatalf("second ToggleMark = %v, %v; want false, nil", off, err)
+	}
+	if markedOf(t, conn, "a") {
+		t.Error("a still marked after the second toggle")
+	}
+}
+
+// The mark lifts itself: it is pinned to the event it was set at, so the next
+// hook event moves the latest id past it. Toggling after that marks again.
+func TestToggleMark_NextEventLiftsIt(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	insertSession(t, conn, "a", "%1")
+	insertEvent(t, conn, "a", "Stop", "idle_done", 10)
+
+	if on, err := ToggleMark(conn, "a"); err != nil || !on {
+		t.Fatalf("ToggleMark = %v, %v; want true, nil", on, err)
+	}
+	insertEvent(t, conn, "a", "UserPromptSubmit", "working", 0)
+	if markedOf(t, conn, "a") {
+		t.Error("a still marked after a new event")
+	}
+	if on, err := ToggleMark(conn, "a"); err != nil || !on {
+		t.Errorf("ToggleMark after the mark lapsed = %v, %v; want true (re-mark), nil", on, err)
+	}
+}
+
+// Marking changes the icon only: state, priority and order stay as they were.
+func TestToggleMark_LeavesStateAndOrder(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	insertSession(t, conn, "p", "%1")
+	insertSession(t, conn, "i", "%2")
+	insertEvent(t, conn, "p", "PermissionRequest", "awaiting_approval", 60)
+	insertEvent(t, conn, "i", "Stop", "idle_done", 60)
+
+	before, err := ListRows(conn, ListOpts{})
+	if err != nil {
+		t.Fatalf("ListRows: %v", err)
+	}
+	on, err := ToggleMark(conn, "i")
+	if err != nil {
+		t.Fatalf("ToggleMark: %v", err)
+	}
+	// Guard against a no-op ToggleMark: the mark must actually be applied,
+	// otherwise the "unchanged" checks below prove nothing.
+	if !on {
+		t.Fatalf("ToggleMark(i) = false; want true")
+	}
+	after, err := ListRows(conn, ListOpts{})
+	if err != nil {
+		t.Fatalf("ListRows: %v", err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("row count %d -> %d", len(before), len(after))
+	}
+	for k := range before {
+		b, a := before[k], after[k]
+		if a.SessionID != b.SessionID || a.EffectiveState != b.EffectiveState || a.Priority != b.Priority {
+			t.Errorf("row %d changed: %+v -> %+v", k, b, a)
+		}
+		if want := a.SessionID == "i"; a.Marked != want {
+			t.Errorf("session %s Marked = %v; want %v", a.SessionID, a.Marked, want)
+		}
+	}
+}
+
+// Tab on a resumable row reaches ToggleMark with an ended session's id; it has
+// to be a silent no-op, not an error and not a write.
+func TestToggleMark_EndedOrUnknownIsNoop(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	insertSession(t, conn, "e", "%1")
+	insertEvent(t, conn, "e", "SessionEnd", "ended", 10)
+	terminate(t, conn, "e", 10)
+
+	for _, sid := range []string{"e", "nope"} {
+		on, err := ToggleMark(conn, sid)
+		if err != nil || on {
+			t.Errorf("ToggleMark(%s) = %v, %v; want false, nil", sid, on, err)
+		}
+	}
+	var mark sql.NullInt64
+	if err := conn.QueryRow("SELECT waiting_event_id FROM sessions WHERE session_id = 'e'").Scan(&mark); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if mark.Valid {
+		t.Errorf("ended session got waiting_event_id = %d", mark.Int64)
 	}
 }

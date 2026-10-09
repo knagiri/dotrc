@@ -39,10 +39,11 @@ make install
 |---|---|
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
-| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` / `--show-resumable` で一覧を広げる |
+| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` / `--show-resumable` で一覧を広げる。Tab でカーソル行の待ちマークをトグルする（後述） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない生存扱いの row を terminated にする（picker 起動時に自動実行される） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue link --parent <session-id> --child <short-id>` | 委譲の親子関係を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示と孤児の判定に使う。設計は `docs/design/claude-queue-session-tree.md` |
+| `claude-queue mark <session-id>` | 手動の待ちマークをトグルする（picker の Tab が呼ぶ）。終了済み・未知の session は何もせず exit 0 |
 | `claude-queue --version` | バージョン表示 |
 
 ### 環境変数
@@ -50,7 +51,7 @@ make install
 | Var | 意味 |
 |---|---|
 | `CLAUDE_QUEUE_DB` | DB パス override（既定 `~/.claude/session-queue.db`） |
-| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X] [~]` に切替 |
+| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X] [~]`（待ちマークは `[P]`）に切替 |
 | `CLAUDE_QUEUE_DEBUG=1` | エラーを `~/.claude/session-queue.log` に追記 |
 
 ### picker の行
@@ -59,7 +60,7 @@ make install
 
 | 列 | 中身 | 幅 |
 |---|---|---|
-| 1 | state アイコン | 可変（1〜2 桁） |
+| 1 | state アイコン（待ちマーク中は 📌） | 可変（1〜2 桁） |
 | 2 | 委譲の木の罫線・孤児の印 + ai-title（transcript 由来） | 40 桁 padding + truncate（罫線込み） |
 | 3 | worktree 名（`<main-repo-basename>_<name>`。メイン checkout は `<repo>` のみ） | 56 桁 padding + truncate |
 | 4 | age | 可変（短い） |
@@ -90,6 +91,19 @@ FORMATS 展開のための処理で、読むだけの行には要らない。た
 summary 側でも必ず潰す — 混ざると 6〜9 列目がずれ、picker が別 session の id / pane / cwd /
 transcript を掴む。tab を含む Bash コマンド（`awk -F'<tab>'`）は承認待ちで普通に出るので、
 これは机上の話ではない。
+
+### 手動の待ちマーク
+
+人の返信待ち・保留・後回しにした session に、picker の Tab で印を付け外しできる。popup は
+閉じず、`picker --list`（同じ flag で行だけを出すモード）で一覧をその場で再描画する。
+印が変えるのはアイコンだけで、並び順・state・priority・age・summary は変えない。別グループに
+すると並びが動いて行を見失うため。stale 判定も変えないので、印の付いた session も時間が
+経てば既定の picker から消え、`--show-stale` では 📌 のまま見える。tmux status-right の
+カウンタは印を数えない。
+
+印は `sessions.waiting_event_id` にその時点の最新 event id を記録したもので、それがまだ最新で
+ある間だけ有効になる。次の hook event が積まれた時点で自動的に外れるので、agent に何か
+伝えれば印は消え、外す処理を hook 側に持たない。
 
 ### picker の到達手段
 

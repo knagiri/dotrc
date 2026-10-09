@@ -54,6 +54,7 @@ func Open(path string) (*sql.DB, error) {
 func migrate(conn *sql.DB) error {
 	for _, m := range []struct{ table, column, ddl string }{
 		{"sessions", "config_dir", "ALTER TABLE sessions ADD COLUMN config_dir TEXT"},
+		{"sessions", "waiting_event_id", "ALTER TABLE sessions ADD COLUMN waiting_event_id INTEGER"},
 	} {
 		has, err := hasColumn(conn, m.table, m.column)
 		if err != nil {

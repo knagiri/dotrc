@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -23,7 +24,13 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/summary"
 )
 
+// iconMarked keys the icon of a row carrying the manual "waiting" mark
+// (db.Row.Marked). It is not a state: the mark replaces the icon only, so it
+// shares the icon tables rather than having its own column.
+const iconMarked = "marked"
+
 var emoji = map[string]string{
+	iconMarked:          "📌",
 	"awaiting_approval": "⏳",
 	"idle_done":         "✅",
 	"working":           "⚙️",
@@ -32,6 +39,7 @@ var emoji = map[string]string{
 }
 
 var ascii = map[string]string{
+	iconMarked:          "[P]",
 	"awaiting_approval": "[!]",
 	"idle_done":         "[.]",
 	"working":           "[*]",
@@ -106,6 +114,11 @@ func FormatLine(row db.Row, title, worktree string, nowSec int64, asciiMode bool
 		icons = ascii
 	}
 	icon := icons[row.EffectiveState]
+	// The mark wins over every state, stale included: a parked session that has
+	// gone stale is still one the user said they would come back to.
+	if row.Marked {
+		icon = icons[iconMarked]
+	}
 
 	sum := summary.Summarize(summary.Input{
 		EffectiveState: row.EffectiveState,
@@ -600,13 +613,69 @@ func waitGone(sessionID string, list func() ([]roster.Agent, error), tick func()
 	return false
 }
 
+// pickerFlags are the listing flags, kept together because they are parsed
+// once and then both drive the listing and are handed back to the reload
+// command the Tab bind runs (see listArgs).
+type pickerFlags struct {
+	ShowWorking   bool
+	ShowStale     bool
+	ShowResumable bool
+	RepoScope     bool
+}
+
+// listArgs is the argv after the binary that makes `picker --list` print the
+// same listing these flags select. The Tab bind reloads through it, so a flag
+// left out here would make the list change shape the first time Tab is pressed.
+func (f pickerFlags) listArgs() []string {
+	args := []string{"picker", "--list"}
+	for _, fl := range []struct {
+		on   bool
+		name string
+	}{
+		{f.ShowWorking, "--show-working"},
+		{f.ShowStale, "--show-stale"},
+		{f.ShowResumable, "--show-resumable"},
+		{f.RepoScope, "--repo-scope"},
+	} {
+		if fl.on {
+			args = append(args, fl.name)
+		}
+	}
+	return args
+}
+
 // Run is the CLI entrypoint for `claude-queue picker`.
 func Run(args []string) {
+	run(args, os.Stdout, reconcileSweep, runFzf)
+}
+
+// reconcileSweep is the pre-listing reconcile, with its reporting. Best-effort
+// -- an unreadable roster is no reason to refuse to display the queue.
+func reconcileSweep(conn *sql.DB) {
+	res, err := reconcile.Sweep(conn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "reconcile skipped:", err)
+		return
+	}
+	for _, dir := range res.Unreadable {
+		fmt.Fprintf(os.Stderr, "reconcile: roster unreadable for %s: its rows were left open\n", dir)
+	}
+	if res.Closed > 0 {
+		fmt.Fprintf(os.Stderr, "reconciled %d ended session(s)\n", res.Closed)
+	}
+}
+
+// run is Run with its side doors injected -- the reconcile sweep and fzf --
+// so a test can drive both the interactive path and --list over one database
+// and compare what each would show.
+func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input string, args []string) (string, error)) {
 	fs := flag.NewFlagSet("picker", flag.ExitOnError)
-	showWorking := fs.Bool("show-working", false, "include working sessions")
-	showStale := fs.Bool("show-stale", false, "include stale sessions")
-	showResumable := fs.Bool("show-resumable", false, "include ended sessions a resume could reopen")
-	repoScope := fs.Bool("repo-scope", false, "only sessions whose cwd is in the same git repo as the picker's cwd")
+	var f pickerFlags
+	fs.BoolVar(&f.ShowWorking, "show-working", false, "include working sessions")
+	fs.BoolVar(&f.ShowStale, "show-stale", false, "include stale sessions")
+	fs.BoolVar(&f.ShowResumable, "show-resumable", false, "include ended sessions a resume could reopen")
+	fs.BoolVar(&f.RepoScope, "repo-scope", false, "only sessions whose cwd is in the same git repo as the picker's cwd")
+	listOnly := fs.Bool("list", false, "print the rows fzf would be given and exit (the Tab bind's reload)")
 	_ = fs.Parse(args)
 
 	conn, err := db.Open(db.DefaultPath())
@@ -619,103 +688,26 @@ func Run(args []string) {
 	// Reconcile before reading the rows, so the list never offers a session
 	// that has already vanished. This is the cheapest place to put it: the
 	// picker is user-driven (so it runs rarely) and it is the one caller that
-	// would otherwise show the stale rows. Best-effort -- an unreadable roster
-	// is no reason to refuse to display the queue.
-	if res, err := reconcile.Sweep(conn); err != nil {
-		fmt.Fprintln(os.Stderr, "reconcile skipped:", err)
-	} else {
-		for _, dir := range res.Unreadable {
-			fmt.Fprintf(os.Stderr, "reconcile: roster unreadable for %s: its rows were left open\n", dir)
-		}
-		if res.Closed > 0 {
-			fmt.Fprintf(os.Stderr, "reconciled %d ended session(s)\n", res.Closed)
-		}
-	}
-
-	// Every live row is read, whatever the flags say: the state filter picks
-	// the rows to show, but buildForest still needs their filtered-out
-	// ancestors to hang them from.
-	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true, ShowStale: true})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return
-	}
-	// Read the resumable rows whether or not they will be listed: the count is
-	// what the empty-queue message needs in order to point at the flag.
-	// Best-effort for the same reason the sweep above is -- a failure here is no
-	// reason to withhold the live queue.
-	var resumable []db.Row
-	if cands, err := db.ResumableCandidates(conn); err != nil {
-		fmt.Fprintln(os.Stderr, "resumable lookup skipped:", err)
-	} else {
-		resumable = filterResumable(cands, isFile, isDir)
+	// would otherwise show the stale rows.
+	//
+	// Not on --list: that is the reload behind every Tab press, it runs inside
+	// a picker that reconciled moments ago, and a sweep costs a roster
+	// subprocess per config dir.
+	if !*listOnly {
+		sweep(conn)
 	}
 
 	asciiMode := os.Getenv("CLAUDE_QUEUE_ASCII") == "1"
-	filter := db.ListOpts{ShowWorking: *showWorking, ShowStale: *showStale}
-	opts := forestOpts{
-		Keep:       func(r db.Row) bool { return filter.Includes(r.EffectiveState) },
-		ParentLive: liveSessions(conn),
-		ASCII:      asciiMode,
+	input, names, ok := listing(conn, f, asciiMode)
+	if !ok {
+		return
 	}
-
-	// --repo-scope (prefix q): keep only rows in the same repo as the pane the
-	// popup was opened from. The popup's cwd is that pane's cwd (tmux.conf
-	// passes -d "#{pane_current_path}"), and every working tree of a repo
-	// shares one --git-common-dir, so main checkout + all its .worktrees/*
-	// collapse to one group. A picker cwd outside any repo cannot scope, so
-	// say so and stop rather than silently listing everything.
-	keys := repoKeyCache{}
-	wantKey := ""
-	if *repoScope {
-		wd, _ := os.Getwd()
-		wantKey = repoKey(wd)
-		if wantKey == "" {
-			fmt.Fprintln(os.Stderr, "not in a git repo; use prefix Q for all sessions")
-			return
-		}
-		opts.InScope = func(r db.Row) bool { return keys.key(rowCwd(r)) == wantKey }
-	}
-
-	lines := buildForest(rows, opts)
-	if *showResumable {
-		// Appended flat, after the tree: ResumableCandidates hands back
-		// priorities above every one the queue view assigns, so they belong
-		// last, and fzf is run with --no-sort.
-		extra := resumable
-		if *repoScope {
-			extra = filterSameRepo(extra, wantKey, keys.key)
-		}
-		for _, r := range extra {
-			lines = append(lines, treeRow{Row: r})
-		}
-	}
-
-	if len(lines) == 0 {
-		if *repoScope {
-			fmt.Fprintln(os.Stderr, "no active sessions in this repo (prefix Q lists all)")
-		} else {
-			fmt.Fprintln(os.Stderr, noRowsMessage(len(resumable), *showResumable))
-		}
+	if *listOnly {
+		io.WriteString(stdout, input)
 		return
 	}
 
-	var buf bytes.Buffer
-	now := time.Now().Unix()
-	names := worktreeCache{}
-	for _, l := range lines {
-		// The title is read here rather than inside FormatLine for the same
-		// reason the worktree name is -- it needs the filesystem. It costs one
-		// bounded tail read per row (see label's tailScanBytes), which the
-		// picker can afford: it is user-driven and lists a handful of rows.
-		title := prefixedTitle(l.Prefix, func(cols int) string {
-			return label.DisplayTitle(rowTranscript(l.Row), cols)
-		})
-		buf.WriteString(FormatLine(l.Row, title, names.name(rowCwd(l.Row)), now, asciiMode))
-		buf.WriteByte('\n')
-	}
-
-	selected, err := runFzf(buf.String())
+	selected, err := fzf(input, fzfArgs(tabBind(selfPath(), f)))
 	if err != nil || selected == "" {
 		return
 	}
@@ -781,6 +773,98 @@ func Run(args []string) {
 	default:
 		fmt.Fprintln(os.Stderr, act.Reason)
 	}
+}
+
+// listing renders the rows fzf is given, one FormatLine per line, along with
+// the worktree-name cache the pick reuses. ok is false when there is nothing
+// to list; the reason has already been printed to stderr.
+//
+// It is the one place the listing is built: the interactive picker feeds it to
+// fzf, and --list prints it for the Tab bind's reload. Two builders would let
+// the reloaded list drift from the one it replaces.
+func listing(conn *sql.DB, f pickerFlags, asciiMode bool) (string, worktreeCache, bool) {
+	names := worktreeCache{}
+	// Every live row is read, whatever the flags say: the state filter picks
+	// the rows to show, but buildForest still needs their filtered-out
+	// ancestors to hang them from.
+	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true, ShowStale: true})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return "", names, false
+	}
+	// Read the resumable rows whether or not they will be listed: the count is
+	// what the empty-queue message needs in order to point at the flag.
+	// Best-effort for the same reason the sweep is -- a failure here is no
+	// reason to withhold the live queue.
+	var resumable []db.Row
+	if cands, err := db.ResumableCandidates(conn); err != nil {
+		fmt.Fprintln(os.Stderr, "resumable lookup skipped:", err)
+	} else {
+		resumable = filterResumable(cands, isFile, isDir)
+	}
+
+	filter := db.ListOpts{ShowWorking: f.ShowWorking, ShowStale: f.ShowStale}
+	opts := forestOpts{
+		Keep:       func(r db.Row) bool { return filter.Includes(r.EffectiveState) },
+		ParentLive: liveSessions(conn),
+		ASCII:      asciiMode,
+	}
+
+	// --repo-scope (prefix q): keep only rows in the same repo as the pane the
+	// popup was opened from. The popup's cwd is that pane's cwd (tmux.conf
+	// passes -d "#{pane_current_path}"), and every working tree of a repo
+	// shares one --git-common-dir, so main checkout + all its .worktrees/*
+	// collapse to one group. A picker cwd outside any repo cannot scope, so
+	// say so and stop rather than silently listing everything.
+	keys := repoKeyCache{}
+	wantKey := ""
+	if f.RepoScope {
+		wd, _ := os.Getwd()
+		wantKey = repoKey(wd)
+		if wantKey == "" {
+			fmt.Fprintln(os.Stderr, "not in a git repo; use prefix Q for all sessions")
+			return "", names, false
+		}
+		opts.InScope = func(r db.Row) bool { return keys.key(rowCwd(r)) == wantKey }
+	}
+
+	lines := buildForest(rows, opts)
+	if f.ShowResumable {
+		// Appended flat, after the tree: ResumableCandidates hands back
+		// priorities above every one the queue view assigns, so they belong
+		// last, and fzf is run with --no-sort.
+		extra := resumable
+		if f.RepoScope {
+			extra = filterSameRepo(extra, wantKey, keys.key)
+		}
+		for _, r := range extra {
+			lines = append(lines, treeRow{Row: r})
+		}
+	}
+
+	if len(lines) == 0 {
+		if f.RepoScope {
+			fmt.Fprintln(os.Stderr, "no active sessions in this repo (prefix Q lists all)")
+		} else {
+			fmt.Fprintln(os.Stderr, noRowsMessage(len(resumable), f.ShowResumable))
+		}
+		return "", names, false
+	}
+
+	var buf bytes.Buffer
+	now := time.Now().Unix()
+	for _, l := range lines {
+		// The title is read here rather than inside FormatLine for the same
+		// reason the worktree name is -- it needs the filesystem. It costs one
+		// bounded tail read per row (see label's tailScanBytes), which the
+		// picker can afford: it is user-driven and lists a handful of rows.
+		title := prefixedTitle(l.Prefix, func(cols int) string {
+			return label.DisplayTitle(rowTranscript(l.Row), cols)
+		})
+		buf.WriteString(FormatLine(l.Row, title, names.name(rowCwd(l.Row)), now, asciiMode))
+		buf.WriteByte('\n')
+	}
+	return buf.String(), names, true
 }
 
 // describeTarget gathers the state DecideAction routes on: the reachable pane,
@@ -875,15 +959,68 @@ func isDir(path string) bool {
 }
 
 // fzfArgs is the fzf invocation, split out of runFzf so the visible-column
-// list can be asserted without running fzf.
-func fzfArgs() []string {
+// list and the Tab bind can be asserted without running fzf.
+func fzfArgs(tab string) []string {
 	return []string{
 		"--delimiter=\t",
 		"--with-nth=" + visibleColumns(),
 		"--no-sort",
 		"--reverse",
 		"--height=100%",
+		"--bind", tab,
 	}
+}
+
+// tabBind is the --bind value that makes Tab toggle the cursor row's mark and
+// redraw the list in place, the popup staying open.
+//
+// The row is named by its hidden session id column, {N} with N derived from
+// the layout constants for the same reason visibleColumns is. fzf field
+// placeholders address the original line, not the --with-nth view, so a
+// hidden column is reachable; fzf also quotes the value it substitutes. reload
+// keeps the cursor where it was, and the mark changes no row's position, so
+// the cursor stays on the row just toggled.
+//
+// self is the binary's own path rather than "claude-queue" so the bind does
+// not depend on the popup's PATH. stderr of both commands is dropped: anything
+// written there lands on top of fzf's screen, and a failed toggle shows up as
+// the icon not changing anyway.
+func tabBind(self string, f pickerFlags) string {
+	exe := shellQuote(self)
+	mark := exe + " mark {" + strconv.Itoa(colSessionID+1) + "} 2>/dev/null"
+	list := exe
+	for _, a := range f.listArgs() {
+		list += " " + shellQuote(a)
+	}
+	list += " 2>/dev/null"
+	return "tab:" + fzfAction("execute-silent", mark) + "+" + fzfAction("reload", list)
+}
+
+// fzfAction renders name(arg) with the first bracket pair fzf accepts whose
+// closing character arg does not contain. fzf ends an action argument at the
+// first closing delimiter, so a ')' in the binary's path would otherwise cut
+// the command short.
+func fzfAction(name, arg string) string {
+	for _, p := range []string{"()", "[]", "<>", "~~", "!!", "@@", "##", "%%", "^^", "&&", "**", ";;", "//", "||"} {
+		if !strings.ContainsRune(arg, rune(p[1])) {
+			return name + string(p[0]) + arg + string(p[1])
+		}
+	}
+	return name + "(" + arg + ")"
+}
+
+// shellQuote single-quotes s for the POSIX shell fzf runs bind commands in.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// selfPath is this binary's absolute path, falling back to the bare name (and
+// so to PATH) only when the OS cannot say.
+func selfPath() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "claude-queue"
 }
 
 // visibleColumns renders the 1-based positions --with-nth takes, derived from
@@ -898,8 +1035,8 @@ func visibleColumns() string {
 	return strings.Join(parts, ",")
 }
 
-func runFzf(input string) (string, error) {
-	cmd := exec.Command("fzf", fzfArgs()...)
+func runFzf(input string, args []string) (string, error) {
+	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader(input)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()

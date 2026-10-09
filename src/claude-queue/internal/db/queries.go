@@ -35,6 +35,11 @@ type Row struct {
 	// parent is gone -- and is always NULL on the resumable rows, which the
 	// picker lists flat.
 	ParentSessionID sql.NullString
+
+	// Marked is the manual "waiting" mark (see ToggleMark): true while the mark
+	// still sits on the session's latest event. It changes the picker's icon
+	// and nothing else -- not the state, the priority or the ordering.
+	Marked bool
 }
 
 // StateResumable is the pseudo effective_state of a terminated row that
@@ -104,7 +109,7 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	rows, err := conn.Query(`
 		SELECT q.session_id, q.tmux_pane, q.cwd, q.transcript_path, q.config_dir,
 		       q.event_type, q.raw_state, q.effective_state, q.payload, q.created_at, q.priority,
-		       NULL AS prior_state, l.parent_session_id
+		       NULL AS prior_state, l.parent_session_id, q.marked
 		FROM queue q
 		LEFT JOIN session_links l ON l.child_short = substr(q.session_id, 1, 8)
 		ORDER BY q.priority ASC, q.created_at DESC
@@ -137,6 +142,37 @@ func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
 		return fmt.Errorf("link session: %w", err)
 	}
 	return nil
+}
+
+// ToggleMark flips the manual "waiting" mark on a live session and reports
+// whether it is now marked.
+//
+// Marking pins the session's latest event id; the mark reads as set only while
+// that is still the latest (see the queue view's marked column), so the next
+// hook event lifts it on its own. Toggling a session whose mark has already
+// been lifted that way marks it again rather than clearing a stale id.
+//
+// A session that is not live -- terminated, or not in the ledger at all -- is
+// left alone and reports false: the picker's resumable rows carry an id too,
+// and Tab on one of them must be a no-op rather than an error.
+func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
+	var marked sql.NullBool
+	err := conn.QueryRow(`
+		UPDATE sessions
+		SET waiting_event_id = CASE
+		      WHEN waiting_event_id = (SELECT MAX(id) FROM events WHERE session_id = ?1) THEN NULL
+		      ELSE (SELECT MAX(id) FROM events WHERE session_id = ?1)
+		    END
+		WHERE session_id = ?1 AND terminated_at IS NULL
+		RETURNING waiting_event_id IS NOT NULL
+	`, sessionID).Scan(&marked)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("toggle mark: %w", err)
+	}
+	return marked.Bool, nil
 }
 
 // ResumableCandidates returns the terminated rows whose conversation
@@ -177,7 +213,7 @@ func ResumableCandidates(conn *sql.DB) ([]Row, error) {
 		       e.event_type, e.state AS raw_state, ? AS effective_state,
 		       e.payload, e.created_at,
 		       CASE WHEN p.state IN ('working', 'awaiting_approval') THEN ? ELSE ? END AS priority,
-		       p.state AS prior_state, NULL AS parent_session_id
+		       p.state AS prior_state, NULL AS parent_session_id, 0 AS marked
 		FROM events e
 		JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
 		  ON e.id = l.mid
@@ -210,7 +246,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		if err := rows.Scan(
 			&r.SessionID, &r.TmuxPane, &r.Cwd, &r.TranscriptPath, &r.ConfigDir,
 			&r.EventType, &r.RawState, &r.EffectiveState, &r.Payload, &r.CreatedAt, &r.Priority,
-			&r.PriorState, &r.ParentSessionID,
+			&r.PriorState, &r.ParentSessionID, &r.Marked,
 		); err != nil {
 			return nil, err
 		}
