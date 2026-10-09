@@ -22,7 +22,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   --
   -- Added by migrate() as well, because CREATE TABLE IF NOT EXISTS is a no-op on
   -- an existing database and would leave the column off it forever.
-  config_dir      TEXT
+  config_dir      TEXT,
+  -- The events.id the session was manually marked "waiting" at (claude-queue
+  -- mark, Tab in the picker). The mark holds only while this still equals the
+  -- session's latest event id, so the next hook event lifts it without anyone
+  -- clearing the column. NULL is unmarked. Added by migrate() too, for the same
+  -- reason as config_dir.
+  waiting_event_id INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_pane_live
@@ -77,7 +83,8 @@ SELECT
     WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at <= 14400 THEN 2
     WHEN e.state = 'working'           AND unixepoch() - e.created_at <= 28800 THEN 3
     ELSE 5
-  END AS priority
+  END AS priority,
+  CASE WHEN s.waiting_event_id = e.id THEN 1 ELSE 0 END AS marked
 FROM events e
 JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
   ON e.id = l.mid
