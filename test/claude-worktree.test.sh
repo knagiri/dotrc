@@ -463,8 +463,10 @@ chmod +x "$stubbin/mise"
 prompt='say "hi" it'\''s here'
 
 # Inside tmux ($TMUX set): launch is wrapped in `bash -c` so claude's exit is
-# chained to `switch-client -t <origin_pane>`, returning the client to the pane
-# we launched from. Assert the chain is wired and quoting is intact.
+# chained to `switch-client -c <client> -t <origin_pane>` for each client showing
+# the window, returning it to the pane we launched from. Assert the chain is
+# wired (naming the client, never a bare switch-client) and quoting is intact.
+# Which clients actually move is checked against a real tmux further down.
 #
 # --tmux keeps `acceptEdits` while the background launch moved to `auto`: a human
 # sits with this session, so their judgment is preferred over the classifier's.
@@ -476,7 +478,7 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log" TMUX=fake TMUX_PANE=%9
   "$wt" --tmux insess -- "$prompt"; } 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -q 'switch-client' "$log" \
+   && grep -Fq 'tmux switch-client -c "$c" -t "$2"' "$log" \
    && grep -Fxq '%9' "$log" \
    && grep -Fq -- '--permission-mode acceptEdits' "$log" \
    && ! grep -Fq -- '--permission-mode auto' "$log" \
@@ -529,6 +531,72 @@ else
   echo "FAIL: in-tmux model slot is '$(tail -n1 "$tmp/ns-in")' without --model"; fail=1
 fi
 
+# --- pane return against a real tmux -------------------------------------------
+# The wrapper string asserted above is run in a private tmux server (its own
+# socket) with two real clients, script(1) giving each a terminal. claude is
+# stubbed to wait on a gate file so the clients are in place before it exits.
+#   viewed:   client A shows the wrapper's session, B another. Only A returns.
+#   unviewed: neither shows it. Nobody moves -- the case a bare
+#             `switch-client -t` gets wrong, since tmux then picks the most
+#             recently active client and pulls it away from where it was.
+# Skipped where tmux or util-linux script is missing.
+return_e2e() { # <A's session> <A's session afterwards>
+  local gone sock="$tmp/e2e.sock" gate="$tmp/e2e.gate" ebin="$tmp/e2ebin" wrapper origin want got s
+  local -a T=(tmux -S "$sock" -f /dev/null) pids=()
+  wrapper="$(grep -F 'switch-client' "$tmp/ns-in")"
+  mkdir -p "$ebin"; rm -f "$gate"
+  # The stub leaves a marker, so the case can prove the stub -- not a real
+  # claude found on PATH -- is what ran in the pane.
+  rm -f "$gate.ran"
+  printf '#!/bin/sh\n: >"%s.ran"\nwhile [ ! -e "%s" ]; do sleep 0.05; done\n' "$gate" "$gate" >"$ebin/claude"
+  chmod +x "$ebin/claude"
+  env -u TMUX -u TMUX_PANE "${T[@]}" new-session -d -s home -x 80 -y 24
+  origin="$(env -u TMUX "${T[@]}" display-message -p -t home '#{pane_id}')"
+  env -u TMUX "${T[@]}" new-session -d -s away
+  env -u TMUX "${T[@]}" new-session -d -s side
+  # PATH via env(1), not new-session -e: observed against tmux 3.6b, -e PATH
+  # shows up in show-environment but not in the pane, which would run the real
+  # claude here.
+  env -u TMUX "${T[@]}" new-session -d -s work \
+    env PATH="$ebin:$PATH" bash -c "$wrapper" bash "$prompt" "$origin" ""
+  for s in "$1" away; do
+    env -u TMUX -u TMUX_PANE TERM=xterm script -qfc "tmux -S $sock attach -t $s" /dev/null >/dev/null 2>&1 &
+    pids+=($!)
+  done
+  want="$(printf '%s\n' "$1" away | sort | paste -sd' ')"
+  for _ in $(seq 200); do
+    got="$(env -u TMUX "${T[@]}" list-clients -F '#{client_session}' 2>/dev/null | sort | paste -sd' ')"
+    [ "$got" = "$want" ] && break; sleep 0.05
+  done
+  # A timeout must fail: the unviewed case expects nobody to move, which is also
+  # true if the clients never attached or the clause never ran.
+  [ "$got" = "$want" ] || { echo "  clients never attached: on [$got], want [$want]"
+    kill "${pids[@]}" 2>/dev/null; env -u TMUX "${T[@]}" kill-server 2>/dev/null; wait 2>/dev/null; return 1; }
+  : >"$gate"
+  # The window closes only after the return clause finishes, so its absence is
+  # when the clients are final.
+  for _ in $(seq 200); do
+    env -u TMUX "${T[@]}" has-session -t =work 2>/dev/null || break; sleep 0.05
+  done
+  gone=0; env -u TMUX "${T[@]}" has-session -t =work 2>/dev/null || gone=1
+  got="$(env -u TMUX "${T[@]}" list-clients -F '#{client_session}' 2>/dev/null | sort | paste -sd' ')"
+  kill "${pids[@]}" 2>/dev/null; env -u TMUX "${T[@]}" kill-server 2>/dev/null; wait 2>/dev/null
+  [ "$gone" = 1 ] || { echo "  the work session never closed: the return clause did not finish"; return 1; }
+  [ -e "$gate.ran" ] || { echo "  the claude stub never ran in the pane"; return 1; }
+  want="$(printf '%s\n' "$2" away | sort | paste -sd' ')"
+  [ "$got" = "$want" ] || { echo "  clients on [$got], want [$want]"; return 1; }
+}
+if command -v tmux >/dev/null && script -qc true /dev/null >/dev/null 2>&1; then
+  if return_e2e work home; then
+    echo "ok: real tmux: the client showing the wrapper's window returns to the origin pane, the other stays"
+  else echo "FAIL: real tmux: viewed-window return"; fail=1; fi
+  if return_e2e side side; then
+    echo "ok: real tmux: no client moves when none shows the wrapper's window"
+  else echo "FAIL: real tmux: unviewed-window return moved a client"; fail=1; fi
+else
+  echo "skip: real tmux pane-return (tmux or script(1) unavailable)"
+fi
+
 # --- --model ------------------------------------------------------------------
 # Inside tmux the model rides in as a positional arg ($3) of the `bash -c` wrapper
 # rather than being folded into the command string, so it cannot break the
@@ -543,7 +611,7 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
 if [ "$rc" -eq 0 ] \
    && grep -Fq 'if [ -n "$3" ]; then' "$log" \
    && grep -Fxq 'opus' "$log" \
-   && grep -q 'switch-client' "$log" \
+   && grep -Fq 'tmux switch-client -c "$c" -t "$2"' "$log" \
    && grep -Fxq "$prompt" "$log" \
    && grep -q 'model    : opus' <<<"$out"; then
   echo "ok: --model reaches the in-tmux launch and is reported"

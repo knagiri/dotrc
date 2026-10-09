@@ -161,8 +161,10 @@ window を開く attach / resume の経路では、`claude` をそのまま pane
 どれも exit 0 で終わり（外からの `claude stop`、UI で `/exit` してから agent view を `Esc` で
 抜ける、`C-z`）、失敗系だけが非 0 になるので、この 2 つを取り違えずに分けられる。
 
-- **正常終了（exit 0）**: 起動元 pane へ `switch-client` で戻り、pane が終了して window も閉じる。
-  その window しか持たない session も一緒に消えるが、client は既に起動元へ移っているので影響しない。
+- **正常終了（exit 0）**: その時点で window を表示している client だけを起動元 pane へ
+  `switch-client -c` で戻し、pane が終了して window も閉じる。別の場所を見ている client は動かさない
+  （外からの `claude stop` で終わったとき、別の pane で作業中のユーザーを引き戻さないため）。
+  その window しか持たない session も一緒に消えるが、表示していた client は既に起動元へ移っているので影響しない。
   残った window はユーザーが手で閉じることになるので、閉じるのが既定
 - **失敗（非 0）**: shell へ置き換えて pane を残し、エラーを読ませる。`tmux new-window` は中の
   コマンドの exit status を返さないので、window を閉じると失敗の理由ごと消える

@@ -12,10 +12,15 @@ import (
 // tmux reports pane ids ("%" plus an index).
 const originPane = "%3"
 
+// wantReturn3 is the clean-exit tail returning to originPane: only clients
+// whose current window is this one ("$TMUX_PANE"'s) are switched, each named
+// with -c, so tmux never picks a client on its own.
+const wantReturn3 = `; w=$(tmux display-message -p -t "$TMUX_PANE" "#{window_id}" 2>/dev/null) && tmux list-clients -F "#{client_name} #{window_id}" 2>/dev/null | while read -r c cw; do if [ "$cw" = "$w" ]; then tmux switch-client -c "$c" -t '%3' 2>/dev/null; fi; done`
+
 // wantCommand is what `claude attach abc` must reach tmux as: one shell command
 // that returns the client to the origin pane when the command exits cleanly, and
 // only on failure keeps the pane alive under a released window name.
-const wantCommand = `'claude' 'attach' 'abc'; rc=$?; if [ "$rc" -ne 0 ]; then tmux rename-window -t "$TMUX_PANE" 'claude-attach-abc~exited'; exec "${SHELL:-/bin/bash}"; fi; tmux switch-client -t '%3' 2>/dev/null`
+const wantCommand = `'claude' 'attach' 'abc'; rc=$?; if [ "$rc" -ne 0 ]; then tmux rename-window -t "$TMUX_PANE" 'claude-attach-abc~exited'; exec "${SHELL:-/bin/bash}"; fi` + wantReturn3
 
 // The argv builders are exercised instead of OpenSession itself so the contract
 // is checked without starting a real tmux server.
@@ -240,7 +245,7 @@ func TestWindowCommand(t *testing.T) {
 
 	t.Run("every element is quoted", func(t *testing.T) {
 		got := windowCommand("w", "%7", []string{"claude", "--resume", "a b'c"})
-		want := `'claude' '--resume' 'a b'\''c'; rc=$?; if [ "$rc" -ne 0 ]; then tmux rename-window -t "$TMUX_PANE" 'w~exited'; exec "${SHELL:-/bin/bash}"; fi; tmux switch-client -t '%7' 2>/dev/null`
+		want := `'claude' '--resume' 'a b'\''c'; rc=$?; if [ "$rc" -ne 0 ]; then tmux rename-window -t "$TMUX_PANE" 'w~exited'; exec "${SHELL:-/bin/bash}"; fi; w=$(tmux display-message -p -t "$TMUX_PANE" "#{window_id}" 2>/dev/null) && tmux list-clients -F "#{client_name} #{window_id}" 2>/dev/null | while read -r c cw; do if [ "$cw" = "$w" ]; then tmux switch-client -c "$c" -t '%7' 2>/dev/null; fi; done`
 		if len(got) != 1 || got[0] != want {
 			t.Errorf("windowCommand(...) = %v, want [%q]", got, want)
 		}
@@ -292,14 +297,14 @@ func TestWindowCommandBranchesOnExitStatus(t *testing.T) {
 		t.Errorf("command = %q, execs the fallback shell outside the failure branch; a clean exit would keep the window open", cmd)
 	}
 
-	// switch-client is the last thing in the string, and outside the branch: it
+	// The return clause is the last thing in the string, and outside the branch: it
 	// is only reached when the command exited 0, because the failure branch
 	// execs and never returns.
-	wantSwitch := `tmux switch-client -t ` + shellQuote(originPane) + ` 2>/dev/null`
-	if !strings.HasSuffix(cmd, wantSwitch) {
-		t.Errorf("command = %q, must end with %q so a clean exit returns the client to the origin pane", cmd, wantSwitch)
+	wantReturn := returnClause(originPane)
+	if !strings.HasSuffix(cmd, wantReturn) {
+		t.Errorf("command = %q, must end with %q so a clean exit returns the client to the origin pane", cmd, wantReturn)
 	}
-	if strings.Index(cmd, wantSwitch) < fiAt {
+	if strings.Index(cmd, wantReturn) < fiAt {
 		t.Errorf("command = %q, returns the client inside the failure branch, where the exec would have consumed the process first", cmd)
 	}
 }
