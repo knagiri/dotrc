@@ -735,13 +735,23 @@ fi
 # preferred over the classifier's (see the header).
 #
 # When launched from inside tmux, wrap the launch in `bash -c` so that when
-# claude exits we chain `switch-client -t <origin_pane>`, returning the attached
-# client to the exact pane we were called from (session-level auto-return only
-# lands on the origin session's active pane, not this one). The prompt and pane
-# id ride in as positional args ($1/$2) -- never folded into the command string
-# -- so quotes in the prompt can't break the chain. If nobody is attached, or
-# the origin pane is already gone, switch-client is a graceful no-op (2>/dev/null)
-# and the single-pane session just dies quietly when the inner bash exits.
+# claude exits, every client showing this session's window is switched back to
+# the exact pane we were called from (session-level auto-return only lands on
+# the origin session's active pane, not this one). Clients are named with -c:
+# a bare `switch-client -t` lets tmux pick one, and it falls back to the most
+# recently active client even when that client is in an unrelated session, so
+# a user working elsewhere when claude exits would be yanked back. The window is
+# looked up via -t "$TMUX_PANE" (a targetless display-message resolves to this
+# pane whatever the clients show) and compared with each client's #{window_id}
+# from list-clients (the window that client currently shows). claude-queue's
+# windowCommand (src/claude-queue/internal/multiplexer/tmux.go, returnClause)
+# carries the same clause; keep the two in step.
+#
+# The prompt and pane id ride in as positional args ($1/$2) -- never folded into
+# the command string -- so quotes in the prompt can't break the chain. If no
+# client shows the window, or the origin pane is already gone, nothing is
+# switched (2>/dev/null) and the single-pane session just dies quietly when the
+# inner bash exits.
 #
 # --model rides in as a positional arg too ($3, empty when unset) rather than
 # being interpolated into the command string, for the same quoting reason. An
@@ -749,7 +759,7 @@ fi
 # launch shape branches on it and omits the flag entirely when it is unset.
 if [ -n "${TMUX:-}" ]; then
   tmux new-session -d -s "$session" -c "$wt_path" \
-    "${launch_env[@]}" bash -c 'if [ -n "$3" ]; then claude --permission-mode acceptEdits --model "$3" "$1"; else claude --permission-mode acceptEdits "$1"; fi; tmux switch-client -t "$2" 2>/dev/null' \
+    "${launch_env[@]}" bash -c 'if [ -n "$3" ]; then claude --permission-mode acceptEdits --model "$3" "$1"; else claude --permission-mode acceptEdits "$1"; fi; w=$(tmux display-message -p -t "$TMUX_PANE" "#{window_id}" 2>/dev/null) && tmux list-clients -F "#{client_name} #{window_id}" 2>/dev/null | while read -r c cw; do if [ "$cw" = "$w" ]; then tmux switch-client -c "$c" -t "$2" 2>/dev/null; fi; done' \
     bash "$prompt" "$TMUX_PANE" "$model"
 elif [ -n "$model" ]; then
   tmux new-session -d -s "$session" -c "$wt_path" \

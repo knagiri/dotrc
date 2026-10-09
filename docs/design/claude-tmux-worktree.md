@@ -248,6 +248,13 @@ pane を残してエラーを読ませる。`bin/claude-worktree` の `--tmux` �
 あちらは exit status で分岐せず無条件に戻す（interactive claude の異常終了を読ませる必要が無く、
 起動元が pane なので `$TMUX_PANE` をそのまま渡せる）。
 
+どちらも戻すのは、終了時点でその window を表示している client だけである。`list-clients` で各
+client が表示中の window を引き、一致した client を `switch-client -c` で名指しして戻す。client を
+名指ししない `switch-client -t` だと tmux が最後にアクティブな client を選び、無関係な session で
+作業中の client まで引き戻す（実測: 誰も表示していない window から client が引き戻された）。
+委譲元が `claude-stop-bg` で委譲先を止めると、picker で開いた `claude attach` はユーザーの操作と
+無関係なタイミングで exit 0 するので、この形がそのまま踏まれる。
+
 戻り先の pane を取るのに、pane の記録に使っている既存の経路を流用せず別のものを立てた。picker は
 `display-popup -E` の中で走り、popup は pane ではないので `TMUX_PANE` を継承しない（実測: popup 内では
 空）ため、環境変数だけでは足りず multiplexer へ問い合わせる必要がある。一方 hook 側が要るのは
