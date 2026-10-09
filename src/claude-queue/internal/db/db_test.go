@@ -791,8 +791,14 @@ func TestToggleMark_LeavesStateAndOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRows: %v", err)
 	}
-	if _, err := ToggleMark(conn, "i"); err != nil {
+	on, err := ToggleMark(conn, "i")
+	if err != nil {
 		t.Fatalf("ToggleMark: %v", err)
+	}
+	// Guard against a no-op ToggleMark: the mark must actually be applied,
+	// otherwise the "unchanged" checks below prove nothing.
+	if !on {
+		t.Fatalf("ToggleMark(i) = false; want true")
 	}
 	after, err := ListRows(conn, ListOpts{})
 	if err != nil {
@@ -805,6 +811,9 @@ func TestToggleMark_LeavesStateAndOrder(t *testing.T) {
 		b, a := before[k], after[k]
 		if a.SessionID != b.SessionID || a.EffectiveState != b.EffectiveState || a.Priority != b.Priority {
 			t.Errorf("row %d changed: %+v -> %+v", k, b, a)
+		}
+		if want := a.SessionID == "i"; a.Marked != want {
+			t.Errorf("session %s Marked = %v; want %v", a.SessionID, a.Marked, want)
 		}
 	}
 }
