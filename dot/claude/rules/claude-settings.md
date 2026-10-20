@@ -100,6 +100,26 @@ rule は、tracked な置き場所へ昇格させる（複数 repo で使うな�
 
 由来: dotrc#59
 
+### skill の `allowed-tools` と `Skill(name)` allow
+
+`Skill(name)` を allow すると、その skill の frontmatter の `allowed-tools` が実行中の turn の
+間、無確認で有効になる。したがって `allowed-tools` には一般に裸の `Bash` / `Edit` を置かない。
+置くと skill の allow が「任意のコマンド・任意の編集を無確認で通す」grant に化け、しかも
+settings.json の差分には `Skill(name)` の 1 行しか現れないので、grant の広さがレビューで見えない。
+
+`allowed-tools` は pre-approve するだけで、tool を制限しない（公式 docs: "It does not restrict
+which tools are available: every tool remains callable, and your permission settings still
+govern tools that are not listed."、<https://code.claude.com/docs/en/skills>）。外しても skill が
+その tool を使えなくなるわけではなく、settings.json の allow による判定に戻るだけなので、迷ったら
+外す側に倒してよい。
+
+この 2 点（裸の `Bash` / `Edit` が無いこと、`dot/claude/skills/` の各 skill と `Skill(...)` allow
+の対応）は `test/skill-permissions.test.sh` が検査する。allow に載せない skill はテスト内の除外
+リストに理由付きで足す。裸の `Write` は意図的に検査しない。書き込み先が実行時に決まる
+`$CLAUDE_JOB_DIR` で、リテラルの `Edit(path)` に狭められないため（現状は `my-create-pr`）。
+
+由来: dotrc#175 / dotrc#176 / dotrc#177
+
 ### Hot-reload
 
 `.claude/settings.local.json` 等の編集は再起動なしに即時反映される（実測確認）。
