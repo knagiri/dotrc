@@ -12,10 +12,10 @@
 # The checks run against the real tree, then against fixtures generated here
 # that reproduce each failure, to show the checks actually discriminate. No
 # test framework; run with bash. SKILLS_DIR / SETTINGS_JSON override the real
-# tree for the real-tree checks only. The discrimination fixtures assume the
-# current tree's shape (they sed pr-review-automerge's allowed-tools line and
-# drop Skill(implement-and-review)), so pointing the override at a different
-# revision can produce FAILs there.
+# tree. Part of the discrimination fixtures is derived from the override targets
+# too, and assumes the current tree's shape (they sed pr-review-automerge's
+# allowed-tools line and drop Skill(implement-and-review)), so pointing the
+# override at a different revision can produce FAILs there.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
