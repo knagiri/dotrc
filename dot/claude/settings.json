@@ -100,7 +100,13 @@
       "WebFetch(domain:docs.aws.amazon.com)",
       "Skill(my-commit)",
       "Skill(my-create-pr)",
-      "Skill(second-opinion)"
+      "Skill(second-opinion)",
+      "Skill(delegate-to-worktree)",
+      "Skill(harness-from-feedback)",
+      "Skill(harness-from-retrospective)",
+      "Skill(implement-and-review)",
+      "Skill(pr-review-automerge)",
+      "Skill(proofread-doc)"
     ],
     "deny": [
       "Read(.env)",
