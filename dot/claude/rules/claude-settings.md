@@ -117,7 +117,7 @@ govern tools that are not listed."、<https://code.claude.com/docs/en/skills>）
 の対応）は `test/skill-permissions.test.sh` が検査する。allow に載せない skill はテスト内の除外
 リストに理由付きで足す。
 
-由来: dotrc#175 / dotrc#176
+由来: dotrc#175 / dotrc#176 / dotrc#177
 
 ### Hot-reload
 
