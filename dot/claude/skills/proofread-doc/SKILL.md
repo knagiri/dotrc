@@ -1,7 +1,7 @@
 ---
 name: proofread-doc
 description: 「この doc を校正して」「designdoc をレビューして」「書きすぎを直して」「文章を推敲して」「冗長なので削って」「この設計ドキュメントを読みやすくして」等、人が読む文書（designdoc / ADR / spec / README 等）の校正・推敲・レビューを依頼されたときに使う。AI に書かせた doc を人手で仕上げるとき、他人の doc PR をレビューするときも含む。
-allowed-tools: Bash, Read, Edit, Grep, Glob
+allowed-tools: Read, Grep, Glob
 ---
 
 # proofread-doc
