@@ -12,7 +12,10 @@
 # The checks run against the real tree, then against fixtures generated here
 # that reproduce each failure, to show the checks actually discriminate. No
 # test framework; run with bash. SKILLS_DIR / SETTINGS_JSON override the real
-# tree, e.g. to point the checks at an older revision.
+# tree for the real-tree checks only. The discrimination fixtures assume the
+# current tree's shape (they sed pr-review-automerge's allowed-tools line and
+# drop Skill(implement-and-review)), so pointing the override at a different
+# revision can produce FAILs there.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -25,7 +28,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 # Skills deliberately left out of the Skill(...) allowlist.
 # es-create-pr: its allowed-tools carry raw `gh pr edit` / `gh pr close`, so
-# each invocation keeps a human confirmation.
+# each invocation keeps a human confirmation. check_skill_allow also fails if an
+# excluded skill gains a Skill(...) allow, or if the name no longer exists.
 excluded_skills="es-create-pr"
 
 # Prints the allowed-tools entries of a SKILL.md frontmatter, one per line.
@@ -61,27 +65,36 @@ allowed_tools() {  # allowed_tools <SKILL.md>
 }
 
 # (a) Prints each SKILL.md whose allowed-tools contain a bare Bash or Edit.
-# Write is not checked: my-create-pr / es-create-pr write temp files under
-# $CLAUDE_JOB_DIR (outside cwd), and a path-scoped Write(path) rule is dead
-# (claude-settings.md), so there is no narrower form to require instead.
+# Bare Write is deliberately not checked: my-create-pr may write a temp file
+# under $CLAUDE_JOB_DIR (only as the fallback when textlint lacks --stdin). That
+# directory is decided at run time, so a literal Edit(<path>) cannot name it and
+# there is no narrower form to require instead.
+# Whole-tool forms count as bare: `Bash(*)` is documented as equivalent to
+# `Bash` (https://code.claude.com/docs/en/permissions); `Bash()`, `Bash(:*)`
+# and `Edit(*)` / `Edit(**)` are treated the same as conservative whole-tool
+# grants (not documented as equivalent for Edit, but as broad in effect).
 check_bare_tools() {  # check_bare_tools <skills dir>
-  local f
+  local f bare_re='(Bash|Edit)(\((\*|\*\*|:\*)?\))?'
   for f in "$1"/*/SKILL.md; do
     [ -f "$f" ] || continue
-    if allowed_tools "$f" | grep -qxE 'Bash|Edit'; then
-      echo "$f: allowed-tools has bare $(allowed_tools "$f" | grep -xE 'Bash|Edit' | paste -sd, -)"
+    if allowed_tools "$f" | grep -qxE "$bare_re"; then
+      echo "$f: allowed-tools has bare $(allowed_tools "$f" | grep -xE "$bare_re" | paste -sd, -)"
     fi
   done
 }
 
 # (b) Prints skills lacking a Skill(...) allow rule, and Skill(...) rules
 # naming no skill. Plugin skills (`plugin:skill`) live elsewhere and are
-# skipped. Directories without SKILL.md (synced/, .trash/) are not skills.
+# skipped. Directories without SKILL.md are not skills.
 check_skill_allow() {  # check_skill_allow <skills dir> <settings.json>
   local allowed d name
   allowed="$(jq -r '.permissions.allow[] | select(startswith("Skill(")) | ltrimstr("Skill(") | rtrimstr(")")' "$2")" || {
     echo "$2: cannot read .permissions.allow"; return
   }
+  for name in $excluded_skills; do
+    [ -f "$1/$name/SKILL.md" ] || echo "stale exclusion: $name has no $1/$name/SKILL.md"
+    printf '%s\n' "$allowed" | grep -qxF "$name" && echo "excluded but allowed: Skill($name)"
+  done
   for d in "$1"/*/; do
     [ -f "$d/SKILL.md" ] || continue
     name="$(basename "$d")"
@@ -121,7 +134,8 @@ out="$(check_bare_tools "$fx")"
 if [ -z "$out" ]; then echo "ok: parenthesised Bash/Edit, Write and no allowed-tools pass"
 else echo "FAIL: false positive: $out"; fail=1; fi
 
-for form in "allowed-tools: Bash, Read" "allowed-tools: Read Bash" "allowed-tools: [Read, \"Edit\"]"; do
+for form in "allowed-tools: Bash, Read" "allowed-tools: Read Bash" "allowed-tools: [Read, \"Edit\"]" \
+  "allowed-tools: Bash(*), Read" "allowed-tools: Read, Edit(**)" "allowed-tools: Read, Bash()"; do
   rm -rf "$fx"; mkskill "$fx" bad "name: bad" "$form"
   out="$(check_bare_tools "$fx")"
   case "$out" in *bad/SKILL.md*) echo "ok: catches '$form'" ;;
@@ -146,6 +160,11 @@ jq '.permissions.allow -= ["Skill(implement-and-review)"]' "$settings" >"$tmp/se
 out="$(check_skill_allow "$skills_dir" "$tmp/settings.json")"
 case "$out" in *"missing allow: Skill(implement-and-review)"*) echo "ok: catches a missing Skill(implement-and-review) allow" ;;
   *) echo "FAIL: missed a missing Skill(implement-and-review) allow"; fail=1 ;; esac
+
+jq '.permissions.allow += ["Skill(es-create-pr)"]' "$settings" >"$tmp/settings.json"
+out="$(check_skill_allow "$skills_dir" "$tmp/settings.json")"
+case "$out" in *"excluded but allowed: Skill(es-create-pr)"*) echo "ok: catches an excluded skill that gains a Skill(...) allow" ;;
+  *) echo "FAIL: missed an excluded skill that gains a Skill(...) allow"; fail=1 ;; esac
 
 jq '.permissions.allow += ["Skill(no-such-skill)", "Skill(some-plugin:skill)"]' "$settings" >"$tmp/settings.json"
 out="$(check_skill_allow "$skills_dir" "$tmp/settings.json")"

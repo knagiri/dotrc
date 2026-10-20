@@ -115,7 +115,8 @@ govern tools that are not listed."、<https://code.claude.com/docs/en/skills>）
 
 この 2 点（裸の `Bash` / `Edit` が無いこと、`dot/claude/skills/` の各 skill と `Skill(...)` allow
 の対応）は `test/skill-permissions.test.sh` が検査する。allow に載せない skill はテスト内の除外
-リストに理由付きで足す。
+リストに理由付きで足す。裸の `Write` は意図的に検査しない。書き込み先が実行時に決まる
+`$CLAUDE_JOB_DIR` で、リテラルの `Edit(path)` に狭められないため（現状は `my-create-pr`）。
 
 由来: dotrc#175 / dotrc#176 / dotrc#177
 
