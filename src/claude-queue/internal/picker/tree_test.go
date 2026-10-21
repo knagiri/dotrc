@@ -311,3 +311,47 @@ func TestParseSelection_PrefixedTitle(t *testing.T) {
 		}
 	}
 }
+
+func TestIsCurrentRow(t *testing.T) {
+	pane := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
+	for _, tc := range []struct {
+		name string
+		row  sql.NullString
+		pane string
+		want bool
+	}{
+		{"no current pane", pane(""), "", false},
+		{"row has no pane", sql.NullString{}, "%7", false},
+		{"other pane", pane("%8"), "%7", false},
+		{"same pane", pane("%7"), "%7", true},
+	} {
+		if got := isCurrentRow(db.Row{TmuxPane: tc.row}, tc.pane); got != tc.want {
+			t.Errorf("%s: isCurrentRow = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The mark shares the title column with the tree prefix, so a marked row's
+// worktree column still starts where every other row's does.
+func TestCurrentMarkKeepsTitleWidth(t *testing.T) {
+	title := func(cols int) string { return runewidth.Truncate(strings.Repeat("長", 40), cols, "") }
+	for _, ascii := range []bool{false, true} {
+		plain := prefixedTitle("└─ ", title)
+		marked := prefixedTitle(currentMark(ascii)+"└─ ", title)
+		if !strings.HasPrefix(marked, currentMark(ascii)+"└─ ") {
+			t.Errorf("ascii=%v: mark not ahead of the tree prefix in %q", ascii, marked)
+		}
+		if w := runewidth.StringWidth(marked); w > titleWidth {
+			t.Errorf("ascii=%v: marked title is %d columns, past titleWidth=%d", ascii, w, titleWidth)
+		}
+		row := db.Row{SessionID: "s", EffectiveState: "idle_done", CreatedAt: nowMinus(60)}
+		a := strings.Split(FormatLine(row, plain, "w", nowUnix(), ascii), "\t")
+		b := strings.Split(FormatLine(row, marked, "w", nowUnix(), ascii), "\t")
+		if runewidth.StringWidth(a[colTitle]) != runewidth.StringWidth(b[colTitle]) {
+			t.Errorf("ascii=%v: title column width %d vs %d", ascii, runewidth.StringWidth(a[colTitle]), runewidth.StringWidth(b[colTitle]))
+		}
+	}
+	if asciiCurrent == unicodeCurrent {
+		t.Errorf("ascii and unicode current marks are the same")
+	}
+}

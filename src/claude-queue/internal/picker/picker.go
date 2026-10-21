@@ -621,6 +621,11 @@ type pickerFlags struct {
 	ShowStale     bool
 	ShowResumable bool
 	RepoScope     bool
+	// CurrentPane is the pane the popup was opened over, whose row gets the
+	// current-session mark. The interactive picker reads it once and hands it
+	// to the reload, so the first listing and every Tab redraw mark the same
+	// row from the same reading.
+	CurrentPane string
 }
 
 // listArgs is the argv after the binary that makes `picker --list` print the
@@ -640,6 +645,9 @@ func (f pickerFlags) listArgs() []string {
 		if fl.on {
 			args = append(args, fl.name)
 		}
+	}
+	if f.CurrentPane != "" {
+		args = append(args, "--current-pane", f.CurrentPane)
 	}
 	return args
 }
@@ -675,6 +683,7 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 	fs.BoolVar(&f.ShowStale, "show-stale", false, "include stale sessions")
 	fs.BoolVar(&f.ShowResumable, "show-resumable", false, "include ended sessions a resume could reopen")
 	fs.BoolVar(&f.RepoScope, "repo-scope", false, "only sessions whose cwd is in the same git repo as the picker's cwd")
+	fs.StringVar(&f.CurrentPane, "current-pane", "", "internal: the pane whose row is marked current, passed to the Tab bind's reload")
 	listOnly := fs.Bool("list", false, "print the rows fzf would be given and exit (the Tab bind's reload)")
 	_ = fs.Parse(args)
 
@@ -697,6 +706,22 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		sweep(conn)
 	}
 
+	mux := multiplexer.Detect()
+
+	// Read the origin pane before anything below can move the client: the
+	// window openers below end with a switch-client of their own, and a pane
+	// read after that would name the window we just opened instead of the pane
+	// the user came from. Reading it here also keeps it out of the popup's own
+	// lifetime question -- the value is captured while the popup is still up,
+	// and only spliced into a command that runs after it is gone.
+	//
+	// The same value marks the current row. --list does not ask: it runs
+	// inside fzf and is handed the pane by the bind instead (see listArgs).
+	if !*listOnly && f.CurrentPane == "" {
+		f.CurrentPane = mux.CurrentPane()
+	}
+	originPane := f.CurrentPane
+
 	asciiMode := os.Getenv("CLAUDE_QUEUE_ASCII") == "1"
 	input, names, ok := listing(conn, f, asciiMode)
 	if !ok {
@@ -717,16 +742,6 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		return
 	}
 	sessionID, transcript := sel.SessionID, sel.Transcript
-
-	mux := multiplexer.Detect()
-
-	// Read the origin pane before anything below can move the client: the
-	// window openers below end with a switch-client of their own, and a pane
-	// read after that would name the window we just opened instead of the pane
-	// the user came from. Reading it here also keeps it out of the popup's own
-	// lifetime question -- the value is captured while the popup is still up,
-	// and only spliced into a command that runs after it is gone.
-	originPane := mux.CurrentPane()
 
 	switch act := DecideAction(describeTarget(mux, sel, roster.ListIn)); act.Kind {
 	case "switch":
@@ -858,7 +873,11 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool) (string, worktreeCache
 		// reason the worktree name is -- it needs the filesystem. It costs one
 		// bounded tail read per row (see label's tailScanBytes), which the
 		// picker can afford: it is user-driven and lists a handful of rows.
-		title := prefixedTitle(l.Prefix, func(cols int) string {
+		prefix := l.Prefix
+		if isCurrentRow(l.Row, f.CurrentPane) {
+			prefix = currentMark(asciiMode) + prefix
+		}
+		title := prefixedTitle(prefix, func(cols int) string {
 			return label.DisplayTitle(rowTranscript(l.Row), cols)
 		})
 		buf.WriteString(FormatLine(l.Row, title, names.name(rowCwd(l.Row)), now, asciiMode))
