@@ -96,6 +96,22 @@ func TestListArgs(t *testing.T) {
 	}
 }
 
+// The Tab reload runs inside fzf and does not ask tmux for the pane, so the
+// current-session mark survives Tab only if the pane rides along in its argv.
+func TestListArgs_CurrentPane(t *testing.T) {
+	got := pickerFlags{ShowStale: true, CurrentPane: "%7"}.listArgs()
+	want := []string{"picker", "--list", "--show-stale", "--current-pane", "%7"}
+	if !slices.Equal(got, want) {
+		t.Errorf("listArgs = %v, want %v", got, want)
+	}
+	if slices.Contains((pickerFlags{}).listArgs(), "--current-pane") {
+		t.Errorf("listArgs passed --current-pane with no pane")
+	}
+	if bind := tabBind("/x/claude-queue", pickerFlags{CurrentPane: "%7"}); !strings.Contains(bind, "'--current-pane' '%7' 2>/dev/null") {
+		t.Errorf("tab bind %q does not reload with the current pane", bind)
+	}
+}
+
 // --list is what Tab reloads the popup with, so it must print exactly what the
 // interactive picker handed fzf for the same flags -- and the interactive
 // picker's bind must ask --list for those same flags.
@@ -103,12 +119,15 @@ func TestListModeMatchesInteractiveInput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "q.db")
 	t.Setenv("CLAUDE_QUEUE_DB", path)
 	t.Setenv("CLAUDE_QUEUE_ASCII", "")
+	// Outside tmux, so the interactive path cannot pick up the pane this test
+	// happens to run in; the current pane comes only from the flag cases below.
+	t.Setenv("TMUX", "")
 	conn, err := db.Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	for _, q := range []string{
-		"INSERT INTO sessions(session_id) VALUES ('a'), ('b'), ('c')",
+		"INSERT INTO sessions(session_id, tmux_pane) VALUES ('a', '%7'), ('b', NULL), ('c', NULL)",
 		"INSERT INTO events(session_id, event_type, state, created_at) VALUES ('a', 'Stop', 'idle_done', unixepoch() - 3700)",
 		"INSERT INTO events(session_id, event_type, state, created_at) VALUES ('b', 'UserPromptSubmit', 'working', unixepoch() - 3700)",
 		"INSERT INTO events(session_id, event_type, state, created_at) VALUES ('c', 'Stop', 'idle_done', unixepoch() - 20000)",
@@ -122,7 +141,7 @@ func TestListModeMatchesInteractiveInput(t *testing.T) {
 	}
 	conn.Close()
 
-	for _, flags := range [][]string{nil, {"--show-working"}, {"--show-working", "--show-stale"}} {
+	for _, flags := range [][]string{nil, {"--show-working"}, {"--show-working", "--show-stale"}, {"--show-working", "--current-pane", "%7"}} {
 		var fzfInput string
 		var fzfArgv []string
 		run(flags, &bytes.Buffer{}, func(c *sql.DB) {}, func(in string, args []string) (string, error) {
@@ -139,6 +158,9 @@ func TestListModeMatchesInteractiveInput(t *testing.T) {
 		}
 		if !strings.Contains(fzfInput, "📌") {
 			t.Errorf("flags %v: marked session not shown marked in %q", flags, fzfInput)
+		}
+		if wantCurrent := slices.Contains(flags, "%7"); strings.Contains(fzfInput, unicodeCurrent) != wantCurrent {
+			t.Errorf("flags %v: current mark shown = %v, want %v in %q", flags, !wantCurrent, wantCurrent, fzfInput)
 		}
 		if out.String() != fzfInput {
 			t.Errorf("flags %v: --list printed\n%q\nwant the interactive input\n%q", flags, out.String(), fzfInput)

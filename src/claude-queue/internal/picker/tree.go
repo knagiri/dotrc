@@ -25,6 +25,29 @@ var (
 	asciiTree   = treeGlyphs{branch: "|- ", last: "`- ", pipe: "|  ", blank: "   ", detached: "^ ", orphan: "x "}
 )
 
+// The current-session mark goes ahead of the tree prefix, so it shares the
+// title column's budget with it. A row that is not current gets nothing, the
+// same as a root with no tree prefix.
+const (
+	unicodeCurrent = "▶ "
+	asciiCurrent   = "> "
+)
+
+func currentMark(ascii bool) string {
+	if ascii {
+		return asciiCurrent
+	}
+	return unicodeCurrent
+}
+
+// isCurrentRow reports whether row is the session in the pane the popup was
+// opened over. Only the ledger's pane is compared: a background session or one
+// reached through `claude attach` has no pane of its own there, and is not
+// looked up any other way.
+func isCurrentRow(row db.Row, pane string) bool {
+	return pane != "" && row.TmuxPane.Valid && row.TmuxPane.String == pane
+}
+
 // forestOpts carries the decisions buildForest needs from outside: the state
 // and repo filters, and whether a session is alive. They are functions so the
 // ledger, git and the filesystem stay in Run.

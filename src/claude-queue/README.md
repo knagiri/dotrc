@@ -61,7 +61,7 @@ make install
 | 列 | 中身 | 幅 |
 |---|---|---|
 | 1 | state アイコン（待ちマーク中は 📌） | 可変（1〜2 桁） |
-| 2 | 委譲の木の罫線・孤児の印 + ai-title（transcript 由来） | 40 桁 padding + truncate（罫線込み） |
+| 2 | 現在 session の印・委譲の木の罫線・孤児の印 + ai-title（transcript 由来） | 40 桁 padding + truncate（印・罫線込み） |
 | 3 | worktree 名（`<main-repo-basename>_<name>`。メイン checkout は `<repo>` のみ） | 56 桁 padding + truncate |
 | 4 | age | 可変（短い） |
 | 5 | summary（何で止まっているか） | padding なし。payload 由来は 150 桁で truncate |
@@ -91,6 +91,12 @@ FORMATS 展開のための処理で、読むだけの行には要らない。た
 summary 側でも必ず潰す — 混ざると 6〜9 列目がずれ、picker が別 session の id / pane / cwd /
 transcript を掴む。tab を含む Bash コマンド（`awk -F'<tab>'`）は承認待ちで普通に出るので、
 これは机上の話ではない。
+
+popup を開いた pane で動いている session の row には、2 列目の先頭（罫線より前）に `▶ `
+（`CLAUDE_QUEUE_ASCII=1` では `> `）が付く。判定は ledger の `tmux_pane` が popup を開いた時点の
+pane と一致するかだけで、background session や `claude attach` で入った pane には付かない。
+state アイコンは置き換えないので、現在の session の state も 1 列目で読める。pane は
+interactive 起動時に 1 度だけ取り、Tab の再描画（`--list`）へは `--current-pane` で渡す。
 
 ### 手動の待ちマーク
 
