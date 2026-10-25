@@ -41,7 +41,7 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
    - artifact 種別: rule / CLAUDE.md 追記 / lint / test / hook / allowlist
    - 配置パスと対象 repo（現 repo or dotrc）
    - 内容の骨子（理由付きソフト指針の本文。由来は番号で示さず、一般化して本文へ書く。経緯は
-     incident doc として同じ PR で入れる。置き場所・書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）
+     incident doc に置く。範囲・対象 repo が dotrc 以外のときの扱い・置き場所・書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）
    - 受け入れ確認（どの状況でロードされ何を防ぐか 等）
 
 3. **方針を提示して終了**: 上記を構造化した**最終メッセージ**として出力する（新規ファイルは

@@ -66,8 +66,9 @@ skill / agent 定義に置いてよいのは、その skill 固有の手順・�
 
 - **一般化を省く手段になる。** 本文に書くべき「何がどう黙って壊れたか」を番号の先へ追いやれて
   しまい、常時ロードされる本文の側で適用時の判断材料が欠ける
-- **番号は repo に従属する。** repo を作り直せば PR は旧 repo に残り、issue は transfer で番号が
-  変わる。どちらもエラーにならず、ポインタが指す先を黙って失う
+- **番号は repo に従属する。** 同名で repo を作り直すと、`dotrc#N` が新しい repo の別の N を
+  指しうる（推論であり再現はしていない）。エラーにならないので、誤った先を指していることに
+  気づけない
 
 一方で、規約を改訂する人や「この型が当てはまるか」迷った agent には、具体的な経緯（何を実行し
 何を観測したか）が要る。そこで常時ロードされる側と、必要なときに読みに行く側を分ける。
@@ -109,9 +110,14 @@ skill / agent 定義に置いてよいのは、その skill 固有の手順・�
   再現して確かめる。前提を実測したことで帰結まで裏が取れた気になりやすく、類推で書いた帰結は
   レビューで初めて誤りと分かる。再現できなかった帰結は、再現していない旨を明記する
 
-harness（rule / skill / agent 定義 / lint / test / hook）を足す PR では、題材になった経緯を
-incident doc として同じ PR で入れる。merge 後に書こうとすると、経緯を知る session が先に
-閉じて書かれないまま残る。
+この節で harness と呼ぶのは、dotrc が管理する rule / skill / agent 定義 / CLAUDE.md 追記 / lint /
+test / hook / allowlist である。harness を足す PR では、題材になった経緯を incident doc として
+同じ PR で入れる。merge 後に書こうとすると、経緯を知る session が先に閉じて書かれないまま残る。
+
+**対象 repo が dotrc 以外のときは、その repo に incident doc を作らない。** 業務 repo に
+`docs/incidents/` を作ると業務情報の置き場が増え、dotrc に置くべき doc を業務 repo の PR に
+入れることもできない。非 dotrc の harness PR では一般化を本文に書くところまでとし、経緯の
+記録が要るなら、匿名化したうえで dotrc 側に別 PR で入れる。
 
 実例: dotrc/docs/incidents/provenance-number-pointer.md
 

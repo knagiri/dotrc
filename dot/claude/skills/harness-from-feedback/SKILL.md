@@ -65,7 +65,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - allowlist（grant）を含む場合は、**`pr-review-automerge` を起動せず PR 作成で停止する**旨を
      明記する（不変条件のとおり。人間の approve を待つ）
    - 内容の骨子（理由ベースのソフト指針の本文。由来は番号で示さず、一般化して本文へ書く）
-   - 題材になった経緯を incident doc として同じ PR で入れる旨（置き場所・書き方は
+   - incident doc の扱い（対象 repo が dotrc 以外なら作らない等。置き場所・書き方は
      `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）
    - rule を書く場合は「**既存のルールファイル（リポジトリの `.claude/rules/*.md`、dotrc なら `dot/claude/rules/*.md`）を1つ Read して形式を踏襲せよ**」と指示する（Read 経由で `rule-authoring` メタルールを確実にトリガーさせるため）
    - `paths` グロブ（領域限定なら）
@@ -86,7 +86,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    ## 設計（HOW）
    - 配置: <パス>（対象 repo: <現 repo or dotrc>）
    - 内容の骨子: <理由付きソフト指針の本文（由来は一般化して本文へ。番号ポインタは書かない）>
-   - incident doc: 経緯を docs/incidents/<slug>.md として同じ PR で入れる（書き方は dot/claude/rules/rule-authoring.md「由来は一般化して本文に書き、経緯は incident doc に置く」節）
+   - incident doc: <作る/作らないは対象 repo で決まる。範囲・置き場所・書き方は dot/claude/rules/rule-authoring.md「由来は一般化して本文に書き、経緯は incident doc に置く」節に従う>
    - rule の場合: 既存のルールファイル（.claude/rules/*.md、dotrc なら dot/claude/rules/*.md）を1つ Read して形式（paths/理由併記/ソフト指針）を踏襲すること。既存の `由来: dotrc#N` 行は真似しない
    - commit: 指摘を参照したメッセージで
 

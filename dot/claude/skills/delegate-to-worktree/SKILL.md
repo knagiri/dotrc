@@ -89,9 +89,8 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    - `<name>` と `-b <branch>` は `issue-<N>-<slug>`。
    - 委譲プロンプトに「PR 本文へ `Closes #<N>` を入れること」を明記する。merge で issue が
      自動 close される。
-   - harness（rule / skill / agent 定義 / lint / test / hook）を足す issue なら、題材の経緯を
-     incident doc として同じ PR で入れる旨も明記する（issue 本文の `## 由来` を写す。置き場所・
-     書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）。
+   - harness を足す issue なら、incident doc の扱いも明記する（issue 本文の `## 由来` を写す。
+     harness の範囲・置き場所・対象 repo が dotrc 以外のときの扱い・書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）。
    - 起動後、issue の label を `status/ready` → `status/delegated` へ替える
      （`gh issue edit` は allowlist に無いので承認プロンプトを踏む。委譲を起こすのは人間が
      同席する session なので摩擦は小さい）。

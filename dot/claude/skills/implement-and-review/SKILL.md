@@ -86,9 +86,8 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 
    `superpowers:test-driven-development` 等、repo の規約に従う。コミットは論理単位で小さく。
 
-   **harness を足すタスクなら incident doc も同じ PR で入れる**: rule / skill / agent 定義 /
-   lint / test / hook を足すときは、題材になった経緯を incident doc として同じ PR に含める。
-   規約本文には由来を番号で書かない。置き場所・書き方は `dot/claude/rules/rule-authoring.md`
+   **harness を足すタスクなら incident doc の扱いに従う**: 規約本文には由来を番号で書かない。
+   harness の範囲・置き場所・対象 repo が dotrc 以外のときの扱い・書き方は `dot/claude/rules/rule-authoring.md`
    「由来は一般化して本文に書き、経緯は incident doc に置く」節。
 
    **plan 内の事実主張は書き写す前に裏を取る**: どの artifact を選ぶか・どこに置くか等の
