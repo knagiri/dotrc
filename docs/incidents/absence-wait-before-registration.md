@@ -22,7 +22,7 @@ until ! claude agents --json | jq -e '<session が居る>'; do sleep 2; done
 ```
 
 起動直後の roster にはまだ当該 session が無く、ループは 1 回目で抜けた。存在を確かめてから
-待つ形にすると、完遂後も `status: idle` のまま roster に残り続けることが観測された。
+待つ形にすると（このときのコマンド出力は残っていない）、完遂後も `status: idle` のまま roster に残り続けることが観測された。
 
 ## 直し方
 

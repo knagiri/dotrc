@@ -69,10 +69,10 @@ model: opus
    `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。
 
 <!-- なぜ: 手順 5 の coverage-first（まず全件バケットに載せる）と `severity` / `confidence` は、
-     Claude Opus 5 が「保守的に報告せよ」「重大なものだけ報告せよ」といった severity フィルタ指示を
-     前世代より literal に守り、バグ発見能力は向上しているのに報告件数が減って recall が落ちたように
-     見える、という Anthropic 公式の Opus 5 移行ガイドの指摘に合わせたもの。公式の推奨パターンは
-     「見つけたものは確信度・重大度を添えて全部挙げさせ、フィルタは別工程でやる」。この repo では
+     「保守的に報告せよ」「重大なものだけ報告せよ」といった severity フィルタ指示をモデルが
+     literal に守ると、見つけていても報告件数が減って recall が落ちるため。そこで判定役は
+     見つけたものを確信度・重大度を添えて全部挙げ、フィルタは別工程に任せる。
+     出典: Anthropic 公式の移行ガイド（severity フィルタ指示と recall の指摘）。この repo では
      orchestrator（`pr-review-automerge`）と人間が別工程として既に存在するので、判定役側は
      coverage-first に寄せ、取捨選択を下流へ渡す。
      同じ手順が `pr-review-automerge` skill の「判定 subagent prompt」にもあるので、片方だけ

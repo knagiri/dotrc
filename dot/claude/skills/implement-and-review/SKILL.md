@@ -155,7 +155,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    しない）・diff の基準（ローカル追跡ブランチでなく remote ref を 3 点表記で使う）・
    `--base` の常時明示といった非自明な作法が `my-create-pr` 側に集約されており、生の
    `gh pr create` はそれを丸ごと迂回するため。skill が allow 済みでも、手元で撃てる生の
-   コマンドのほうへ手が伸びやすい。
+   コマンドのほうへ手が伸びやすい。実例: `dotrc/docs/incidents/raw-gh-pr-create-bypassed-skill.md`
 
    **ただし実行先 repo が PR 作成のレーンを定めているなら、そちらが優先される。** repo の
    doc や CLAUDE.md がブランチ名で PR 作成の経路を分けていれば、その規約に従う。レーンを
