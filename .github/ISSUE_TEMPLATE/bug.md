@@ -25,3 +25,4 @@ assignees: ''
 ## 由来
 
 <!-- どの session / PR / 実行から出たか -->
+<!-- この節は起票から merge までの一時的な記録。harness を足す PR では、merge までに経緯を docs/incidents/<slug>.md へ写す（書き方は dot/claude/rules/rule-authoring.md） -->
