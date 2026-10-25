@@ -32,7 +32,8 @@ repo 作り直しで PR が旧 repo に残る・issue の transfer で番号が�
 - 具体的な経緯は `docs/incidents/<slug>.md` に 1 件 1 ファイルで置き、節の末尾から
   `実例: dotrc/docs/incidents/<slug>.md` で参照する
 
-既存の `由来: dotrc#N` 行の移し替えは別作業として後続で行う。
+既存の `由来: dotrc#N` 行は後続の作業で移し替えた（一般化して本文へ残すか、incident doc へ移すか、
+記録として落とすかを箇所ごとに振り分けた）。
 
 ## 反映先
 
