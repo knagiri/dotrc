@@ -12,10 +12,10 @@
 当時の症状は 2 つあった。素の `git push` が "The upstream branch of your current branch does
 not match the name of your current branch" で fatal になったこと、そして `@{upstream}` の成否で
 「未 push か」を判定する箇所が、upstream が `origin/main` に付いているせいで未 push を push 済みと
-誤判定しうること。下の観測は後日の使い捨て repo での再現で、当時の症状とは別物である。再現では
-push 前は `origin/main` 基準で見えるので push 済みに見え、`git push origin <branch>` 後は
-`origin/main` との差分が残って未 push に見える。どちらの向きでも判定が狂うが、当時 push 済みと
-誤判定した実際の挙動は再現で確かめていない。
+誤判定しうること。push 済みの誤判定は `@{upstream}` の存在（解決の成否）で判定する箇所で起きる。
+upstream が付いているだけで解決に成功するためで、この向きは再現していない。下の観測は後日の
+使い捨て repo での再現で、当時の症状とは別物である。再現で確かめたのは push 後の向き
+（push 済みなのに未 push に見える）だけである。
 
 ## 観測
 
