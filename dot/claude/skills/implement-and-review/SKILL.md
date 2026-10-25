@@ -86,6 +86,11 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 
    `superpowers:test-driven-development` 等、repo の規約に従う。コミットは論理単位で小さく。
 
+   **harness を足すタスクなら incident doc も同じ PR で入れる**: rule / skill / agent 定義 /
+   lint / test / hook を足すときは、題材になった経緯を incident doc として同じ PR に含める。
+   規約本文には由来を番号で書かない。置き場所・書き方は `dot/claude/rules/rule-authoring.md`
+   「由来は一般化して本文に書き、経緯は incident doc に置く」節。
+
    **plan 内の事実主張は書き写す前に裏を取る**: どの artifact を選ぶか・どこに置くか等の
    設計判断には従う。一方 plan 本文が repo 内の実装・ツール挙動に言及していたら（「`bin/X`
    はこう動く」「既存 skill Y はこう書いてある」等）、書き写す前に該当ファイルを Read して
@@ -148,8 +153,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    **報告する実測値は報告時点の HEAD で測り直す**: PR 本文へ数値として載せるもの（削減した
    文字数、ベンチ結果、カバレッジ等）が対象。整形・lint 修正・レビュー修正はいずれも測定の
    後に入るので、測定と報告の間に commit が挟まるのは例外ではなく既定である。ずれた値は
-   テストと違って CI も判定役も検算しないため、誰も気づかないまま PR 本文に正典として残る
-   （rules の由来ポインタが PR 本文を指す運用ではなおさら）。由来: dotrc#106 / dotrc#108
+   テストと違って CI も判定役も検算しないため、誰も気づかないまま PR 本文に正典として残る。由来: dotrc#106 / dotrc#108
 4. **review→merge**: PR は既定では `my-create-pr` skill で作り、生の `gh pr create` は直接
    叩かない。base の決定（`gh repo view` で既定ブランチを取得し、ブランチ名を決め打ちに
    しない）・diff の基準（ローカル追跡ブランチでなく remote ref を 3 点表記で使う）・
