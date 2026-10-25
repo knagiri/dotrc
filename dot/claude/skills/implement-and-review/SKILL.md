@@ -97,10 +97,9 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    設計をやり直すのとは別物なので、不変条件「HOW を勝手に作り直さない」と矛盾しない。
    常時ロードの `dot/claude/rules/evidence-over-guesswork.md` §1（一次情報を確認しきる前に
    着手しない）と同根で、plan 経由でそれが迂回されるのを塞ぐ位置づけ。
-   由来: plan に埋め込まれた SKILL.md 全文の「headless 起動では claude-review が出力を
-   ログ化する」を無検証で書き写し、レビューで差し戻された実例（実際の `bin/claude-review` は
-   自身が起こす headless pane の stdout を tee するだけで、委譲先の interactive セッションから
-   呼ばれた skill の出力は載らない）。
+   plan に埋め込まれた SKILL.md 全文のように、設計判断と事実主張が同じ文面に混ざっていると
+   後者まで設計判断として書き写しやすい。
+   実例: dotrc/docs/incidents/plan-fact-copied-unverified.md
 
    **外部ツールへ渡す文字列・オプションも同じ扱いにする**: plan が外部ツールへ渡す文字列・
    オプションの仕様に踏み込んでいたら（「この文字を置換すればよい」「この `-o` を足せば塞がる」
@@ -145,21 +144,18 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    レビュー段で判定役が発見 → 修正役が直す、で 1 イテレーションをまるごと消費する。
    さらに修正役は他人の変更を conflict 解決越しに扱うことになり、内容欠落のリスクが乗る。
    自分の文脈が生きているここで取り込むほうが安く確実。
-   由来: knagiri/dotrc#26（Opus 5 の委譲上限を追記した PR）で、実装中に base が 40 コミット
-   以上進み、そのうち 1 つが自分と同一ファイルの同一段落を変更していたのに気づかず conflict
-   したまま PR を出し、レビュー段の判定役が発見して 1 イテレーションを消費した実例。
+   実例: dotrc/docs/incidents/base-advanced-during-delegation.md
 
    **報告する実測値は報告時点の HEAD で測り直す**: PR 本文へ数値として載せるもの（削減した
    文字数、ベンチ結果、カバレッジ等）が対象。整形・lint 修正・レビュー修正はいずれも測定の
    後に入るので、測定と報告の間に commit が挟まるのは例外ではなく既定である。ずれた値は
-   テストと違って CI も判定役も検算しないため、誰も気づかないまま PR 本文に正典として残る。由来: dotrc#106 / dotrc#108
+   テストと違って CI も判定役も検算しないため、誰も気づかないまま PR 本文に正典として残る。
 4. **review→merge**: PR は既定では `my-create-pr` skill で作り、生の `gh pr create` は直接
    叩かない。base の決定（`gh repo view` で既定ブランチを取得し、ブランチ名を決め打ちに
    しない）・diff の基準（ローカル追跡ブランチでなく remote ref を 3 点表記で使う）・
    `--base` の常時明示といった非自明な作法が `my-create-pr` 側に集約されており、生の
-   `gh pr create` はそれを丸ごと迂回するため。由来: 上と同じ委譲ランで、repo に
-   `my-create-pr` があり settings.json で allow までされているのに素通りし、生の
-   `gh pr create` を使っていた。
+   `gh pr create` はそれを丸ごと迂回するため。skill が allow 済みでも、手元で撃てる生の
+   コマンドのほうへ手が伸びやすい。
 
    **ただし実行先 repo が PR 作成のレーンを定めているなら、そちらが優先される。** repo の
    doc や CLAUDE.md がブランチ名で PR 作成の経路を分けていれば、その規約に従う。レーンを

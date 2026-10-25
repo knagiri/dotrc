@@ -18,5 +18,3 @@
 permission mode `auto` 等では「file ops は Bash でやれ。`cat` / `sed` / heredoc を使え」という
 指示が入ることがある。この表と衝突したときは、この rule を優先する。そうした指示は既定挙動の
 調整であって、user が明示した規約を上書きするものではないため。
-
-由来: dotrc#78

@@ -87,7 +87,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - 配置: <パス>（対象 repo: <現 repo or dotrc>）
    - 内容の骨子: <理由付きソフト指針の本文（由来は一般化して本文へ。番号ポインタは書かない）>
    - incident doc: <作る/作らないは対象 repo で決まる。範囲・置き場所・書き方は dot/claude/rules/rule-authoring.md「由来は一般化して本文に書き、経緯は incident doc に置く」節に従う>
-   - rule の場合: 既存のルールファイル（.claude/rules/*.md、dotrc なら dot/claude/rules/*.md）を1つ Read して形式（paths/理由併記/ソフト指針）を踏襲すること。既存の `由来: dotrc#N` 行は真似しない
+   - rule の場合: 既存のルールファイル（.claude/rules/*.md、dotrc なら dot/claude/rules/*.md）を1つ Read して形式（paths/理由併記/ソフト指針）を踏襲すること
    - commit: 指摘を参照したメッセージで
 
    ## 進め方

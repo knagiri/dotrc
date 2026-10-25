@@ -49,10 +49,6 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
     留める（規約の出所を 1 つに保ち、片方だけ更新されて食い違うのを避けるため）。
   - **担当外の気づきは直さず完了報告に列挙させる。** 他の委譲が並行していると分かって
     いれば、委譲先は自分で直さず報告へ回せる。委譲元が拾って然るべき担当へ渡す。
-  由来: picker の修正を担当した委譲先が design doc の stale な記述を見つけたが、スコープ外
-  として報告に留め、doc 担当の委譲先が拾った。この実例が実証したのは「報告へ回す」側であって、
-  触ってよいファイルの排他宣言ではない。旧版はその排他宣言を求めていたが、予測に依存する
-  制約は実装中の追加修正で破れるという指摘を受け、伝える内容を担当領域の共有へ寄せた。
 - **add-only 例外**: 「worktree だけ作って」など、明示的に初期タスクを伴わない要求の
   ときに限り `--` 無しで呼ぶ。判断に迷ったら session 起動を選ぶ。
 - 起動後は fire-and-forget。起動成否の二重検証はしない（重複 session・dir 既存・name 検証は
@@ -74,10 +70,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    実測記述（「〜を確認した」「〜は起きない」）は委譲先が検証できないので、誤っていても
    前提として使われ、増幅されるだけになる。並列委譲では同じ誤りが同時に複数 worktree へ流れ、
    撤回コストが本数に比例する。
-   由来: `claude --bg` の自動終了を `until ! <session が居る>` ループで確認したが、`--bg` は
-   session が roster に載る前に return するため初回チェックで空振りし、「終了した」と誤判定
-   した。その結論だけを spec に書いたため誰も再現できず、5 本の並列委譲を経て 8 箇所の doc へ
-   伝播し、撤回に PR 2 本を要した。
+   実例: dotrc/docs/incidents/absence-wait-before-registration.md
 
    **issue 起点で委譲する場合**、着手条件は `status/ready` label が付いていることだけである。
    `status/triage` の issue は HOW が未確定でありうるので委譲しない（上の「WHAT と HOW が固まって

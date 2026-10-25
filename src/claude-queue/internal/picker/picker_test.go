@@ -396,8 +396,8 @@ func TestNoRowsMessage(t *testing.T) {
 	}
 }
 
-// Selecting a resumable row must reach the resume path PR #55 already built,
-// not a second one. This walks the whole chain the pick goes through -- render
+// Selecting a resumable row must reach the existing resume path, not a second
+// one. This walks the whole chain the pick goes through -- render
 // the row, split the line, resolve the pane, route -- for a session the roster
 // no longer lists.
 func TestResumableRowRoutesToResume(t *testing.T) {

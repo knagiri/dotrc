@@ -56,8 +56,6 @@ git 固有の一文が付く（次節末尾を参照）。
 一度きりの read-only 覗き見」で `git -C <絶対パス>` を使う場合は、承認プロンプトが出るのを
 受け入れる（一度きりなので摩擦が小さい）。
 
-由来: dotrc#52
-
 ### ファイル系 permission は Read/Edit の 2 ファミリでしか照合されない
 
 ファイル系 permission rule はツール名単位ではなく「読み系」「書き系」の 2 ファミリで判定される。`Read(path)` は Grep/Glob 等の読み取り系ツールにも best-effort で適用され、`Edit(path)` は Edit/Write/MultiEdit/NotebookEdit 等の書き込み系ツールをまとめてカバーする（公式 docs "Read and Edit" セクション）。
@@ -71,8 +69,6 @@ git 固有の一文が付く（次節末尾を参照）。
 このため書き込み系の rule は `Edit(path)` に、読み取り系の rule は `Read(path)` に寄せる。`Write(...)` / `Glob(...)` / `NotebookEdit(...)` 等の個別ツール名でパス付き rule を書いても永久にマッチしない。
 
 なおパスを伴わない裸のツール名 deny（例: `Write`）はツール全体にマッチする一括 deny であり、この 2 ファミリ判定の対象外なので警告は出ない。
-
-由来: dotrc#23
 
 ### 3 層の使い分け — 委譲先に効かせたい rule は tracked に置く
 
@@ -98,8 +94,6 @@ rule は、tracked な置き場所へ昇格させる（複数 repo で使うな�
 とおり）。その checkout 限りの実験や、ローカルのパスに依存する許可は local に残してよい
 （他人の checkout では dead rule になるだけで、伝播させる価値が無いため）。
 
-由来: dotrc#59
-
 ### skill の `allowed-tools` と `Skill(name)` allow
 
 `Skill(name)` を allow すると、その skill の frontmatter の `allowed-tools` が実行中の turn の
@@ -117,8 +111,6 @@ govern tools that are not listed."、<https://code.claude.com/docs/en/skills>）
 の対応）は `test/skill-permissions.test.sh` が検査する。allow に載せない skill はテスト内の除外
 リストに理由付きで足す。裸の `Write` は意図的に検査しない。書き込み先が実行時に決まる
 `$CLAUDE_JOB_DIR` で、リテラルの `Edit(path)` に狭められないため（現状は `my-create-pr`）。
-
-由来: dotrc#175 / dotrc#176 / dotrc#177
 
 ### Hot-reload
 

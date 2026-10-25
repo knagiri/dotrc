@@ -68,7 +68,7 @@ model: opus
 6. **verdict 出力**: verdict JSON だけを出力する（説明文は付けない）。スキーマは
    `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。
 
-<!-- 由来: 手順 5 の coverage-first（まず全件バケットに載せる）と `severity` / `confidence` は、
+<!-- なぜ: 手順 5 の coverage-first（まず全件バケットに載せる）と `severity` / `confidence` は、
      Claude Opus 5 が「保守的に報告せよ」「重大なものだけ報告せよ」といった severity フィルタ指示を
      前世代より literal に守り、バグ発見能力は向上しているのに報告件数が減って recall が落ちたように
      見える、という Anthropic 公式の Opus 5 移行ガイドの指摘に合わせたもの。公式の推奨パターンは
