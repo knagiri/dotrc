@@ -10,8 +10,6 @@
 関連ルール: 承認が要るコマンドの回避一般は [bash-command-constraints.md](./bash-command-constraints.md)、
 別 worktree・別 repo を read-only で覗く許可は [worktree-scope.md](./worktree-scope.md) §3 を参照。
 
-由来: dotrc#17
-
 ### 大前提
 
 `cd <dir> && …` でディレクトリを渡り歩かない。編集・commit・実行したい先が cwd でないなら、
@@ -97,5 +95,3 @@ CLAUDE.md はロードされない）。エラーも警告も出ないので、�
 だから「詰まらないから安全」とは読まない。詰まる形では摩擦そのものが気づきの合図になるが、
 こちらはその合図が無く、静かに間違える。repo 内でも作業対象が cwd でないなら、§トリガーの
 とおり `/cd <dir>` を頼んで止まる。
-
-由来: dotrc#78

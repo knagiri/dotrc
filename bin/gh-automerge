@@ -11,12 +11,12 @@ set -euo pipefail
 # Clean-status fallback: GitHub's enablePullRequestAutoMerge refuses a PR whose
 # mergeStateStatus is CLEAN with "Pull request is in clean status" -- there is
 # nothing left to wait for, so there is no auto-merge to enable. A repo without
-# CI workflows lands in that state almost immediately, which made auto-merge
-# structurally unreachable (measured on knagiri/dotrc#60 and #61). On exactly
-# that refusal we fall back to `gh pr merge --merge <PR>`, a direct merge that
-# GitHub still gates on branch protection (required checks / approvals); this
-# wrapper bypasses nothing, and --admin remains unreachable. Any other failure
-# (unmet required check, conflict, ...) is passed back to the caller untouched.
+# CI workflows lands in that state almost immediately, which makes auto-merge
+# structurally unreachable. On exactly that refusal we fall back to
+# `gh pr merge --merge <PR>`, a direct merge that GitHub still gates on branch
+# protection (required checks / approvals); this wrapper bypasses nothing, and
+# --admin remains unreachable. Any other failure (unmet required check,
+# conflict, ...) is passed back to the caller untouched.
 #
 # Usage: gh-automerge <PR-number>
 

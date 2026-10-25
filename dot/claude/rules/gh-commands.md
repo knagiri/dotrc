@@ -125,11 +125,13 @@ prompt injection / 権限バイパスの経路になる。
 - `gh-automerge` の fallback は **clean 拒否 1 種類にだけ**効く。`gh pr merge --auto` の失敗の
   stderr に `clean status` が含まれるとき（= 待つものが何も無い PR に auto-merge は張れない、と
   GitHub が拒否したとき）だけ `gh pr merge --merge <PR>` へ落ちる。CI workflow を持たない repo は
-  PR 作成直後にこの状態へ入るので、fallback が無いと auto-merge が構造的に届かなかったため
-  （PR #73）。それ以外の失敗（required check 未達、conflict、**repo で auto-merge が無効**、など）は
+  PR 作成直後にこの状態へ入るので、fallback が無いと auto-merge が構造的に届かないため。
+  それ以外の失敗（required check 未達、conflict、**repo で auto-merge が無効**、など）は
   fallback せず終了コードごと呼び出し元へ返す。したがって auto-merge が無効な repo では
   引き続き merge ステップが完了せず、`pr-review-automerge` は report して停止する
   （fallback はこのケースを救わない）。
+
+実例: dotrc/docs/incidents/automerge-clean-status-unreachable.md
 
 #### grant 変更を含む PR は auto-merge させない
 
@@ -143,5 +145,3 @@ allowlist（grant）の変更は agent に委譲してよい。ただし **grant
 人目を通らずそのまま main へ入り、規約がそのまま無効化される。逆に approve を人間に残せば、
 grant の広さは merge 前に必ず一度は人目を通る。だから条件を「誰が書くか」ではなく merge
 ゲート側へ置く。
-
-由来: dotrc#90

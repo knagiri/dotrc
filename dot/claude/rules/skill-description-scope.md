@@ -13,8 +13,6 @@ frontmatter の `description` には skill / agent の**起動トリガー**（�
 出典: `superpowers:writing-skills` skill の "Skill Discovery Optimization" → "1. Rich
 Description Field" 節（"CRITICAL: Description = When to Use, NOT What the Skill Does"）。
 
-由来: dotrc#39
-
 ### 要約を避ける理由は 2 つある
 
 **(a) 本文の方針変更に取り残される。** description は本文とは別の場所で保守されるため、

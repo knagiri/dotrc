@@ -6,8 +6,6 @@ agent が生む task（harness 改善案・不具合・設計課題）を GitHub
 
 設計の根拠・却下案・既知の限界は `docs/design/agent-issue-workflow.md` を参照。
 
-由来: dotrc#83
-
 ### 1. 起票経路は `gh-issue-file` だけ
 
 agent が issue を起こすときは `bin/gh-issue-file` を使い、生の `gh issue create` は使わない。
@@ -140,5 +138,3 @@ PR reply ポリシーと同じ扱いで、既定は指摘の整理・要約・�
 
 **消化側を状況から推測しない。** 緊急そうだから・文脈がロードされているから・今なら安いから、
 を理由に自分で引き取らない。割り当ては人間（または crawler）が明示的に行う。
-
-由来: dotrc#97

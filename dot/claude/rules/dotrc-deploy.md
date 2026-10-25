@@ -13,8 +13,6 @@ paths:
 `dot/` ツリー、`bin/deploy.sh`、`src/claude-queue` を触る作業でだけロードする（他リポジトリ
 では効かない話なので `paths` でスコープする）。
 
-由来: dotrc#25
-
 ### 1. 実物を読んでから書く
 
 展開方式を説明・変更する前に `bin/deploy.sh` を Read する。以下は現時点の要約であって、
@@ -112,8 +110,6 @@ find src/claude-queue -name '*.go' -newer bin/claude-queue   # 出力が空な�
 
 ソースは直っているのにバイナリは古い、という乖離は「直したはずの挙動が直っていない」として
 現れる。修正内容そのものを疑う方向へ切り分けが向かうので、原因に辿り着くまでが遠い。
-
-由来: dotrc#62
 
 ### 6. 個人 config dir（`~/.claude-personal`）— dotrc だけ別 account で動かす
 

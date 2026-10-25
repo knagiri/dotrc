@@ -13,8 +13,6 @@
 効果を主張しようとしたとき（他者から渡された実測を読むときを含む）、および不在・消滅・
 失敗しなかったことを成功条件に書こうとしたとき、で効く。
 
-由来: dotrc#10
-
 ### 1. 公式ドキュメントを確認する前に計画・実装を開始しない
 
 新しいライブラリ・API・ツールを使う設計や実装に着手する前に、公式ドキュメント・公式サンプルの
@@ -40,19 +38,14 @@
 - config 既定に依存して黙って付く副作用 — 例: `git worktree add -b <branch> <path> origin/HEAD`
   のように remote-tracking ref を start point に渡すと、`branch.autoSetupMerge` の既定で
   新規ブランチの upstream が `origin/main` になり、`git status` の ahead/behind や
-  `@{upstream}` を使う判定が `origin/main` 基準に狂う（実測: `git log @{upstream}..HEAD` は
-  commit を積む前こそ空だが、1 commit 積むと表示され、`git push origin <branch>` で
-  push した後も空にならない。push 済みなのに未 push の commit が残っているように見え、
-  `git status -sb` も `## <branch>...origin/main [ahead 1]` のまま変わらない）。
-  素の `git push` は push.default=simple の既定なら upstream 名とブランチ名の不一致を
-  エラーで止めるので、このクラスには当たらない
+  `@{upstream}` を使う判定が `origin/main` 基準に狂う。push 済みの commit が未 push に見える
 
 man を読むだけで終えず、実効値を出せるツールがあればそれで確かめる（`ssh -G <host>`、
 `git config --list --show-origin`、作った直後の `git rev-parse --abbrev-ref <branch>@{upstream}`
 等）。読んだ内容と実効値が食い違うことこそがこのクラスの典型で、解決順も既定値も、手元の
 config や呼び出し側の引数との組み合わせで初めて決まるため。
 
-由来: dotrc#75 / dotrc#124
+実例: dotrc/docs/incidents/upstream-autosetupmerge-origin-main.md
 
 ### 2. ローカルで再現できないエラーを推測で修正しない
 
@@ -154,8 +147,6 @@ fix が連続して外れるのは、個々の修正のミスではなく前提�
 落とせないかを PR 本文に書いて明示する。テストに落とせるのにテストを書かなかったケースを、
 例外に紛れ込ませて黙って通さないため。
 
-由来: dotrc#37 / dotrc#76 / dotrc#82 / dotrc#84 / dotrc#93
-
 ### 5. 確認が空振りしていないか確かめる — 対照を取り、不在を待つ前に対象の存在を確かめる
 
 「X を入れたら Y になった」を主張する測定は、X が無い状態も測る。X 無しでも Y になっていた
@@ -191,4 +182,4 @@ return したことを登録の証拠として扱わない。
 観測結果を doc や設計の前提として記録するときは特に効かせる。誤った観測は、それ自体の訂正
 だけでは済まず、そこから派生した記述すべての撤回になるため。
 
-由来: dotrc#59 / dotrc#76
+実例: dotrc/docs/incidents/absence-wait-before-registration.md
