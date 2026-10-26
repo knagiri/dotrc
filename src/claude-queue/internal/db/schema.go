@@ -39,7 +39,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- 'print' (claude -p). NULL is unknown and reads as interactive. Recorded by
   -- the hook from its environment (hook.KindFromEnv), because the SessionEnd
   -- reason cannot tell them apart. Added by migrate() too.
-  kind             TEXT
+  kind             TEXT,
+  -- Free-text annotations, NULL when absent: memo is a note any open session
+  -- can carry, pin_note says what a pinned session (waiting_event_id set) is
+  -- waiting on. Both are flattened to one line on write (see SetMemo) because
+  -- the picker lays them into a tab-separated line. Added by migrate() too.
+  memo             TEXT,
+  pin_note         TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_pane_live
@@ -116,7 +122,9 @@ SELECT
     ELSE 5
   END AS priority,
   p.state AS prior_state,
-  CASE WHEN s.waiting_event_id IS NOT NULL THEN 1 ELSE 0 END AS marked
+  CASE WHEN s.waiting_event_id IS NOT NULL THEN 1 ELSE 0 END AS marked,
+  s.memo,
+  s.pin_note
 FROM events e
 JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
   ON e.id = l.mid

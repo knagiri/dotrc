@@ -39,35 +39,45 @@ make install
 |---|---|
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
-| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` で一覧を広げる。Tab でカーソル行の待ちマークをトグルし、`ctrl-x` でカーソル行を done にする（後述）。`--show-resumable` は受け付けるが何もしない（gone は既定で並ぶ） |
+| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` で一覧を広げる。キー操作は「pin とメモ」と「session の状態」の節を参照。`--show-resumable` は受け付けるが何もしない（gone は既定で並ぶ） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない running の session を gone にし、done なのに running な background session を `claude stop` する（picker 起動時に自動実行される） |
 | `claude-queue watch [--idle-minutes N] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も停止もせず対象を出すだけ（後述） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue link --parent <session-id> --child <short-id>` | 委譲の親子関係を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示と孤児の判定に使う。設計は `docs/design/claude-queue-session-tree.md` |
-| `claude-queue mark <session-id>` | 手動の待ちマークをトグルする（picker の Tab が呼ぶ）。done・未知の session は何もせず exit 0 |
+| `claude-queue mark <session-id>` | pin をトグルする（picker の Tab が呼ぶ）。外すと pin のコメントも消える。done・未知の session は何もせず exit 0 |
+| `claude-queue memo [--session <id>] [--] [<text>]` | session のメモを設定する。`<text>` を省くと現在のメモを出力し、空文字を渡すと消す |
+| `claude-queue pin [--session <id>] [--note <text>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す |
+| `claude-queue unpin [--session <id>]` | pin とそのコメントを外す |
 | `claude-queue done <session-id-or-prefix>` | session の作業を done にする（委譲先も cascade で done）。picker の `ctrl-x` と `bin/claude-stop-bg` が呼ぶ。8 桁以上の前方一致で 1 件に決まらなければ exit 1。既に done でも exit 0 |
 | `claude-queue --version` | バージョン表示 |
+
+`memo` / `pin` / `unpin` は `--session`（8 桁以上の前方一致）を省くと `CLAUDE_CODE_SESSION_ID` を使う。Claude Code は
+hook と Bash tool の環境にその session の id を入れるので、agent は id を知らずに自分の session へ書ける
+（例: `claude-queue pin --note "<待っているもの>"`）。どちらも無いとき、id が 1 件に決まらないとき、done の
+session に書こうとしたときは exit 1 で、理由を stderr に出す。
 
 ### 環境変数
 
 | Var | 意味 |
 |---|---|
 | `CLAUDE_QUEUE_DB` | DB パス override（既定 `~/.claude/session-queue.db`） |
-| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X] [~]`（待ちマークは `[P]`）に切替 |
+| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X] [~]`（pin は `[P]`、メモは `[M]`）に切替 |
 | `CLAUDE_QUEUE_DEBUG=1` | エラーを `~/.claude/session-queue.log` に追記 |
 
 ### picker の行
 
-行は tab 区切りで、fzf に見せるのは前半 5 列だけ（`--with-nth`）。
+行は tab 区切りで、fzf に見せるのは 1〜5 列と 11 列だけ（`--with-nth`）。fzf は見せている列だけを検索する。
 
 | 列 | 中身 | 幅 |
 |---|---|---|
-| 1 | state アイコン（待ちマーク中は 📌） | 可変（1〜2 桁） |
+| 1 | state アイコン（pin 中は 📌） | 可変（1〜2 桁） |
 | 2 | 現在 session の印・委譲の木の罫線・孤児の印 + ai-title（transcript 由来） | 40 桁 padding + truncate（印・罫線込み） |
 | 3 | worktree 名（`<main-repo-basename>_<name>`。メイン checkout は `<repo>` のみ） | 56 桁 padding + truncate |
 | 4 | age | 可変（短い） |
 | 5 | summary（何で止まっているか） | padding なし。payload 由来は 150 桁で truncate |
-| 6〜9 | session_id / tmux_pane / cwd / transcript_path | 非表示 |
+| 6〜10 | session_id / tmux_pane / cwd / transcript_path / config_dir | 非表示 |
+| 11 | 注記（`📌 <pin のコメント>` と `📝 <メモ>`） | padding なし |
+| 12〜13 | メモ / pin のコメント（編集キーの初期値） | 非表示 |
 
 3 列目は cwd の git toplevel basename そのままではなく、`--git-common-dir`（絶対）の親を
 メイン toplevel として `<main-repo-basename>_<name>` を合成する。worktree は
@@ -90,7 +100,7 @@ summary が 150 桁使ってもなお収まる。
 ai-title は window 名と同じ transcript から取るが、**別関数**（`label.DisplayTitle`）で作る。
 window 名側の 16 桁切りと `-<id8>` 付与、`.` `:` `~` `#` の置換は tmux の `-t` target 構文と
 FORMATS 展開のための処理で、読むだけの行には要らない。ただし `\t` `\n` `\r` だけは title 側でも
-summary 側でも必ず潰す — 混ざると 6〜9 列目がずれ、picker が別 session の id / pane / cwd /
+summary 側でも必ず潰す（メモと pin のコメントは保存時に潰す） — 混ざると 6 列目以降がずれ、picker が別 session の id / pane / cwd /
 transcript を掴む。tab を含む Bash コマンド（`awk -F'<tab>'`）は承認待ちで普通に出るので、
 これは机上の話ではない。
 
@@ -100,17 +110,32 @@ pane と一致するかだけで、background session や `claude attach` で入
 state アイコンは置き換えないので、現在の session の state も 1 列目で読める。pane は
 interactive 起動時に 1 度だけ取り、Tab の再描画（`--list`）へは `--current-pane` で渡す。
 
-### 手動の待ちマーク
+11 列目が 6〜10 列目より後ろにあるのは、後から足した列で既存の隠し列の位置を動かさないため。
 
-人の返信待ち・保留・後回しにした session に、picker の Tab で印を付け外しできる。popup は
-閉じず、`picker --list`（同じ flag で行だけを出すモード）で一覧をその場で再描画する。
-印が変えるのはアイコンだけで、並び順・state・priority・age・summary は変えない。別グループに
+### pin とメモ
+
+pin は「外部待ち」の印で、人の返信待ち・保留・後回しにした session に付ける。メモはどの session にも
+付けられる 1 行の自由文。どちらも 11 列目に出るので、fzf の曖昧検索で引ける。
+
+| キー | 操作 |
+|---|---|
+| `tab` | pin の付け外し。外すとコメントも消える |
+| `ctrl-t` | pin のコメントを 1 行編集する。保存すると pin も立つ |
+| `ctrl-e` | メモを 1 行編集する。空にして保存すると消える |
+| `ctrl-x` | done にする。`y` 以外を押すと何もしない。失敗したら理由を出し、キー入力を待つ |
+
+編集は現在の値を初期値にした readline で、`Ctrl-U` で行を空にしてから `Ctrl-D` で取り消す（行が空でない間の `Ctrl-D` は 1 文字削除になる）。空のまま Enter すると消去になる。`-` で始まるメモも保存できる。保存したテキストのタブと改行は空白に
+潰す。agent は CLI（`claude-queue pin` / `memo`）で自分の session に付けられる。
+
+いずれのキーでも popup は閉じず、`picker --list`（同じ flag で行だけを出すモード）で一覧をその場で再描画する。
+pin が変えるのはアイコンだけで、並び順・state・priority・age・summary は変えない。別グループに
 すると並びが動いて行を見失うため。stale 判定も変えないので、印の付いた session も時間が
 経てば既定の picker から消え、`--show-stale` では 📌 のまま見える。tmux status-right の
-カウンタは印を数えない。
+カウンタは pin を数えない。
 
-印（`sessions.waiting_event_id` が非 NULL）は明示的に外すまで残り、gone の session にも付けられる。
-外部待ちの間も催促などで session に触れることがあり、そのたびに外れては印の意味が無いため。
+pin（`sessions.waiting_event_id` が非 NULL）は明示的に外すまで残り、gone の session にも付けられる。
+外部待ちの間も催促などで session に触れることがあり、そのたびに外れては pin の意味が無いため。
+done の session には pin もメモも書けない（一覧に出ないので、書いても見えない）。
 
 ### session の状態（作業とプロセスの 2 軸）
 
@@ -334,12 +359,14 @@ make -C src/claude-queue test vet fmt-check
 - [ ] tmux 外で起動した（`TMUX` を持たない）interactive session を picker から選ぶと、kill されず「別端末で使用中の可能性」の理由が出る
 - [ ] transcript が無い / cwd が reap 済みの session を picker から選ぶと、resume されずどちらが欠けたかが出る
 - [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
-- [ ] ホスト再起動後、`C-q q` / `C-q Q` に再起動前の session が 💤 で並び、待ちマーク（📌）と委譲の木が残っている
+- [ ] ホスト再起動後、`C-q q` / `C-q Q` に再起動前の session が 💤 で並び、pin（📌）と委譲の木が残っている
 - [ ] gone の session が running の session の後ろに並び、終了直前が `working` / `awaiting_approval` のものが先頭に来る
 - [ ] gone の session を選ぶと同じ session id のまま会話が復元され、💤 が running の state に戻る
 - [ ] Ctrl-C / `/exit` で閉じた session は一覧から消える
 - [ ] 同 pane で `/clear` 後、旧 session が一覧から消える（L3）
-- [ ] picker の `ctrl-x` で行が消え、その委譲先の行も消える
+- [ ] picker の `ctrl-x` で確認が出て、`y` で行が消え、その委譲先の行も消える。`n` では残る
+- [ ] picker の `ctrl-e` で付けたメモが 11 列目に 📝 付きで出て、メモの語で絞り込める
+- [ ] agent の Bash tool から `claude-queue pin --note "<待っているもの>"` を叩くと、その session に 📌 とコメントが出る
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
 - [ ] 2 pane 並行で approve 連打、busy_timeout 超過しない
 

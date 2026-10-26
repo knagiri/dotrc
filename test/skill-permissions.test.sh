@@ -19,12 +19,15 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 skills_dir="${SKILLS_DIR:-$here/../dot/claude/skills}"
 settings="${SETTINGS_JSON:-$here/../dot/claude/settings.json}"
 fail=0
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
 # Skills deliberately left out of the Skill(...) allowlist.
 # es-create-pr: its allowed-tools carry raw `gh pr edit` / `gh pr close`, so

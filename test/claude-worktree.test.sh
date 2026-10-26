@@ -8,6 +8,9 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 src="$here/../bin/claude-worktree"
 fail=0
 
@@ -17,7 +20,7 @@ fail=0
 unset CLAUDE_CONFIG_DIR
 
 tmp="$(mktemp -d)"
-trap 'git -C "$tmp" worktree prune 2>/dev/null; rm -rf "$tmp"' EXIT
+trap 'sandbox_cleanup; git -C "$tmp" worktree prune 2>/dev/null; rm -rf "$tmp"' EXIT
 
 # "script repo" = where a copy of claude-worktree lives (stands in for dotrc).
 scriptrepo="$tmp/scriptrepo"
@@ -550,10 +553,15 @@ return_e2e() { # <A's session> <A's session afterwards>
   rm -f "$gate.ran"
   printf '#!/bin/sh\n: >"%s.ran"\nwhile [ ! -e "%s" ]; do sleep 0.05; done\n' "$gate" "$gate" >"$ebin/claude"
   chmod +x "$ebin/claude"
-  env -u TMUX -u TMUX_PANE "${T[@]}" new-session -d -s home -x 80 -y 24
+  # The other panes run sleep, not the default login shell: script(1) here has
+  # /dev/null on stdin, so each client forwards an EOF to the pane it attaches
+  # to, and a bare shell logs out on it. With the real HOME's shell startup
+  # files it happened not to; under the sandbox HOME it does, the session ends
+  # and its client vanishes.
+  env -u TMUX -u TMUX_PANE "${T[@]}" new-session -d -s home -x 80 -y 24 sleep 600
   origin="$(env -u TMUX "${T[@]}" display-message -p -t home '#{pane_id}')"
-  env -u TMUX "${T[@]}" new-session -d -s away
-  env -u TMUX "${T[@]}" new-session -d -s side
+  env -u TMUX "${T[@]}" new-session -d -s away sleep 600
+  env -u TMUX "${T[@]}" new-session -d -s side sleep 600
   # PATH via env(1), not new-session -e: observed against tmux 3.6b, -e PATH
   # shows up in show-environment but not in the pane, which would run the real
   # claude here.

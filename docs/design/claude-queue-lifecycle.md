@@ -1,8 +1,8 @@
 # claude-queue: session のライフサイクル再設計
 
 > 実装状況: 第 1 部（状態モデルの 2 軸化・gone の一覧表示・mark の持続・`claude-stop-bg` の done 書き込み・
-> 既存台帳の移行）と休眠（`claude-queue watch` と systemd-user timer、`bin/claude-reap-bg` の廃止）は
-> 実装済み。メモ・pin の外部待ち・PR 監視による自動再開は後続 PR の範囲。
+> 既存台帳の移行）、メモと pin のコメント、休眠（`claude-queue watch` と systemd-user timer、`bin/claude-reap-bg`
+> の廃止）は実装済み。PR 監視による自動再開は後続 PR の範囲。
 
 ## 目的
 

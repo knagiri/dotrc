@@ -14,11 +14,14 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 bindir="$here/../bin"
 fail=0
 
 stubdir="$(mktemp -d)"
-trap 'rm -rf "$stubdir"' EXIT
+trap 'sandbox_cleanup; rm -rf "$stubdir"' EXIT
 cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash
 : >"$GH_ARGS_FILE"
@@ -280,7 +283,7 @@ else echo "FAIL: gh-pr-edit-body flag mutant args=$(cat "$stubdir/args" 2>/dev/n
 # calls the projected {workflow_runs: [...]} / {statuses: [...]} objects.
 # Endpoints are matched with a trailing * because the wrapper appends --jq.
 checksstub="$(mktemp -d)"
-trap 'rm -rf "$stubdir" "$checksstub"' EXIT
+trap 'sandbox_cleanup; rm -rf "$stubdir" "$checksstub"' EXIT
 cat >"$checksstub/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
@@ -495,7 +498,7 @@ PATH="$checksstub:$PATH" "$bindir/gh-pr-checks" 42 --watch >/dev/null 2>&1; [ $?
 # or, when it starts with `{`, the raw `gh pr view --json` document, which the
 # stub runs through the wrapper's own --jq so the filter itself is exercised.
 awaitstub="$(mktemp -d)"
-trap 'rm -rf "$stubdir" "$checksstub" "$awaitstub"' EXIT
+trap 'sandbox_cleanup; rm -rf "$stubdir" "$checksstub" "$awaitstub"' EXIT
 cat >"$awaitstub/gh" <<'STUB'
 #!/usr/bin/env bash
 n=$(( $(cat "$GH_STUB_COUNT" 2>/dev/null || echo 0) + 1 ))

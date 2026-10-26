@@ -70,4 +70,6 @@ jobs:
             test/gh-issue-file.test.sh \
             test/gh-wrappers.test.sh \
             test/git-reap-gone.test.sh \
+            test/lib/sandbox.sh \
+            test/sandbox-usage.test.sh \
             test/skill-permissions.test.sh
