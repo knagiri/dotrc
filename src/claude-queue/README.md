@@ -39,11 +39,12 @@ make install
 |---|---|
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
-| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` / `--show-resumable` で一覧を広げる。Tab でカーソル行の待ちマークをトグルする（後述） |
-| `claude-queue reconcile` | `claude agents --json` に載っていない生存扱いの row を terminated にする（picker 起動時に自動実行される） |
+| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` で一覧を広げる。Tab でカーソル行の待ちマークをトグルし、`ctrl-x` でカーソル行を done にする（後述）。`--show-resumable` は受け付けるが何もしない（gone は既定で並ぶ） |
+| `claude-queue reconcile` | `claude agents --json` に載っていない running の session を gone にし、done なのに running な background session を `claude stop` する（picker 起動時に自動実行される） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue link --parent <session-id> --child <short-id>` | 委譲の親子関係を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示と孤児の判定に使う。設計は `docs/design/claude-queue-session-tree.md` |
-| `claude-queue mark <session-id>` | 手動の待ちマークをトグルする（picker の Tab が呼ぶ）。終了済み・未知の session は何もせず exit 0 |
+| `claude-queue mark <session-id>` | 手動の待ちマークをトグルする（picker の Tab が呼ぶ）。done・未知の session は何もせず exit 0 |
+| `claude-queue done <session-id-or-prefix>` | session の作業を done にする（委譲先も cascade で done）。picker の `ctrl-x` と `bin/claude-stop-bg` が呼ぶ。8 桁以上の前方一致で 1 件に決まらなければ exit 1。既に done でも exit 0 |
 | `claude-queue --version` | バージョン表示 |
 
 ### 環境変数
@@ -107,9 +108,37 @@ interactive 起動時に 1 度だけ取り、Tab の再描画（`--list`）へ�
 経てば既定の picker から消え、`--show-stale` では 📌 のまま見える。tmux status-right の
 カウンタは印を数えない。
 
-印は `sessions.waiting_event_id` にその時点の最新 event id を記録したもので、それがまだ最新で
-ある間だけ有効になる。次の hook event が積まれた時点で自動的に外れるので、agent に何か
-伝えれば印は消え、外す処理を hook 側に持たない。
+印（`sessions.waiting_event_id` が非 NULL）は明示的に外すまで残り、gone の session にも付けられる。
+外部待ちの間も催促などで session に触れることがあり、そのたびに外れては印の意味が無いため。
+
+### session の状態（作業とプロセスの 2 軸）
+
+台帳は session ごとに、作業（`done_at`。NULL が open）とプロセス（`terminated_at`。NULL が
+running、非 NULL が gone）を別々に持つ。picker の既定一覧は open な session で、gone は 💤
+（`[~]`）・summary `gone (was <直前の state>)` で running の後ろに並ぶ。直前の state が
+`working` / `awaiting_approval` のもの（作業途中で落ちた可能性が高い）が先。選べば上の到達手段で
+resume する。done は一覧に出ない。設計は
+[docs/design/claude-queue-lifecycle.md](../../docs/design/claude-queue-lifecycle.md)。
+
+done にするのは次だけで、idle の長さ・roster に居ないこと・`reason: other` の `SessionEnd` は
+根拠にしない（いずれもホスト再起動と区別できないため）。
+
+- `SessionEnd` の `reason` が `prompt_input_exit`（Ctrl-C / `/exit`）または `clear`
+- `/clear` で同 pane に新 session が始まったとき（`SessionStart` の `source: clear`）の旧 session
+- print mode（`claude -p`）の session の終了
+- `claude-queue done`（picker の `ctrl-x`、`bin/claude-stop-bg`）
+- 親が done になったときの子孫（`session_links` を辿る cascade）
+
+done は一方向で、後続の hook event（resume 等）でも戻らない。gone は同じ session id の hook が
+届いた時点で running に戻る。kind（`interactive` / `background` / `print`）は hook の環境変数
+（`CLAUDE_JOB_DIR` / `CLAUDE_CODE_ENTRYPOINT`）で決める。`SessionEnd` の `reason` は
+`claude -p` の終了・`claude stop`・pane の kill・ホスト停止のいずれも `other` で、kind を区別
+できないため。
+
+gone の session は `tmux_pane` を運ばない（view が NULL にする）。ledger はこの列を終了時に
+クリアせず持ち回るため、gone の pane は必ず「終わったプロセスの pane」であり、pane id は server
+単位のカウンタで新しい server は `%0` から振り直すので、再起動後は無関係な live pane に衝突する。
+transcript / cwd の実在は選んだ時点で確かめ、欠けていれば理由を出す（後述の到達手段 5）。
 
 ### picker の到達手段
 
@@ -186,45 +215,6 @@ client は端末へ detach される。
 握り続け、選び直しても `claude attach` が二度と走らなくなる。正常終了側で改名しないのは window が
 閉じて名前ごと消えるためで、`~exited` window が溜まるのもこれで避けられる。
 
-### 終了済み session の掘り起こし（`--show-resumable`）
-
-ホスト再起動などで session が全部閉じると `queue` view は空になる（`terminated_at IS NULL`
-で絞るため）が、会話 jsonl は残っており `claude --resume <uuid>` で復元できる。`--show-resumable`
-はこの「terminated だが resume で拾い直せる row」を一覧に加える。既定 off、`C-q Q` 側だけに付ける。
-
-対象になる条件は、SQL 側（`db.ResumableCandidates`）と Go 側（`picker.filterResumable`）に分かれる。
-後者がファイルシステムを見る必要があるため。
-
-SQL 側:
-
-- `terminated_at` がセット済み
-- 最後の event が `ended`（`SessionEnd` または `ForcedEnd`）
-- その event が `SessionEnd` なら payload の `reason` が `prompt_input_exit` **でない**。
-  `prompt_input_exit` は人が REPL を区切りで閉じた end。signal 経由の end（SIGTERM /
-  `claude stop` / ホスト停止）と、reconcile が合成した `ForcedEnd`（payload を持たない）が残る
-
-Go 側:
-
-- `transcript_path` が空でなく、そのファイルが実在する（短命 session は jsonl を書かない）
-- `cwd` が空でなく、そのディレクトリが実在する（reap 済み worktree では消えている）
-
-並び順は live な row の全部より後ろ。resumable 同士では、終了直前の state が `working` /
-`awaiting_approval` だったもの（作業途中で落ちた可能性が高い）を先に出し、その中では新しい順。
-summary は `resumable (was working)` のように終了直前の state を出す — payload には end の
-reason しか無く、raw state は全部 `ended` なので、row を見分けられるのはここだけ。
-
-`tmux_pane` は運ばない（クエリ側で NULL にする）。ledger はこの列を終了時にクリアせず持ち回るため、
-resumable な row の pane は必ず「終わったプロセスの pane」であり、pane id は server 単位のカウンタで
-新しい server は `%0` から振り直すので、再起動後は無関係な live pane に衝突する。
-
-live な row が 0 件のときは、resumable の候補数と flag を stderr に出す（理由は design doc 参照）。
-拾える窓は auto-GC の保持期間（7 日）と同じ。
-
-選択したときの到達手段は上の一覧と同じで、resumable 専用の分岐は無い。プロセスはもう無いので
-通常は「roster に居ない session の直接 resume」に落ちるが、reconcile が早めに閉じた等で実際には
-生きていた場合は roster を見て既存のロジック（switch / attach / orphan なら kill してから resume）に
-そのまま乗る。
-
 ## State machine
 
 | hook event | state |
@@ -234,22 +224,26 @@ live な row が 0 件のときは、resumable の候補数と flag を stderr �
 | `PermissionRequest` | awaiting_approval |
 | `PermissionDenied` / `PostToolUse` / `PostToolUseFailure` | working |
 | `Stop` / `StopFailure` | idle_done |
-| `SessionEnd` | ended（view から除外） |
+| `SessionEnd` | ended（プロセス軸が gone になる。作業軸は上の規則による） |
 
 Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
 
-`ended` は view から外れるが、`--show-resumable` はこの外れた row を別クエリで拾い直して
-`resumable` という擬似 state で並べる（前述）。hook が書く state ではない。
+`gone` は view が `terminated_at` から導く擬似 state で、hook が書く state ではない。
 
 ## L3 自己修復
 
 `/exit` `/clear` で `SessionEnd` が発火しないバグ対処：新規 `SessionStart`
-時に **同一 `$TMUX_PANE` 上で生存中の他 session を `ForcedEnd`**。
+時に **同一 `$TMUX_PANE` 上で生存中の他 session を `ForcedEnd`**（gone にする）。新 session の
+`source` が `clear` のときだけ、旧 session を done にもする。
 
 ## Auto-GC
 
-`SessionEnd` hook 末尾で、`terminated_at` が 7 日以上前の sessions とその
-events を削除。`session_links` は作成から 7 日以上経ち、子が生きていないものを削除。
+`SessionEnd` hook 末尾で、`done_at` が 7 日以上前の sessions とその events を削除。gone の
+session は期間に関わらず消さない。`session_links` は作成から 7 日以上経ち、親子のどちらも open で
+ないものを削除。
+
+既存 DB は初回の Open で一度だけ移行する（`PRAGMA user_version` で判定）。直近 7 日以内に
+`prompt_input_exit` / `clear` 以外で閉じた session は open（gone）に、それ以外は done になる。
 
 ## tmux 設定（`dot/tmux.conf`）
 
@@ -257,7 +251,7 @@ events を削除。`session_links` は作成から 7 日以上経ち、子が生
 set -g status-interval 5
 set -g status-right '#(claude-queue status) | %H:%M'
 bind-key q display-popup -E -d "#{pane_current_path}" -w 80% -h 60% "claude-queue picker --repo-scope"
-bind-key Q display-popup -E -w 80% -h 60% "claude-queue picker --show-working --show-stale --show-resumable"
+bind-key Q display-popup -E -w 80% -h 60% "claude-queue picker --show-working --show-stale"
 ```
 
 prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`q` は `--repo-scope` 付きで、
@@ -266,7 +260,7 @@ prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`q` �
 "#{pane_current_path}"` を明示するのは、この絞り込みが popup 自身の cwd を起点にするため。
 repo の外で `q` を押したときは一覧を出さず `not in a git repo; use prefix Q for all sessions`
 を stderr へ出して終わる。`Q` は絞り込みを外した全部入り（別 repo の session も、working /
-stale / resumable も出す）。
+stale も出す）。gone は `q` / `Q` どちらでも出る。
 
 `dot/tmux.conf` は `bin/deploy.sh` の symlink 経由なので pull した時点で反映されるが、
 `bin/claude-queue` は `.gitignore` 対象で `make install` でしか更新されない。flag が増えた
@@ -317,11 +311,12 @@ make -C src/claude-queue test vet fmt-check
 - [ ] tmux 外で起動した（`TMUX` を持たない）interactive session を picker から選ぶと、kill されず「別端末で使用中の可能性」の理由が出る
 - [ ] transcript が無い / cwd が reap 済みの session を picker から選ぶと、resume されずどちらが欠けたかが出る
 - [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
-- [ ] live 0 件の状態で `claude-queue picker` を**シェルから直接**起動すると、resumable の候補数と `--show-resumable` を案内する stderr が出る（`display-popup -E` は command の exit で popup を閉じるので、`C-q q` 経路ではこの案内は読めない）
-- [ ] `C-q Q` で resumable な row が live な row の後ろに並び、終了直前が `working` / `awaiting_approval` のものが先頭に来る
-- [ ] resumable な row を選ぶと同じ session id のまま会話が復元される（kill 段階を経ずに resume される）
-- [ ] `SessionEnd` が `reason: prompt_input_exit` で飛んだ session は `--show-resumable` でも出ない（`SessionEnd` が飛ばず L3 の `ForcedEnd` で閉じた `/exit` `/clear` は payload を持たないので出る）
-- [ ] 同 pane で `/clear` 後、旧 session が view から消える（L3）
+- [ ] ホスト再起動後、`C-q q` / `C-q Q` に再起動前の session が 💤 で並び、待ちマーク（📌）と委譲の木が残っている
+- [ ] gone の row が running の row の後ろに並び、終了直前が `working` / `awaiting_approval` のものが先頭に来る
+- [ ] gone の row を選ぶと同じ session id のまま会話が復元され、💤 が running の state に戻る
+- [ ] Ctrl-C / `/exit` で閉じた session は一覧から消える
+- [ ] 同 pane で `/clear` 後、旧 session が一覧から消える（L3）
+- [ ] picker の `ctrl-x` で行が消え、その委譲先の行も消える
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
 - [ ] 2 pane 並行で approve 連打、busy_timeout 超過しない
 
