@@ -284,10 +284,16 @@ review / comment の種別・時刻・author が bot か（`__typename`）を読
 
 - 既読位置（`pin_cursor`）より新しい review / comment は、author を問わず数える。最初に見た pass では記録だけして、
   `--pr-debounce-minutes`（既定 2。timer の 1 tick から揺らぎの余裕を引いた値）以上経った pass でまとめて配送する。bot の review の
-  連続コメントを 1 回で渡すため。配送に成功してから既読位置を最新の活動へ進める（失敗・skip なら次の pass で再試行）
-- merge / close は待たずに配送し、成功したら pin を外す
+  連続コメントを 1 回で渡すため
+- merge / close は待たずに配送する
+- 配送しても既読位置は進めず、配送時刻と進め先（`pin_delivered_at` / `pin_delivered_upto`）を記録する。次の pass で
+  その session の配送時刻以降の `UserPromptSubmit` が台帳にあれば、既読位置を進めて（merge / close なら pin を外して）記録を消す。
+  6 分（timer の 2 tick）経っても無ければ window の中の resume が失敗したとみなして記録を消し、次の pass で再配送する。
+  起動自体の失敗・skip は何も記録せず、次の pass で再試行する
 
 配送は指示文を最初の入力にした resume で行う。interactive は picker の resume と同じ tmux session・window 名で
+（その session が無ければ最後に attach された既存の session に。service から session を作ると `update-environment` で
+SSH agent 等が消えた env になるので作らない）
 `claude --resume <id> "<指示文>"` の window を detached で開き（client は動かさない。同名の window があっても `-S` は付けず、常に新しい window を作る。`-S` と `-d` の併用は同名 window があると何もせず成功を返すため）、background は
 `claude --bg --resume <id> "<指示文>"`。どちらも台帳に記録された config dir で起動する。running な session には入力欄へ
 打ち込まず、休眠と同じ手順で止めてから resume する。次のときは配送せず次の pass に回す: running かつ open な委譲先がいる、

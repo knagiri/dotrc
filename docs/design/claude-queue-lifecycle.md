@@ -120,7 +120,8 @@ review で修正が要るとき、委譲元は閉じた委譲先を再開せず�
 
 `systemd-user` の timer が数分おきに監視コマンドを 1 回起動し（常駐はしない）、PR 監視条件付きの
 pin について GitHub の PR を確認する。pin は既読位置（cursor）を持ち、それより新しい活動があれば
-その session を起こして指示を渡し、cursor を進める。bot の review も人の review も同じく起こす対象で、
+その session を起こして指示を渡す。cursor を進めるのは、起こした session がその指示を受け取ったと
+台帳で確かめてからである（後述）。bot の review も人の review も同じく起こす対象で、
 pin は merge / close まで残る。PR が閉じるまで「活動 → 委譲元が対応 → 休眠 → 次の活動」のループを
 回すためである。bot の review はコメントが連続して付くので、最後の活動から 1 tick 経ってから
 まとめて 1 回配送する。
@@ -155,8 +156,16 @@ author で絞らないのは、委譲先が利用者の token で PR を作る�
 候補が表示されることがあり、`tmux capture-pane` からは打ちかけの文字列と区別できない。window の置き場所と
 名前は picker の resume と同じ規約に従う。timer には popup を開いたクライアントが無いので、window は session の cwd が
 属する repo の正準名の tmux session（`<main-repo-basename>_<name>` と同じ規約で決まる名前）に開き、
-無ければ detached で作る。起きた session は通常の hook で state を更新するので、人の判断が要る場面は
+無ければ最後に attach された既存の session に開く。session は新しく作らない。監視コマンドから
+`tmux new-session` を打つと、tmux の `update-environment` が service の env に無い変数（`SSH_AUTH_SOCK` 等）を
+削除として新しい session の env に写し、その session の window から SSH agent が見えなくなるため。tmux server は
+最後の session が消えると終了するので、server が居れば session は必ず 1 つ以上ある。起きた session は通常の hook で state を更新するので、人の判断が要る場面は
 `awaiting_approval` / `idle_done` として一覧に上がる。自動再開専用の通知は作らない。
+
+起動コマンドが成功しても、window の中の `claude --resume` が失敗していれば指示は届いていない。そこで配送時は
+cursor を進めず、配送した時刻と、成功したら cursor をどこまで進めるかを pin に記録する。次の pass で、その session の
+配送時刻以降の `UserPromptSubmit` が台帳にあれば成功とみなして cursor を進め（merge / close なら pin を外し）、
+記録を消す。2 tick 経っても無ければ失敗とみなして記録だけを消し、cursor は進んでいないので次の pass で再配送する。
 
 GitHub への問い合わせは既存の `gh-*` wrapper と同じ token 経路を使う（`bin/lib/gh-mise.sh`）。
 
