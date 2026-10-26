@@ -1,6 +1,6 @@
 // Package annotate implements `claude-queue memo`, `pin` and `unpin`, which
 // write a session's free-text memo and its pin (waiting on something outside
-// it, with an optional note). The picker binds them to keys; an agent calls
+// it, with an optional note and an optional PR for the watch pass to follow). The picker binds them to keys; an agent calls
 // them on its own session, which is why the session id defaults to
 // CLAUDE_CODE_SESSION_ID -- the id Claude Code puts in the environment of every
 // hook and Bash tool call.
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 )
@@ -22,7 +23,7 @@ const sessionEnv = "CLAUDE_CODE_SESSION_ID"
 
 var usages = map[string]string{
 	"memo":  "usage: claude-queue memo [--session <id>] [--] [<text>]",
-	"pin":   "usage: claude-queue pin [--session <id>] [--note <text>]",
+	"pin":   "usage: claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N | PR URL>]",
 	"unpin": "usage: claude-queue unpin [--session <id>]",
 }
 
@@ -38,7 +39,7 @@ func Run(cmd string, args []string) {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", cmd, err)
 		os.Exit(1)
 	}
-	err = run(conn, cmd, args, os.Getenv, os.Stdout, os.Stderr)
+	err = run(conn, cmd, args, os.Getenv, time.Now, os.Stdout, os.Stderr)
 	conn.Close()
 	if errors.Is(err, errUsage) {
 		fmt.Fprintln(os.Stderr, usages[cmd])
@@ -52,7 +53,7 @@ func Run(cmd string, args []string) {
 
 // run is Run against an open database, with the environment and the output
 // injected so it can be driven from a test without an os.Exit.
-func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, out, errOut io.Writer) error {
+func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, now func() time.Time, out, errOut io.Writer) error {
 	if _, ok := usages[cmd]; !ok {
 		return fmt.Errorf("unknown command %q", cmd)
 	}
@@ -60,8 +61,14 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, ou
 	fs.SetOutput(errOut)
 	session := fs.String("session", "", "session id or 8+ char prefix (default $"+sessionEnv+")")
 	var note *string
+	var pr string
 	if cmd == "pin" {
 		fs.Func("note", "what the session is waiting on", func(v string) error { note = &v; return nil })
+		fs.Func("pr", "a PR to watch: wake the session on its new reviews and comments, and when it is merged or closed", func(v string) error {
+			ref, err := db.ParsePRRef(v)
+			pr = ref
+			return err
+		})
 	}
 	if err := fs.Parse(args); err != nil {
 		return errUsage
@@ -98,7 +105,13 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, ou
 		}
 		return db.SetMemo(conn, id, rest[0])
 	case "pin":
-		return db.SetPin(conn, id, note)
+		if err := db.SetPin(conn, id, note); err != nil {
+			return err
+		}
+		if pr != "" {
+			return db.SetPinPR(conn, id, pr, now())
+		}
+		return nil
 	default:
 		return db.ClearPin(conn, id)
 	}

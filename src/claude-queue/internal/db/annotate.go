@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // ErrDone is returned by the annotation writers for a session whose work is
@@ -52,10 +54,137 @@ func SetPin(conn *sql.DB, sessionID string, note *string) error {
 		WHERE session_id = ?1 AND done_at IS NULL`, keep, n)
 }
 
-// ClearPin unpins an open session and drops the pin's note.
+// ClearPin unpins an open session and drops the pin's note and PR watch.
 func ClearPin(conn *sql.DB, sessionID string) error {
-	return annotate(conn, "clear pin", sessionID,
-		"UPDATE sessions SET waiting_event_id = NULL, pin_note = NULL WHERE session_id = ?1 AND done_at IS NULL")
+	return annotate(conn, "clear pin", sessionID, `
+		UPDATE sessions
+		SET waiting_event_id = NULL, pin_note = NULL, pin_pr = NULL, pin_cursor = NULL, pin_seen_at = NULL
+		WHERE session_id = ?1 AND done_at IS NULL`)
+}
+
+// ClearPRPin unpins a session whose watched PR has closed. It is ClearPin,
+// except that it changes nothing unless the pin still watches pr: the person
+// may have re-pinned the session on another PR while the delivery that
+// precedes this ran, and that pin is not the one that closed.
+func ClearPRPin(conn *sql.DB, sessionID, pr string) error {
+	_, err := conn.Exec(`
+		UPDATE sessions
+		SET waiting_event_id = NULL, pin_note = NULL, pin_pr = NULL, pin_cursor = NULL, pin_seen_at = NULL
+		WHERE session_id = ?1 AND pin_pr = ?2`, sessionID, pr)
+	if err != nil {
+		return fmt.Errorf("clear PR pin: %w", err)
+	}
+	return nil
+}
+
+var (
+	prShort = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#([1-9][0-9]*)$`)
+	prURL   = regexp.MustCompile(`^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)(?:[/?#].*)?$`)
+)
+
+// ParsePRRef reads a PR reference -- owner/repo#N or a github.com pull URL --
+// and returns it as owner/repo#N, the form pin_pr stores. The repo is always
+// part of it: the watch pass queries the PR with --repo rather than from the
+// pinned session's cwd, which may belong to another repo or be gone.
+func ParsePRRef(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	for _, re := range []*regexp.Regexp{prShort, prURL} {
+		if m := re.FindStringSubmatch(s); m != nil {
+			return m[1] + "/" + m[2] + "#" + m[3], nil
+		}
+	}
+	return "", fmt.Errorf("not a PR reference (want owner/repo#N or https://github.com/owner/repo/pull/N): %q", s)
+}
+
+// SetPinPR pins an open session (keeping a pin it already has, and its note)
+// and makes the pin watch pr, which must already be in ParsePRRef's form. The
+// cursor starts at now: what happened on the PR before the pin was put on is
+// not news to the session that put it there.
+func SetPinPR(conn *sql.DB, sessionID, pr string, now time.Time) error {
+	return annotate(conn, "set pin", sessionID, `
+		UPDATE sessions
+		SET waiting_event_id = COALESCE(waiting_event_id,
+		      (SELECT MAX(id) FROM events WHERE session_id = ?1), 0),
+		    pin_pr = ?2, pin_cursor = ?3, pin_seen_at = NULL
+		WHERE session_id = ?1 AND done_at IS NULL`, pr, now.UTC().Format(time.RFC3339))
+}
+
+// PRPin is an open session whose pin watches a PR, with what a delivery to it
+// needs.
+type PRPin struct {
+	SessionID string
+	PR        string
+	// Cursor is the time of the newest activity already delivered.
+	Cursor time.Time
+	// SeenAt is the unix time newer activity was first seen, 0 when none is
+	// pending.
+	SeenAt         int64
+	Cwd            string
+	TranscriptPath string
+	ConfigDir      string
+	// Kind is sessions.kind; "" is unknown and reads as interactive.
+	Kind string
+	// Gone is the process axis: the session's process has ended.
+	Gone bool
+}
+
+// PRPins returns every open, pinned session whose pin watches a PR. A done
+// session is never watched: nobody is left to act on what the PR says.
+func PRPins(conn *sql.DB) ([]PRPin, error) {
+	rows, err := conn.Query(`
+		SELECT session_id, pin_pr, COALESCE(pin_cursor, ''), COALESCE(pin_seen_at, 0),
+		       COALESCE(cwd, ''), COALESCE(transcript_path, ''), config_dir, COALESCE(kind, ''),
+		       terminated_at IS NOT NULL
+		FROM sessions
+		WHERE done_at IS NULL AND waiting_event_id IS NOT NULL AND pin_pr IS NOT NULL
+		ORDER BY session_id`)
+	if err != nil {
+		return nil, fmt.Errorf("PR pins: %w", err)
+	}
+	defer rows.Close()
+	var out []PRPin
+	for rows.Next() {
+		var p PRPin
+		var cursor string
+		var dir sql.NullString
+		if err := rows.Scan(&p.SessionID, &p.PR, &cursor, &p.SeenAt, &p.Cwd, &p.TranscriptPath, &dir, &p.Kind, &p.Gone); err != nil {
+			return nil, err
+		}
+		p.ConfigDir = ConfigDirOf(dir)
+		if cursor != "" {
+			t, err := time.Parse(time.RFC3339, cursor)
+			if err != nil {
+				return nil, fmt.Errorf("PR pin of %s: bad cursor %q: %w", p.SessionID, cursor, err)
+			}
+			p.Cursor = t
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// SetPRSeen records (at > 0) or clears (at == 0) when a pass first saw
+// activity on the session's PR that has not been delivered yet. Like every
+// write the watch pass makes to a pin, it applies only while the pin still
+// watches pr.
+func SetPRSeen(conn *sql.DB, sessionID, pr string, at int64) error {
+	_, err := conn.Exec(`UPDATE sessions SET pin_seen_at = ?3 WHERE session_id = ?1 AND pin_pr = ?2`,
+		sessionID, pr, sql.NullInt64{Int64: at, Valid: at > 0})
+	if err != nil {
+		return fmt.Errorf("set PR seen: %w", err)
+	}
+	return nil
+}
+
+// AdvancePRCursor marks the PR's activity up to cursor as delivered and clears
+// the pending mark, while the pin still watches pr.
+func AdvancePRCursor(conn *sql.DB, sessionID, pr string, cursor time.Time) error {
+	_, err := conn.Exec(`UPDATE sessions SET pin_cursor = ?3, pin_seen_at = NULL WHERE session_id = ?1 AND pin_pr = ?2`,
+		sessionID, pr, cursor.UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("advance PR cursor: %w", err)
+	}
+	return nil
 }
 
 // annotate runs an UPDATE that touches only an open sessionID (its first

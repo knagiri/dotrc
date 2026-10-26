@@ -25,7 +25,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       claude-queue mark <session-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue done <session-id-or-prefix>")
 	fmt.Fprintln(os.Stderr, "       claude-queue memo [--session <id>] [--] [<text>]")
-	fmt.Fprintln(os.Stderr, "       claude-queue pin [--session <id>] [--note <text>]")
+	fmt.Fprintln(os.Stderr, "       claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N | PR URL>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue unpin [--session <id>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue --version")
 }

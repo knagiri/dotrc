@@ -45,7 +45,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- waiting on. Both are flattened to one line on write (see SetMemo) because
   -- the picker lays them into a tab-separated line. Added by migrate() too.
   memo             TEXT,
-  pin_note         TEXT
+  pin_note         TEXT,
+  -- The PR a pin watches, as owner/repo#N (see ParsePRRef), NULL for a pin
+  -- that watches nothing. pin_cursor is the RFC3339 time of the newest PR
+  -- activity already handed to the session; pin_seen_at is the unix time of
+  -- the watch pass that first saw newer activity not yet handed over (NULL
+  -- when there is none), which is what the one-tick debounce measures from.
+  -- All three are cleared with the pin. Added by migrate() too.
+  pin_pr           TEXT,
+  pin_cursor       TEXT,
+  pin_seen_at      INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_pane_live

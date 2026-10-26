@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 )
@@ -47,23 +48,23 @@ func pinOf(t *testing.T, conn *sql.DB) (bool, sql.NullString) {
 func TestMemoCLI_PrintsCurrent(t *testing.T) {
 	conn := setup(t)
 	var out bytes.Buffer
-	if err := run(conn, "memo", []string{"--session", "aaaaaaaa", "fix the build"}, env(nil), &out, &out); err != nil {
+	if err := run(conn, "memo", []string{"--session", "aaaaaaaa", "fix the build"}, env(nil), time.Now, &out, &out); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if out.Len() != 0 {
 		t.Errorf("set printed %q", out.String())
 	}
-	if err := run(conn, "memo", []string{"--session", "aaaaaaaa"}, env(nil), &out, &out); err != nil {
+	if err := run(conn, "memo", []string{"--session", "aaaaaaaa"}, env(nil), time.Now, &out, &out); err != nil {
 		t.Fatalf("print: %v", err)
 	}
 	if got, want := out.String(), "fix the build\n"; got != want {
 		t.Errorf("printed %q, want %q", got, want)
 	}
 	out.Reset()
-	if err := run(conn, "memo", []string{"--session", "aaaaaaaa", ""}, env(nil), &out, &out); err != nil {
+	if err := run(conn, "memo", []string{"--session", "aaaaaaaa", ""}, env(nil), time.Now, &out, &out); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if err := run(conn, "memo", []string{"--session", "aaaaaaaa"}, env(nil), &out, &out); err != nil || out.Len() != 0 {
+	if err := run(conn, "memo", []string{"--session", "aaaaaaaa"}, env(nil), time.Now, &out, &out); err != nil || out.Len() != 0 {
 		t.Errorf("after clearing: printed %q, %v; want nothing", out.String(), err)
 	}
 }
@@ -72,14 +73,14 @@ func TestPinCLI_UsesEnvSessionID(t *testing.T) {
 	conn := setup(t)
 	e := env(map[string]string{sessionEnv: sid})
 	var out bytes.Buffer
-	if err := run(conn, "pin", []string{"--note", "waiting on review"}, e, &out, &out); err != nil {
+	if err := run(conn, "pin", []string{"--note", "waiting on review"}, e, time.Now, &out, &out); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	if pinned, note := pinOf(t, conn); !pinned || note.String != "waiting on review" {
 		t.Errorf("pinned=%v note=%v", pinned, note)
 	}
 	// Without --note the note stays.
-	if err := run(conn, "pin", nil, e, &out, &out); err != nil {
+	if err := run(conn, "pin", nil, e, time.Now, &out, &out); err != nil {
 		t.Fatalf("pin again: %v", err)
 	}
 	if _, note := pinOf(t, conn); note.String != "waiting on review" {
@@ -90,7 +91,7 @@ func TestPinCLI_UsesEnvSessionID(t *testing.T) {
 func TestPinCLI_NoIDNoEnv(t *testing.T) {
 	conn := setup(t)
 	var out, errOut bytes.Buffer
-	err := run(conn, "pin", []string{"--note", "x"}, env(nil), &out, &errOut)
+	err := run(conn, "pin", []string{"--note", "x"}, env(nil), time.Now, &out, &errOut)
 	if !errors.Is(err, errUsage) {
 		t.Fatalf("err = %v, want errUsage", err)
 	}
@@ -103,10 +104,10 @@ func TestUnpinCLI(t *testing.T) {
 	conn := setup(t)
 	e := env(map[string]string{sessionEnv: sid})
 	var out bytes.Buffer
-	if err := run(conn, "pin", []string{"--note", "n"}, e, &out, &out); err != nil {
+	if err := run(conn, "pin", []string{"--note", "n"}, e, time.Now, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(conn, "unpin", nil, e, &out, &out); err != nil {
+	if err := run(conn, "unpin", nil, e, time.Now, &out, &out); err != nil {
 		t.Fatalf("unpin: %v", err)
 	}
 	if pinned, note := pinOf(t, conn); pinned || note.Valid {
@@ -121,7 +122,7 @@ func TestCLI_DoneSessionFails(t *testing.T) {
 	}
 	e := env(map[string]string{sessionEnv: sid})
 	var out bytes.Buffer
-	if err := run(conn, "pin", nil, e, &out, &out); !errors.Is(err, db.ErrDone) {
+	if err := run(conn, "pin", nil, e, time.Now, &out, &out); !errors.Is(err, db.ErrDone) {
 		t.Errorf("pin on done = %v, want ErrDone", err)
 	}
 }
@@ -138,7 +139,7 @@ func TestCLI_ExtraArgsAreUsage(t *testing.T) {
 		{"pin", []string{"stray"}},
 		{"unpin", []string{"stray"}},
 	} {
-		if err := run(conn, c.cmd, c.args, e, &out, &out); !errors.Is(err, errUsage) {
+		if err := run(conn, c.cmd, c.args, e, time.Now, &out, &out); !errors.Is(err, errUsage) {
 			t.Errorf("%s %v = %v, want errUsage", c.cmd, c.args, err)
 		}
 	}
@@ -147,13 +148,45 @@ func TestCLI_ExtraArgsAreUsage(t *testing.T) {
 func TestMemoCLI_DashLeadingText(t *testing.T) {
 	conn := setup(t)
 	var out bytes.Buffer
-	if err := run(conn, "memo", []string{"--session", "aaaaaaaa", "--", "-wip check"}, env(nil), &out, &out); err != nil {
+	if err := run(conn, "memo", []string{"--session", "aaaaaaaa", "--", "-wip check"}, env(nil), time.Now, &out, &out); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if err := run(conn, "memo", []string{"--session", "aaaaaaaa"}, env(nil), &out, &out); err != nil {
+	if err := run(conn, "memo", []string{"--session", "aaaaaaaa"}, env(nil), time.Now, &out, &out); err != nil {
 		t.Fatalf("print: %v", err)
 	}
 	if got, want := out.String(), "-wip check\n"; got != want {
 		t.Errorf("printed %q, want %q", got, want)
+	}
+}
+
+func TestPinCLI_PR(t *testing.T) {
+	conn := setup(t)
+	e := env(map[string]string{sessionEnv: sid})
+	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return at }
+	var out bytes.Buffer
+	if err := run(conn, "pin", []string{"--note", "human review", "--pr", "https://github.com/example-org/example-repo/pull/4"}, e, clock, &out, &out); err != nil {
+		t.Fatalf("pin --pr: %v", err)
+	}
+	pinned, note := pinOf(t, conn)
+	var pr, cursor sql.NullString
+	if err := conn.QueryRow("SELECT pin_pr, pin_cursor FROM sessions WHERE session_id = ?", sid).Scan(&pr, &cursor); err != nil {
+		t.Fatal(err)
+	}
+	if !pinned || note.String != "human review" || pr.String != "example-org/example-repo#4" || cursor.String != "2026-10-26T09:00:00Z" {
+		t.Errorf("after pin --pr: pinned=%v note=%v pr=%v cursor=%v", pinned, note, pr, cursor)
+	}
+
+	// A plain pin afterwards keeps the watch: it only touches the note.
+	if err := run(conn, "pin", []string{"--note", "still waiting"}, e, clock, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow("SELECT pin_pr FROM sessions WHERE session_id = ?", sid).Scan(&pr); err != nil || pr.String != "example-org/example-repo#4" {
+		t.Errorf("plain pin dropped the PR watch: %v, %v", pr, err)
+	}
+
+	var errOut bytes.Buffer
+	if err := run(conn, "pin", []string{"--pr", "not-a-pr"}, e, clock, &out, &errOut); !errors.Is(err, errUsage) {
+		t.Errorf("pin --pr not-a-pr = %v, want errUsage", err)
 	}
 }
