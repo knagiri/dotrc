@@ -630,8 +630,14 @@ func reconcileSweep(conn *sql.DB) {
 	for _, dir := range res.Unreadable {
 		fmt.Fprintf(os.Stderr, "reconcile: roster unreadable for %s: its rows were left open\n", dir)
 	}
+	for _, e := range res.StopErrors {
+		fmt.Fprintln(os.Stderr, "reconcile: stop failed:", e)
+	}
 	if res.Closed > 0 {
 		fmt.Fprintf(os.Stderr, "reconciled %d ended session(s)\n", res.Closed)
+	}
+	if res.Stopped > 0 {
+		fmt.Fprintf(os.Stderr, "stopped %d done background session(s)\n", res.Stopped)
 	}
 }
 

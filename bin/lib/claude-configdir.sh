@@ -74,8 +74,9 @@ cq_sqlite_available() {
 # recorded plus the default, deduplicated and sorted.
 #
 # Ended rows count, not just live ones: a caller can be asked about a session,
-# or a day, that is already over. They are GC'd 7 days after termination, which
-# is the one limit of deriving the list this way -- see bin/claude-digest.
+# or a day, that is already over. They are GC'd 7 days after their work is
+# marked done, which is the one limit of deriving the list this way -- see
+# bin/claude-digest.
 cq_config_dirs() {
   {
     cq_default_config_dir
@@ -138,5 +139,28 @@ cq_config_dir_for() {
     0) cq_default_config_dir ;;
     1) printf '%s\n' "$out" ;;
     *) return 2 ;;
+  esac
+}
+
+# cq_kind_for <short-id> -- the kind the ledger recorded for the session whose
+# id starts with short-id, on stdout: interactive, background or print. A row
+# that recorded none (written before the column existed) reads as interactive,
+# the same as on the Go side. "none" when the ledger holds no row for the id,
+# "ambiguous" when rows of different kinds share the prefix.
+#
+# Exit 1, printing nothing, when the ledger cannot be read or the query fails:
+# a caller deciding whether it may touch a session must not read a failed
+# lookup as "no such session".
+cq_kind_for() {
+  local short="$1" out
+  [[ "$short" =~ ^[0-9a-f]{8}$ ]] || return 1
+  cq_sqlite_available || return 1
+  out="$(sqlite3 "$(cq_db_path)" \
+    "SELECT DISTINCT COALESCE(NULLIF(kind, ''), 'interactive')
+       FROM sessions WHERE substr(session_id, 1, 8) = '$short'" 2>/dev/null)" || return 1
+  case "$(printf '%s' "$out" | grep -c .)" in
+    0) echo none ;;
+    1) printf '%s\n' "$out" ;;
+    *) echo ambiguous ;;
   esac
 }

@@ -1,6 +1,8 @@
 package reconcile
 
 import (
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -203,5 +205,118 @@ func TestSessionIDs(t *testing.T) {
 	}
 	if got := sessionIDs(nil); len(got) != 0 {
 		t.Errorf("sessionIDs(nil) = %v, want empty", got)
+	}
+}
+
+// sweepFixture is a ledger with one background session of each kind the stop
+// pass must tell apart, all under dirWork.
+func sweepFixture(t *testing.T) *sql.DB {
+	t.Helper()
+	conn, err := db.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	for _, q := range []string{
+		"INSERT INTO sessions(session_id, config_dir, kind) VALUES " +
+			"('done-run-0000', '" + dirWork + "', 'background'), " +
+			"('open-run-0000', '" + dirWork + "', 'background'), " +
+			"('done-ia-00000', '" + dirWork + "', 'interactive')",
+		"UPDATE sessions SET done_at = unixepoch() WHERE session_id IN ('done-run-0000', 'done-ia-00000')",
+	} {
+		if _, err := conn.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return conn
+}
+
+func TestSweep_StopsDoneButRunningBackground(t *testing.T) {
+	conn := sweepFixture(t)
+	var stopped []string
+	res, err := sweep(conn,
+		func(string) ([]string, error) {
+			return []string{"done-run-0000", "open-run-0000", "done-ia-00000"}, nil
+		},
+		func(dir, id string) error { stopped = append(stopped, dir+" "+id); return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{dirWork + " done-run-0000"}; !reflect.DeepEqual(stopped, want) {
+		t.Errorf("stopped = %v, want %v", stopped, want)
+	}
+	if res.Stopped != 1 || res.Closed != 0 {
+		t.Errorf("result = %+v, want Stopped 1, Closed 0", res)
+	}
+}
+
+// Open work is never stopped, and neither is a done session the roster cannot
+// vouch for: an unreadable roster is no evidence anything is running.
+func TestSweep_DoesNotStopOpenSession(t *testing.T) {
+	conn := sweepFixture(t)
+	if _, err := conn.Exec("UPDATE sessions SET done_at = NULL WHERE session_id = 'done-run-0000'"); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	stop := func(string, string) error { called = true; return nil }
+	if _, err := sweep(conn, func(string) ([]string, error) {
+		return []string{"done-run-0000", "open-run-0000", "done-ia-00000"}, nil
+	}, stop); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("an open session was stopped")
+	}
+
+	conn = sweepFixture(t)
+	if _, err := sweep(conn, func(string) ([]string, error) { return nil, errors.New("roster down") }, stop); err == nil {
+		t.Error("an all-unreadable sweep did not report an error")
+	}
+	if called {
+		t.Error("a session was stopped on an unreadable roster")
+	}
+}
+
+// A failed stop is reported, not fatal: the session stays done and the next
+// sweep tries again.
+func TestSweep_StopFailureIsReported(t *testing.T) {
+	conn := sweepFixture(t)
+	res, err := sweep(conn,
+		func(string) ([]string, error) {
+			return []string{"done-run-0000", "open-run-0000", "done-ia-00000"}, nil
+		},
+		func(string, string) error { return errors.New("boom") },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Stopped != 0 || len(res.StopErrors) != 1 {
+		t.Errorf("result = %+v, want one stop error", res)
+	}
+}
+
+// With one dir readable and another not, a done session under the unreadable
+// dir is left alone: the sweep goes on, but nothing vouches for that process.
+func TestSweep_DoesNotStopUnderUnreadableDir(t *testing.T) {
+	conn := sweepFixture(t)
+	if _, err := conn.Exec("UPDATE sessions SET config_dir = ? WHERE session_id = 'done-run-0000'", dirPersonal); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	res, err := sweep(conn, func(dir string) ([]string, error) {
+		if dir == dirPersonal {
+			return nil, errors.New("roster down")
+		}
+		return []string{"open-run-0000", "done-ia-00000"}, nil
+	}, func(string, string) error { called = true; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("stopped a session whose roster could not be read")
+	}
+	if !reflect.DeepEqual(res.Unreadable, []string{dirPersonal}) {
+		t.Errorf("Unreadable = %v", res.Unreadable)
 	}
 }

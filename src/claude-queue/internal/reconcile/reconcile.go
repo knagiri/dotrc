@@ -1,4 +1,10 @@
-// Package reconcile closes ledger rows whose sessions are no longer running.
+// Package reconcile closes ledger rows whose sessions are no longer running,
+// and stops the background sessions whose work is done but whose process is
+// still up.
+//
+// Closing a row here moves the process axis only (db.TerminateSession): the
+// session becomes gone and stays listed, because a process vanishing says
+// nothing about whether its work is finished.
 //
 // A background session does not end when its turn ends: it sits at `idle`
 // waiting for further input and, roughly an hour later, disappears WITHOUT
@@ -27,7 +33,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 
+	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
@@ -108,12 +116,17 @@ func sessionIDs(agents []roster.Agent) []string {
 	return ids
 }
 
-// Result is what one sweep did: how many rows it closed, and which config dirs
-// it could not read -- whose rows it therefore left open, and which a caller can
-// report so the omission is visible rather than silent.
+// Result is what one sweep did: how many rows it closed, how many done-but-
+// running background sessions it stopped, and which config dirs it could not
+// read -- whose rows it therefore left open, and which a caller can report so
+// the omission is visible rather than silent.
 type Result struct {
 	Closed     int
+	Stopped    int
 	Unreadable []string
+	// StopErrors are the stops that failed, one message each. They do not fail
+	// the sweep: the session stays done, and the next sweep tries again.
+	StopErrors []string
 }
 
 // Sweep matches the ledger against each config dir's live roster and terminates
@@ -126,7 +139,36 @@ type Result struct {
 // the sweep is an error with a zero count, which is what callers already skip
 // the pass on; when only some do, the rest are still swept and the failures come
 // back in Result.Unreadable.
+//
+// It then stops every background session whose work is done while its process
+// is still running (db.DoneButRunning) -- what a cascade leaves behind when it
+// marks a running delegate done. Only a session its own dir's roster lists is
+// stopped: an unreadable roster is no evidence it is running, and one the
+// roster does not list has just been closed above.
 func Sweep(conn *sql.DB) (Result, error) {
+	return sweep(conn, liveIDsIn, stopIn)
+}
+
+// stopIn stops one background session with `claude stop <short id>` under its
+// own config dir, the same way roster.ListIn reads it.
+func stopIn(dir, sessionID string) error {
+	short := sessionID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	cmd := exec.Command("claude", "stop", short)
+	if dir != "" {
+		cmd.Env = configdir.Env(os.Environ(), dir)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("claude stop %s: %w: %s", short, err, out)
+	}
+	return nil
+}
+
+// sweep is Sweep with the roster read and the stop injected, so the decisions
+// can be tested without a claude binary.
+func sweep(conn *sql.DB, list func(dir string) ([]string, error), stop func(dir, sessionID string) error) (Result, error) {
 	tracked, err := db.LiveSessions(conn)
 	if err != nil {
 		return Result{}, err
@@ -137,7 +179,7 @@ func Sweep(conn *sql.DB) (Result, error) {
 	var res Result
 	var firstErr error
 	for _, dir := range dirs {
-		ids, err := liveIDsIn(dir)
+		ids, err := list(dir)
 		if err != nil {
 			res.Unreadable = append(res.Unreadable, dir)
 			if firstErr == nil {
@@ -157,7 +199,33 @@ func Sweep(conn *sql.DB) (Result, error) {
 		}
 		res.Closed++
 	}
+
+	leftovers, err := db.DoneButRunning(conn)
+	if err != nil {
+		return res, err
+	}
+	for _, s := range leftovers {
+		if !listed(live, s) {
+			continue
+		}
+		if err := stop(s.ConfigDir, s.SessionID); err != nil {
+			res.StopErrors = append(res.StopErrors, err.Error())
+			continue
+		}
+		res.Stopped++
+	}
 	return res, nil
+}
+
+// listed reports whether s's own config dir's roster, as read this sweep,
+// lists it.
+func listed(live map[string][]string, s db.LiveSession) bool {
+	for _, id := range live[s.ConfigDir] {
+		if id == s.SessionID {
+			return true
+		}
+	}
+	return false
 }
 
 // Run is the CLI entrypoint for `claude-queue reconcile`.
@@ -180,5 +248,8 @@ func Run(args []string) {
 	for _, dir := range res.Unreadable {
 		fmt.Fprintf(os.Stderr, "reconcile: roster unreadable for %s: its rows were left open\n", dir)
 	}
-	fmt.Fprintf(os.Stderr, "reconcile: closed %d session(s) missing from the roster\n", res.Closed)
+	for _, e := range res.StopErrors {
+		fmt.Fprintln(os.Stderr, "reconcile: stop failed:", e)
+	}
+	fmt.Fprintf(os.Stderr, "reconcile: closed %d session(s) missing from the roster, stopped %d done background session(s)\n", res.Closed, res.Stopped)
 }
