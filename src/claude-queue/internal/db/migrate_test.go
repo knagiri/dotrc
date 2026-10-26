@@ -141,7 +141,9 @@ func migrateFixture(t *testing.T) map[string]migrated {
 	}
 	defer conn.Close()
 	// Open just ran the migration at the real clock; undo the stamp and run it
-	// again at the fixed one. done_at is reset too, since that is all it wrote.
+	// again at the fixed one. done_at is reset too: it is the only thing the
+	// real-clock run wrote that the fixed-clock run would not write back the
+	// same (the lapsed-mark drop and the kind fill give the same result twice).
 	if _, err := conn.Exec("UPDATE sessions SET done_at = NULL; PRAGMA user_version = 0"); err != nil {
 		t.Fatal(err)
 	}
@@ -221,6 +223,14 @@ func TestMigrate_Idempotent(t *testing.T) {
 	conn, err := Open(path)
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
+	}
+	// Open ran the migration at the real clock, which makes the outcome depend
+	// on today's date. Redo it at the fixed one, as migrateFixture does.
+	if _, err := conn.Exec("UPDATE sessions SET done_at = NULL; PRAGMA user_version = 0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateLifecycle(conn, migNow); err != nil {
+		t.Fatalf("migrateLifecycle: %v", err)
 	}
 	first := snapshot(t, conn)
 	// Move every open row's end far into the past: a second migration pass

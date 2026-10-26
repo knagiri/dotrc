@@ -13,14 +13,19 @@ import "github.com/knagiri/dotrc/src/claude-queue/internal/db"
 //	CLAUDE_CODE_ENTRYPOINT   cli          cli                  sdk-cli
 //	CLAUDE_JOB_DIR           unset        <config>/jobs/<id>   unset
 //
-// CLAUDE_JOB_DIR is checked first: it exists only for a background job, and
-// is the one variable that tells it from an interactive session.
+// The sdk-cli entrypoint is checked first. CLAUDE_JOB_DIR is inherited by
+// child processes, so a `claude -p` started from a background job's Bash tool
+// carries it too; checking it first would record that print run as background,
+// which is never marked done at exit and piles up as gone. No background job
+// has the sdk-cli entrypoint (the table above), so the order costs the measured
+// cases nothing. CLAUDE_JOB_DIR is then the one variable that tells a
+// background job from an interactive session.
 func KindFromEnv(getenv func(string) string) string {
-	if getenv("CLAUDE_JOB_DIR") != "" {
-		return db.KindBackground
-	}
 	if getenv("CLAUDE_CODE_ENTRYPOINT") == "sdk-cli" {
 		return db.KindPrint
+	}
+	if getenv("CLAUDE_JOB_DIR") != "" {
+		return db.KindBackground
 	}
 	return db.KindInteractive
 }

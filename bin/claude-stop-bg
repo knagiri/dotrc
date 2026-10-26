@@ -66,10 +66,12 @@ command -v jq >/dev/null 2>&1 || {
   exit 1
 }
 
-# sqlite3 is NOT required: without it (or without a ledger) every lookup answers
-# with the default config dir, which is what every session ran under before a
-# second one existed. A session in another dir then fails the uniqueness check
-# below and is refused -- never silently stopped in the wrong place.
+# sqlite3 is optional for a RUNNING session: without it (or without a ledger)
+# the config-dir lookup answers with the default dir, which is what every
+# session ran under before a second one existed. A session in another dir then
+# fails the uniqueness check below and is refused -- never silently stopped in
+# the wrong place. A session that is NOT running does need it: its kind comes
+# from the ledger (cq_kind_for), and without sqlite3 that is a refusal.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/claude-configdir.sh"
 
 if ! config_dir="$(cq_config_dir_for "$id")"; then
@@ -92,14 +94,19 @@ roster="$(claude agents --json 2>/dev/null)" || {
 }
 
 # mark_done writes the work-done mark (cascading to the session's own
-# delegates). Best-effort: a ledger that does not know the id, or a missing
-# claude-queue, must not keep a running background session from being stopped.
+# delegates). Returns non-zero when the mark was not written. A running session
+# is stopped regardless (a ledger that does not know the id, or a missing
+# claude-queue, must not keep it alive), but a session that is not running has
+# nothing else to do, so there the failure is the command's failure.
 mark_done() {
   if ! command -v claude-queue >/dev/null 2>&1; then
     echo "claude-stop-bg: claude-queue not found; $id not marked done in the ledger" >&2
-    return 0
+    return 1
   fi
-  claude-queue "done" "$id" >/dev/null || echo "claude-stop-bg: could not mark $id done in the ledger" >&2
+  claude-queue "done" "$id" >/dev/null || {
+    echo "claude-stop-bg: could not mark $id done in the ledger" >&2
+    return 1
+  }
 }
 
 # Resolve the id against the roster and read its kind: "none" for no match,
@@ -111,9 +118,15 @@ kind="$(jq -r --arg id "$id" \
 
 case "$kind" in
   background)
-    mark_done
-    claude stop "$id"
-    exit
+    marked=0
+    mark_done || marked=1
+    stop_rc=0
+    claude stop "$id" || stop_rc=$?
+    if [ "$marked" -ne 0 ]; then
+      echo "claude-stop-bg: $id stopped but NOT marked done; its work stays open in the ledger" >&2
+      [ "$stop_rc" -ne 0 ] || stop_rc=1
+    fi
+    exit "$stop_rc"
     ;;
   none) ;;
   "") echo "claude-stop-bg: no unique live session matching $id under $config_dir" >&2; exit 1 ;;
@@ -129,7 +142,7 @@ if ! lkind="$(cq_kind_for "$id")"; then
 fi
 case "$lkind" in
   background)
-    mark_done
+    mark_done || exit 1
     echo "claude-stop-bg: $id is not running; marked done" >&2
     ;;
   none)

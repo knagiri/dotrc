@@ -193,7 +193,9 @@ hook 側は **pane が window 唯一の pane のときだけ**改名する（spl
 `claude agents --json` の `status: idle`（承認待ちの `status: waiting` / `waitingFor: permission
 prompt` とは別状態）で次の入力を待ち続ける。放置すると完遂から約 60 分で roster から消えるが、
 その消滅では `SessionEnd` が飛ばないため③の `terminated_at` は NULL のまま残り、`queue` view に
-幽霊行が残る。追跡がきれいに閉じるのは `claude stop`（= `claude-stop-bg`）で閉じた経路だけ。
+幽霊行が残る。追跡がきれいに閉じるのは `claude-stop-bg` で閉じた経路だけ。素の `claude stop` は
+reason `other` で終わり session は gone（作業は open）になる。`claude-stop-bg` は done を台帳に
+書いてから stop するので、作業の完了まで閉じる。
 したがって委譲元は、完了報告を受けたら質問へ返信したかに関わらず `claude-stop-bg <short-id>` で
 閉じる（`delegate-to-worktree` 手順 6 / `worktree-scope.md` §6）。
 

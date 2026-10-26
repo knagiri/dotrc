@@ -122,8 +122,12 @@ const lifecycleVersion = 1
 //
 // Gated on PRAGMA user_version rather than written to be re-runnable, because
 // it is not: run again later, rule 3 would close every session gone since. The
-// gate is read inside BEGIN IMMEDIATE so two hooks opening the ledger at once
-// cannot both pass it.
+// gate is checked twice. The first read, outside any transaction, lets every
+// Open of an already-migrated ledger return without taking the write lock, so
+// read-only callers (status, picker) never queue behind a hook's write. The
+// second read, inside BEGIN IMMEDIATE, is the one that decides: two hooks
+// opening an old ledger at once can both pass the first read, and only one of
+// them may pass the second.
 func migrateLifecycle(conn *sql.DB, now int64) error {
 	ctx := context.Background()
 	c, err := conn.Conn(ctx)
@@ -131,6 +135,14 @@ func migrateLifecycle(conn *sql.DB, now int64) error {
 		return err
 	}
 	defer c.Close()
+
+	var v int
+	if err := c.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
+		return fmt.Errorf("read user_version: %w", err)
+	}
+	if v >= lifecycleVersion {
+		return nil
+	}
 
 	if _, err := c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -142,7 +154,8 @@ func migrateLifecycle(conn *sql.DB, now int64) error {
 		}
 	}()
 
-	var v int
+	// Re-read under the write lock: another Open may have migrated between the
+	// unlocked read above and this transaction.
 	if err := c.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
 	}

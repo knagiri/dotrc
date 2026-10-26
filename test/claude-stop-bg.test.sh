@@ -70,6 +70,17 @@ if [ "$rc" -eq 0 ] && [ "$(cat "$stoplog")" = "aaaaaaaa" ] && [ "$(cat "$donelog
   echo "ok: background session is marked done, then stopped, by short id"
 else echo "FAIL: background stop rc=$rc stoplog=$(cat "$stoplog") donelog=$(cat "$donelog") order=$(cat "$orderlog")"; fail=1; fi
 
+# A failing done mark: the running path still stops the session but ends
+# non-zero and says it was not marked; the not-running path has only the mark to
+# do, so it ends non-zero and never claims "marked done".
+failbin="$tmp/failbin"; mkdir -p "$failbin"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$failbin/claude-queue"; chmod +x "$failbin/claude-queue"
+: >"$stoplog"
+out="$(PATH="$failbin:$stubbin:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" "$src" aaaaaaaa 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ "$(cat "$stoplog")" = "aaaaaaaa" ] && grep -qF 'NOT marked done' <<<"$out"; then
+  echo "ok: a failed done mark still stops the session but exits non-zero"
+else echo "FAIL: failed mark on running session rc=$rc out=$out"; fail=1; fi
+
 # interactive session -> refused. This is the whole reason the wrapper exists:
 # a broad `claude stop *` grant would let an agent kill the user's own session.
 # A refusal writes no done mark either.
@@ -263,6 +274,14 @@ if command -v sqlite3 >/dev/null 2>&1; then
   if [ "$rc" -eq 0 ] && [ ! -s "$stoplog" ] && [ "$(cat "$donelog")" = "11111111" ]; then
     echo "ok: a background session no longer running is marked done without a stop"
   else echo "FAIL: gone background rc=$rc out=$out donelog=$(cat "$donelog")"; fail=1; fi
+
+  # The done mark fails (claude-queue exits 1): the mark is this path's only
+  # effect, so it must end non-zero and must not claim "marked done".
+  : >"$stoplog"
+  out="$(PATH="$failbin:$stubbin:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" CLAUDE_QUEUE_DB="$kdb" "$src" 11111111 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && ! grep -qF 'is not running; marked done' <<<"$out"; then
+    echo "ok: a gone session whose done mark fails exits non-zero without claiming it was marked"
+  else echo "FAIL: failed mark on gone session rc=$rc out=$out"; fail=1; fi
 
   # The case the wrapper's grant must not cover: the user's own interactive
   # session, gone after a reboot. Closing it would drop their WIP from the list.

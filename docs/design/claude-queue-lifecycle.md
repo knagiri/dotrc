@@ -1,5 +1,8 @@
 # claude-queue: session のライフサイクル再設計
 
+> 実装状況: 第 1 部（状態モデルの 2 軸化・gone の一覧表示・mark の持続・`claude-stop-bg` の done 書き込み・
+> 既存台帳の移行）は実装済み。メモ・pin の外部待ち・休眠・PR 監視による自動再開は後続 PR の範囲。
+
 ## 目的
 
 claude-queue の台帳は、session の「プロセスが生きているか」と「作業が終わったか」を

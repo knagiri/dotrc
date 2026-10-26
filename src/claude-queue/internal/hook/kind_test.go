@@ -23,6 +23,9 @@ func TestKindFromEnv(t *testing.T) {
 		{"print", map[string]string{
 			"CLAUDE_CODE_ENTRYPOINT": "sdk-cli", "CLAUDE_CODE_SESSION_ATTENDED": "0",
 		}, db.KindPrint},
+		{"print inheriting a background job's dir", map[string]string{
+			"CLAUDE_CODE_ENTRYPOINT": "sdk-cli", "CLAUDE_JOB_DIR": "/home/u/.claude/jobs/abcd1234",
+		}, db.KindPrint},
 		{"nothing set", map[string]string{}, db.KindInteractive},
 	}
 	for _, tc := range cases {
