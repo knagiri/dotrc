@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,6 +42,8 @@ func ledger(t *testing.T) *sql.DB {
 
 type calls struct {
 	sweeps     int
+	prWatches  int
+	resumed    map[string]bool
 	hibernated []string
 	checked    []string
 }
@@ -66,6 +69,10 @@ func (c *calls) deps(hibernateErr error) Deps {
 			c.checked = append(c.checked, cand.SessionID)
 			return hibernateErr
 		},
+		PRWatch: func(*sql.DB, time.Time, time.Duration, io.Writer) map[string]bool {
+			c.prWatches++
+			return c.resumed
+		},
 		Now: func() time.Time { return now },
 	}
 }
@@ -76,8 +83,8 @@ func TestWatch_StubsCatchEveryEffect(t *testing.T) {
 	c := &calls{}
 	var out bytes.Buffer
 	Pass(ledger(t), Options{Idle: 2 * time.Hour}, c.deps(nil), &out)
-	if c.sweeps != 1 || len(c.hibernated) != 1 || c.hibernated[0] != "idleidle-1" {
-		t.Fatalf("sweeps = %d, hibernated = %v; output:\n%s", c.sweeps, c.hibernated, &out)
+	if c.sweeps != 1 || c.prWatches != 1 || len(c.hibernated) != 1 || c.hibernated[0] != "idleidle-1" {
+		t.Fatalf("sweeps = %d, PR watches = %d, hibernated = %v; output:\n%s", c.sweeps, c.prWatches, c.hibernated, &out)
 	}
 	for _, want := range []string{"reconcile: closed 1", "hibernated idleidle (background, idle 3h)", "skipped busybusy: roster status is \"busy\""} {
 		if !strings.Contains(out.String(), want) {
@@ -90,8 +97,8 @@ func TestWatch_DryRunStopsNothing(t *testing.T) {
 	c := &calls{}
 	var out bytes.Buffer
 	Pass(ledger(t), Options{Idle: 2 * time.Hour, DryRun: true}, c.deps(nil), &out)
-	if c.sweeps != 0 || len(c.hibernated) != 0 {
-		t.Fatalf("dry run: sweeps = %d, hibernated = %v", c.sweeps, c.hibernated)
+	if c.sweeps != 0 || c.prWatches != 0 || len(c.hibernated) != 0 {
+		t.Fatalf("dry run: sweeps = %d, PR watches = %d, hibernated = %v", c.sweeps, c.prWatches, c.hibernated)
 	}
 	if !strings.Contains(out.String(), "would hibernate idleidle") || len(c.checked) != 1 {
 		t.Fatalf("dry run did not check and report the candidate (checked %v):\n%s", c.checked, &out)
@@ -114,5 +121,19 @@ func TestWatch_ReportsSkipsAndFailures(t *testing.T) {
 	Pass(ledger(t), Options{Idle: 2 * time.Hour}, (&calls{}).deps(errors.New("still in the roster")), &out)
 	if !strings.Contains(out.String(), "failed idleidle: still in the roster") {
 		t.Fatalf("failure not reported:\n%s", &out)
+	}
+}
+
+// A session the PR watch has just resumed is idle by its old idle_done event
+// until its first hook lands, and must not be stopped again in the same pass.
+func TestWatch_ResumedSessionNotHibernated(t *testing.T) {
+	c := &calls{resumed: map[string]bool{"idleidle-1": true}}
+	var out bytes.Buffer
+	Pass(ledger(t), Options{Idle: 2 * time.Hour}, c.deps(nil), &out)
+	if len(c.hibernated) != 0 {
+		t.Fatalf("hibernated %v right after the PR watch woke it:\n%s", c.hibernated, &out)
+	}
+	if !strings.Contains(out.String(), "skipped idleidle: woken by the PR watch in this pass") {
+		t.Errorf("skip not reported:\n%s", &out)
 	}
 }

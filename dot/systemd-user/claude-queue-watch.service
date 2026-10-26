@@ -1,6 +1,7 @@
-# One pass of claude-queue's unattended upkeep: reconcile the ledger, then
-# hibernate sessions idle past the threshold (stop the process, keep the work
-# open). Paired with claude-queue-watch.timer.
+# One pass of claude-queue's unattended upkeep: reconcile the ledger, wake the
+# sessions whose pinned PR has news, then hibernate sessions idle past the
+# threshold (stop the process, keep the work open). Paired with
+# claude-queue-watch.timer.
 #
 # `deploy.sh` symlinks dot/systemd-user/* into ~/.config/systemd/user, so this
 # file is not templated at deploy time and the repo path below is written out in
@@ -11,16 +12,16 @@
 # PATH is set explicitly because a systemd user unit inherits none of the
 # shell's: ~/.bashrc returns early for non-interactive shells, so the
 # dotrc bin directory it appends is never on the PATH here. The pass needs
-# `claude` (agents, stop) and `tmux` on it as well.
+# `claude` (agents, stop, resume), `tmux`, `gh`, `mise` (the token path of
+# bin/lib/gh-mise.sh) and `systemd-run` on it as well.
 #
 # KillMode is left at its default (control-group), which kills whatever the
-# service started when it exits, so the question is whether this pass can start
-# a long-lived claude daemon inside the cgroup. Measured with an empty config
-# dir (no daemon running): `claude agents --json` returned [] with exit 0 and
-# `claude stop deadbeef` printed "No job matching 'deadbeef'." with exit 1;
-# neither added a `claude daemon run` process. The existing daemons were all
-# spawned by `claude --bg`. So this pass only stops processes and starts none;
-# once it starts tmux windows or claude, those must leave the cgroup first.
+# service started when it exits. Reading and stopping start nothing long-lived
+# (measured with an empty config dir: `claude agents --json` and `claude stop`
+# added no `claude daemon run` process). Waking a session does: it may start a
+# tmux server or a claude daemon. Those launches run under
+# `systemd-run --user --scope`, which puts them in a scope unit of their own,
+# outside this service's cgroup (internal/prwatch Deliver).
 #
 # Requires `loginctl enable-linger <user>` to run while logged out.
 

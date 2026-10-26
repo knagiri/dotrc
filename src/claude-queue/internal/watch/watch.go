@@ -2,8 +2,10 @@
 // systemd-user timer runs every few minutes. It is not a daemon -- each run
 // does its pass and exits.
 //
-// A pass reconciles the ledger against the live rosters, then hibernates the
-// sessions that have sat idle past the threshold (see package hibernate).
+// A pass reconciles the ledger against the live rosters, wakes the sessions
+// whose pinned PR has news (see package prwatch), then hibernates the sessions
+// that have sat idle past the threshold (see package hibernate). Hibernation
+// goes last so that a session woken in this pass is not stopped by it.
 package watch
 
 import (
@@ -16,6 +18,7 @@ import (
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hibernate"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/prwatch"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
@@ -23,9 +26,12 @@ import (
 // Options are the knobs of one pass.
 type Options struct {
 	Idle time.Duration
+	// PRDebounce is how long new PR activity is held before it is delivered
+	// (prwatch.DefaultDebounce).
+	PRDebounce time.Duration
 	// DryRun reports what would be hibernated and changes nothing: no
 	// reconcile (it writes the ledger and stops done background sessions), no
-	// stop.
+	// PR watch (it resumes sessions and moves their cursors), no stop.
 	DryRun bool
 }
 
@@ -38,7 +44,9 @@ type Deps struct {
 	Hibernate            func(hibernate.Candidate) error
 	// Check is Hibernate's read-only half, which a dry run asks instead.
 	Check func(hibernate.Candidate) error
-	Now   func() time.Time
+	// PRWatch is prwatch.Pass: it returns the sessions it resumed.
+	PRWatch func(conn *sql.DB, now time.Time, debounce time.Duration, out io.Writer) map[string]bool
+	Now     func() time.Time
 }
 
 // RealDeps wires Deps to the real reconcile, rosters, transcripts and stops.
@@ -50,7 +58,11 @@ func RealDeps(conn *sql.DB) Deps {
 		LastTurnSendsMessage: hibernate.LastTurnSendsMessage,
 		Hibernate:            func(c hibernate.Candidate) error { return hibernate.Hibernate(c, hd) },
 		Check:                func(c hibernate.Candidate) error { return hibernate.Check(c, hd) },
-		Now:                  time.Now,
+		PRWatch: func(conn *sql.DB, now time.Time, debounce time.Duration, out io.Writer) map[string]bool {
+			pd := prwatch.RealDeps(hd, func() (map[string]int, error) { return db.RunningDelegateCounts(conn) })
+			return prwatch.Pass(conn, now, debounce, pd, out)
+		},
+		Now: time.Now,
 	}
 }
 
@@ -75,6 +87,13 @@ func Pass(conn *sql.DB, opts Options, deps Deps, out io.Writer) {
 		}
 	}
 
+	resumed := map[string]bool{}
+	if opts.DryRun {
+		fmt.Fprintln(out, "pr-watch: skipped (dry run)")
+	} else {
+		resumed = deps.PRWatch(conn, deps.Now(), opts.PRDebounce, out)
+	}
+
 	now := deps.Now()
 	cands, skips, err := hibernate.Candidates(conn, now.Unix(), opts.Idle, deps.List, deps.LastTurnSendsMessage)
 	if err != nil {
@@ -85,6 +104,10 @@ func Pass(conn *sql.DB, opts Options, deps Deps, out io.Writer) {
 		fmt.Fprintf(out, "skipped %s: %s\n", short(s.SessionID), s.Reason)
 	}
 	for _, c := range cands {
+		if resumed[c.SessionID] {
+			fmt.Fprintf(out, "skipped %s: woken by the PR watch in this pass\n", short(c.SessionID))
+			continue
+		}
 		act, done := deps.Hibernate, "hibernated"
 		if opts.DryRun {
 			act, done = deps.Check, "would hibernate"
@@ -123,10 +146,12 @@ func Run(args []string) {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	idleMinutes := fs.Int("idle-minutes", int(hibernate.DefaultIdle/time.Minute),
 		"hibernate sessions idle at least this many minutes since their idle_done event")
+	debounceMinutes := fs.Int("pr-debounce-minutes", int(prwatch.DefaultDebounce/time.Minute),
+		"deliver new PR activity once it has been pending at least this many minutes")
 	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; change nothing")
 	_ = fs.Parse(args)
-	if *idleMinutes < 0 {
-		fmt.Fprintln(os.Stderr, "watch: --idle-minutes must not be negative")
+	if *idleMinutes < 0 || *debounceMinutes < 0 {
+		fmt.Fprintln(os.Stderr, "watch: --idle-minutes and --pr-debounce-minutes must not be negative")
 		os.Exit(2)
 	}
 
@@ -137,5 +162,10 @@ func Run(args []string) {
 	}
 	defer conn.Close()
 
-	Pass(conn, Options{Idle: time.Duration(*idleMinutes) * time.Minute, DryRun: *dryRun}, RealDeps(conn), os.Stdout)
+	opts := Options{
+		Idle:       time.Duration(*idleMinutes) * time.Minute,
+		PRDebounce: time.Duration(*debounceMinutes) * time.Minute,
+		DryRun:     *dryRun,
+	}
+	Pass(conn, opts, RealDeps(conn), os.Stdout)
 }
