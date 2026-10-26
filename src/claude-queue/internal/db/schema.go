@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- once it reaches the cap, delivery stops, and pin_halted_upto is the
   -- pin_delivered_upto of the last failed one (NULL for a merge / close), the
   -- activity that has to be outdone for delivery to resume. All seven are
-  -- cleared with the pin, and the last two whenever it is put on again.
+  -- cleared with the pin, and the last two also when it is put on again, when
+  -- delivery resumes or is confirmed, and when the mark is toggled.
   -- Added by migrate() too.
   pin_pr             TEXT,
   pin_cursor         TEXT,

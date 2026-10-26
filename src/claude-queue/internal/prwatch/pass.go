@@ -138,12 +138,17 @@ func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io
 				fmt.Fprintf(out, "pr-watch: %s (%s): delivery stopped after %d unconfirmed resumes, until newer activity or a re-pin\n", id, p.PR, p.Failures)
 				continue
 			}
-			// Back through the debounce, from this pass: the news may be the
-			// first of a burst. The pending mark left from before the stop
-			// is overwritten below.
-			report(out, db.ResumePRDelivery(conn, p.SessionID, p.PR))
+			// Newer activity goes back through the debounce, from this pass:
+			// it may be the first of a burst. A merge or close skips the
+			// debounce and is delivered at once. The pending mark left from
+			// before the stop is overwritten below. If the resume fails, try
+			// again on the next pass rather than go on with a stop still set.
+			if err := db.ResumePRDelivery(conn, p.SessionID, p.PR); err != nil {
+				report(out, err)
+				continue
+			}
 			p.SeenAt = 0
-			fmt.Fprintf(out, "pr-watch: %s (%s): newer activity since delivery stopped, resuming delivery\n", id, p.PR)
+			fmt.Fprintf(out, "pr-watch: %s (%s): the PR has news since delivery stopped, resuming delivery\n", id, p.PR)
 		}
 		events := NewSince(a, p.Cursor)
 		if !closed {

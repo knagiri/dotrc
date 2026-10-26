@@ -693,7 +693,7 @@ func failState(t *testing.T, conn *sql.DB, id string) (failures sql.NullInt64, h
 	return
 }
 
-// tripwire puts tmux, claude and gh on PATH that only leave a mark, so a
+// tripwire puts tmux, claude, gh and mise on PATH that only leave a mark, so a
 // launch that went past the world stub to a real command shows up as the
 // mark instead of a window or a resumed session.
 func tripwire(t *testing.T) string {
@@ -737,7 +737,7 @@ func halted(t *testing.T, w *world, clock *time.Time, out *bytes.Buffer) *sql.DB
 
 func TestPass_RetryCap(t *testing.T) {
 	// Every launch of the cycles below lands on the world stub: the tmux,
-	// claude and gh on PATH are never run.
+	// claude, gh and mise on PATH are never run.
 	t.Run("stubs catch every launch", func(t *testing.T) {
 		mark := tripwire(t)
 		w := &world{activity: news}

@@ -352,7 +352,7 @@ func TestPromptSince(t *testing.T) {
 
 // FailPRDelivery counts failures and stops at max, reading back through
 // PRPins; putting the pin on again (pin --pr; pin --note is
-// TestPass_RetryCap's) or toggling it off with Tab lifts the stop, and a
+// TestPass_RetryCap's) or toggling it off with Tab (which drops the stop along with the watch), and a
 // write for another PR changes nothing.
 func TestFailPRDelivery(t *testing.T) {
 	const pr, note = "example-org/example-repo#3", "[stopped]"

@@ -181,8 +181,8 @@ func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
 // written by the earlier, lapsing mark migrates without a schema change.
 //
 // Toggling the mark off drops the pin's note and its PR watch with it (see
-// SetPin, SetPinPR). Either way it lifts a stop on the PR's delivery, as
-// putting the pin on again does.
+// SetPin, SetPinPR). Toggling off also drops any stop on the PR's delivery
+// along with the watch.
 //
 // A done or unknown session is left alone and reports false.
 func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {

@@ -132,8 +132,8 @@ type PRPin struct {
 	DeliveredUpTo time.Time
 	// Failures counts the deliveries in a row that were never confirmed. At
 	// the cap, delivery has stopped, and HaltedUpTo is the DeliveredUpTo of
-	// the last of them: activity newer than it resumes delivery. Zero for a
-	// merge or close.
+	// the last of them: activity newer than it resumes delivery.
+	// HaltedUpTo is zero when the stopped delivery was a merge or close.
 	Failures       int
 	HaltedUpTo     time.Time
 	Cwd            string
