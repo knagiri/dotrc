@@ -127,13 +127,18 @@ pin は merge / close まで残る。PR が閉じるまで「活動 → 委譲�
 
 | PR の変化 | 委譲元への指示 |
 |---|---|
-| review / comment（author を問わない。bot を含む） | 内容を読み、修正の要否を判断する |
+| review / comment（author を問わない。bot を含む） | 内容を `gh-pr-comments` で読み、修正の要否を判断する |
 | merge | 次の作業を整理する（pin を外す） |
 | merge なしの close | 状況を確認する（pin を外す） |
 
 author で絞らないのは、委譲先が利用者の token で PR を作るので PR author が利用者自身になり、絞ると
 利用者自身の review コメントで起きなくなるためである。agent は PR にコメントを投稿しない運用なので、
 起こした session が自分の書き込みで再び起きることもない。
+
+指示文に入れるのは PR 番号と、review（state ごと）/ comment の件数を bot か人か別にしたものだけで、本文と author 名は
+入れない。public な PR には誰でも書き込めるので、本文を指示文に入れると第三者の文が利用者本人の入力と同じ重みで
+委譲元に渡り、人の居ない auto mode の session で実行されうる。本文は委譲元が `gh-pr-comments` で tool の出力として読み、
+指示文はそれを信頼できない外部入力として扱うよう明記する。
 
 起こし方は session のプロセス状態で分かれる。
 
@@ -143,23 +148,28 @@ author で絞らないのは、委譲先が利用者の token で PR を作る�
 | `gone`（background） | `claude --bg --resume <id> "<指示文>"`。同じ id・同じ会話のまま background で再開する |
 | `running` で `idle_done` | 休眠と同じ手順で止め、`gone` と同じく resume する。window が表示中なら止めず次の tick に回す |
 | `running` で `working` / `awaiting_approval` | 割り込まず次の tick に回す |
-| `running` かつ `open` な子を持つ | 子が PR を扱っている最中なので、次の tick に回す |
+| （状態を問わず）`running` かつ `open` な子を持つ | 子が PR を扱っている最中なので、次の tick に回す |
 
 `running` な session へ外からメッセージを渡す CLI は claude に無い。interactive の pane へ `tmux send-keys`
 で打ち込む手は使わない。入力欄が空かを確実に判定できないためで、pane には利用者が打っていない次の入力
 候補が表示されることがあり、`tmux capture-pane` からは打ちかけの文字列と区別できない。window の置き場所と
 名前は picker の resume と同じ規約に従う。timer には popup を開いたクライアントが無いので、window は session の cwd が
 属する repo の正準名の tmux session（`<main-repo-basename>_<name>` と同じ規約で決まる名前）に開き、
-無ければ detached で作る。tmux server 自体が無いときも同様に起動する。起きた session は通常の hook で state を更新するので、人の判断が要る場面は
+無ければ detached で作る。起きた session は通常の hook で state を更新するので、人の判断が要る場面は
 `awaiting_approval` / `idle_done` として一覧に上がる。自動再開専用の通知は作らない。
 
 GitHub への問い合わせは既存の `gh-*` wrapper と同じ token 経路を使う（`bin/lib/gh-mise.sh`）。
 
 systemd user unit は shell の環境を引き継がないので、PATH は `claude-digest.service` と同じく明示し、
 claude を起動するときの `CLAUDE_CONFIG_DIR` は 台帳に記録された session の config dir から決める（`internal/configdir`）。
-`Type=oneshot` の service が起動した子プロセスは、既定（`KillMode=control-group`）では service の
-終了とともに殺される。監視コマンドが tmux server・claude・background daemon を新たに立ち上げる場合は、
-それらを service の cgroup の外へ出す（`systemd-run --user --scope` 等）か `KillMode` を変える。
+配送は既に動いている tmux server（interactive）か、その config dir の claude daemon（background）へだけ行い、
+居なければ次の tick に回す。監視コマンドが起動すると、それらは service の env（SSH agent が無く、PATH は unit が
+固定した値）を持ち、引き継がせる。daemon はそれを on-demand で起動した呼び出し元の env を、生きている間に起動する
+background session すべてに渡すので、以後の委譲先がその env で走る。tmux server も global env を window に渡す。
+そのため、ホスト再起動後で tmux server が無い間は、誰かが tmux を開くまで interactive の委譲元は起こされない。
+background の委譲元も、daemon は最後の client が切れて数秒で終わるので、他の background session が動いていない間は
+起こされない。この制約で、監視コマンドが service の cgroup に長命のプロセスを起こすこと（`Type=oneshot` の service が
+終わると既定の `KillMode=control-group` で殺される）も無くなる。
 
 ## 一覧と GC
 

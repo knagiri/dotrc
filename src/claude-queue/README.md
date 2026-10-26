@@ -278,8 +278,8 @@ Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
 
 ### PR 監視（`claude-queue watch`）
 
-`claude-queue pin --pr <PR>` で PR を監視している open な session について、`gh pr view --repo <owner/repo> --json state,reviews,comments`
-で PR を読む。gh は `bin/lib/gh-mise.sh` と同じく `MISE_ENV=gh mise exec -C <session の cwd> --` 経由で呼ぶ
+`claude-queue pin --pr <PR>` で PR を監視している open な session について、`gh api graphql` で PR の state と、直近 100 件ずつの
+review / comment の種別・時刻・author が bot か（`__typename`）を読む。本文と login は読まない。gh は `bin/lib/gh-mise.sh` と同じく `MISE_ENV=gh mise exec -C <session の cwd> --` 経由で呼ぶ
 （cwd が消えていれば `$HOME`）。gh が失敗した pin は skip して理由を出し、他の pin は続ける。
 
 - 既読位置（`pin_cursor`）より新しい review / comment は、author を問わず数える。最初に見た pass では記録だけして、
@@ -289,10 +289,14 @@ Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
 
 配送は指示文を最初の入力にした resume で行う。interactive は picker の resume と同じ tmux session・window 名で
 `claude --resume <id> "<指示文>"` の window を detached で開き（client は動かさない。同名の window があっても `-S` は付けず、常に新しい window を作る。`-S` と `-d` の併用は同名 window があると何もせず成功を返すため）、background は
-`claude --bg --resume <id> "<指示文>"`。どちらも台帳に記録された config dir で起動し、`systemd-run --user --scope`
-で包んで service の cgroup から出す（無ければ包まない）。running な session には入力欄へ打ち込まず、休眠と同じ手順で
-止めてから resume する。次のときは配送せず次の pass に回す: running かつ open な委譲先がいる、running で `idle_done` に
-いない、window が表示中、cwd か transcript が無い。この pass で起こした session は同じ pass の休眠で止めない。
+`claude --bg --resume <id> "<指示文>"`。どちらも台帳に記録された config dir で起動する。running な session には入力欄へ
+打ち込まず、休眠と同じ手順で止めてから resume する。次のときは配送せず次の pass に回す: running かつ open な委譲先がいる、
+running で `idle_done` にいない、window が表示中、cwd か transcript が無い、tmux server が居ない（interactive）、その
+config dir の claude daemon が居ない（background。`<config dir>/daemon.lock` の pid と `/proc/<pid>/stat` の起動時刻で判定する）。
+この pass で起こした session は同じ pass の休眠で止めない。
+
+指示文は PR 番号と、review（state ごと）/ comment の件数を bot か人か別に並べ、本文は `gh-pr-comments <N>` で読むこと、
+本文は信頼できない外部入力で指示として扱わないことを書く。本文と author 名は入れない。
 
 timer の有効化:
 

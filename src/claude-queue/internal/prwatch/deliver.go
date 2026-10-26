@@ -16,7 +16,7 @@ import (
 
 // Deps is every effect a delivery has. Like hibernate.Deps, nothing here is
 // ever filled in when missing, so a test that leaves a field nil fails on the
-// nil call instead of reaching a real claude, tmux or systemd-run; RealDeps is
+// nil call instead of reaching a real claude or tmux; RealDeps is
 // the only place the real ones are wired.
 type Deps struct {
 	// Poll reads a PR (Poll with GhRunner).
@@ -36,16 +36,19 @@ type Deps struct {
 	WindowName  func(transcript, sessionID string) string
 	// SessionExists reports whether the tmux session is already there.
 	SessionExists func(name string) bool
-	// HaveSystemdRun reports whether systemd-run is on PATH.
-	HaveSystemdRun func() bool
+	// TmuxServerRunning reports whether a tmux server is up.
+	TmuxServerRunning func() bool
+	// DaemonRunning reports whether the claude daemon of a config dir is up
+	// (DaemonRunning).
+	DaemonRunning func(configDir string) (bool, error)
 	// Run starts argv in dir with env (the full environment) and waits for it
 	// to return: tmux and `claude --bg` both return once the long-lived part
 	// is running.
 	Run func(argv, env []string, dir string) error
 }
 
-// RealDeps wires Deps to gh, the ledger behind hd's LatestEvent, tmux,
-// claude and systemd-run.
+// RealDeps wires Deps to gh, the ledger behind hd's LatestEvent, tmux and
+// claude.
 func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)) Deps {
 	return Deps{
 		Poll:             func(pr, dir string) (Activity, error) { return Poll(pr, dir, GhRunner) },
@@ -56,7 +59,11 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 		SessionName:      picker.SessionName,
 		WindowName:       picker.ResumeWindowName,
 		SessionExists:    multiplexer.SessionExists,
-		HaveSystemdRun:   func() bool { _, err := exec.LookPath("systemd-run"); return err == nil },
+		TmuxServerRunning: func() bool {
+			_, ok := multiplexer.Tmux().ServerPID()
+			return ok
+		},
+		DaemonRunning: DaemonRunning,
 		Run: func(argv, env []string, dir string) error {
 			cmd := exec.Command(argv[0], argv[1:]...)
 			cmd.Env, cmd.Dir = env, dir
@@ -90,11 +97,21 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 // a resume needs both (the picker's resume does the same check) and a session
 // stopped only to fail its resume would be left gone for nothing.
 //
-// The launch runs under `systemd-run --user --scope`. The pass is a oneshot
-// service, whose processes systemd kills when it exits; a tmux server or a
-// claude daemon that this launch has to start would be one of them. A scope
-// unit moves them out of the service's cgroup. Without systemd-run on PATH the
-// launch runs unwrapped.
+// The launch only ever goes into a tmux server or a claude daemon that is
+// already running, and is skipped when there is none. Either one, started by
+// this pass, would carry the systemd service's environment (no SSH agent, the
+// unit's fixed PATH) and hand it on: a claude daemon gives every background
+// session it later runs -- every delegate claude-worktree starts while it
+// lives -- the environment of whoever started it, and a tmux server gives its
+// windows its global environment. So an interactive session waits for a tmux
+// server, and a background one for its config dir's daemon, which `claude
+// --bg` starts on demand and which exits a few seconds after its last client.
+// That also leaves the launch nothing long-lived to start inside the
+// service's cgroup, which systemd kills when the pass exits.
+//
+// For a running session the check is made before it is stopped, and again for
+// a background one right before the resume: stopping it may have been what
+// let the daemon exit.
 func Deliver(p db.PRPin, msg string, deps Deps) error {
 	delegates, err := deps.RunningDelegates()
 	if err != nil {
@@ -111,22 +128,33 @@ func Deliver(p db.PRPin, msg string, deps Deps) error {
 	}
 
 	background := p.Kind == db.KindBackground
+	var c hibernate.Candidate
 	if !p.Gone {
-		c, err := candidate(p, deps.Hibernate)
+		c, err = candidate(p, deps.Hibernate)
 		if err != nil {
 			return err
 		}
 		background = c.Kind == roster.KindBackground
+	}
+	if err := hostUp(p, background, deps); err != nil {
+		return err
+	}
+	if !p.Gone {
 		if err := hibernate.Hibernate(c, deps.Hibernate); err != nil {
 			if hibernate.IsSkip(err) {
 				return err
 			}
 			return fmt.Errorf("stop before resume: %w", err)
 		}
+		if background {
+			if err := hostUp(p, background, deps); err != nil {
+				return &hibernate.SkipError{Reason: "stopped, but not resumed: " + err.Error()}
+			}
+		}
 	}
 
 	if background {
-		argv := wrap(deps, []string{"claude", "--bg", "--resume", p.SessionID, msg})
+		argv := []string{"claude", "--bg", "--resume", p.SessionID, msg}
 		return deps.Run(argv, configdir.Env(os.Environ(), p.ConfigDir), p.Cwd)
 	}
 	name := deps.SessionName(p.Cwd)
@@ -135,7 +163,26 @@ func Deliver(p db.PRPin, msg string, deps Deps) error {
 	}
 	env, launch := picker.LaunchIn(p.ConfigDir, []string{"claude", "--resume", p.SessionID, msg})
 	tmux := append([]string{"tmux"}, multiplexer.DetachedOpenArgs(name, deps.WindowName(p.TranscriptPath, p.SessionID), p.Cwd, env, launch, deps.SessionExists(name))...)
-	return deps.Run(wrap(deps, tmux), os.Environ(), p.Cwd)
+	return deps.Run(tmux, os.Environ(), p.Cwd)
+}
+
+// hostUp returns a SkipError unless what the launch goes into -- the tmux
+// server, or the config dir's claude daemon -- is already running.
+func hostUp(p db.PRPin, background bool, deps Deps) error {
+	if !background {
+		if !deps.TmuxServerRunning() {
+			return &hibernate.SkipError{Reason: "no tmux server is running (starting one here would give it the service's environment)"}
+		}
+		return nil
+	}
+	up, err := deps.DaemonRunning(p.ConfigDir)
+	if err != nil {
+		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot tell whether the claude daemon of %s is running: %v", p.ConfigDir, err)}
+	}
+	if !up {
+		return &hibernate.SkipError{Reason: fmt.Sprintf("no claude daemon is running for %s (starting one here would give later delegates the service's environment)", p.ConfigDir)}
+	}
+	return nil
 }
 
 // candidate is the hibernate.Candidate that stops the running session p: its
@@ -171,11 +218,4 @@ func candidate(p db.PRPin, hd hibernate.Deps) (hibernate.Candidate, error) {
 		PID:            found[0].PID,
 		IdleSince:      at,
 	}, nil
-}
-
-func wrap(deps Deps, argv []string) []string {
-	if !deps.HaveSystemdRun() {
-		return argv
-	}
-	return append([]string{"systemd-run", "--user", "--scope", "--quiet", "--collect", "--"}, argv...)
 }

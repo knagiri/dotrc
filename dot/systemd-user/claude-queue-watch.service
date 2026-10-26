@@ -13,15 +13,14 @@
 # shell's: ~/.bashrc returns early for non-interactive shells, so the
 # dotrc bin directory it appends is never on the PATH here. The pass needs
 # `claude` (agents, stop, resume), `tmux`, `gh`, `mise` (the token path of
-# bin/lib/gh-mise.sh) and `systemd-run` on it as well.
+# bin/lib/gh-mise.sh) on it as well.
 #
 # KillMode is left at its default (control-group), which kills whatever the
-# service started when it exits. Reading and stopping start nothing long-lived
-# (measured with an empty config dir: `claude agents --json` and `claude stop`
-# added no `claude daemon run` process). Waking a session does: it may start a
-# tmux server or a claude daemon. Those launches run under
-# `systemd-run --user --scope`, which puts them in a scope unit of their own,
-# outside this service's cgroup (internal/prwatch Deliver).
+# service started when it exits. The pass starts nothing long-lived: reading
+# and stopping start no daemon (measured with an empty config dir: `claude
+# agents --json` and `claude stop` added no `claude daemon run` process), and
+# waking a session only ever launches into a tmux server or a claude daemon
+# that is already running, skipping it otherwise (internal/prwatch Deliver).
 #
 # Requires `loginctl enable-linger <user>` to run while logged out.
 

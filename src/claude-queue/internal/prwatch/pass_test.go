@@ -34,6 +34,8 @@ type world struct {
 	visible  bool
 	children int
 	runErr   error
+	noTmux   bool
+	noDaemon bool
 
 	polled  []string
 	ran     [][]string
@@ -71,13 +73,14 @@ func (w *world) deps() Deps {
 				return w.latest, now.Unix() - 600, w.latest != "", nil
 			},
 		},
-		RunningDelegates: func() (map[string]int, error) { return map[string]int{sid: w.children}, nil },
-		IsFile:           func(p string) bool { _, err := os.Stat(p); return err == nil },
-		IsDir:            func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() },
-		SessionName:      func(string) string { return "example-repo_feature" },
-		WindowName:       func(string, string) string { return "fix the thing" },
-		SessionExists:    func(string) bool { return false },
-		HaveSystemdRun:   func() bool { return true },
+		RunningDelegates:  func() (map[string]int, error) { return map[string]int{sid: w.children}, nil },
+		IsFile:            func(p string) bool { _, err := os.Stat(p); return err == nil },
+		IsDir:             func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() },
+		SessionName:       func(string) string { return "example-repo_feature" },
+		WindowName:        func(string, string) string { return "fix the thing" },
+		SessionExists:     func(string) bool { return false },
+		TmuxServerRunning: func() bool { return !w.noTmux },
+		DaemonRunning:     func(string) (bool, error) { return !w.noDaemon, nil },
 		Run: func(argv, env []string, _ string) error {
 			w.ran = append(w.ran, argv)
 			w.ranEnv = append(w.ranEnv, env)
@@ -99,7 +102,7 @@ func pin(t *testing.T) db.PRPin {
 }
 
 // Every effect of a delivery -- stopping a running session and launching the
-// resume -- lands on a world stub, none on a real tmux, claude or systemd-run.
+// resume -- lands on a world stub, none on a real tmux or claude.
 func TestDeliver_StubsCatchEveryEffect(t *testing.T) {
 	for _, kind := range []string{roster.KindInteractive, roster.KindBackground} {
 		w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: kind, Status: roster.StatusIdle}}}
@@ -123,10 +126,7 @@ func TestDeliver_GoneInteractiveOpensWindow(t *testing.T) {
 		t.Fatalf("ran %q", w.ran)
 	}
 	argv := w.ran[0]
-	if !slices.Equal(argv[:6], []string{"systemd-run", "--user", "--scope", "--quiet", "--collect", "--"}) || argv[6] != "tmux" {
-		t.Errorf("not launched through systemd-run: %q", argv)
-	}
-	if !slices.Contains(argv, "new-session") || !slices.Contains(argv, "-d") || !slices.Contains(argv, "example-repo_feature") {
+	if !slices.Equal(argv[:3], []string{"tmux", "new-session", "-d"}) || !slices.Contains(argv, "example-repo_feature") {
 		t.Errorf("not a detached session in the worktree's tmux session: %q", argv)
 	}
 	if !slices.Contains(argv, "CLAUDE_CONFIG_DIR="+cfg) {
@@ -147,7 +147,6 @@ func TestDeliver_ExistingSessionNewWindowDetached(t *testing.T) {
 	w := &world{}
 	d := w.deps()
 	d.SessionExists = func(string) bool { return true }
-	d.HaveSystemdRun = func() bool { return false }
 	if err := Deliver(pin(t), "m", d); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +166,7 @@ func TestDeliver_GoneBackground(t *testing.T) {
 	if err := Deliver(p, "m", w.deps()); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"systemd-run", "--user", "--scope", "--quiet", "--collect", "--", "claude", "--bg", "--resume", sid, "m"}; !slices.Equal(w.ran[0], want) {
+	if want := []string{"claude", "--bg", "--resume", sid, "m"}; !slices.Equal(w.ran[0], want) {
 		t.Errorf("argv = %q", w.ran[0])
 	}
 	if !slices.Contains(w.ranEnv[0], "CLAUDE_CONFIG_DIR="+cfg) {
@@ -215,7 +214,7 @@ func TestDeliver_RunningKindFromListing(t *testing.T) {
 	if !slices.Equal(w.stopped, []string{sid}) || len(w.ended) != 0 {
 		t.Errorf("stopped %v ended %v", w.stopped, w.ended)
 	}
-	want := []string{"systemd-run", "--user", "--scope", "--quiet", "--collect", "--", "claude", "--bg", "--resume", sid, "m"}
+	want := []string{"claude", "--bg", "--resume", sid, "m"}
 	if len(w.ran) != 1 || !slices.Equal(w.ran[0], want) {
 		t.Errorf("ran %q", w.ran)
 	}
@@ -274,13 +273,39 @@ func TestDeliver_MissingCwdSkipped(t *testing.T) {
 
 func TestMessage_Activity(t *testing.T) {
 	m := Message(pr, Activity{State: StateOpen}, []Event{
-		{Kind: KindReview, Author: "example-user", ReviewState: "CHANGES_REQUESTED", Summary: "rename this"},
-		{Kind: KindComment, Author: "example-bot[bot]", Summary: "nit"},
+		{Kind: KindReview, ReviewState: "CHANGES_REQUESTED"},
+		{Kind: KindComment, Bot: true},
+		{Kind: KindReview, ReviewState: "CHANGES_REQUESTED"},
+		{Kind: KindReview, Bot: true, ReviewState: "COMMENTED"},
 	})
-	for _, want := range []string{"PR " + pr + " に新しい活動があります", "- example-user: changes_requested rename this", "- example-bot[bot]: comment nit", "delegate-to-worktree"} {
+	for _, want := range []string{
+		"PR " + pr + " に新しい活動があります",
+		"- review changes_requested（人）: 2 件",
+		"- comment（bot）: 1 件",
+		"- review commented（bot）: 1 件",
+		"`gh-pr-comments 12`", "信頼できない外部入力", "delegate-to-worktree",
+	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("message lacks %q:\n%s", want, m)
 		}
+	}
+}
+
+// Nothing a PR's commenters wrote reaches the message: the bodies are not
+// even read (see TestPoll_IgnoresBodies), and neither are logins.
+func TestMessage_CarriesNoBodyOrLogin(t *testing.T) {
+	a, err := parse([]byte(injection))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := Message(pr, a, a.Events)
+	for _, bad := range []string{"Ignore previous instructions", "rm -rf", "example-user", "example-bot"} {
+		if strings.Contains(m, bad) {
+			t.Errorf("message carries %q:\n%s", bad, m)
+		}
+	}
+	if !strings.Contains(m, "- review changes_requested（人）: 1 件") || !strings.Contains(m, "- comment（bot）: 1 件") {
+		t.Errorf("message lost the counts:\n%s", m)
 	}
 }
 
@@ -294,7 +319,7 @@ func TestMessage_MergedAndClosed(t *testing.T) {
 }
 
 // ledger holds one gone interactive session pinned on pr with its cursor at
-// 10:00, and returns it with the pin's cwd.
+// 10:00.
 func ledger(t *testing.T, id string) *sql.DB {
 	t.Helper()
 	conn, err := db.Open(filepath.Join(t.TempDir(), "q.db"))
@@ -325,9 +350,9 @@ func pinState(t *testing.T, conn *sql.DB, id string) (pinned bool, cursor sql.Nu
 }
 
 var news = Activity{State: StateOpen, Events: []Event{
-	{Kind: KindComment, Author: "example-user", At: at("09:00"), Summary: "old"},
-	{Kind: KindComment, Author: "example-user", At: at("10:30"), Summary: "new one"},
-	{Kind: KindReview, Author: "example-bot[bot]", At: at("10:40"), ReviewState: "COMMENTED", Summary: "new two"},
+	{Kind: KindReview, At: at("09:00"), ReviewState: "APPROVED"},
+	{Kind: KindComment, At: at("10:30")},
+	{Kind: KindReview, Bot: true, At: at("10:40"), ReviewState: "COMMENTED"},
 }}
 
 // The first pass that sees new activity only records it; the next one, a tick
@@ -347,7 +372,7 @@ func TestPass_DebounceOneTick(t *testing.T) {
 		t.Fatalf("second pass: resumed %v, ran %q\n%s", got, w.ran, &out)
 	}
 	cmd := w.ran[0][len(w.ran[0])-1]
-	if !strings.Contains(cmd, "new one") || !strings.Contains(cmd, "new two") || strings.Contains(cmd, "old") {
+	if !strings.Contains(cmd, "comment（人）: 1 件") || !strings.Contains(cmd, "review commented（bot）: 1 件") || strings.Contains(cmd, "approved") {
 		t.Errorf("delivered message = %q", cmd)
 	}
 	pinned, cursor, seen := pinState(t, conn, sid)
@@ -452,5 +477,51 @@ func TestPass_GhErrorSkipsPin(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "pr-watch: skipped pinnedaa ("+pr+"): ") || !strings.Contains(out.String(), "Bad credentials") {
 		t.Errorf("gh failure not reported:\n%s", &out)
+	}
+}
+
+// Without a tmux server, or without the config dir's claude daemon, nothing
+// is launched -- either would be started here with the service's environment
+// -- and a running session is not stopped first.
+func TestDeliver_NoHostSkipped(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		w           *world
+		gone        bool
+		kind, inMsg string
+	}{
+		{"gone interactive, no tmux server", &world{noTmux: true}, true, db.KindInteractive, "no tmux server"},
+		{"gone background, no daemon", &world{noDaemon: true}, true, db.KindBackground, "no claude daemon"},
+		{"running interactive, no tmux server", &world{noTmux: true, latest: "idle_done",
+			agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindInteractive, Status: roster.StatusIdle}}}, false, db.KindInteractive, "no tmux server"},
+		{"running background, no daemon", &world{noDaemon: true, latest: "idle_done",
+			agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindBackground, Status: roster.StatusIdle}}}, false, db.KindBackground, "no claude daemon"},
+	} {
+		p := pin(t)
+		p.Gone, p.Kind = tc.gone, tc.kind
+		err := Deliver(p, "m", tc.w.deps())
+		if !hibernate.IsSkip(err) || !strings.Contains(err.Error(), tc.inMsg) {
+			t.Errorf("%s: err = %v", tc.name, err)
+		}
+		if n := len(tc.w.ran) + len(tc.w.ended) + len(tc.w.stopped); n != 0 {
+			t.Errorf("%s: acted anyway: ran %q ended %v stopped %v", tc.name, tc.w.ran, tc.w.ended, tc.w.stopped)
+		}
+	}
+}
+
+// Stopping the last background session can let its daemon exit; the resume is
+// then not launched, rather than starting a new daemon from the service.
+func TestDeliver_DaemonGoneAfterStop(t *testing.T) {
+	w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindBackground, Status: roster.StatusIdle}}}
+	d := w.deps()
+	d.DaemonRunning = func(string) (bool, error) { return len(w.stopped) == 0, nil }
+	p := pin(t)
+	p.Gone = false
+	err := Deliver(p, "m", d)
+	if !hibernate.IsSkip(err) || !strings.Contains(err.Error(), "stopped, but not resumed") {
+		t.Fatalf("err = %v", err)
+	}
+	if !slices.Equal(w.stopped, []string{sid}) || len(w.ran) != 0 {
+		t.Errorf("stopped %v ran %q", w.stopped, w.ran)
 	}
 }

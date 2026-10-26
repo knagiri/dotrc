@@ -17,7 +17,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // PR states, as gh reports them.
@@ -39,33 +38,46 @@ type Activity struct {
 	Events []Event
 }
 
-// Event is one review or comment on the PR.
+// Event is one review or comment on the PR. It deliberately carries neither
+// the body nor the author's login: see Message.
 type Event struct {
-	Kind   string
-	Author string
-	At     time.Time
-	// Summary is the first non-empty line of the body, cut to summaryWidth.
-	Summary string
+	Kind string
+	// Bot is set when the author is a GitHub App or bot account (GraphQL
+	// __typename Bot). A login is not enough to tell: the Copilot reviewer's
+	// does not end in [bot].
+	Bot bool
+	At  time.Time
 	// ReviewState is a review's verdict (APPROVED, CHANGES_REQUESTED,
 	// COMMENTED, ...); empty for a comment.
 	ReviewState string
 }
 
-// summaryWidth bounds an event's summary, in runes: the message carries one
-// line per event, and the session reads the PR itself for the rest.
-const summaryWidth = 80
-
 // Runner runs argv in dir and returns its stdout.
 type Runner func(argv []string, dir string) ([]byte, error)
+
+// query asks for the PR's state and the newest 100 reviews and comments, with
+// no body: nothing a PR's commenters wrote is read, so none of it can reach
+// the woken session (see Message). A PR with more than 100 of either since
+// the last delivery loses the oldest of them from the count only.
+const query = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      state
+      reviews(last: 100) { nodes { state submittedAt author { __typename } } }
+      comments(last: 100) { nodes { createdAt author { __typename } } }
+    }
+  }
+}`
 
 // Poll reads the PR pr (owner/repo#N, as db.ParsePRRef returns it) with gh,
 // from dir.
 //
-// --repo is always passed, so the answer never depends on which repo dir is
-// in: the pinned session's cwd may belong to another repo, or be gone. --json
-// names exactly the fields needed, because the default view also asks for
-// statusCheckRollup, which a fine-grained token cannot read
-// (dot/claude/rules/gh-commands.md Sec1).
+// The repo is always named in the query, so the answer never depends on which
+// repo dir is in: the pinned session's cwd may belong to another repo, or be
+// gone. It is a GraphQL query rather than `gh pr view --json` because only
+// GraphQL says whether an author is a bot, and it names exactly the fields
+// needed -- the default view also asks for statusCheckRollup, which a
+// fine-grained token cannot read (dot/claude/rules/gh-commands.md Sec1).
 //
 // Every review and comment counts, whoever wrote it. A delegate opens its PR
 // with the person's own token, so the PR author is the person, and leaving out
@@ -74,74 +86,71 @@ type Runner func(argv []string, dir string) ([]byte, error)
 // woken session talking to itself.
 func Poll(pr, dir string, run Runner) (Activity, error) {
 	repo, num, ok := strings.Cut(pr, "#")
-	if !ok || repo == "" || num == "" {
+	owner, name, ok2 := strings.Cut(repo, "/")
+	if !ok || !ok2 || owner == "" || name == "" || num == "" {
 		return Activity{}, fmt.Errorf("bad PR reference %q", pr)
 	}
-	out, err := run([]string{"gh", "pr", "view", num, "--repo", repo, "--json", "state,reviews,comments"}, dir)
+	out, err := run([]string{"gh", "api", "graphql", "-f", "query=" + query,
+		"-F", "owner=" + owner, "-F", "repo=" + name, "-F", "number=" + num}, dir)
 	if err != nil {
-		return Activity{}, fmt.Errorf("gh pr view %s: %w", pr, err)
+		return Activity{}, fmt.Errorf("gh api graphql %s: %w", pr, err)
 	}
 	return parse(out)
 }
 
 type ghAuthor struct {
-	Login string `json:"login"`
+	Typename string `json:"__typename"`
 }
 
 type ghView struct {
-	State   string `json:"state"`
-	Reviews []struct {
-		Author      ghAuthor  `json:"author"`
-		Body        string    `json:"body"`
-		State       string    `json:"state"`
-		SubmittedAt time.Time `json:"submittedAt"`
-	} `json:"reviews"`
-	Comments []struct {
-		Author    ghAuthor  `json:"author"`
-		Body      string    `json:"body"`
-		CreatedAt time.Time `json:"createdAt"`
-	} `json:"comments"`
+	Data struct {
+		Repository struct {
+			PullRequest *struct {
+				State   string `json:"state"`
+				Reviews struct {
+					Nodes []struct {
+						State       string    `json:"state"`
+						SubmittedAt time.Time `json:"submittedAt"`
+						Author      *ghAuthor `json:"author"`
+					} `json:"nodes"`
+				} `json:"reviews"`
+				Comments struct {
+					Nodes []struct {
+						CreatedAt time.Time `json:"createdAt"`
+						Author    *ghAuthor `json:"author"`
+					} `json:"nodes"`
+				} `json:"comments"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
 }
+
+// isBot reads an author, which is null for a deleted account.
+func isBot(a *ghAuthor) bool { return a != nil && a.Typename == "Bot" }
 
 func parse(data []byte) (Activity, error) {
 	var v ghView
 	if err := json.Unmarshal(data, &v); err != nil {
-		return Activity{}, fmt.Errorf("parse gh pr view: %w", err)
+		return Activity{}, fmt.Errorf("parse gh api graphql: %w", err)
 	}
-	if v.State == "" {
-		return Activity{}, errors.New("parse gh pr view: no state")
+	pr := v.Data.Repository.PullRequest
+	if pr == nil || pr.State == "" {
+		return Activity{}, errors.New("parse gh api graphql: no pull request state")
 	}
-	a := Activity{State: v.State}
-	for _, r := range v.Reviews {
+	a := Activity{State: pr.State}
+	for _, r := range pr.Reviews.Nodes {
 		// A pending review is the reviewer's unsubmitted draft; it has no
 		// submittedAt and nobody else can see it yet.
 		if r.SubmittedAt.IsZero() {
 			continue
 		}
-		a.Events = append(a.Events, Event{Kind: KindReview, Author: r.Author.Login, At: r.SubmittedAt, Summary: summary(r.Body), ReviewState: r.State})
+		a.Events = append(a.Events, Event{Kind: KindReview, Bot: isBot(r.Author), At: r.SubmittedAt, ReviewState: r.State})
 	}
-	for _, c := range v.Comments {
-		a.Events = append(a.Events, Event{Kind: KindComment, Author: c.Author.Login, At: c.CreatedAt, Summary: summary(c.Body)})
+	for _, c := range pr.Comments.Nodes {
+		a.Events = append(a.Events, Event{Kind: KindComment, Bot: isBot(c.Author), At: c.CreatedAt})
 	}
 	sort.SliceStable(a.Events, func(i, j int) bool { return a.Events[i].At.Before(a.Events[j].At) })
 	return a, nil
-}
-
-// summary is the first non-empty line of body, trimmed and cut to
-// summaryWidth runes.
-func summary(body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if utf8.RuneCountInString(line) > summaryWidth {
-			r := []rune(line)
-			line = string(r[:summaryWidth-1]) + "…"
-		}
-		return line
-	}
-	return ""
 }
 
 // NewSince returns a's events newer than cursor, oldest first. An event at
