@@ -1,9 +1,11 @@
 package hibernate
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 
+	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
@@ -33,10 +35,16 @@ type Deps struct {
 	// List reads the config dir's `claude agents` listing. check calls it again
 	// right before acting, because Candidates' read can be minutes old.
 	List func(dir string) ([]roster.Agent, error)
+	// LatestEvent reads the session's latest ledger event (state, unix time;
+	// found false when there is none). check compares it with the idle_done
+	// Candidates saw, because a session that ran a whole turn since then is
+	// idle again by status alone.
+	LatestEvent func(sessionID string) (state string, createdAt int64, found bool, err error)
 }
 
-// RealDeps wires Deps to tmux, signals and `claude stop`.
-func RealDeps() Deps {
+// RealDeps wires Deps to tmux, signals, `claude stop`, the `claude agents`
+// listing and the ledger behind conn.
+func RealDeps(conn *sql.DB) Deps {
 	mux := multiplexer.Tmux()
 	return Deps{
 		FindPane:       mux.FindPane,
@@ -47,6 +55,9 @@ func RealDeps() Deps {
 		KillPane:       multiplexer.KillPane,
 		Stop:           reconcile.StopIn,
 		List:           roster.ListIn,
+		LatestEvent: func(id string) (string, int64, bool, error) {
+			return db.LatestEvent(conn, id)
+		},
 	}
 }
 
@@ -79,6 +90,10 @@ func IsSkip(err error) bool {
 //     status idle. Candidates judged that some time ago, and each interactive
 //     stop before this one can wait up to 10s, so the session may have started
 //     a turn since; a listing that cannot be read is a skip too;
+//   - the session's latest ledger event is no longer the idle_done Candidates
+//     judged (a different state, or the same state at a later time): status
+//     alone cannot tell, since a session that ran a whole turn in between is
+//     idle again. An unreadable ledger is a skip too;
 //   - the pane's window is on screen in an attached client. Someone is looking
 //     at it, whatever the idle clock says.
 //
@@ -105,7 +120,8 @@ func Hibernate(c Candidate, deps Deps) error {
 }
 
 // Check runs Hibernate's skip decisions without stopping anything, for a dry
-// run: it only reads tmux. A nil error means Hibernate would go on to stop c.
+// run: it reads the `claude agents` listing, the ledger and tmux, and changes
+// nothing. A nil error means Hibernate would go on to stop c.
 func Check(c Candidate, deps Deps) error {
 	_, err := check(c, deps)
 	return err
@@ -126,6 +142,13 @@ func check(c Candidate, deps Deps) (string, error) {
 	}
 	if a.Status != roster.StatusIdle {
 		return "", &SkipError{Reason: fmt.Sprintf("status is %q on re-check, not idle", a.Status)}
+	}
+	state, at, found, err := deps.LatestEvent(c.SessionID)
+	if err != nil {
+		return "", &SkipError{Reason: fmt.Sprintf("cannot re-read the ledger to confirm the idle_done event: %v", err)}
+	}
+	if !found || state != "idle_done" || at != c.IdleSince {
+		return "", &SkipError{Reason: fmt.Sprintf("latest event changed since the idle check (now %q at %d, was idle_done at %d)", state, at, c.IdleSince)}
 	}
 	switch c.Kind {
 	case roster.KindBackground:

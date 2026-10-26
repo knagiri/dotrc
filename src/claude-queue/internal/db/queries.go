@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
@@ -132,6 +133,20 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 		}
 	}
 	return out, nil
+}
+
+// LatestEvent returns the state and unix time of a session's latest ledger
+// event, read from the same queue view ListRows uses. found is false when the
+// view has no entry for the session.
+func LatestEvent(conn *sql.DB, sessionID string) (state string, createdAt int64, found bool, err error) {
+	err = conn.QueryRow(`SELECT raw_state, created_at FROM queue WHERE session_id = ?`, sessionID).Scan(&state, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("latest event: %w", err)
+	}
+	return state, createdAt, true, nil
 }
 
 // LinkSession records that the session whose id starts with childShort was

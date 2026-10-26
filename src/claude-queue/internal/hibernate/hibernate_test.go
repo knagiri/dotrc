@@ -25,7 +25,19 @@ type recorder struct {
 	// candidates in these tests name.
 	agents  []roster.Agent
 	listErr error
+	// latest is what LatestEvent returns; nil means the idle_done at
+	// interactive()'s IdleSince.
+	latest *latestEvent
 }
+
+type latestEvent struct {
+	state string
+	at    int64
+	found bool
+	err   error
+}
+
+const idleAt = 1000
 
 func (r *recorder) deps() Deps {
 	return Deps{
@@ -41,6 +53,13 @@ func (r *recorder) deps() Deps {
 				{SessionID: "aaaaaaaa-1", Status: roster.StatusIdle},
 				{SessionID: "bbbbbbbb-1", Status: roster.StatusIdle},
 			}, nil
+		},
+		LatestEvent: func(id string) (string, int64, bool, error) {
+			r.calls = append(r.calls, "latest")
+			if r.latest != nil {
+				return r.latest.state, r.latest.at, r.latest.found, r.latest.err
+			}
+			return "idle_done", idleAt, true, nil
 		},
 		FindPane: func(pid int) (string, bool) {
 			r.calls = append(r.calls, "find")
@@ -74,7 +93,7 @@ func (r *recorder) deps() Deps {
 }
 
 func interactive() Candidate {
-	return Candidate{SessionID: "aaaaaaaa-1", ConfigDir: dirA, Kind: roster.KindInteractive, PID: fakePID}
+	return Candidate{SessionID: "aaaaaaaa-1", ConfigDir: dirA, Kind: roster.KindInteractive, PID: fakePID, IdleSince: idleAt}
 }
 
 // The destructive ends -- tmux, `claude stop` -- are blocked before any test
@@ -83,7 +102,7 @@ func interactive() Candidate {
 func TestHibernate_StubsCatchEveryEffect(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("TMUX", "")
-	real := RealDeps()
+	real := RealDeps(nil)
 	if err := real.KillPane("%1"); err == nil {
 		t.Fatal("real KillPane ran with an empty PATH")
 	}
@@ -98,7 +117,7 @@ func TestHibernate_StubsCatchEveryEffect(t *testing.T) {
 	if err := Hibernate(interactive(), r.deps()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"list", "find", "window %5", "visible", "end aaaaaaaa-1", "exists %5", "kill-pane %5"}
+	want := []string{"list", "latest", "find", "window %5", "visible", "end aaaaaaaa-1", "exists %5", "kill-pane %5"}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("calls = %v, want %v", r.calls, want)
 	}
@@ -131,7 +150,7 @@ func TestHibernate_NoPaneSkipped(t *testing.T) {
 	if !IsSkip(err) || !strings.Contains(err.Error(), "no tmux pane") {
 		t.Fatalf("err = %v, want a no-pane skip", err)
 	}
-	if !reflect.DeepEqual(r.calls, []string{"list", "find"}) {
+	if !reflect.DeepEqual(r.calls, []string{"list", "latest", "find"}) {
 		t.Fatalf("calls = %v, want only the pane lookup", r.calls)
 	}
 }
@@ -164,11 +183,11 @@ func TestHibernate_PaneAlreadyClosed(t *testing.T) {
 
 func TestHibernate_BackgroundUsesStop(t *testing.T) {
 	r := &recorder{}
-	c := Candidate{SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID}
+	c := Candidate{SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt}
 	if err := Hibernate(c, r.deps()); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(r.calls, []string{"list", "stop bbbbbbbb-1"}) {
+	if !reflect.DeepEqual(r.calls, []string{"list", "latest", "stop bbbbbbbb-1"}) {
 		t.Fatalf("calls = %v, want only the stop", r.calls)
 	}
 }
@@ -179,7 +198,7 @@ func TestCheck_ReadsOnly(t *testing.T) {
 	if err := Check(interactive(), r.deps()); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(r.calls, []string{"list", "find", "window %5", "visible"}) {
+	if !reflect.DeepEqual(r.calls, []string{"list", "latest", "find", "window %5", "visible"}) {
 		t.Fatalf("calls = %v, want only the reads", r.calls)
 	}
 	r = &recorder{pane: "%5", window: "@2", visible: map[string]bool{"@2": true}}
@@ -187,8 +206,8 @@ func TestCheck_ReadsOnly(t *testing.T) {
 		t.Fatalf("err = %v, want the on-screen skip", err)
 	}
 	r = &recorder{}
-	bg := Candidate{SessionID: "bbbbbbbb-1", Kind: roster.KindBackground}
-	if err := Check(bg, r.deps()); err != nil || !reflect.DeepEqual(r.calls, []string{"list"}) {
+	bg := Candidate{SessionID: "bbbbbbbb-1", Kind: roster.KindBackground, IdleSince: idleAt}
+	if err := Check(bg, r.deps()); err != nil || !reflect.DeepEqual(r.calls, []string{"list", "latest"}) {
 		t.Fatalf("background: err = %v, calls = %v", err, r.calls)
 	}
 }
@@ -198,7 +217,7 @@ func TestCheck_ReadsOnly(t *testing.T) {
 func TestHibernate_BusyOnRecheckSkipped(t *testing.T) {
 	cases := map[string]Candidate{
 		"interactive": interactive(),
-		"background":  {SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID},
+		"background":  {SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -231,5 +250,35 @@ func TestHibernate_RecheckUnreadableOrNotOnceSkipped(t *testing.T) {
 				t.Fatalf("calls = %v, want only the re-read", r.calls)
 			}
 		})
+	}
+}
+
+// Status alone cannot tell that a session ran a whole turn since Candidates
+// looked: it is idle again. The ledger's latest event must still be the
+// idle_done Candidates judged.
+func TestHibernate_LatestEventChangedSkipped(t *testing.T) {
+	cases := map[string]latestEvent{
+		"newer idle_done": {state: "idle_done", at: idleAt + 60, found: true},
+		"other state":     {state: "working", at: idleAt, found: true},
+		"missing":         {},
+		"unreadable":      {err: errors.New("db locked")},
+	}
+	kinds := map[string]Candidate{
+		"interactive": interactive(),
+		"background":  {SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt},
+	}
+	for name, l := range cases {
+		for kname, c := range kinds {
+			t.Run(name+"/"+kname, func(t *testing.T) {
+				l := l
+				r := &recorder{pane: "%5", window: "@2", visible: map[string]bool{}, present: true, latest: &l}
+				if err := Hibernate(c, r.deps()); !IsSkip(err) {
+					t.Fatalf("err = %v, want a skip", err)
+				}
+				if !reflect.DeepEqual(r.calls, []string{"list", "latest"}) {
+					t.Fatalf("calls = %v, want no stop", r.calls)
+				}
+			})
+		}
 	}
 }

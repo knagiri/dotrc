@@ -42,8 +42,8 @@ type Deps struct {
 }
 
 // RealDeps wires Deps to the real reconcile, rosters, transcripts and stops.
-func RealDeps() Deps {
-	hd := hibernate.RealDeps()
+func RealDeps(conn *sql.DB) Deps {
+	hd := hibernate.RealDeps(conn)
 	return Deps{
 		Sweep:                reconcile.Sweep,
 		List:                 roster.ListIn,
@@ -137,5 +137,5 @@ func Run(args []string) {
 	}
 	defer conn.Close()
 
-	Pass(conn, Options{Idle: time.Duration(*idleMinutes) * time.Minute, DryRun: *dryRun}, RealDeps(), os.Stdout)
+	Pass(conn, Options{Idle: time.Duration(*idleMinutes) * time.Minute, DryRun: *dryRun}, RealDeps(conn), os.Stdout)
 }
