@@ -27,7 +27,7 @@ func legacyLedger(t *testing.T, path string) {
 
 	type ev struct {
 		sid, typ, state, payload string
-		at                      int64
+		at                       int64
 	}
 	sessions := []struct {
 		id, pane string

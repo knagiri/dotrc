@@ -42,6 +42,7 @@ func Run(event string) {
 		DB:        conn,
 		Pane:      pane,
 		ConfigDir: configdir.Resolve(in.TranscriptPath, os.Getenv(configdir.EnvVar)),
+		Kind:      KindFromEnv(os.Getenv),
 	}
 	if err := Dispatch(d, event, in); err != nil {
 		logDebug("dispatch %s: %v", event, err)
