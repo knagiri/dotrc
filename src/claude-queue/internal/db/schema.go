@@ -24,10 +24,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- an existing database and would leave the column off it forever.
   config_dir      TEXT,
   -- The events.id the session was manually marked "waiting" at (claude-queue
-  -- mark, Tab in the picker). The mark holds only while this still equals the
-  -- session's latest event id, so the next hook event lifts it without anyone
-  -- clearing the column. NULL is unmarked. Added by migrate() too, for the same
-  -- reason as config_dir.
+  -- mark, Tab in the picker). Non-NULL is marked, until it is toggled off;
+  -- later events do not lift it. NULL is unmarked. Added by migrate() too, for
+  -- the same reason as config_dir.
   waiting_event_id INTEGER,
   -- The work axis: when the session's work was declared finished. NULL is
   -- open. terminated_at is the process axis (NULL running, set gone) and says
@@ -117,7 +116,7 @@ SELECT
     ELSE 5
   END AS priority,
   p.state AS prior_state,
-  CASE WHEN s.waiting_event_id = e.id THEN 1 ELSE 0 END AS marked
+  CASE WHEN s.waiting_event_id IS NOT NULL THEN 1 ELSE 0 END AS marked
 FROM events e
 JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
   ON e.id = l.mid

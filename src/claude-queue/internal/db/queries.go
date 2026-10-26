@@ -36,13 +36,12 @@ type Row struct {
 
 	// ParentSessionID is the full id of the session that delegated this one,
 	// from session_links. NULL means no link was recorded -- not that the
-	// parent is gone -- and is always NULL on the resumable rows, which the
-	// picker lists flat.
+	// parent is done or gone.
 	ParentSessionID sql.NullString
 
-	// Marked is the manual "waiting" mark (see ToggleMark): true while the mark
-	// still sits on the session's latest event. It changes the picker's icon
-	// and nothing else -- not the state, the priority or the ordering.
+	// Marked is the manual "waiting" mark (see ToggleMark), held until it is
+	// toggled off. It changes the picker's icon and nothing else -- not the
+	// state, the priority or the ordering.
 	Marked bool
 }
 
@@ -57,19 +56,6 @@ const (
 // ended (terminated_at set). No hook writes it: the queue view derives it, and
 // the session stays listed until its work is marked done.
 const StateGone = "gone"
-
-// StateResumable is the pseudo effective_state of a terminated row that
-// `claude --resume` can reopen. It is not a state any hook writes: the ledger
-// only knows 'ended', and this names the subset of ended rows worth offering.
-const StateResumable = "resumable"
-
-// priorityResumable / priorityResumableIdle sort the resumable rows behind
-// every live one -- the queue view's own priorities top out at 5 -- and, among
-// themselves, put the sessions that were interrupted mid-task first.
-const (
-	priorityResumable     = 6
-	priorityResumableIdle = 7
-)
 
 // ListOpts filters the queue listing.
 type ListOpts struct {
@@ -99,7 +85,9 @@ func Counts(conn *sql.DB) (map[string]int, error) {
 }
 
 // Includes reports whether a row in effectiveState passes the filter. By
-// default working + stale are excluded; with both flags set nothing is.
+// default working + stale are excluded; with both flags set nothing is. Gone
+// rows are always included: the work is open and waiting on a resume, which is
+// what the default listing is for.
 //
 // It is the filter ListRows applies, exposed because the picker reads every
 // row and applies it itself: a delegating parent is usually `working`, and the
@@ -109,7 +97,7 @@ func (o ListOpts) Includes(effectiveState string) bool {
 		return true
 	}
 	switch effectiveState {
-	case "awaiting_approval", "idle_done":
+	case "awaiting_approval", "idle_done", StateGone:
 		return true
 	case "working":
 		return o.ShowWorking
@@ -160,26 +148,28 @@ func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
 	return nil
 }
 
-// ToggleMark flips the manual "waiting" mark on a live session and reports
+// ToggleMark flips the manual "waiting" mark on an open session and reports
 // whether it is now marked.
 //
-// Marking pins the session's latest event id; the mark reads as set only while
-// that is still the latest (see the queue view's marked column), so the next
-// hook event lifts it on its own. Toggling a session whose mark has already
-// been lifted that way marks it again rather than clearing a stale id.
+// The mark holds until it is toggled off: a session waiting on something
+// outside it (a review, another person) still gets touched in the meantime --
+// a nudge, a question -- and that must not lift it. A gone session can be
+// marked too; it is open work like any other.
 //
-// A session that is not live -- terminated, or not in the ledger at all -- is
-// left alone and reports false: the picker's resumable rows carry an id too,
-// and Tab on one of them must be a no-op rather than an error.
+// The column stores the event id the mark was set at, which nothing reads
+// beyond "is it set"; it is kept rather than turned into a flag so a database
+// written by the earlier, lapsing mark migrates without a schema change.
+//
+// A done or unknown session is left alone and reports false.
 func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
 	var marked sql.NullBool
 	err := conn.QueryRow(`
 		UPDATE sessions
 		SET waiting_event_id = CASE
-		      WHEN waiting_event_id = (SELECT MAX(id) FROM events WHERE session_id = ?1) THEN NULL
-		      ELSE (SELECT MAX(id) FROM events WHERE session_id = ?1)
+		      WHEN waiting_event_id IS NOT NULL THEN NULL
+		      ELSE COALESCE((SELECT MAX(id) FROM events WHERE session_id = ?1), 0)
 		    END
-		WHERE session_id = ?1 AND terminated_at IS NULL
+		WHERE session_id = ?1 AND done_at IS NULL
 		RETURNING waiting_event_id IS NOT NULL
 	`, sessionID).Scan(&marked)
 	if err == sql.ErrNoRows {
@@ -191,69 +181,27 @@ func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
 	return marked.Bool, nil
 }
 
-// ResumableCandidates returns the terminated rows whose conversation
-// `claude --resume` could reopen, ordered to follow the live rows: interrupted
-// sessions first, newest first within each group.
-//
-// This is only the half of the test that SQL can answer. A resume also needs
-// the transcript and the working directory to still be on disk, and the ledger
-// having recorded a path is no evidence of that -- short-lived sessions never
-// write a jsonl, and a reaped worktree takes the cwd with it. Callers must run
-// the surviving candidates past a filesystem check (picker.filterResumable)
-// before offering them, because `claude --resume` with an id it cannot find
-// starts an empty session under that id instead of failing.
-//
-// The reason filter is what keeps the list to sessions that were CUT OFF. A
-// SessionEnd carrying reason 'prompt_input_exit' is a human closing the REPL at
-// a stopping point, so it is excluded; every other end is either a signal
-// (SIGTERM, `claude stop`, the host going down) or a ForcedEnd synthesised by
-// reconcile after a session vanished without notice, and those are the ones
-// worth offering back. json_valid guards the extract because a SessionEnd with
-// no reason stores an empty payload string, which json_extract rejects as
-// malformed rather than reading as absent.
-//
-// tmux_pane is dropped rather than selected. The ledger never clears it -- the
-// upsert COALESCEs it forward -- so on these rows it always names the pane of a
-// process that has ended, and pane ids are a per-server counter that a fresh
-// server restarts from %0, meaning the recorded id almost certainly resolves to
-// an unrelated live pane after a reboot. The picker's last-resort fallback
-// trusts a ledger pane when the roster cannot be read, on the grounds that an
-// unreadable roster is not evidence the session ended; for a row selected by
-// terminated_at that premise is simply false, and honouring it would switch to
-// a stranger's pane instead of resuming, silently. Where a pane is genuinely
-// reachable the roster names the process and the picker re-derives the pane
-// from its ancestry, so nothing is lost by withholding this column.
-func ResumableCandidates(conn *sql.DB) ([]Row, error) {
-	rows, err := conn.Query(`
-		SELECT s.session_id, NULL AS tmux_pane, s.cwd, s.transcript_path, s.config_dir,
-		       e.event_type, e.state AS raw_state, ? AS effective_state,
-		       e.payload, e.created_at,
-		       CASE WHEN p.state IN ('working', 'awaiting_approval') THEN ? ELSE ? END AS priority,
-		       p.state AS prior_state, NULL AS parent_session_id, 0 AS marked, s.kind
-		FROM events e
-		JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
-		  ON e.id = l.mid
-		JOIN sessions s ON s.session_id = e.session_id
-		LEFT JOIN events p ON p.id = (
-		  SELECT MAX(id) FROM events
-		  WHERE session_id = e.session_id AND id < e.id AND state != 'ended'
-		)
-		WHERE s.terminated_at IS NOT NULL
-		  AND e.state = 'ended'
-		  AND COALESCE(
-		        CASE WHEN json_valid(e.payload) THEN json_extract(e.payload, '$.reason') END,
-		        ''
-		      ) != 'prompt_input_exit'
-		ORDER BY priority ASC, e.created_at DESC
-	`, StateResumable, priorityResumable, priorityResumableIdle)
+// OpenSessionIDs returns the ids of every session whose work is not done,
+// running or gone -- the sessions still able to answer for their delegates.
+func OpenSessionIDs(conn *sql.DB) ([]string, error) {
+	rows, err := conn.Query("SELECT session_id FROM sessions WHERE done_at IS NULL ORDER BY session_id")
 	if err != nil {
-		return nil, fmt.Errorf("list resumable: %w", err)
+		return nil, fmt.Errorf("open sessions: %w", err)
 	}
-	return scanRows(rows)
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
-// scanRows drains a query shaped like the column list both listings select, and
-// closes it. Shared so the two cannot drift apart in column order.
+// scanRows drains a query shaped like the column list ListRows selects, and
+// closes it.
 func scanRows(rows *sql.Rows) ([]Row, error) {
 	defer rows.Close()
 	var out []Row

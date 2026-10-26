@@ -1,6 +1,7 @@
 // Package mark implements `claude-queue mark <session_id>`, which toggles the
 // manual "waiting" mark the picker shows on a session -- a reply the human is
-// waiting on, work parked to come back to. The picker binds it to Tab.
+// waiting on, work parked to come back to. The mark holds until toggled off.
+// The picker binds it to Tab.
 package mark
 
 import (
@@ -11,8 +12,7 @@ import (
 )
 
 // Run is the CLI entrypoint. It exits 1 on a missing argument or a failed
-// write. An ended or unknown session is a silent no-op (see db.ToggleMark), so
-// Tab on a resumable row does nothing rather than fail.
+// write. A done or unknown session is a silent no-op (see db.ToggleMark).
 func Run(args []string) {
 	if len(args) != 1 || args[0] == "" {
 		fmt.Fprintln(os.Stderr, "usage: claude-queue mark <session-id>")

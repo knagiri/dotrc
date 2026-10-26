@@ -3,7 +3,6 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -150,234 +149,6 @@ func TestListRows_SortsByPriorityThenRecency(t *testing.T) {
 	}
 }
 
-// The reason filter is the whole point of the candidate query: an end a human
-// typed at the REPL prompt is a stopping point, while a signal-driven end or a
-// ForcedEnd synthesised by reconcile is a session that was cut off.
-func TestResumableCandidates_FiltersByEndReason(t *testing.T) {
-	conn, err := Open(filepath.Join(t.TempDir(), "r.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer conn.Close()
-
-	// The ends that should come back.
-	insertSession(t, conn, "signal", "%1")
-	insertEvent(t, conn, "signal", "Stop", "idle_done", 400)
-	insertEventPayload(t, conn, "signal", "SessionEnd", "ended", `{"reason":"other"}`, 300)
-	terminate(t, conn, "signal", 300)
-
-	insertSession(t, conn, "forced", "%2")
-	insertEvent(t, conn, "forced", "UserPromptSubmit", "working", 400)
-	insertEvent(t, conn, "forced", "ForcedEnd", "ended", 300) // no payload at all
-	terminate(t, conn, "forced", 300)
-
-	// A SessionEnd with no reason recorded stores an empty payload string, which
-	// json_extract rejects as malformed rather than reading as absent. It must
-	// not take the query down or drop the row.
-	insertSession(t, conn, "noreason", "%3")
-	insertEvent(t, conn, "noreason", "Stop", "idle_done", 400)
-	insertEventPayload(t, conn, "noreason", "SessionEnd", "ended", "", 300)
-	terminate(t, conn, "noreason", 300)
-
-	// The ends that should not.
-	insertSession(t, conn, "typedexit", "%4")
-	insertEvent(t, conn, "typedexit", "Stop", "idle_done", 400)
-	insertEventPayload(t, conn, "typedexit", "SessionEnd", "ended", `{"reason":"prompt_input_exit"}`, 300)
-	terminate(t, conn, "typedexit", 300)
-
-	// Still live: it belongs to the queue view, not here.
-	insertSession(t, conn, "live", "%5")
-	insertEvent(t, conn, "live", "Stop", "idle_done", 60)
-
-	got, err := ResumableCandidates(conn)
-	if err != nil {
-		t.Fatalf("ResumableCandidates: %v", err)
-	}
-	found := map[string]Row{}
-	for _, r := range got {
-		found[r.SessionID] = r
-	}
-	for _, want := range []string{"signal", "forced", "noreason"} {
-		if _, ok := found[want]; !ok {
-			t.Errorf("session %q missing from the candidates", want)
-		}
-	}
-	for _, unwanted := range []string{"typedexit", "live"} {
-		if _, ok := found[unwanted]; ok {
-			t.Errorf("session %q should not be a candidate", unwanted)
-		}
-	}
-	if len(got) != 3 {
-		t.Fatalf("len(candidates) = %d, want 3: %+v", len(got), got)
-	}
-
-	// Every candidate is labelled with the pseudo state the picker renders, and
-	// carries the state it was in before the end so the summary can name it.
-	if s := found["forced"]; s.EffectiveState != StateResumable || s.PriorState.String != "working" {
-		t.Errorf("forced = {%q, %q}, want {%q, working}", s.EffectiveState, s.PriorState.String, StateResumable)
-	}
-	if s := found["signal"]; s.PriorState.String != "idle_done" {
-		t.Errorf("signal prior state = %q, want idle_done", s.PriorState.String)
-	}
-}
-
-// Resumable rows sort behind every live row, then interrupted before finished,
-// then newest first -- so a host that came back up offers the work that was
-// actually in flight at the top.
-func TestResumableCandidates_Ordering(t *testing.T) {
-	conn, err := Open(filepath.Join(t.TempDir(), "o.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer conn.Close()
-
-	type seed struct {
-		id    string
-		prior string
-		ago   int64
-	}
-	// Inserted in an order that matches neither the priority nor the recency
-	// the result must come back in.
-	for _, s := range []seed{
-		{"done-old", "idle_done", 500},
-		{"work-old", "working", 400},
-		{"appr-new", "awaiting_approval", 100},
-		{"done-new", "idle_done", 200},
-		{"work-new", "working", 150},
-	} {
-		insertSession(t, conn, s.id, "")
-		insertEvent(t, conn, s.id, "Stop", s.prior, s.ago+50)
-		insertEvent(t, conn, s.id, "ForcedEnd", "ended", s.ago)
-		terminate(t, conn, s.id, s.ago)
-	}
-
-	got, err := ResumableCandidates(conn)
-	if err != nil {
-		t.Fatalf("ResumableCandidates: %v", err)
-	}
-	var ids []string
-	for _, r := range got {
-		ids = append(ids, r.SessionID)
-		if r.Priority <= 5 {
-			t.Errorf("%s has priority %d, which would sort it among the live rows",
-				r.SessionID, r.Priority)
-		}
-	}
-	want := []string{"appr-new", "work-new", "work-old", "done-new", "done-old"}
-	if strings.Join(ids, ",") != strings.Join(want, ",") {
-		t.Errorf("order = %v, want %v", ids, want)
-	}
-}
-
-// A session whose only event is the end has no prior state to report, and must
-// still be offered rather than dropped by the join that looks for one.
-func TestResumableCandidates_NoPriorState(t *testing.T) {
-	conn, err := Open(filepath.Join(t.TempDir(), "p.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer conn.Close()
-
-	insertSession(t, conn, "bare", "%1")
-	insertEvent(t, conn, "bare", "ForcedEnd", "ended", 100)
-	terminate(t, conn, "bare", 100)
-
-	got, err := ResumableCandidates(conn)
-	if err != nil {
-		t.Fatalf("ResumableCandidates: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1", len(got))
-	}
-	if got[0].PriorState.Valid {
-		t.Errorf("PriorState = %q, want NULL", got[0].PriorState.String)
-	}
-	if got[0].Priority != priorityResumableIdle {
-		t.Errorf("Priority = %d, want %d", got[0].Priority, priorityResumableIdle)
-	}
-}
-
-// The prior state is what the session was last DOING, which takes two things
-// the naive "the event before the last one" does not give. A session that ended,
-// was resumed and ended again has to report the second run, not the first. And
-// end events do not count as a prior state: 'ended' says nothing about the work,
-// so a row carrying more than one of them in a row -- the shape a resurrected
-// session leaves behind -- must be looked past rather than reported as
-// "resumable (was ended)" and sorted as if it had finished cleanly.
-func TestResumableCandidates_PriorStateIsTheLastWorkingState(t *testing.T) {
-	conn, err := Open(filepath.Join(t.TempDir(), "q.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer conn.Close()
-
-	insertSession(t, conn, "twice", "%1")
-	// First run, closed cleanly.
-	insertEvent(t, conn, "twice", "Stop", "idle_done", 900)
-	insertEventPayload(t, conn, "twice", "SessionEnd", "ended", `{"reason":"other"}`, 800)
-	// Resumed, then cut off mid-approval -- and closed twice over.
-	insertEvent(t, conn, "twice", "SessionStart", "working", 700)
-	insertEvent(t, conn, "twice", "PermissionRequest", "awaiting_approval", 600)
-	insertEventPayload(t, conn, "twice", "SessionEnd", "ended", `{"reason":"other"}`, 550)
-	insertEvent(t, conn, "twice", "ForcedEnd", "ended", 500)
-	terminate(t, conn, "twice", 500)
-
-	got, err := ResumableCandidates(conn)
-	if err != nil {
-		t.Fatalf("ResumableCandidates: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1 (only the last event decides)", len(got))
-	}
-	if got[0].PriorState.String != "awaiting_approval" {
-		t.Errorf("PriorState = %q, want awaiting_approval", got[0].PriorState.String)
-	}
-	if got[0].Priority != priorityResumable {
-		t.Errorf("Priority = %d, want %d (interrupted, so ahead of the finished ones)",
-			got[0].Priority, priorityResumable)
-	}
-}
-
-// The picker's filesystem filter reads cwd and transcript_path off the row, so
-// the candidate query has to carry them through.
-func TestResumableCandidates_CarriesResumeInputs(t *testing.T) {
-	conn, err := Open(filepath.Join(t.TempDir(), "c2.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer conn.Close()
-
-	if _, err := conn.Exec(`
-		INSERT INTO sessions(session_id, tmux_pane, cwd, transcript_path)
-		VALUES ('s', '%1', '/w/a', '/t/a.jsonl')
-	`); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	insertEvent(t, conn, "s", "ForcedEnd", "ended", 10)
-	terminate(t, conn, "s", 10)
-
-	got, err := ResumableCandidates(conn)
-	if err != nil {
-		t.Fatalf("ResumableCandidates: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1", len(got))
-	}
-	if got[0].Cwd.String != "/w/a" || got[0].TranscriptPath.String != "/t/a.jsonl" {
-		t.Errorf("cwd/transcript = %q/%q, want /w/a and /t/a.jsonl",
-			got[0].Cwd.String, got[0].TranscriptPath.String)
-	}
-	// The pane, by contrast, must NOT come through even though the ledger still
-	// holds one. It names a pane of a process that has ended, and the picker's
-	// last-resort fallback would trust it whenever the roster cannot be read --
-	// switching to whatever unrelated pane inherited that id on the new server
-	// instead of resuming the conversation.
-	if got[0].TmuxPane.Valid {
-		t.Errorf("tmux_pane = %q, want NULL: a terminated row's pane is never its own",
-			got[0].TmuxPane.String)
-	}
-}
-
 func TestTerminateSession(t *testing.T) {
 	conn, err := Open(filepath.Join(t.TempDir(), "c.db"))
 	if err != nil {
@@ -502,15 +273,15 @@ func TestListRows_JoinsParent(t *testing.T) {
 // ListOpts.Includes is the filter the picker applies to rows it read unfiltered,
 // so it has to agree with what the flags meant when ListRows filtered in SQL.
 func TestListOptsIncludes(t *testing.T) {
-	states := []string{"awaiting_approval", "idle_done", "working", "stale"}
+	states := []string{"awaiting_approval", "idle_done", "working", "stale", StateGone}
 	cases := []struct {
 		opts ListOpts
 		want []bool
 	}{
-		{ListOpts{}, []bool{true, true, false, false}},
-		{ListOpts{ShowWorking: true}, []bool{true, true, true, false}},
-		{ListOpts{ShowStale: true}, []bool{true, true, false, true}},
-		{ListOpts{ShowWorking: true, ShowStale: true}, []bool{true, true, true, true}},
+		{ListOpts{}, []bool{true, true, false, false, true}},
+		{ListOpts{ShowWorking: true}, []bool{true, true, true, false, true}},
+		{ListOpts{ShowStale: true}, []bool{true, true, false, true, true}},
+		{ListOpts{ShowWorking: true, ShowStale: true}, []bool{true, true, true, true, true}},
 	}
 	for _, tc := range cases {
 		for i, s := range states {
@@ -678,9 +449,9 @@ func TestToggleMark_SetsAndClears(t *testing.T) {
 	}
 }
 
-// The mark lifts itself: it is pinned to the event it was set at, so the next
-// hook event moves the latest id past it. Toggling after that marks again.
-func TestToggleMark_NextEventLiftsIt(t *testing.T) {
+// The mark holds until it is toggled off: later hook events -- the session
+// being nudged while it waits -- do not lift it.
+func TestToggleMark_PersistsAcrossEvents(t *testing.T) {
 	conn, err := Open(filepath.Join(t.TempDir(), "m.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -692,12 +463,84 @@ func TestToggleMark_NextEventLiftsIt(t *testing.T) {
 	if on, err := ToggleMark(conn, "a"); err != nil || !on {
 		t.Fatalf("ToggleMark = %v, %v; want true, nil", on, err)
 	}
-	insertEvent(t, conn, "a", "UserPromptSubmit", "working", 0)
-	if markedOf(t, conn, "a") {
-		t.Error("a still marked after a new event")
+	insertEvent(t, conn, "a", "UserPromptSubmit", "working", 5)
+	insertEvent(t, conn, "a", "Stop", "idle_done", 0)
+	if !markedOf(t, conn, "a") {
+		t.Error("a new event lifted the mark")
 	}
-	if on, err := ToggleMark(conn, "a"); err != nil || !on {
-		t.Errorf("ToggleMark after the mark lapsed = %v, %v; want true (re-mark), nil", on, err)
+	if on, err := ToggleMark(conn, "a"); err != nil || on {
+		t.Errorf("ToggleMark after events = %v, %v; want false (cleared), nil", on, err)
+	}
+}
+
+// A gone session is open work: it can be marked, and keeps the mark.
+func TestToggleMark_GoneSession(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	insertSession(t, conn, "g", "%1")
+	insertEvent(t, conn, "g", "Stop", "idle_done", 20)
+	insertEventPayload(t, conn, "g", "SessionEnd", "ended", `{"reason":"other"}`, 10)
+	terminate(t, conn, "g", 10)
+
+	if on, err := ToggleMark(conn, "g"); err != nil || !on {
+		t.Fatalf("ToggleMark(gone) = %v, %v; want true, nil", on, err)
+	}
+	if !markedOf(t, conn, "g") {
+		t.Error("gone session not shown marked")
+	}
+}
+
+// The reboot case, end to end in the ledger: a marked delegate and its parent
+// both lose their processes (a SessionEnd for one, a reconcile ForcedEnd for
+// the other) and both stay listed, gone, with the mark and the link intact.
+func TestListRows_GoneKeepsMarkAndParent(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	const parent, child = "aaaaaaaa-0000", "bbbbbbbb-0000"
+	insertSession(t, conn, parent, "%1")
+	insertSession(t, conn, child, "")
+	insertEvent(t, conn, parent, "UserPromptSubmit", "working", 100)
+	insertEvent(t, conn, child, "Stop", "idle_done", 100)
+	if err := LinkSession(conn, "bbbbbbbb", parent); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := ToggleMark(conn, child); err != nil || !on {
+		t.Fatalf("ToggleMark = %v, %v", on, err)
+	}
+
+	insertEventPayload(t, conn, parent, "SessionEnd", "ended", `{"reason":"other"}`, 10)
+	terminate(t, conn, parent, 10)
+	if err := TerminateSession(conn, child); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := ListRows(conn, ListOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Row{}
+	for _, r := range rows {
+		got[r.SessionID] = r
+	}
+	p, ok := got[parent]
+	if !ok || p.EffectiveState != StateGone {
+		t.Errorf("parent = %+v (listed %v), want gone in the default listing", p, ok)
+	}
+	c, ok := got[child]
+	if !ok || c.EffectiveState != StateGone {
+		t.Fatalf("child = %+v (listed %v), want gone in the default listing", c, ok)
+	}
+	if !c.Marked {
+		t.Error("child lost its mark")
+	}
+	if c.ParentSessionID.String != parent {
+		t.Errorf("child parent = %+v, want %s", c.ParentSessionID, parent)
 	}
 }
 
@@ -744,9 +587,9 @@ func TestToggleMark_LeavesStateAndOrder(t *testing.T) {
 	}
 }
 
-// Tab on a resumable row reaches ToggleMark with an ended session's id; it has
-// to be a silent no-op, not an error and not a write.
-func TestToggleMark_EndedOrUnknownIsNoop(t *testing.T) {
+// A done session is not listed, so nothing should mark it; an id the ledger
+// does not know is the same. Both are a silent no-op, not an error or a write.
+func TestToggleMark_DoneOrUnknownIsNoop(t *testing.T) {
 	conn, err := Open(filepath.Join(t.TempDir(), "m.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -755,6 +598,9 @@ func TestToggleMark_EndedOrUnknownIsNoop(t *testing.T) {
 	insertSession(t, conn, "e", "%1")
 	insertEvent(t, conn, "e", "SessionEnd", "ended", 10)
 	terminate(t, conn, "e", 10)
+	if _, err := conn.Exec("UPDATE sessions SET done_at = unixepoch() WHERE session_id = 'e'"); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, sid := range []string{"e", "nope"} {
 		on, err := ToggleMark(conn, sid)
@@ -767,6 +613,6 @@ func TestToggleMark_EndedOrUnknownIsNoop(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	if mark.Valid {
-		t.Errorf("ended session got waiting_event_id = %d", mark.Int64)
+		t.Errorf("done session got waiting_event_id = %d", mark.Int64)
 	}
 }

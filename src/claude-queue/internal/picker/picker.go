@@ -35,7 +35,7 @@ var emoji = map[string]string{
 	"idle_done":         "✅",
 	"working":           "⚙️",
 	"stale":             "🧟",
-	db.StateResumable:   "💤",
+	db.StateGone:        "💤",
 }
 
 var ascii = map[string]string{
@@ -44,7 +44,7 @@ var ascii = map[string]string{
 	"idle_done":         "[.]",
 	"working":           "[*]",
 	"stale":             "[X]",
-	db.StateResumable:   "[~]",
+	db.StateGone:        "[~]",
 }
 
 // Column positions in a rendered row, in the order FormatLine writes them.
@@ -224,42 +224,6 @@ func rowTranscript(row db.Row) string {
 // read back as a missing field rather than as a deliberate blank.
 func rowConfigDir(row db.Row) string {
 	return db.ConfigDirOf(row.ConfigDir)
-}
-
-// filterResumable drops the candidates whose resume would fail, which is the
-// half of the test db.ResumableCandidates cannot make: both preconditions live
-// on disk rather than in the ledger.
-//
-// It is the same pair resumeBlocked checks when a row is picked, applied a step
-// earlier so a candidate that cannot be reopened is never listed at all.
-// fileExists and dirExists are parameters so the rule can be exercised without
-// laying out transcripts and worktrees on a real filesystem.
-func filterResumable(rows []db.Row, fileExists, dirExists func(string) bool) []db.Row {
-	var out []db.Row
-	for _, r := range rows {
-		transcript, cwd := rowTranscript(r), rowCwd(r)
-		if transcript == "" || cwd == "" {
-			continue
-		}
-		if !fileExists(transcript) || !dirExists(cwd) {
-			continue
-		}
-		out = append(out, r)
-	}
-	return out
-}
-
-// noRowsMessage explains an empty picker, naming the resumable count and the
-// flag that would list them: a host that has just come back up has no live
-// session at all, which is exactly when a default-off flag has to advertise
-// itself. The count is post-filter, so it never offers rows that cannot resume.
-func noRowsMessage(resumable int, shown bool) string {
-	if resumable == 0 || shown {
-		return "no active sessions"
-	}
-	return fmt.Sprintf(
-		"no active sessions, but %d can be resumed: reopen the picker with --show-resumable (prefix Q)",
-		resumable)
 }
 
 func formatAge(sec int64) string {
@@ -615,12 +579,11 @@ func waitGone(sessionID string, list func() ([]roster.Agent, error), tick func()
 
 // pickerFlags are the listing flags, kept together because they are parsed
 // once and then both drive the listing and are handed back to the reload
-// command the Tab bind runs (see listArgs).
+// command the Tab and done binds run (see listArgs).
 type pickerFlags struct {
-	ShowWorking   bool
-	ShowStale     bool
-	ShowResumable bool
-	RepoScope     bool
+	ShowWorking bool
+	ShowStale   bool
+	RepoScope   bool
 	// CurrentPane is the pane the popup was opened over, whose row gets the
 	// current-session mark. The interactive picker reads it once and hands it
 	// to the reload, so the first listing and every Tab redraw mark the same
@@ -629,8 +592,8 @@ type pickerFlags struct {
 }
 
 // listArgs is the argv after the binary that makes `picker --list` print the
-// same listing these flags select. The Tab bind reloads through it, so a flag
-// left out here would make the list change shape the first time Tab is pressed.
+// same listing these flags select. The Tab and done binds reload through it, so
+// a flag left out here would make the list change shape the first key press.
 func (f pickerFlags) listArgs() []string {
 	args := []string{"picker", "--list"}
 	for _, fl := range []struct {
@@ -639,7 +602,6 @@ func (f pickerFlags) listArgs() []string {
 	}{
 		{f.ShowWorking, "--show-working"},
 		{f.ShowStale, "--show-stale"},
-		{f.ShowResumable, "--show-resumable"},
 		{f.RepoScope, "--repo-scope"},
 	} {
 		if fl.on {
@@ -681,7 +643,10 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 	var f pickerFlags
 	fs.BoolVar(&f.ShowWorking, "show-working", false, "include working sessions")
 	fs.BoolVar(&f.ShowStale, "show-stale", false, "include stale sessions")
-	fs.BoolVar(&f.ShowResumable, "show-resumable", false, "include ended sessions a resume could reopen")
+	// Accepted and ignored: gone sessions -- what this used to add -- are in the
+	// default listing now. Kept so an old tmux bind that still passes it opens
+	// the picker rather than failing on an unknown flag.
+	_ = fs.Bool("show-resumable", false, "no-op: gone sessions are always listed")
 	fs.BoolVar(&f.RepoScope, "repo-scope", false, "only sessions whose cwd is in the same git repo as the picker's cwd")
 	fs.StringVar(&f.CurrentPane, "current-pane", "", "internal: the pane whose row is marked current, passed to the Tab bind's reload")
 	listOnly := fs.Bool("list", false, "print the rows fzf would be given and exit (the Tab bind's reload)")
@@ -732,7 +697,8 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		return
 	}
 
-	selected, err := fzf(input, fzfArgs(tabBind(selfPath(), f)))
+	self := selfPath()
+	selected, err := fzf(input, fzfArgs(tabBind(self, f), doneBind(self, f)))
 	if err != nil || selected == "" {
 		return
 	}
@@ -807,21 +773,10 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool) (string, worktreeCache
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return "", names, false
 	}
-	// Read the resumable rows whether or not they will be listed: the count is
-	// what the empty-queue message needs in order to point at the flag.
-	// Best-effort for the same reason the sweep is -- a failure here is no
-	// reason to withhold the live queue.
-	var resumable []db.Row
-	if cands, err := db.ResumableCandidates(conn); err != nil {
-		fmt.Fprintln(os.Stderr, "resumable lookup skipped:", err)
-	} else {
-		resumable = filterResumable(cands, isFile, isDir)
-	}
-
 	filter := db.ListOpts{ShowWorking: f.ShowWorking, ShowStale: f.ShowStale}
 	opts := forestOpts{
 		Keep:       func(r db.Row) bool { return filter.Includes(r.EffectiveState) },
-		ParentLive: liveSessions(conn),
+		ParentOpen: openSessions(conn),
 		ASCII:      asciiMode,
 	}
 
@@ -844,24 +799,11 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool) (string, worktreeCache
 	}
 
 	lines := buildForest(rows, opts)
-	if f.ShowResumable {
-		// Appended flat, after the tree: ResumableCandidates hands back
-		// priorities above every one the queue view assigns, so they belong
-		// last, and fzf is run with --no-sort.
-		extra := resumable
-		if f.RepoScope {
-			extra = filterSameRepo(extra, wantKey, keys.key)
-		}
-		for _, r := range extra {
-			lines = append(lines, treeRow{Row: r})
-		}
-	}
-
 	if len(lines) == 0 {
 		if f.RepoScope {
-			fmt.Fprintln(os.Stderr, "no active sessions in this repo (prefix Q lists all)")
+			fmt.Fprintln(os.Stderr, "no open sessions in this repo (prefix Q lists all)")
 		} else {
-			fmt.Fprintln(os.Stderr, noRowsMessage(len(resumable), f.ShowResumable))
+			fmt.Fprintln(os.Stderr, "no open sessions")
 		}
 		return "", names, false
 	}
@@ -943,22 +885,24 @@ func describeTarget(mux multiplexer.Multiplexer, sel selection, list func(string
 	return t
 }
 
-// liveSessions returns the ledger's view of which sessions are running, for
-// telling an orphan from a delegate whose parent is merely not listed. Run
-// reconciles first, so the ledger tracks the roster closely. A lookup that
-// fails counts every parent as alive: the orphan mark is then withheld rather
-// than shown on a session that may still have its delegator.
-func liveSessions(conn *sql.DB) func(string) bool {
-	sessions, err := db.LiveSessions(conn)
+// openSessions returns the ledger's view of which sessions' work is still
+// open, for telling an orphan from a delegate whose parent is merely not
+// listed. A parent that is only gone is not an orphaning one -- resuming it
+// brings the delegation back -- so this asks about done_at, not about the
+// process. A lookup that fails counts every parent as open: the orphan mark is
+// then withheld rather than shown on a session that may still have its
+// delegator.
+func openSessions(conn *sql.DB) func(string) bool {
+	ids, err := db.OpenSessionIDs(conn)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "parent liveness lookup skipped:", err)
+		fmt.Fprintln(os.Stderr, "parent lookup skipped:", err)
 		return func(string) bool { return true }
 	}
-	live := make(map[string]bool, len(sessions))
-	for _, sess := range sessions {
-		live[sess.SessionID] = true
+	open := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		open[id] = true
 	}
-	return func(id string) bool { return live[id] }
+	return func(id string) bool { return open[id] }
 }
 
 func isFile(path string) bool {
@@ -978,16 +922,19 @@ func isDir(path string) bool {
 }
 
 // fzfArgs is the fzf invocation, split out of runFzf so the visible-column
-// list and the Tab bind can be asserted without running fzf.
-func fzfArgs(tab string) []string {
-	return []string{
+// list and the key binds can be asserted without running fzf.
+func fzfArgs(binds ...string) []string {
+	args := []string{
 		"--delimiter=\t",
 		"--with-nth=" + visibleColumns(),
 		"--no-sort",
 		"--reverse",
 		"--height=100%",
-		"--bind", tab,
 	}
+	for _, b := range binds {
+		args = append(args, "--bind", b)
+	}
+	return args
 }
 
 // tabBind is the --bind value that makes Tab toggle the cursor row's mark and
@@ -1005,14 +952,27 @@ func fzfArgs(tab string) []string {
 // written there lands on top of fzf's screen, and a failed toggle shows up as
 // the icon not changing anyway.
 func tabBind(self string, f pickerFlags) string {
+	return rowBind("tab", "mark", self, f)
+}
+
+// doneBind is the --bind value that makes ctrl-x mark the cursor row's work
+// done (`claude-queue done`, delegates included) and redraw the list, which no
+// longer carries it. Built the same way as tabBind.
+func doneBind(self string, f pickerFlags) string {
+	return rowBind("ctrl-x", "done", self, f)
+}
+
+// rowBind runs `<self> <sub> <session id of the cursor row>` and reloads the
+// listing in place -- the shape both row binds share.
+func rowBind(key, sub, self string, f pickerFlags) string {
 	exe := shellQuote(self)
-	mark := exe + " mark {" + strconv.Itoa(colSessionID+1) + "} 2>/dev/null"
+	cmd := exe + " " + sub + " {" + strconv.Itoa(colSessionID+1) + "} >/dev/null 2>&1"
 	list := exe
 	for _, a := range f.listArgs() {
 		list += " " + shellQuote(a)
 	}
 	list += " 2>/dev/null"
-	return "tab:" + fzfAction("execute-silent", mark) + "+" + fzfAction("reload", list)
+	return key + ":" + fzfAction("execute-silent", cmd) + "+" + fzfAction("reload", list)
 }
 
 // fzfAction renders name(arg) with the first bracket pair fzf accepts whose
