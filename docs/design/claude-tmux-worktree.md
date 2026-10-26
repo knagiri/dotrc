@@ -204,8 +204,7 @@ prompt` とは別状態）で次の入力を待ち続ける。放置すると完
 （`claude-queue watch`、`worktree-scope.md` §8）は `idle_done` から閾値以上経った session のプロセスを
 止めて gone にするが、返信待ちの session（最後のターンに `SendMessage` がある、承認待ち）は止めない。
 止めると返信や承認の受け手が居なくなる。完了報告も `SendMessage` なので、閉じ忘れた委譲先は委譲元が
-done になるまで休眠しない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による cascadeで、委譲元自身が休眠・done になれば
-委譲先も cascade で done になる。逆向きに、running かつ open な委譲先を持つ委譲元も報告の受け手なので
+done になるまで休眠しない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による cascade である。逆向きに、running かつ open な委譲先を持つ委譲元も報告の受け手なので
 休眠しない。休眠は作業を終わらせないので、判定が外れても失うのはプロセスだけで、resume すれば戻る。
 
 worktree の滞留も同様に残る — ①はどちらの経路でも走り、誰も消さないので、後片付けは
