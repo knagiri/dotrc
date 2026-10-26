@@ -168,7 +168,7 @@ cursor を進めず、配送した時刻と、成功したら cursor をどこ�
 配送時刻以降の `UserPromptSubmit` が台帳にあれば成功とみなして cursor を進め（merge / close なら pin を外し）、
 記録を消す。2 tick 経っても無ければ失敗とみなして記録だけを消し、cursor は進んでいないので次の pass で再配送する。
 resume が恒常的に失敗すると約 9 分ごとに window が増え続けるので、失敗が 3 回続いたら配送を止め、pin のコメントの
-先頭に印を付けて picker で目に入るようにする。止めた配送より新しい活動か merge / close が来るか、pin が付け直されたら再開する。ただし merge / close の配送そのもので止まった pin は、PR が closed のままなら reopen か付け直しまで止まったままである。付け直しは `claude-queue pin` / ctrl-t で、Tab で外すと PR 監視ごと外れる。再開や配送成功のあとも、コメント先頭の印は残る。
+先頭に印を付けて picker で目に入るようにする。止めた配送より新しい活動か merge / close が来るか、pin が付け直されたら再開する。ただし merge / close の配送そのもので止まった pin は、PR が closed のままなら reopen か付け直しまで止まったままである。付け直しは `claude-queue pin` / ctrl-t で、Tab で外すと PR 監視ごと外れる。再開や配送成功のあとも、note を書き換えない限り、コメント先頭の印は残る。
 照合は時刻だけで本文は見ないので、人が手で resume して打った prompt でも成功とみなして cursor が進む。これは既知の限界とする。
 
 GitHub への問い合わせは既存の `gh-*` wrapper と同じ token 経路を使う（`bin/lib/gh-mise.sh`）。

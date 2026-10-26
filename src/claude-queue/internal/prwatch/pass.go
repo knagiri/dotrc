@@ -135,13 +135,14 @@ func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io
 		closed := a.State == StateMerged || a.State == StateClosed
 		if p.Failures >= MaxFailures {
 			if !outdone(p, a, closed) {
-				fmt.Fprintf(out, "pr-watch: %s (%s): delivery stopped after %d unconfirmed resumes, until newer activity or a re-pin\n", id, p.PR, p.Failures)
+				fmt.Fprintf(out, "pr-watch: %s (%s): delivery stopped after %d unconfirmed resumes, until the PR has news or a re-pin\n", id, p.PR, p.Failures)
 				continue
 			}
 			// Newer activity goes back through the debounce, from this pass:
 			// it may be the first of a burst. A merge or close skips the
-			// debounce and is delivered at once. The pending mark left from
-			// before the stop is overwritten below. If the resume fails, try
+			// debounce and is delivered at once. ResumePRDelivery also clears
+			// the pending mark left from before the stop, so it cannot count as
+			// an elapsed debounce for the next activity. If the resume fails, try
 			// again on the next pass rather than go on with a stop still set.
 			if err := db.ResumePRDelivery(conn, p.SessionID, p.PR); err != nil {
 				report(out, err)
@@ -211,7 +212,7 @@ func confirm(conn *sql.DB, p db.PRPin, now time.Time, out io.Writer) {
 		case err != nil:
 			report(out, err)
 		case n >= MaxFailures:
-			fmt.Fprintf(out, "pr-watch: %s (%s): no prompt within %s of the delivery, %d times in a row; delivery stopped until newer activity or a re-pin\n", id, p.PR, hibernate.Minutes(ConfirmWindow), n)
+			fmt.Fprintf(out, "pr-watch: %s (%s): no prompt within %s of the delivery, %d times in a row; delivery stopped until the PR has news or a re-pin\n", id, p.PR, hibernate.Minutes(ConfirmWindow), n)
 		default:
 			fmt.Fprintf(out, "pr-watch: %s (%s): no prompt within %s of the delivery (%d of %d), delivering again on the next pass\n", id, p.PR, hibernate.Minutes(ConfirmWindow), n, MaxFailures)
 		}

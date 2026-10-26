@@ -736,8 +736,8 @@ func halted(t *testing.T, w *world, clock *time.Time, out *bytes.Buffer) *sql.DB
 }
 
 func TestPass_RetryCap(t *testing.T) {
-	// Every launch of the cycles below lands on the world stub: the tmux,
-	// claude, gh and mise on PATH are never run.
+	// Every launch of the first subtest lands on the world stub: the tmux,
+	// claude, gh and mise on PATH are never run (its tripwire shows it).
 	t.Run("stubs catch every launch", func(t *testing.T) {
 		mark := tripwire(t)
 		w := &world{activity: news}
@@ -828,7 +828,9 @@ func TestPass_RetryCap(t *testing.T) {
 	// A stop on a merge has nothing newer to wait for.
 	t.Run("stop on a merge stays", func(t *testing.T) {
 		conn := ledger(t, sid)
-		w := &world{activity: Activity{State: StateMerged}}
+		// news.Events are newer than the cursor, so a merge stop that wrongly
+		// waited on "newer activity" would resume at once.
+		w := &world{activity: Activity{State: StateMerged, Events: news.Events}}
 		clock := now
 		var out bytes.Buffer
 		for range MaxFailures {
@@ -838,8 +840,48 @@ func TestPass_RetryCap(t *testing.T) {
 		if len(w.ran) != MaxFailures {
 			t.Errorf("delivered after the stop: ran %d times\n%s", len(w.ran), &out)
 		}
+		// A comment after the merge is not a reason to resume either.
+		w.activity.Events = append(slices.Clone(news.Events), Event{Kind: KindComment, At: at("11:00")})
+		Pass(conn, clock.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures {
+			t.Errorf("delivered after a comment on the merged PR: ran %d times\n%s", len(w.ran), &out)
+		}
 		if failures, up, _ := failState(t, conn, sid); failures.Int64 != MaxFailures || up.Valid {
 			t.Errorf("failures=%v halted=%v", failures, up)
+		}
+	})
+
+	// A reopen lifts a merge stop even with nothing newer than the cursor, and
+	// the pending mark from before the stop must not survive it.
+	t.Run("reopen clears the old pending mark", func(t *testing.T) {
+		conn := ledger(t, sid)
+		if err := db.SetPRSeen(conn, sid, pr, now.Unix()-3600); err != nil {
+			t.Fatal(err)
+		}
+		w := &world{activity: Activity{State: StateMerged}}
+		clock := now
+		var out bytes.Buffer
+		for range MaxFailures {
+			unconfirmed(t, conn, w, &clock, &out)
+		}
+		// Reopened; its one event is older than the cursor (10:00).
+		w.activity = Activity{State: StateOpen, Events: []Event{{Kind: KindReview, At: at("09:00")}}}
+		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+		if failures, up, _ := failState(t, conn, sid); failures.Valid || up.Valid {
+			t.Fatalf("stop not lifted by the reopen: failures=%v halted=%v\n%s", failures, up, &out)
+		}
+		if _, _, seen := pinState(t, conn, sid); seen.Valid {
+			t.Errorf("pin_seen_at survived the resume: %v", seen)
+		}
+		w.activity.Events = append(w.activity.Events, Event{Kind: KindComment, At: at("11:30")})
+		clock = clock.Add(3 * time.Minute)
+		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures {
+			t.Fatalf("delivered without the debounce: ran %d times\n%s", len(w.ran), &out)
+		}
+		Pass(conn, clock.Add(DefaultDebounce), DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures+1 {
+			t.Errorf("not delivered after the debounce: ran %d times\n%s", len(w.ran), &out)
 		}
 	})
 

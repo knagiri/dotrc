@@ -278,10 +278,12 @@ func FailPRDelivery(conn *sql.DB, sessionID, pr string, max int, upTo time.Time,
 }
 
 // ResumePRDelivery lifts a stop on the PR's delivery (see FailPRDelivery),
-// while the pin still watches pr. The pin's note keeps its prefix: the person
-// may still want to know the resumes kept failing.
+// while the pin still watches pr. It also clears pin_seen_at: the pending mark
+// left from before the stop would otherwise count as an elapsed debounce for
+// the next activity. The pin's note keeps its prefix: the person may still want
+// to know the resumes kept failing.
 func ResumePRDelivery(conn *sql.DB, sessionID, pr string) error {
-	_, err := conn.Exec(`UPDATE sessions SET pin_failures = NULL, pin_halted_upto = NULL WHERE session_id = ?1 AND pin_pr = ?2`, sessionID, pr)
+	_, err := conn.Exec(`UPDATE sessions SET pin_failures = NULL, pin_halted_upto = NULL, pin_seen_at = NULL WHERE session_id = ?1 AND pin_pr = ?2`, sessionID, pr)
 	if err != nil {
 		return fmt.Errorf("resume PR delivery: %w", err)
 	}
