@@ -343,10 +343,12 @@ func RecordedConfigDirs(conn *sql.DB) ([]string, error) {
 	return out, rows.Err()
 }
 
-// TerminateSession marks a session ended (terminated_at + ForcedEnd event),
-// matching the cleanup pattern in hook.forcedEndSiblings. The reconcile sweep is
-// the only caller that decides to close a row: it does so from the live agent
-// roster, which is authoritative, rather than from a failed tmux command.
+// TerminateSession marks a session's process gone (terminated_at + ForcedEnd
+// event), matching the cleanup pattern in hook.forcedEndSiblings. It moves the
+// process axis only: the work stays open and the session stays listed, as
+// gone, until something explicit marks it done (MarkDone). The reconcile sweep
+// is the only caller that decides to close a row: it does so from the live
+// agent roster, which is authoritative, rather than from a failed tmux command.
 func TerminateSession(conn *sql.DB, sessionID string) error {
 	tx, err := conn.Begin()
 	if err != nil {
@@ -362,43 +364,6 @@ func TerminateSession(conn *sql.DB, sessionID string) error {
 		"INSERT INTO events(session_id, event_type, state) VALUES (?, 'ForcedEnd', 'ended')", sessionID,
 	); err != nil {
 		return fmt.Errorf("insert ForcedEnd: %w", err)
-	}
-	return tx.Commit()
-}
-
-// GC deletes ended sessions (and their events) whose terminated_at is
-// older than maxAgeSec seconds ago, and the delegation links older than that
-// whose child is no longer running. A link is aged by its own created_at
-// rather than by its child's row, because the child may never have written
-// one.
-func GC(conn *sql.DB, maxAgeSec int64) error {
-	tx, err := conn.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(`
-		DELETE FROM events
-		WHERE session_id IN (
-			SELECT session_id FROM sessions
-			WHERE terminated_at IS NOT NULL AND terminated_at < unixepoch() - ?
-		)
-	`, maxAgeSec); err != nil {
-		return fmt.Errorf("gc events: %w", err)
-	}
-	if _, err := tx.Exec(`
-		DELETE FROM sessions
-		WHERE terminated_at IS NOT NULL AND terminated_at < unixepoch() - ?
-	`, maxAgeSec); err != nil {
-		return fmt.Errorf("gc sessions: %w", err)
-	}
-	if _, err := tx.Exec(`
-		DELETE FROM session_links
-		WHERE created_at < unixepoch() - ?
-		  AND child_short NOT IN (SELECT substr(session_id, 1, 8) FROM sessions WHERE terminated_at IS NULL)
-	`, maxAgeSec); err != nil {
-		return fmt.Errorf("gc session_links: %w", err)
 	}
 	return tx.Commit()
 }

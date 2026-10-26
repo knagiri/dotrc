@@ -377,9 +377,9 @@ func TestDispatch_UnknownEvent_NoOp(t *testing.T) {
 func TestDispatch_SessionEnd_TriggersGC(t *testing.T) {
 	d := openTestDB(t)
 
-	// Pre-seed an ancient terminated session that should be gc'd.
+	// Pre-seed a session done long ago that should be gc'd.
 	_, err := d.DB.Exec(`
-		INSERT INTO sessions(session_id, terminated_at) VALUES ('ancient', unixepoch() - 700000);
+		INSERT INTO sessions(session_id, terminated_at, done_at) VALUES ('ancient', unixepoch() - 700000, unixepoch() - 700000);
 	`)
 	if err != nil {
 		t.Fatalf("seed ancient: %v", err)

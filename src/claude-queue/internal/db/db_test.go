@@ -418,39 +418,6 @@ func TestTerminateSession(t *testing.T) {
 	}
 }
 
-func TestGC_DeletesOldEndedSessions(t *testing.T) {
-	conn, err := Open(filepath.Join(t.TempDir(), "c.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer conn.Close()
-
-	insertSession(t, conn, "old", "%1")
-	_, err = conn.Exec("UPDATE sessions SET terminated_at = unixepoch() - 700000 WHERE session_id = 'old'")
-	if err != nil {
-		t.Fatalf("update terminated: %v", err)
-	}
-	insertEvent(t, conn, "old", "SessionEnd", "ended", 700000)
-
-	insertSession(t, conn, "recent", "%2")
-	_, _ = conn.Exec("UPDATE sessions SET terminated_at = unixepoch() - 100 WHERE session_id = 'recent'")
-	insertEvent(t, conn, "recent", "SessionEnd", "ended", 100)
-
-	if err := GC(conn, 7*24*3600); err != nil {
-		t.Fatalf("GC: %v", err)
-	}
-
-	var n int
-	_ = conn.QueryRow("SELECT COUNT(*) FROM sessions WHERE session_id = 'old'").Scan(&n)
-	if n != 0 {
-		t.Errorf("old session should be deleted; count = %d", n)
-	}
-	_ = conn.QueryRow("SELECT COUNT(*) FROM sessions WHERE session_id = 'recent'").Scan(&n)
-	if n != 1 {
-		t.Errorf("recent session should be kept; count = %d", n)
-	}
-}
-
 func linkParent(t *testing.T, conn *sql.DB, childID string) string {
 	t.Helper()
 	var p sql.NullString
@@ -496,47 +463,6 @@ func TestLinkSession_Upsert(t *testing.T) {
 	}
 	if age > 10 {
 		t.Errorf("relink kept the old created_at (age %ds)", age)
-	}
-}
-
-// GC drops a link only when it is both old and its child is not running. A
-// fresh link survives even with no child row (the child's SessionStart may not
-// have fired yet), and an old link survives while its child is still live.
-func TestGC_SessionLinks(t *testing.T) {
-	conn, err := Open(filepath.Join(t.TempDir(), "g.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer conn.Close()
-
-	insertSession(t, conn, "11111111-aaaa", "%1") // live child
-	insertSession(t, conn, "22222222-aaaa", "%2") // ended child
-	terminate(t, conn, "22222222-aaaa", 100)
-
-	for _, c := range []string{"11111111", "22222222", "33333333", "44444444"} {
-		if err := LinkSession(conn, c, "p"); err != nil {
-			t.Fatalf("LinkSession %s: %v", c, err)
-		}
-	}
-	// 44444444 stays fresh; the rest are older than the GC horizon.
-	if _, err := conn.Exec("UPDATE session_links SET created_at = unixepoch() - 700000 WHERE child_short != '44444444'"); err != nil {
-		t.Fatalf("age links: %v", err)
-	}
-
-	if err := GC(conn, 7*24*3600); err != nil {
-		t.Fatalf("GC: %v", err)
-	}
-
-	want := map[string]bool{
-		"11111111": true,  // old, child live
-		"22222222": false, // old, child ended
-		"33333333": false, // old, child never had a row
-		"44444444": true,  // fresh, child has no row yet
-	}
-	for c, keep := range want {
-		if got := linkParent(t, conn, c) != ""; got != keep {
-			t.Errorf("link %s kept = %v, want %v", c, got, keep)
-		}
 	}
 }
 
