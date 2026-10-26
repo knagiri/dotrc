@@ -44,7 +44,7 @@ make install
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue link --parent <session-id> --child <short-id>` | 委譲の親子関係を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示と孤児の判定に使う。設計は `docs/design/claude-queue-session-tree.md` |
 | `claude-queue mark <session-id>` | pin をトグルする（picker の Tab が呼ぶ）。外すと pin のコメントも消える。done・未知の session は何もせず exit 0 |
-| `claude-queue memo [--session <id>] [<text>]` | session のメモを設定する。`<text>` を省くと現在のメモを出力し、空文字を渡すと消す |
+| `claude-queue memo [--session <id>] [--] [<text>]` | session のメモを設定する。`<text>` を省くと現在のメモを出力し、空文字を渡すと消す |
 | `claude-queue pin [--session <id>] [--note <text>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す |
 | `claude-queue unpin [--session <id>]` | pin とそのコメントを外す |
 | `claude-queue done <session-id-or-prefix>` | session の作業を done にする（委譲先も cascade で done）。picker の `ctrl-x` と `bin/claude-stop-bg` が呼ぶ。8 桁以上の前方一致で 1 件に決まらなければ exit 1。既に done でも exit 0 |
@@ -123,7 +123,7 @@ pin は「外部待ち」の印で、人の返信待ち・保留・後回しに�
 | `ctrl-e` | メモを 1 行編集する。空にして保存すると消える |
 | `ctrl-x` | done にする。`y` 以外を押すと何もしない。失敗したら理由を出し、キー入力を待つ |
 
-編集は現在の値を初期値にした readline で、`Ctrl-D` で取り消す。保存したテキストのタブと改行は空白に
+編集は現在の値を初期値にした readline で、`Ctrl-U` で行を空にしてから `Ctrl-D` で取り消す（行が空でない間の `Ctrl-D` は 1 文字削除になる）。空のまま Enter すると消去になる。`-` で始まるメモも保存できる。保存したテキストのタブと改行は空白に
 潰す。agent は CLI（`claude-queue pin` / `memo`）で自分の session に付けられる。
 
 いずれのキーでも popup は閉じず、`picker --list`（同じ flag で行だけを出すモード）で一覧をその場で再描画する。

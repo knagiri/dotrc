@@ -1026,7 +1026,7 @@ func doneScript(self string) string {
 // memoBind is the --bind value that makes ctrl-e edit the cursor row's memo on
 // one line, prefilled with the current one, and redraw the list.
 func memoBind(self string, f pickerFlags) string {
-	return scriptBind("ctrl-e", editScript(self, "memo> ", `memo --session "$1" "$line"`), self, f, colSessionID, colMemo)
+	return scriptBind("ctrl-e", editScript(self, "memo> ", `memo --session "$1" -- "$line"`), self, f, colSessionID, colMemo)
 }
 
 // pinNoteBind is ctrl-e's twin for the pin note on ctrl-t. Saving pins the
@@ -1038,7 +1038,7 @@ func pinNoteBind(self string, f pickerFlags) string {
 // editScript is the bash script behind the edit keys, run with the session id
 // as $1 and the current text as $2. It reads one line from the terminal with
 // readline, prefilled with $2, and saves it with `<self> <save>`; an empty line
-// clears the text. Ctrl-D cancels.
+// clears the text. Ctrl-D cancels only on an empty line (readline's delete-char otherwise), so clear a prefilled line with Ctrl-U first.
 func editScript(self, prompt, save string) string {
 	exe := shellQuote(self)
 	return `IFS= read -r -e -i "$2" -p ` + shellQuote(prompt) + ` line </dev/tty || exit 0; ` + failOut(exe+" "+save)

@@ -21,7 +21,7 @@ import (
 const sessionEnv = "CLAUDE_CODE_SESSION_ID"
 
 var usages = map[string]string{
-	"memo":  "usage: claude-queue memo [--session <id>] [<text>]",
+	"memo":  "usage: claude-queue memo [--session <id>] [--] [<text>]",
 	"pin":   "usage: claude-queue pin [--session <id>] [--note <text>]",
 	"unpin": "usage: claude-queue unpin [--session <id>]",
 }

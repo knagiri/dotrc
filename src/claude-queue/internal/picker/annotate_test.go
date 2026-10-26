@@ -118,6 +118,10 @@ func TestFzfArgs_Binds(t *testing.T) {
 		}
 	}
 
+	if b := memoBind("/opt/x/claude-queue", f); !strings.Contains(b, `-- "$line"`) {
+		t.Errorf("ctrl-e bind %q must pass -- before the text so a leading dash is not parsed as a flag", b)
+	}
+
 	args := fzfArgs()
 	i := slices.IndexFunc(args, func(a string) bool { return strings.HasPrefix(a, "--header=") })
 	if i < 0 {

@@ -143,3 +143,17 @@ func TestCLI_ExtraArgsAreUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestMemoCLI_DashLeadingText(t *testing.T) {
+	conn := setup(t)
+	var out bytes.Buffer
+	if err := run(conn, "memo", []string{"--session", "aaaaaaaa", "--", "-wip check"}, env(nil), &out, &out); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := run(conn, "memo", []string{"--session", "aaaaaaaa"}, env(nil), &out, &out); err != nil {
+		t.Fatalf("print: %v", err)
+	}
+	if got, want := out.String(), "-wip check\n"; got != want {
+		t.Errorf("printed %q, want %q", got, want)
+	}
+}
