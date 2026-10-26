@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func openAnnotate(t *testing.T) *sql.DB {
@@ -166,5 +167,116 @@ func TestToggleMark_ClearsNote(t *testing.T) {
 	rows, err := ListRows(conn, ListOpts{})
 	if err != nil || len(rows) != 1 || rows[0].PinNote.Valid {
 		t.Errorf("ListRows = %+v, %v", rows, err)
+	}
+}
+
+func TestParsePRRef(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"example-org/example-repo#12", "example-org/example-repo#12"},
+		{"https://github.com/example-org/example-repo/pull/12", "example-org/example-repo#12"},
+		{"https://github.com/example-org/example-repo/pull/12/files", "example-org/example-repo#12"},
+		{" example-org/example-repo#7 ", "example-org/example-repo#7"},
+	} {
+		got, err := ParsePRRef(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("ParsePRRef(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"", "12", "#12", "example-repo#12", "a/b#", "a/b#x", "a/b#0", "a/b/c#1",
+		"https://github.com/a/b/issues/1", "https://example.com/a/b/pull/1", "a b/c#1"} {
+		if got, err := ParsePRRef(bad); err == nil {
+			t.Errorf("ParsePRRef(%q) = %q, want an error", bad, got)
+		}
+	}
+}
+
+func prPinOf(t *testing.T, conn *sql.DB, sid string) (pr, cursor sql.NullString, seen sql.NullInt64) {
+	t.Helper()
+	if err := conn.QueryRow(
+		"SELECT pin_pr, pin_cursor, pin_seen_at FROM sessions WHERE session_id = ?", sid,
+	).Scan(&pr, &cursor, &seen); err != nil {
+		t.Fatalf("read %s: %v", sid, err)
+	}
+	return pr, cursor, seen
+}
+
+// Activity from before the pin was put on is not news to the session that
+// pinned itself: the cursor starts at the pin.
+func TestSetPinPR_SetsCursorToNow(t *testing.T) {
+	conn := openAnnotate(t)
+	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	if _, err := conn.Exec("UPDATE sessions SET pin_seen_at = 5 WHERE session_id = 'a'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPinPR(conn, "a", "example-org/example-repo#3", at); err != nil {
+		t.Fatalf("SetPinPR: %v", err)
+	}
+	pr, cursor, seen := prPinOf(t, conn, "a")
+	if pr.String != "example-org/example-repo#3" || cursor.String != "2026-10-26T09:00:00Z" || seen.Valid {
+		t.Errorf("pin = %v, %v, %v", pr, cursor, seen)
+	}
+	if _, _, pinned := annotationsOf(t, conn, "a"); !pinned {
+		t.Error("SetPinPR did not pin the session")
+	}
+	pins, err := PRPins(conn)
+	if err != nil || len(pins) != 1 {
+		t.Fatalf("PRPins = %v, %v", pins, err)
+	}
+	if p := pins[0]; p.SessionID != "a" || p.PR != "example-org/example-repo#3" || !p.Cursor.Equal(at) || p.SeenAt != 0 {
+		t.Errorf("PRPins[0] = %+v", p)
+	}
+}
+
+func TestClearPin_ClearsPR(t *testing.T) {
+	for name, unpin := range map[string]func(*sql.DB) error{
+		"ClearPin":   func(c *sql.DB) error { return ClearPin(c, "a") },
+		"ToggleMark": func(c *sql.DB) error { _, err := ToggleMark(c, "a"); return err },
+		"ClearPRPin": func(c *sql.DB) error { return ClearPRPin(c, "a", "example-org/example-repo#3") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn := openAnnotate(t)
+			if err := SetPinPR(conn, "a", "example-org/example-repo#3", time.Unix(100, 0)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Exec("UPDATE sessions SET pin_seen_at = 5 WHERE session_id = 'a'"); err != nil {
+				t.Fatal(err)
+			}
+			if err := unpin(conn); err != nil {
+				t.Fatal(err)
+			}
+			if pr, cursor, seen := prPinOf(t, conn, "a"); pr.Valid || cursor.Valid || seen.Valid {
+				t.Errorf("after %s: %v, %v, %v", name, pr, cursor, seen)
+			}
+			if _, _, pinned := annotationsOf(t, conn, "a"); pinned {
+				t.Errorf("after %s: still pinned", name)
+			}
+		})
+	}
+}
+
+func TestPRPins_SkipsDoneAndPlainPins(t *testing.T) {
+	conn := openAnnotate(t)
+	for _, id := range []string{"plain", "done"} {
+		insertSession(t, conn, id, "")
+		insertEvent(t, conn, id, "Stop", "idle_done", 10)
+	}
+	if err := SetPin(conn, "plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPinPR(conn, "done", "example-org/example-repo#1", time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MarkDone(conn, "done", 200); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPinPR(conn, "a", "example-org/example-repo#2", time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	pins, err := PRPins(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pins) != 1 || pins[0].SessionID != "a" {
+		t.Errorf("PRPins = %+v, want only a", pins)
 	}
 }

@@ -180,7 +180,8 @@ func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
 // beyond "is it set"; it is kept rather than turned into a flag so a database
 // written by the earlier, lapsing mark migrates without a schema change.
 //
-// Toggling the mark off drops the pin's note with it (see SetPin).
+// Toggling the mark off drops the pin's note and its PR watch with it (see
+// SetPin, SetPinPR).
 //
 // A done or unknown session is left alone and reports false.
 func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
@@ -191,7 +192,10 @@ func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
 		      WHEN waiting_event_id IS NOT NULL THEN NULL
 		      ELSE COALESCE((SELECT MAX(id) FROM events WHERE session_id = ?1), 0)
 		    END,
-		    pin_note = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_note END
+		    pin_note = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_note END,
+		    pin_pr = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_pr END,
+		    pin_cursor = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_cursor END,
+		    pin_seen_at = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_seen_at END
 		WHERE session_id = ?1 AND done_at IS NULL
 		RETURNING waiting_event_id IS NOT NULL
 	`, sessionID).Scan(&marked)
