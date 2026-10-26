@@ -35,7 +35,7 @@ const (
 	// interactive session, its pane should have been found by FindPane, so
 	// seeing this alongside an unreachable pane means the pane closed while
 	// the process lived on. That implication does not hold for a background
-	// session: paneForSession skips background entries outright (see its
+	// session: sessionproc.PaneForSession skips background entries outright (see its
 	// comment), so an unreachable pane there proves nothing about the pane
 	// ever having closed -- it was never looked up. describeTarget calls
 	// originOf regardless of kind, but DecideAction routes background

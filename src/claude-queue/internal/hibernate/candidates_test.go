@@ -323,3 +323,15 @@ func TestLastTurnSendsMessage(t *testing.T) {
 		}
 	})
 }
+
+func TestMinutes(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		7*time.Minute + 30*time.Second: "7m",
+		2 * time.Hour:                  "2h",
+		63 * time.Minute:               "1h3m",
+	} {
+		if got := Minutes(d); got != want {
+			t.Errorf("Minutes(%s) = %q, want %q", d, got, want)
+		}
+	}
+}

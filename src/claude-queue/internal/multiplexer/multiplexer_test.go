@@ -96,3 +96,13 @@ func TestPaneListed(t *testing.T) {
 		t.Error("paneListed over an empty table = true, want false")
 	}
 }
+
+func TestParseWindowIDs(t *testing.T) {
+	got := parseWindowIDs("@3\n@7\n\n@3\n")
+	if len(got) != 2 || !got["@3"] || !got["@7"] {
+		t.Fatalf("parseWindowIDs = %v, want {@3, @7}", got)
+	}
+	if got := parseWindowIDs(""); len(got) != 0 {
+		t.Fatalf("parseWindowIDs(\"\") = %v, want empty", got)
+	}
+}

@@ -28,6 +28,19 @@ import (
 // the same process, short enough that a day's leftovers stop holding memory.
 const DefaultIdle = 2 * time.Hour
 
+// Minutes renders d to the minute ("2h", "1h3m", "7m"), for reports.
+func Minutes(d time.Duration) string {
+	m := int(d / time.Minute)
+	switch h := m / 60; {
+	case h == 0:
+		return fmt.Sprintf("%dm", m)
+	case m%60 == 0:
+		return fmt.Sprintf("%dh", h)
+	default:
+		return fmt.Sprintf("%dh%dm", h, m%60)
+	}
+}
+
 // Candidate is a session that passed every gate and may be stopped.
 type Candidate struct {
 	SessionID string
@@ -123,7 +136,7 @@ func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir strin
 		}
 		age := time.Duration(now-r.CreatedAt) * time.Second
 		if age < idle {
-			skip(id, "idle for %s, under the %s threshold", age.Truncate(time.Minute), idle)
+			skip(id, "idle for %s, under the %s threshold", Minutes(age), Minutes(idle))
 			continue
 		}
 		dir := db.ConfigDirOf(r.ConfigDir)

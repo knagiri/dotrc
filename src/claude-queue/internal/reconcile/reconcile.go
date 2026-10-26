@@ -146,12 +146,14 @@ type Result struct {
 // stopped: an unreadable roster is no evidence it is running, and one the
 // roster does not list has just been closed above.
 func Sweep(conn *sql.DB) (Result, error) {
-	return sweep(conn, liveIDsIn, stopIn)
+	return sweep(conn, liveIDsIn, StopIn)
 }
 
-// stopIn stops one background session with `claude stop <short id>` under its
-// own config dir, the same way roster.ListIn reads it.
-func stopIn(dir, sessionID string) error {
+// StopIn stops one background session with `claude stop <short id>` under its
+// own config dir, the same way roster.ListIn reads it. It moves the process
+// axis only: the stop ends in SessionEnd(reason=other), which the hook records
+// as gone, so hibernation uses it too without marking any work done.
+func StopIn(dir, sessionID string) error {
 	short := sessionID
 	if len(short) > 8 {
 		short = short[:8]
