@@ -69,9 +69,9 @@ func SessionExists(name string) bool {
 
 // LastAttachedSession returns the session a client was attached to most
 // recently (the largest session_last_attached; one never attached counts as
-// 0). A running server always has a session, because tmux exits its server
-// when the last one goes, so an error here means the server could not be
-// asked or has just gone.
+// 0). With exit-empty on (the default) a running server always has a session,
+// because tmux exits its server when the last one goes, so an error here means
+// the server could not be asked or has just gone.
 func LastAttachedSession() (string, error) {
 	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_last_attached} #{session_name}").Output()
 	if err != nil {

@@ -88,8 +88,8 @@ func Message(pr string, a Activity, events []Event) string {
 //
 // A delivery is not taken as done when it is launched. The pass records when
 // it launched it and how far it reached, and a later pass confirms it from
-// the ledger: a UserPromptSubmit of the session since then is the message
-// arriving, and only then does the cursor move to the newest delivered event
+// the ledger: a UserPromptSubmit of the session since then is taken as the
+// message arriving (its text is not matched), and only then does the cursor move to the newest delivered event
 // (or, for a merge or close, the pin come off). With none after ConfirmWindow
 // the record is dropped and, the cursor not having moved, the next pass
 // delivers again with everything that piled up meanwhile. A skipped or failed

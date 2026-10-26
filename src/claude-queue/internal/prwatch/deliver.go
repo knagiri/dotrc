@@ -157,7 +157,9 @@ func Deliver(p db.PRPin, msg string, deps Deps) error {
 		}
 		// Re-check for both kinds: closing an interactive session's pane may
 		// have been the last window, which makes tmux exit its server
-		// (exit-empty), and the new-window would then start one here.
+		// (exit-empty). new-window does not start a server, it just fails
+		// when none is there, so skip and leave it to the next pass rather
+		// than recreate the server.
 		if err := hostUp(p, background, deps); err != nil {
 			return &hibernate.SkipError{Reason: "stopped, but not resumed: " + err.Error()}
 		}

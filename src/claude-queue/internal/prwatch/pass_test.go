@@ -503,10 +503,10 @@ func deliveredState(t *testing.T, conn *sql.DB, id string) (at sql.NullInt64, up
 	return
 }
 
-// A failed or skipped delivery leaves the cursor where it was,
-// so the next pass retries with the same activity, and a successful one is not
-// repeated.
-func TestPass_CursorAdvancesOnlyOnSuccess(t *testing.T) {
+// A failed or skipped launch records nothing, so the next pass retries with the
+// same activity; once a launch succeeds, it is not delivered again while
+// awaiting confirmation.
+func TestPass_FailedLaunchRetried(t *testing.T) {
 	conn := ledger(t, sid)
 	if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
 		t.Fatal(err)

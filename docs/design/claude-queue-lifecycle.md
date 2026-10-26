@@ -159,13 +159,15 @@ author で絞らないのは、委譲先が利用者の token で PR を作る�
 無ければ最後に attach された既存の session に開く。session は新しく作らない。監視コマンドから
 `tmux new-session` を打つと、tmux の `update-environment` が service の env に無い変数（`SSH_AUTH_SOCK` 等）を
 削除として新しい session の env に写し、その session の window から SSH agent が見えなくなるため。tmux server は
-最後の session が消えると終了するので、server が居れば session は必ず 1 つ以上ある。起きた session は通常の hook で state を更新するので、人の判断が要る場面は
+最後の session が消えると終了する（`exit-empty`、既定で on）ので、既定の設定なら server が居れば session は
+必ず 1 つ以上ある。起きた session は通常の hook で state を更新するので、人の判断が要る場面は
 `awaiting_approval` / `idle_done` として一覧に上がる。自動再開専用の通知は作らない。
 
 起動コマンドが成功しても、window の中の `claude --resume` が失敗していれば指示は届いていない。そこで配送時は
 cursor を進めず、配送した時刻と、成功したら cursor をどこまで進めるかを pin に記録する。次の pass で、その session の
 配送時刻以降の `UserPromptSubmit` が台帳にあれば成功とみなして cursor を進め（merge / close なら pin を外し）、
 記録を消す。2 tick 経っても無ければ失敗とみなして記録だけを消し、cursor は進んでいないので次の pass で再配送する。
+照合は時刻だけで本文は見ないので、人が手で resume して打った prompt でも成功とみなして cursor が進む。これは既知の限界とする。
 
 GitHub への問い合わせは既存の `gh-*` wrapper と同じ token 経路を使う（`bin/lib/gh-mise.sh`）。
 
