@@ -349,3 +349,60 @@ func TestPromptSince(t *testing.T) {
 		}
 	}
 }
+
+// FailPRDelivery counts failures and stops at max, reading back through
+// PRPins; putting the pin on again (pin --pr; pin --note is
+// TestPass_RetryCap's) or toggling it off with Tab lifts the stop, and a
+// write for another PR changes nothing.
+func TestFailPRDelivery(t *testing.T) {
+	const pr, note = "example-org/example-repo#3", "[stopped]"
+	upTo := time.Date(2026, 10, 26, 10, 40, 0, 0, time.UTC)
+	stop := func(t *testing.T, conn *sql.DB) {
+		t.Helper()
+		if err := SetPinPR(conn, "a", pr, time.Unix(100, 0)); err != nil {
+			t.Fatal(err)
+		}
+		for i := 1; i <= 3; i++ {
+			if err := SetPRDelivered(conn, "a", pr, 500, upTo); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := FailPRDelivery(conn, "a", pr, 3, upTo, note); err != nil || n != i {
+				t.Fatalf("failure %d: n=%d err=%v", i, n, err)
+			}
+		}
+	}
+	conn := openAnnotate(t)
+	stop(t, conn)
+	if n, err := FailPRDelivery(conn, "a", "example-org/example-repo#4", 3, upTo, note); n != 0 || err != nil {
+		t.Errorf("another PR: n=%d err=%v", n, err)
+	}
+	pins, err := PRPins(conn)
+	if err != nil || len(pins) != 1 {
+		t.Fatalf("PRPins = %v, %v", pins, err)
+	}
+	if p := pins[0]; p.Failures != 3 || !p.HaltedUpTo.Equal(upTo) || p.DeliveredAt != 0 {
+		t.Errorf("after the third failure: %+v", p)
+	}
+	if _, got, _ := annotationsOf(t, conn, "a"); got.String != note {
+		t.Errorf("note = %v", got)
+	}
+
+	for name, repin := range map[string]func(*sql.DB) error{
+		"pin --pr": func(c *sql.DB) error { return SetPinPR(c, "a", pr, time.Unix(200, 0)) },
+		"tab":      func(c *sql.DB) error { _, err := ToggleMark(c, "a"); return err },
+	} {
+		conn := openAnnotate(t)
+		stop(t, conn)
+		if err := repin(conn); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var failures sql.NullInt64
+		var halted sql.NullString
+		if err := conn.QueryRow("SELECT pin_failures, pin_halted_upto FROM sessions WHERE session_id = 'a'").Scan(&failures, &halted); err != nil {
+			t.Fatal(err)
+		}
+		if failures.Valid || halted.Valid {
+			t.Errorf("%s kept the stop: failures=%v halted=%v", name, failures, halted)
+		}
+	}
+}

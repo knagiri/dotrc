@@ -684,3 +684,235 @@ func TestDeliver_TmuxServerGoneAfterStop(t *testing.T) {
 		t.Errorf("killed %v ran %q", w.killed, w.ran)
 	}
 }
+
+func failState(t *testing.T, conn *sql.DB, id string) (failures sql.NullInt64, halted, note sql.NullString) {
+	t.Helper()
+	if err := conn.QueryRow("SELECT pin_failures, pin_halted_upto, pin_note FROM sessions WHERE session_id = ?", id).Scan(&failures, &halted, &note); err != nil {
+		t.Fatal(err)
+	}
+	return
+}
+
+// tripwire puts tmux, claude and gh on PATH that only leave a mark, so a
+// launch that went past the world stub to a real command shows up as the
+// mark instead of a window or a resumed session.
+func tripwire(t *testing.T) string {
+	t.Helper()
+	bin, mark := t.TempDir(), filepath.Join(t.TempDir(), "reached")
+	for _, name := range []string{"tmux", "claude", "gh", "mise"} {
+		script := "#!/bin/sh\necho " + name + " >> '" + mark + "'\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	return mark
+}
+
+// unconfirmed runs the passes of one delivery that never sees a prompt: the
+// pass at *clock delivers, and the one ConfirmWindow later drops it as
+// failed. *clock ends a tick after that, where the next delivery would be.
+func unconfirmed(t *testing.T, conn *sql.DB, w *world, clock *time.Time, out *bytes.Buffer) {
+	t.Helper()
+	Pass(conn, *clock, DefaultDebounce, w.deps(), out)
+	*clock = clock.Add(ConfirmWindow)
+	Pass(conn, *clock, DefaultDebounce, w.deps(), out)
+	*clock = clock.Add(3 * time.Minute)
+}
+
+// halted is a ledger whose pin has had MaxFailures unconfirmed deliveries of
+// news in a row.
+func halted(t *testing.T, w *world, clock *time.Time, out *bytes.Buffer) *sql.DB {
+	t.Helper()
+	conn := ledger(t, sid)
+	if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
+		t.Fatal(err)
+	}
+	*clock = now
+	for range MaxFailures {
+		unconfirmed(t, conn, w, clock, out)
+	}
+	return conn
+}
+
+func TestPass_RetryCap(t *testing.T) {
+	// Every launch of the cycles below lands on the world stub: the tmux,
+	// claude and gh on PATH are never run.
+	t.Run("stubs catch every launch", func(t *testing.T) {
+		mark := tripwire(t)
+		w := &world{activity: news}
+		var clock time.Time
+		var out bytes.Buffer
+		halted(t, w, &clock, &out)
+		if len(w.ran) != MaxFailures || w.ran[0][0] != "tmux" {
+			t.Errorf("launches not captured by the stub: %q\n%s", w.ran, &out)
+		}
+		if b, err := os.ReadFile(mark); err == nil {
+			t.Errorf("a real command was run: %s", b)
+		}
+	})
+
+	t.Run("stops at the third failure", func(t *testing.T) {
+		w := &world{activity: news}
+		var clock time.Time
+		var out bytes.Buffer
+		conn := halted(t, w, &clock, &out)
+		failures, up, note := failState(t, conn, sid)
+		if failures.Int64 != MaxFailures || up.String != "2026-10-26T10:40:00Z" || note.String != HaltNote {
+			t.Errorf("failures=%v halted=%v note=%v", failures, up, note)
+		}
+		if !strings.Contains(out.String(), "3 times in a row; delivery stopped") {
+			t.Errorf("the stop is not reported:\n%s", &out)
+		}
+		if strings.Count(out.String(), "delivering again on the next pass") != MaxFailures-1 {
+			t.Errorf("want %d retries reported:\n%s", MaxFailures-1, &out)
+		}
+	})
+
+	t.Run("stopped pin is polled but not delivered to", func(t *testing.T) {
+		w := &world{activity: news}
+		var clock time.Time
+		var out bytes.Buffer
+		conn := halted(t, w, &clock, &out)
+		polled := len(w.polled)
+		out.Reset()
+		for range 4 {
+			Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+			clock = clock.Add(3 * time.Minute)
+		}
+		if len(w.ran) != MaxFailures {
+			t.Errorf("delivered after the stop: ran %d times\n%s", len(w.ran), &out)
+		}
+		if len(w.polled) != polled+4 {
+			t.Errorf("the stopped pin is not polled: %d polls", len(w.polled)-polled)
+		}
+		if !strings.Contains(out.String(), "delivery stopped after 3 unconfirmed resumes") {
+			t.Errorf("the stop is not reported on later passes:\n%s", &out)
+		}
+	})
+
+	t.Run("newer activity resumes", func(t *testing.T) {
+		w := &world{activity: news}
+		var clock time.Time
+		var out bytes.Buffer
+		conn := halted(t, w, &clock, &out)
+		w.activity = Activity{State: StateOpen, Events: append(slices.Clone(news.Events), Event{Kind: KindComment, At: at("10:50")})}
+		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+		if failures, up, _ := failState(t, conn, sid); failures.Valid || up.Valid {
+			t.Errorf("stop not lifted: failures=%v halted=%v", failures, up)
+		}
+		if len(w.ran) != MaxFailures {
+			t.Errorf("resumed delivery skipped the debounce: ran %d times\n%s", len(w.ran), &out)
+		}
+		Pass(conn, clock.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures+1 {
+			t.Fatalf("not delivered after the stop was lifted: ran %d times\n%s", len(w.ran), &out)
+		}
+		if cmd := w.ran[MaxFailures][len(w.ran[MaxFailures])-1]; !strings.Contains(cmd, "comment（人）: 2 件") {
+			t.Errorf("the resumed delivery does not carry what piled up: %q", cmd)
+		}
+	})
+
+	t.Run("merge resumes", func(t *testing.T) {
+		w := &world{activity: news}
+		var clock time.Time
+		var out bytes.Buffer
+		conn := halted(t, w, &clock, &out)
+		w.activity = Activity{State: StateMerged, Events: news.Events}
+		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures+1 || !strings.Contains(w.ran[MaxFailures][len(w.ran[MaxFailures])-1], "merge されました") {
+			t.Errorf("merge not delivered after the stop: %q\n%s", w.ran, &out)
+		}
+	})
+
+	// A stop on a merge has nothing newer to wait for.
+	t.Run("stop on a merge stays", func(t *testing.T) {
+		conn := ledger(t, sid)
+		w := &world{activity: Activity{State: StateMerged}}
+		clock := now
+		var out bytes.Buffer
+		for range MaxFailures {
+			unconfirmed(t, conn, w, &clock, &out)
+		}
+		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures {
+			t.Errorf("delivered after the stop: ran %d times\n%s", len(w.ran), &out)
+		}
+		if failures, up, _ := failState(t, conn, sid); failures.Int64 != MaxFailures || up.Valid {
+			t.Errorf("failures=%v halted=%v", failures, up)
+		}
+	})
+
+	t.Run("confirmed delivery resets the count", func(t *testing.T) {
+		conn := ledger(t, sid)
+		if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
+			t.Fatal(err)
+		}
+		w := &world{activity: news}
+		clock := now
+		var out bytes.Buffer
+		for range MaxFailures - 1 {
+			unconfirmed(t, conn, w, &clock, &out)
+		}
+		if failures, _, _ := failState(t, conn, sid); failures.Int64 != MaxFailures-1 {
+			t.Fatalf("failures = %v\n%s", failures, &out)
+		}
+		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+		prompt(t, conn, sid, clock.Unix()+5)
+		Pass(conn, clock.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
+		if failures, up, note := failState(t, conn, sid); failures.Valid || up.Valid || note.Valid {
+			t.Errorf("after a confirmed delivery: failures=%v halted=%v note=%v\n%s", failures, up, note, &out)
+		}
+	})
+
+	t.Run("note prefix is not repeated", func(t *testing.T) {
+		w := &world{activity: news}
+		var clock time.Time
+		var out bytes.Buffer
+		conn := ledger(t, sid)
+		note := "Copilot の review 待ち"
+		if err := db.SetPin(conn, sid, &note); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
+			t.Fatal(err)
+		}
+		clock = now
+		want := HaltNote + " " + note
+		for round, last := range []string{"10:50", "11:00"} {
+			for range MaxFailures {
+				unconfirmed(t, conn, w, &clock, &out)
+			}
+			if _, _, got := failState(t, conn, sid); got.String != want {
+				t.Fatalf("round %d: note = %q, want %q", round, got.String, want)
+			}
+			// Newer activity lifts the stop and starts the next round.
+			w.activity.Events = append(slices.Clone(w.activity.Events), Event{Kind: KindComment, At: at(last)})
+			Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+			clock = clock.Add(3 * time.Minute)
+		}
+		if len(w.ran) != 2*MaxFailures {
+			t.Errorf("ran %d times\n%s", len(w.ran), &out)
+		}
+	})
+
+	// Putting the pin on again (claude-queue pin, the picker's ctrl-t) lifts
+	// the stop at once, with no new activity.
+	t.Run("re-pin resets the count", func(t *testing.T) {
+		w := &world{activity: news}
+		var clock time.Time
+		var out bytes.Buffer
+		conn := halted(t, w, &clock, &out)
+		note := "見直した"
+		if err := db.SetPin(conn, sid, &note); err != nil {
+			t.Fatal(err)
+		}
+		if failures, up, _ := failState(t, conn, sid); failures.Valid || up.Valid {
+			t.Fatalf("re-pin kept the stop: failures=%v halted=%v", failures, up)
+		}
+		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures+1 {
+			t.Errorf("not delivered after the re-pin: ran %d times\n%s", len(w.ran), &out)
+		}
+	})
+}

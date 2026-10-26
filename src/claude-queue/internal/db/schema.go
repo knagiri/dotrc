@@ -55,13 +55,20 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- with that activity, NULL when no delivery awaits confirmation, and
   -- pin_delivered_upto the RFC3339 time pin_cursor moves to once the
   -- session's UserPromptSubmit confirms it (NULL for a merge / close, whose
-  -- confirmation takes the pin off instead). All five are cleared with the
-  -- pin. Added by migrate() too.
+  -- confirmation takes the pin off instead). pin_failures counts the
+  -- deliveries in a row that no UserPromptSubmit confirmed (NULL is none);
+  -- once it reaches the cap, delivery stops, and pin_halted_upto is the
+  -- pin_delivered_upto of the last failed one (NULL for a merge / close), the
+  -- activity that has to be outdone for delivery to resume. All seven are
+  -- cleared with the pin, and the last two whenever it is put on again.
+  -- Added by migrate() too.
   pin_pr             TEXT,
   pin_cursor         TEXT,
   pin_seen_at        INTEGER,
   pin_delivered_at   INTEGER,
-  pin_delivered_upto TEXT
+  pin_delivered_upto TEXT,
+  pin_failures       INTEGER,
+  pin_halted_upto    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_pane_live
