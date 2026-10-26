@@ -43,6 +43,11 @@ type Row struct {
 	// toggled off. It changes the picker's icon and nothing else -- not the
 	// state, the priority or the ordering.
 	Marked bool
+
+	// Memo and PinNote are the free-text annotations (see SetMemo, SetPin).
+	// PinNote is only ever set while Marked is.
+	Memo    sql.NullString
+	PinNote sql.NullString
 }
 
 // Session kinds, as sessions.kind records them.
@@ -113,7 +118,7 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	rows, err := conn.Query(`
 		SELECT q.session_id, q.tmux_pane, q.cwd, q.transcript_path, q.config_dir,
 		       q.event_type, q.raw_state, q.effective_state, q.payload, q.created_at, q.priority,
-		       q.prior_state, l.parent_session_id, q.marked, q.kind
+		       q.prior_state, l.parent_session_id, q.marked, q.kind, q.memo, q.pin_note
 		FROM queue q
 		LEFT JOIN session_links l ON l.child_short = substr(q.session_id, 1, 8)
 		ORDER BY q.priority ASC, q.created_at DESC
@@ -160,6 +165,8 @@ func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
 // beyond "is it set"; it is kept rather than turned into a flag so a database
 // written by the earlier, lapsing mark migrates without a schema change.
 //
+// Toggling the mark off drops the pin's note with it (see SetPin).
+//
 // A done or unknown session is left alone and reports false.
 func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
 	var marked sql.NullBool
@@ -168,7 +175,8 @@ func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
 		SET waiting_event_id = CASE
 		      WHEN waiting_event_id IS NOT NULL THEN NULL
 		      ELSE COALESCE((SELECT MAX(id) FROM events WHERE session_id = ?1), 0)
-		    END
+		    END,
+		    pin_note = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_note END
 		WHERE session_id = ?1 AND done_at IS NULL
 		RETURNING waiting_event_id IS NOT NULL
 	`, sessionID).Scan(&marked)
@@ -210,7 +218,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		if err := rows.Scan(
 			&r.SessionID, &r.TmuxPane, &r.Cwd, &r.TranscriptPath, &r.ConfigDir,
 			&r.EventType, &r.RawState, &r.EffectiveState, &r.Payload, &r.CreatedAt, &r.Priority,
-			&r.PriorState, &r.ParentSessionID, &r.Marked, &r.Kind,
+			&r.PriorState, &r.ParentSessionID, &r.Marked, &r.Kind, &r.Memo, &r.PinNote,
 		); err != nil {
 			return nil, err
 		}
