@@ -120,7 +120,7 @@ running、非 NULL が gone）を別々に持つ。picker の既定一覧は ope
 resume する。done は一覧に出ない。設計は
 [docs/design/claude-queue-lifecycle.md](../../docs/design/claude-queue-lifecycle.md)。
 
-done にするのは次だけで、idle の長さ・roster に居ないこと・`reason: other` の `SessionEnd` は
+done にするのは次だけで、idle の長さ・`claude agents` の一覧に居ないこと・`reason: other` の `SessionEnd` は
 根拠にしない（いずれもホスト再起動と区別できないため）。
 
 - `SessionEnd` の `reason` が `prompt_input_exit`（Ctrl-C / `/exit`）または `clear`
@@ -312,8 +312,8 @@ make -C src/claude-queue test vet fmt-check
 - [ ] transcript が無い / cwd が reap 済みの session を picker から選ぶと、resume されずどちらが欠けたかが出る
 - [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
 - [ ] ホスト再起動後、`C-q q` / `C-q Q` に再起動前の session が 💤 で並び、待ちマーク（📌）と委譲の木が残っている
-- [ ] gone の row が running の row の後ろに並び、終了直前が `working` / `awaiting_approval` のものが先頭に来る
-- [ ] gone の row を選ぶと同じ session id のまま会話が復元され、💤 が running の state に戻る
+- [ ] gone の session が running の session の後ろに並び、終了直前が `working` / `awaiting_approval` のものが先頭に来る
+- [ ] gone の session を選ぶと同じ session id のまま会話が復元され、💤 が running の state に戻る
 - [ ] Ctrl-C / `/exit` で閉じた session は一覧から消える
 - [ ] 同 pane で `/clear` 後、旧 session が一覧から消える（L3）
 - [ ] picker の `ctrl-x` で行が消え、その委譲先の行も消える

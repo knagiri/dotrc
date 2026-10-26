@@ -28,7 +28,7 @@ pin も運ばない。閉じてから 7 日で GC が session の記録ごと消
 - 優先度の項目は持たない。並べ替えの判断は利用者がメモを見て行う
 - PR 以外の外部待ち（人の作業待ち等）の自動検知はしない。コメントだけ付け、再開は手動
 - webhook は使わない。手元のマシンに公開の受け口を置かない
-- 推測で作業を完了扱いにしてはならない。idle が長い・roster に居ない・`SessionEnd` が来た、は
+- 推測で作業を完了扱いにしてはならない。idle が長い・動いている session の一覧（`claude agents`）に居ない・`SessionEnd` が来た、は
   どれも作業完了の根拠にならない。これを破ると、生きた WIP が一覧から黙って消える現状に戻る
 - 返信待ちの session（委譲元へ `SendMessage` で質問中の委譲先、`awaiting_approval` 中の session）を
   休眠させてはならない。止めると返信や承認の受け手が居なくなる
@@ -40,7 +40,7 @@ session は kind（`interactive` / `background`）を持ち、状態は独立し
 | 軸 | 値 | 誰が決めるか |
 |---|---|---|
 | 作業 | `open` → `done`（一方向） | 利用者・委譲元の明示的な操作だけ |
-| プロセス | `running` ↔ `gone` | 観測（hook・roster）と休眠 |
+| プロセス | `running` ↔ `gone` | 観測（hook・`claude agents` の一覧）と休眠 |
 
 既存の hook 由来の state（`working` / `awaiting_approval` / `idle_done`）は `running` の中の細分として
 そのまま残る。メモ・pin・親子関係は `open` の間、プロセス軸がどう動いても消えない。
@@ -52,14 +52,14 @@ session は kind（`interactive` / `background`）を持ち、状態は独立し
 | interactive | `SessionEnd` の `reason: prompt_input_exit`（Ctrl-C / `/exit`） |
 | interactive | picker からの完了操作 |
 | interactive | `/clear`（古い session id が `done` になる。利用者は別作業を新しい session で始める運用なので、`/clear` は完了とみなす） |
-| background | `claude-stop-bg` で閉じたとき。`claude stop` 由来の `SessionEnd` は `reason: other` で再起動時の SIGTERM と区別できないので、`claude-stop-bg` が台帳へ完了を書き、roster に居れば続けて stop する（休眠で既に `gone` の子にも効くよう、roster に居ないことを拒否理由にしない） |
+| background | `claude-stop-bg` で閉じたとき。`claude stop` 由来の `SessionEnd` は `reason: other` で再起動時の SIGTERM と区別できないので、`claude-stop-bg` が台帳へ完了を書き、`claude agents` の一覧に居れば続けて stop する（休眠で既に `gone` の子にも効くよう、一覧に居ないことを拒否理由にしない）。interactive（kind 不明を含む）は一覧に居ても居なくても拒否し、done を書かない |
 | 非対話（`claude -p` 等） | プロセス終了時に常に `done`。一回きりの実行で、再開する WIP ではない |
 | 両方 | 親が `done` になったとき（cascade。下記） |
 
 ### `gone` への遷移（作業は `open` のまま）
 
 - `SessionEnd` の `reason` が `prompt_input_exit` 以外（ホスト停止の SIGTERM 等）
-- roster に居ない（reconcile。background の約 60 分後の自然消滅を含む）
+- `claude agents` の一覧に居ない（reconcile。background の約 60 分後の自然消滅を含む）
 - 休眠
 - 既存の `ForcedEnd` 経路（同 pane の新 session、picker の switch 失敗）のうち、`/clear` 以外
 

@@ -266,16 +266,16 @@ flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` �
 `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを参照
 （README.md は挙動レベルの説明に留め、flag レベルは書かない）。
 
-### gone の row は pane を運ばない
+### gone の session は pane を運ばない
 
 プロセスが消えた session（gone）も、作業が open な間は `queue` view に残る
 （`docs/design/claude-queue-lifecycle.md`）。status-right は running の state だけを数え、gone を数えない。
 
-gone の row で `tmux_pane` を運ばないのは、ledger がこの列を終了時にクリアしないためである。
+gone の session で `tmux_pane` を運ばないのは、ledger がこの列を終了時にクリアしないためである。
 pane id は tmux server 単位のカウンタで新しい server は `%0` から振り直すので、終了したプロセスの
 pane id は再起動後の server では無関係な live pane に衝突する。picker は roster が読めないときだけ
 ledger の pane を信用する（roster が読めないことは session の死の証拠にならないから）が、
-`terminated_at` が立った row にはその前提が成り立たない — 死んでいる証拠を別に持っているので、
+`terminated_at` が立った session にはその前提が成り立たない — 死んでいる証拠を別に持っているので、
 信用すると会話の復元ではなく他人の pane への switch になる。
 
 ### ④は **メイン** toplevel 基準でパスを作る
