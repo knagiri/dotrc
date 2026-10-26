@@ -3,6 +3,7 @@ package multiplexer
 import (
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -73,6 +74,12 @@ func SessionExists(name string) bool {
 // new-window without -d would change what a person attached to that session is
 // looking at.
 //
+// An existing session gets a window without -S. With -S, tmux selects a
+// same-named window instead of creating one, and "unless -d is also given in
+// which case the command does nothing" (tmux(1)): the command would exit 0
+// without starting claude, and the delivery would be recorded as done. So the
+// window is always a new one, even if another has the same name.
+//
 // The names are sanitized here for the same reason OpenSession does it: every
 // tmux target built from them has to agree on one spelling.
 func DetachedOpenArgs(name, window, cwd string, env map[string]string, argv []string, exists bool) []string {
@@ -81,5 +88,6 @@ func DetachedOpenArgs(name, window, cwd string, env map[string]string, argv []st
 		return newSessionArgs(name, window, cwd, "", env, argv)
 	}
 	args := newWindowArgs(name, window, cwd, "", env, argv)
-	return append([]string{args[0], "-d"}, args[1:]...)
+	i := slices.Index(args, "-S")
+	return slices.Concat([]string{args[0], "-d"}, args[1:i], args[i+1:])
 }

@@ -288,7 +288,7 @@ Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
 - merge / close は待たずに配送し、成功したら pin を外す
 
 配送は指示文を最初の入力にした resume で行う。interactive は picker の resume と同じ tmux session・window 名で
-`claude --resume <id> "<指示文>"` の window を detached で開き（client は動かさない）、background は
+`claude --resume <id> "<指示文>"` の window を detached で開き（client は動かさない。同名の window があっても `-S` は付けず、常に新しい window を作る。`-S` と `-d` の併用は同名 window があると何もせず成功を返すため）、background は
 `claude --bg --resume <id> "<指示文>"`。どちらも台帳に記録された config dir で起動し、`systemd-run --user --scope`
 で包んで service の cgroup から出す（無ければ包まない）。running な session には入力欄へ打ち込まず、休眠と同じ手順で
 止めてから resume する。次のときは配送せず次の pass に回す: running かつ open な委譲先がいる、running で `idle_done` に

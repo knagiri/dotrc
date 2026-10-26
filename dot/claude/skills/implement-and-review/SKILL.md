@@ -171,7 +171,8 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    は作らない」）は PR を作らない。その PR の branch に push し、既存 PR #N に対して
    `pr-review-automerge` を呼ぶ。委譲元は review で修正が要ると、同じ worktree・branch に新しい
    委譲先を起こしてこの形で渡す（`dot/claude/rules/worktree-scope.md` §6）。ここで PR を新しく
-   作ると同じ head に open PR が 2 本立ち、PR 監視の pin も review の指摘も元の PR に残ったままになる。
+   作ろうとしても、同じ head / base の open PR があるので GitHub が拒否する。base を変えて別 PR に
+   すると、PR 監視の pin も review の指摘も元の PR に残ったままになる。
 
    このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しは
    `pr-review-automerge` 手順 3.c が `gh-automerge` の直前に行い、PR 本文との食い違いは

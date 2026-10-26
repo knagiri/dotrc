@@ -98,6 +98,22 @@ func pin(t *testing.T) db.PRPin {
 	return db.PRPin{SessionID: sid, PR: pr, Cwd: dir, TranscriptPath: tr, ConfigDir: cfg, Kind: db.KindInteractive, Gone: true}
 }
 
+// Every effect of a delivery -- stopping a running session and launching the
+// resume -- lands on a world stub, none on a real tmux, claude or systemd-run.
+func TestDeliver_StubsCatchEveryEffect(t *testing.T) {
+	for _, kind := range []string{roster.KindInteractive, roster.KindBackground} {
+		w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: kind, Status: roster.StatusIdle}}}
+		p := pin(t)
+		p.Gone = false
+		if err := Deliver(p, "m", w.deps()); err != nil {
+			t.Fatalf("%v: %v", kind, err)
+		}
+		if len(w.ran) != 1 || len(w.ended)+len(w.stopped) != 1 {
+			t.Errorf("%v: effects not all captured: ran %q ended %v stopped %v", kind, w.ran, w.ended, w.stopped)
+		}
+	}
+}
+
 func TestDeliver_GoneInteractiveOpensWindow(t *testing.T) {
 	w := &world{}
 	if err := Deliver(pin(t), "PR has news", w.deps()); err != nil {
@@ -138,6 +154,10 @@ func TestDeliver_ExistingSessionNewWindowDetached(t *testing.T) {
 	if argv := w.ran[0]; argv[0] != "tmux" || argv[1] != "new-window" || argv[2] != "-d" {
 		t.Errorf("argv = %q", argv)
 	}
+	// -S with -d makes tmux do nothing when a same-named window exists.
+	if slices.Contains(w.ran[0], "-S") {
+		t.Errorf("-S would turn a name collision into a silent no-op: %q", w.ran[0])
+	}
 }
 
 func TestDeliver_GoneBackground(t *testing.T) {
@@ -152,6 +172,52 @@ func TestDeliver_GoneBackground(t *testing.T) {
 	}
 	if !slices.Contains(w.ranEnv[0], "CLAUDE_CONFIG_DIR="+cfg) {
 		t.Errorf("env lacks the config dir")
+	}
+}
+
+// A running interactive session is stopped (process ended, pane killed) and
+// only then resumed in a new tmux window.
+func TestDeliver_RunningInteractiveStoppedThenResumed(t *testing.T) {
+	w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindInteractive, Status: roster.StatusIdle}}}
+	var order []string
+	d := w.deps()
+	end, kill, run := d.Hibernate.End, d.Hibernate.KillPane, d.Run
+	d.Hibernate.End = func(pid int, a, b string) error { order = append(order, "end"); return end(pid, a, b) }
+	d.Hibernate.KillPane = func(pn string) error { order = append(order, "kill"); return kill(pn) }
+	d.Run = func(a, e []string, dir string) error { order = append(order, "run"); return run(a, e, dir) }
+	p := pin(t)
+	p.Gone = false
+	if err := Deliver(p, "m", d); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(w.ended, []int{stray}) || !slices.Equal(w.killed, []string{"%7"}) || len(w.stopped) != 0 {
+		t.Errorf("ended %v killed %v stopped %v", w.ended, w.killed, w.stopped)
+	}
+	if len(w.ran) != 1 || !slices.Contains(w.ran[0], "tmux") {
+		t.Fatalf("ran %q", w.ran)
+	}
+	if !slices.Equal(order, []string{"end", "kill", "run"}) {
+		t.Errorf("order = %v, the resume must come after the stop", order)
+	}
+}
+
+// The listing decides how a running session is resumed, not the ledger's Kind:
+// one recorded as interactive but listed as background is stopped with
+// `claude stop` and resumed with `claude --bg`, with no tmux window.
+func TestDeliver_RunningKindFromListing(t *testing.T) {
+	w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindBackground, Status: roster.StatusIdle}}}
+	p := pin(t)
+	p.Gone = false
+	p.Kind = db.KindInteractive
+	if err := Deliver(p, "m", w.deps()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(w.stopped, []string{sid}) || len(w.ended) != 0 {
+		t.Errorf("stopped %v ended %v", w.stopped, w.ended)
+	}
+	want := []string{"systemd-run", "--user", "--scope", "--quiet", "--collect", "--", "claude", "--bg", "--resume", sid, "m"}
+	if len(w.ran) != 1 || !slices.Equal(w.ran[0], want) {
+		t.Errorf("ran %q", w.ran)
 	}
 }
 
@@ -192,7 +258,7 @@ func TestDeliver_RunningChildSkipped(t *testing.T) {
 	}
 }
 
-// Review Focus 5.
+// A session whose working directory is gone is skipped before anything is stopped, so it is not left gone for a resume that cannot work.
 func TestDeliver_MissingCwdSkipped(t *testing.T) {
 	w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindInteractive, Status: roster.StatusIdle}}}
 	p := pin(t)
@@ -295,7 +361,7 @@ func TestPass_DebounceOneTick(t *testing.T) {
 	}
 }
 
-// Review Focus 1: a failed or skipped delivery leaves the cursor where it was,
+// A failed or skipped delivery leaves the cursor where it was,
 // so the next pass retries with the same activity, and a successful one is not
 // repeated.
 func TestPass_CursorAdvancesOnlyOnSuccess(t *testing.T) {
@@ -341,7 +407,7 @@ func TestPass_MergedUnpins(t *testing.T) {
 	}
 }
 
-// Review Focus 4.
+// A session that is done (not open work) is never polled or woken.
 func TestPass_DoneSessionIgnored(t *testing.T) {
 	conn := ledger(t, sid)
 	if _, err := db.MarkDone(conn, sid, now.Unix()); err != nil {
@@ -354,7 +420,7 @@ func TestPass_DoneSessionIgnored(t *testing.T) {
 	}
 }
 
-// Review Focus 2, the Pass half: one pin's gh failure is reported and the
+// One pin's gh failure is reported and the
 // other pins are still watched.
 func TestPass_GhErrorSkipsPin(t *testing.T) {
 	conn := ledger(t, sid)
