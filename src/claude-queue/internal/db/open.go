@@ -66,6 +66,8 @@ func migrate(conn *sql.DB) error {
 		{"sessions", "pin_pr", "ALTER TABLE sessions ADD COLUMN pin_pr TEXT"},
 		{"sessions", "pin_cursor", "ALTER TABLE sessions ADD COLUMN pin_cursor TEXT"},
 		{"sessions", "pin_seen_at", "ALTER TABLE sessions ADD COLUMN pin_seen_at INTEGER"},
+		{"sessions", "pin_delivered_at", "ALTER TABLE sessions ADD COLUMN pin_delivered_at INTEGER"},
+		{"sessions", "pin_delivered_upto", "ALTER TABLE sessions ADD COLUMN pin_delivered_upto TEXT"},
 	} {
 		has, err := hasColumn(conn, m.table, m.column)
 		if err != nil {

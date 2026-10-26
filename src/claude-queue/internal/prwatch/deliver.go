@@ -36,6 +36,10 @@ type Deps struct {
 	WindowName  func(transcript, sessionID string) string
 	// SessionExists reports whether the tmux session is already there.
 	SessionExists func(name string) bool
+	// LastAttachedSession names the session a client was attached to most
+	// recently (multiplexer.LastAttachedSession), where the window goes when
+	// the repo's own session is not there.
+	LastAttachedSession func() (string, error)
 	// TmuxServerRunning reports whether a tmux server is up.
 	TmuxServerRunning func() bool
 	// DaemonRunning reports whether the claude daemon of a config dir is up
@@ -51,14 +55,15 @@ type Deps struct {
 // claude.
 func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)) Deps {
 	return Deps{
-		Poll:             func(pr, dir string) (Activity, error) { return Poll(pr, dir, GhRunner) },
-		Hibernate:        hd,
-		RunningDelegates: runningDelegates,
-		IsFile:           func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.Mode().IsRegular() },
-		IsDir:            isDir,
-		SessionName:      picker.SessionName,
-		WindowName:       picker.ResumeWindowName,
-		SessionExists:    multiplexer.SessionExists,
+		Poll:                func(pr, dir string) (Activity, error) { return Poll(pr, dir, GhRunner) },
+		Hibernate:           hd,
+		RunningDelegates:    runningDelegates,
+		IsFile:              func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.Mode().IsRegular() },
+		IsDir:               isDir,
+		SessionName:         picker.SessionName,
+		WindowName:          picker.ResumeWindowName,
+		SessionExists:       multiplexer.SessionExists,
+		LastAttachedSession: multiplexer.LastAttachedSession,
 		TmuxServerRunning: func() bool {
 			_, ok := multiplexer.Tmux().ServerPID()
 			return ok
@@ -78,6 +83,10 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 // Deliver hands msg to the pinned session p by resuming it with msg as its
 // first input: `claude --resume <id> <msg>` in a new tmux window for an
 // interactive session, `claude --bg --resume <id> <msg>` for a background one.
+// The window goes into the repo's own tmux session (the picker's
+// SessionName) when it is there, and otherwise into the session a client was
+// attached to last. No session is created: one made from the service would
+// carry its environment (see multiplexer.DetachedOpenArgs).
 // It returns a hibernate.SkipError (see hibernate.IsSkip) when it decided not
 // to act now, which leaves the activity to the next pass.
 //
@@ -148,7 +157,7 @@ func Deliver(p db.PRPin, msg string, deps Deps) error {
 		}
 		// Re-check for both kinds: closing an interactive session's pane may
 		// have been the last window, which makes tmux exit its server
-		// (exit-empty), and new-session would then start one here.
+		// (exit-empty), and the new-window would then start one here.
 		if err := hostUp(p, background, deps); err != nil {
 			return &hibernate.SkipError{Reason: "stopped, but not resumed: " + err.Error()}
 		}
@@ -159,11 +168,15 @@ func Deliver(p db.PRPin, msg string, deps Deps) error {
 		return deps.Run(argv, configdir.Env(os.Environ(), p.ConfigDir), p.Cwd)
 	}
 	name := deps.SessionName(p.Cwd)
-	if name == "" {
-		return &hibernate.SkipError{Reason: fmt.Sprintf("no tmux session name for %s", p.Cwd)}
+	if name == "" || !deps.SessionExists(name) {
+		last, err := deps.LastAttachedSession()
+		if err != nil {
+			return &hibernate.SkipError{Reason: fmt.Sprintf("no tmux session to open the window in: %v", err)}
+		}
+		name = last
 	}
 	env, launch := picker.LaunchIn(p.ConfigDir, []string{"claude", "--resume", p.SessionID, msg})
-	tmux := append([]string{"tmux"}, multiplexer.DetachedOpenArgs(name, deps.WindowName(p.TranscriptPath, p.SessionID), p.Cwd, env, launch, deps.SessionExists(name))...)
+	tmux := append([]string{"tmux"}, multiplexer.DetachedOpenArgs(name, deps.WindowName(p.TranscriptPath, p.SessionID), p.Cwd, env, launch)...)
 	return deps.Run(tmux, os.Environ(), p.Cwd)
 }
 

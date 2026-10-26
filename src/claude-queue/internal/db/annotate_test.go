@@ -205,7 +205,7 @@ func prPinOf(t *testing.T, conn *sql.DB, sid string) (pr, cursor sql.NullString,
 func TestSetPinPR_SetsCursorToNow(t *testing.T) {
 	conn := openAnnotate(t)
 	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
-	if _, err := conn.Exec("UPDATE sessions SET pin_seen_at = 5 WHERE session_id = 'a'"); err != nil {
+	if _, err := conn.Exec("UPDATE sessions SET pin_seen_at = 5, pin_delivered_at = 7, pin_delivered_upto = 'x' WHERE session_id = 'a'"); err != nil {
 		t.Fatal(err)
 	}
 	if err := SetPinPR(conn, "a", "example-org/example-repo#3", at); err != nil {
@@ -222,7 +222,7 @@ func TestSetPinPR_SetsCursorToNow(t *testing.T) {
 	if err != nil || len(pins) != 1 {
 		t.Fatalf("PRPins = %v, %v", pins, err)
 	}
-	if p := pins[0]; p.SessionID != "a" || p.PR != "example-org/example-repo#3" || !p.Cursor.Equal(at) || p.SeenAt != 0 {
+	if p := pins[0]; p.SessionID != "a" || p.PR != "example-org/example-repo#3" || !p.Cursor.Equal(at) || p.SeenAt != 0 || p.DeliveredAt != 0 || !p.DeliveredUpTo.IsZero() {
 		t.Errorf("PRPins[0] = %+v", p)
 	}
 }
@@ -238,7 +238,7 @@ func TestClearPin_ClearsPR(t *testing.T) {
 			if err := SetPinPR(conn, "a", "example-org/example-repo#3", time.Unix(100, 0)); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := conn.Exec("UPDATE sessions SET pin_seen_at = 5 WHERE session_id = 'a'"); err != nil {
+			if _, err := conn.Exec("UPDATE sessions SET pin_seen_at = 5, pin_delivered_at = 7, pin_delivered_upto = 'x' WHERE session_id = 'a'"); err != nil {
 				t.Fatal(err)
 			}
 			if err := unpin(conn); err != nil {
@@ -246,6 +246,14 @@ func TestClearPin_ClearsPR(t *testing.T) {
 			}
 			if pr, cursor, seen := prPinOf(t, conn, "a"); pr.Valid || cursor.Valid || seen.Valid {
 				t.Errorf("after %s: %v, %v, %v", name, pr, cursor, seen)
+			}
+			var at sql.NullInt64
+			var upTo sql.NullString
+			if err := conn.QueryRow("SELECT pin_delivered_at, pin_delivered_upto FROM sessions WHERE session_id = 'a'").Scan(&at, &upTo); err != nil {
+				t.Fatal(err)
+			}
+			if at.Valid || upTo.Valid {
+				t.Errorf("after %s: delivery record %v, %v", name, at, upTo)
 			}
 			if _, _, pinned := annotationsOf(t, conn, "a"); pinned {
 				t.Errorf("after %s: still pinned", name)
@@ -278,5 +286,66 @@ func TestPRPins_SkipsDoneAndPlainPins(t *testing.T) {
 	}
 	if len(pins) != 1 || pins[0].SessionID != "a" {
 		t.Errorf("PRPins = %+v, want only a", pins)
+	}
+}
+
+// A delivery is recorded without moving the cursor; AdvancePRCursor moves it
+// and drops the record. A merge or close records no cursor to move to.
+func TestSetPRDelivered(t *testing.T) {
+	conn := openAnnotate(t)
+	pr := "example-org/example-repo#3"
+	if err := SetPinPR(conn, "a", pr, time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	upTo := time.Date(2026, 10, 26, 10, 40, 0, 0, time.UTC)
+	if err := SetPRDelivered(conn, "a", pr, 500, upTo); err != nil {
+		t.Fatal(err)
+	}
+	pins, err := PRPins(conn)
+	if err != nil || len(pins) != 1 {
+		t.Fatalf("PRPins = %v, %v", pins, err)
+	}
+	if p := pins[0]; p.DeliveredAt != 500 || !p.DeliveredUpTo.Equal(upTo) || !p.Cursor.Equal(time.Unix(100, 0)) {
+		t.Errorf("after SetPRDelivered: %+v", p)
+	}
+	// Another PR's write does not touch this pin.
+	if err := SetPRDelivered(conn, "a", "example-org/example-repo#4", 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AdvancePRCursor(conn, "a", pr, upTo); err != nil {
+		t.Fatal(err)
+	}
+	pins, _ = PRPins(conn)
+	if p := pins[0]; p.DeliveredAt != 0 || !p.DeliveredUpTo.IsZero() || !p.Cursor.Equal(upTo) {
+		t.Errorf("after AdvancePRCursor: %+v", p)
+	}
+	if err := SetPRDelivered(conn, "a", pr, 600, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	pins, _ = PRPins(conn)
+	if p := pins[0]; p.DeliveredAt != 600 || !p.DeliveredUpTo.IsZero() {
+		t.Errorf("merge delivery: %+v", p)
+	}
+}
+
+func TestPromptSince(t *testing.T) {
+	conn := openAnnotate(t)
+	// Only a UserPromptSubmit counts: a Stop at 200 is no prompt.
+	for _, e := range []struct {
+		typ, state string
+		at         int64
+	}{{"UserPromptSubmit", "working", 100}, {"Stop", "idle_done", 200}} {
+		if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state, created_at) VALUES ('a', ?, ?, ?)", e.typ, e.state, e.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		at   int64
+		want bool
+	}{{50, true}, {100, true}, {101, false}} {
+		got, err := PromptSince(conn, "a", tc.at)
+		if err != nil || got != tc.want {
+			t.Errorf("PromptSince(%d) = %v, %v; want %v", tc.at, got, err, tc.want)
+		}
 	}
 }

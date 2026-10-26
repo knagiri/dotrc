@@ -36,6 +36,13 @@ type world struct {
 	runErr   error
 	noTmux   bool
 	noDaemon bool
+	// noRepoSession: the repo's own tmux session is not there, and the
+	// window goes to the last attached session, "main". noSessions: there is
+	// none of that either.
+	noRepoSession bool
+	noSessions    bool
+
+	asked []string // tmux session lookups, in order
 
 	polled  []string
 	ran     [][]string
@@ -73,12 +80,22 @@ func (w *world) deps() Deps {
 				return w.latest, now.Unix() - 600, w.latest != "", nil
 			},
 		},
-		RunningDelegates:  func() (map[string]int, error) { return map[string]int{sid: w.children}, nil },
-		IsFile:            func(p string) bool { _, err := os.Stat(p); return err == nil },
-		IsDir:             func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() },
-		SessionName:       func(string) string { return "example-repo_feature" },
-		WindowName:        func(string, string) string { return "fix the thing" },
-		SessionExists:     func(string) bool { return false },
+		RunningDelegates: func() (map[string]int, error) { return map[string]int{sid: w.children}, nil },
+		IsFile:           func(p string) bool { _, err := os.Stat(p); return err == nil },
+		IsDir:            func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() },
+		SessionName:      func(string) string { return "example-repo_feature" },
+		WindowName:       func(string, string) string { return "fix the thing" },
+		SessionExists: func(n string) bool {
+			w.asked = append(w.asked, "has "+n)
+			return !w.noRepoSession
+		},
+		LastAttachedSession: func() (string, error) {
+			w.asked = append(w.asked, "last")
+			if w.noSessions {
+				return "", errors.New("tmux list-sessions: no session")
+			}
+			return "main", nil
+		},
 		TmuxServerRunning: func() bool { return !w.noTmux },
 		DaemonRunning:     func(string) (bool, error) { return !w.noDaemon, nil },
 		Run: func(argv, env []string, _ string) error {
@@ -105,7 +122,7 @@ func pin(t *testing.T) db.PRPin {
 // resume -- lands on a world stub, none on a real tmux or claude.
 func TestDeliver_StubsCatchEveryEffect(t *testing.T) {
 	for _, kind := range []string{roster.KindInteractive, roster.KindBackground} {
-		w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: kind, Status: roster.StatusIdle}}}
+		w := &world{latest: "idle_done", noRepoSession: true, agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: kind, Status: roster.StatusIdle}}}
 		p := pin(t)
 		p.Gone = false
 		if err := Deliver(p, "m", w.deps()); err != nil {
@@ -113,6 +130,9 @@ func TestDeliver_StubsCatchEveryEffect(t *testing.T) {
 		}
 		if len(w.ran) != 1 || len(w.ended)+len(w.stopped) != 1 {
 			t.Errorf("%v: effects not all captured: ran %q ended %v stopped %v", kind, w.ran, w.ended, w.stopped)
+		}
+		if kind == roster.KindInteractive && !slices.Equal(w.asked, []string{"has example-repo_feature", "last"}) {
+			t.Errorf("tmux session lookups not all captured: %v", w.asked)
 		}
 	}
 }
@@ -126,8 +146,11 @@ func TestDeliver_GoneInteractiveOpensWindow(t *testing.T) {
 		t.Fatalf("ran %q", w.ran)
 	}
 	argv := w.ran[0]
-	if !slices.Equal(argv[:3], []string{"tmux", "new-session", "-d"}) || !slices.Contains(argv, "example-repo_feature") {
-		t.Errorf("not a detached session in the worktree's tmux session: %q", argv)
+	if !slices.Equal(argv[:3], []string{"tmux", "new-window", "-d"}) || !slices.Contains(argv, "=example-repo_feature:") {
+		t.Errorf("not a detached window in the worktree's tmux session: %q", argv)
+	}
+	if slices.Contains(w.asked, "last") {
+		t.Errorf("looked past the repo's own session: %v", w.asked)
 	}
 	if !slices.Contains(argv, "CLAUDE_CONFIG_DIR="+cfg) {
 		t.Errorf("the window does not run under the recorded config dir: %q", argv)
@@ -141,12 +164,44 @@ func TestDeliver_GoneInteractiveOpensWindow(t *testing.T) {
 	}
 }
 
+// Without the repo's own tmux session, the window goes to the session a
+// client was attached to last; no session is created, because one made from
+// the service would take its environment (no SSH agent) for all its windows.
+func TestDeliver_NoRepoSessionUsesLastAttached(t *testing.T) {
+	w := &world{noRepoSession: true}
+	if err := Deliver(pin(t), "m", w.deps()); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.ran) != 1 {
+		t.Fatalf("ran %q", w.ran)
+	}
+	argv := w.ran[0]
+	if slices.Contains(argv, "new-session") {
+		t.Errorf("created a tmux session from the service: %q", argv)
+	}
+	if !slices.Equal(argv[:3], []string{"tmux", "new-window", "-d"}) || !slices.Contains(argv, "=main:") {
+		t.Errorf("not a detached window in the last attached session: %q", argv)
+	}
+}
+
+// With no session to put the window in, nothing is launched and the delivery
+// waits for the next pass.
+func TestDeliver_NoSessionSkipped(t *testing.T) {
+	w := &world{noRepoSession: true, noSessions: true}
+	err := Deliver(pin(t), "m", w.deps())
+	if !hibernate.IsSkip(err) || !strings.Contains(err.Error(), "no tmux session") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(w.ran) != 0 {
+		t.Errorf("ran %q", w.ran)
+	}
+}
+
 // An existing tmux session gets a new window, detached so a person attached
 // to that session keeps looking at what they were looking at.
 func TestDeliver_ExistingSessionNewWindowDetached(t *testing.T) {
 	w := &world{}
 	d := w.deps()
-	d.SessionExists = func(string) bool { return true }
 	if err := Deliver(pin(t), "m", d); err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +411,9 @@ var news = Activity{State: StateOpen, Events: []Event{
 }}
 
 // The first pass that sees new activity only records it; the next one, a tick
-// later, delivers it all at once and moves the cursor to the newest event.
+// later, delivers it all at once. The cursor stays where it was until a later
+// pass finds the session's UserPromptSubmit since the delivery, and then moves
+// to the newest delivered event.
 func TestPass_DebounceOneTick(t *testing.T) {
 	conn := ledger(t, sid)
 	w := &world{activity: news}
@@ -367,7 +424,8 @@ func TestPass_DebounceOneTick(t *testing.T) {
 	if _, _, seen := pinState(t, conn, sid); seen.Int64 != now.Unix() {
 		t.Fatalf("pin_seen_at = %v", seen)
 	}
-	got := Pass(conn, now.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
+	delivered := now.Add(3 * time.Minute)
+	got := Pass(conn, delivered, DefaultDebounce, w.deps(), &out)
 	if !got[sid] || len(w.ran) != 1 {
 		t.Fatalf("second pass: resumed %v, ran %q\n%s", got, w.ran, &out)
 	}
@@ -375,15 +433,74 @@ func TestPass_DebounceOneTick(t *testing.T) {
 	if !strings.Contains(cmd, "comment（人）: 1 件") || !strings.Contains(cmd, "review commented（bot）: 1 件") || strings.Contains(cmd, "approved") {
 		t.Errorf("delivered message = %q", cmd)
 	}
+	if _, cursor, _ := pinState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" {
+		t.Errorf("cursor moved on the launch alone: %v", cursor)
+	}
+	prompt(t, conn, sid, delivered.Unix()+5)
+	Pass(conn, delivered.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
 	pinned, cursor, seen := pinState(t, conn, sid)
 	if !pinned || cursor.String != "2026-10-26T10:40:00Z" || seen.Valid {
-		t.Errorf("after delivery: pinned=%v cursor=%v seen=%v", pinned, cursor, seen)
+		t.Errorf("after the prompt: pinned=%v cursor=%v seen=%v\n%s", pinned, cursor, seen, &out)
 	}
-	// Nothing newer: the third pass delivers nothing.
-	Pass(conn, now.Add(6*time.Minute), DefaultDebounce, w.deps(), &out)
+	if at, _ := deliveredState(t, conn, sid); at.Valid {
+		t.Errorf("delivery record left after confirmation: %v", at)
+	}
+	// Nothing newer: the next pass delivers nothing.
+	Pass(conn, delivered.Add(6*time.Minute), DefaultDebounce, w.deps(), &out)
 	if len(w.ran) != 1 {
 		t.Errorf("delivered again: %q", w.ran)
 	}
+}
+
+// A resume that failed inside its window leaves no UserPromptSubmit. The pass
+// right after the delivery keeps the cursor and waits; once ConfirmWindow (two
+// ticks) has passed, the record is dropped and the next pass delivers again.
+// A prompt from before the delivery does not count.
+func TestPass_UnconfirmedDeliveryRedelivered(t *testing.T) {
+	conn := ledger(t, sid)
+	if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
+		t.Fatal(err)
+	}
+	prompt(t, conn, sid, now.Unix()-60)
+	w := &world{activity: news}
+	var out bytes.Buffer
+	if got := Pass(conn, now, DefaultDebounce, w.deps(), &out); !got[sid] || len(w.ran) != 1 {
+		t.Fatalf("not delivered: %v\n%s", got, &out)
+	}
+	for _, tick := range []time.Duration{3 * time.Minute, 6 * time.Minute} {
+		Pass(conn, now.Add(tick), DefaultDebounce, w.deps(), &out)
+		if _, cursor, _ := pinState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" {
+			t.Fatalf("+%v: cursor moved without a prompt: %v", tick, cursor)
+		}
+		if len(w.ran) != 1 {
+			t.Fatalf("+%v: delivered again before the window closed: %q\n%s", tick, w.ran, &out)
+		}
+	}
+	if at, _ := deliveredState(t, conn, sid); at.Valid {
+		t.Fatalf("record kept past ConfirmWindow: %v\n%s", at, &out)
+	}
+	if !strings.Contains(out.String(), "delivering again on the next pass") {
+		t.Errorf("failure not reported:\n%s", &out)
+	}
+	Pass(conn, now.Add(9*time.Minute), DefaultDebounce, w.deps(), &out)
+	if len(w.ran) != 2 {
+		t.Errorf("not delivered again: ran %d times\n%s", len(w.ran), &out)
+	}
+}
+
+func prompt(t *testing.T, conn *sql.DB, id string, at int64) {
+	t.Helper()
+	if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state, created_at) VALUES (?, 'UserPromptSubmit', 'working', ?)", id, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func deliveredState(t *testing.T, conn *sql.DB, id string) (at sql.NullInt64, upTo sql.NullString) {
+	t.Helper()
+	if err := conn.QueryRow("SELECT pin_delivered_at, pin_delivered_upto FROM sessions WHERE session_id = ?", id).Scan(&at, &upTo); err != nil {
+		t.Fatal(err)
+	}
+	return
 }
 
 // A failed or skipped delivery leaves the cursor where it was,
@@ -423,12 +540,36 @@ func TestPass_MergedUnpins(t *testing.T) {
 	if cmd := w.ran[0][len(w.ran[0])-1]; !strings.Contains(cmd, "merge されました") {
 		t.Errorf("message = %q", cmd)
 	}
+	if pinned, _, _ := pinState(t, conn, sid); !pinned {
+		t.Fatal("unpinned on the launch alone")
+	}
+	prompt(t, conn, sid, now.Unix())
+	Pass(conn, now.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
 	if pinned, _, _ := pinState(t, conn, sid); pinned {
-		t.Error("still pinned after the merge was delivered")
+		t.Errorf("still pinned after the merge was taken in:\n%s", &out)
 	}
 	pins, err := db.PRPins(conn)
 	if err != nil || len(pins) != 0 {
 		t.Errorf("PRPins after merge = %v, %v", pins, err)
+	}
+	if len(w.ran) != 1 {
+		t.Errorf("delivered again: %q", w.ran)
+	}
+}
+
+// A merge whose resume left no prompt keeps the pin and is delivered again.
+func TestPass_MergedUnconfirmedRedelivered(t *testing.T) {
+	conn := ledger(t, sid)
+	w := &world{activity: Activity{State: StateMerged}}
+	var out bytes.Buffer
+	for _, tick := range []time.Duration{0, 3 * time.Minute, 6 * time.Minute, 9 * time.Minute} {
+		Pass(conn, now.Add(tick), DefaultDebounce, w.deps(), &out)
+	}
+	if pinned, _, _ := pinState(t, conn, sid); !pinned {
+		t.Errorf("unpinned without a prompt:\n%s", &out)
+	}
+	if len(w.ran) != 2 {
+		t.Errorf("want the delivery and one redelivery, ran %d times:\n%s", len(w.ran), &out)
 	}
 }
 
