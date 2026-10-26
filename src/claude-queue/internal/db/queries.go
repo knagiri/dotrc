@@ -23,12 +23,16 @@ type Row struct {
 	CreatedAt      int64
 	Priority       int
 
-	// PriorState is the state the session was last in before it ended, and is
-	// set only for the resumable rows -- a live row's own RawState already says
-	// what it is doing. It is what separates "the host went down mid-task" from
-	// "the work was finished and the session closed", which decides both the
-	// resumable ordering and what the summary column says.
+	// PriorState is the session's latest non-ended state. On a running row it
+	// repeats RawState; on a gone row it is what separates "the host went down
+	// mid-task" from "it had finished a turn", which decides both the gone
+	// ordering and what the summary column says.
 	PriorState sql.NullString
+
+	// Kind is how the session was started (KindInteractive / KindBackground /
+	// KindPrint). NULL is a row recorded before the column existed, read as
+	// interactive.
+	Kind sql.NullString
 
 	// ParentSessionID is the full id of the session that delegated this one,
 	// from session_links. NULL means no link was recorded -- not that the
@@ -41,6 +45,18 @@ type Row struct {
 	// and nothing else -- not the state, the priority or the ordering.
 	Marked bool
 }
+
+// Session kinds, as sessions.kind records them.
+const (
+	KindInteractive = "interactive"
+	KindBackground  = "background"
+	KindPrint       = "print"
+)
+
+// StateGone is the pseudo effective_state of an open session whose process has
+// ended (terminated_at set). No hook writes it: the queue view derives it, and
+// the session stays listed until its work is marked done.
+const StateGone = "gone"
 
 // StateResumable is the pseudo effective_state of a terminated row that
 // `claude --resume` can reopen. It is not a state any hook writes: the ledger
@@ -109,7 +125,7 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	rows, err := conn.Query(`
 		SELECT q.session_id, q.tmux_pane, q.cwd, q.transcript_path, q.config_dir,
 		       q.event_type, q.raw_state, q.effective_state, q.payload, q.created_at, q.priority,
-		       NULL AS prior_state, l.parent_session_id, q.marked
+		       q.prior_state, l.parent_session_id, q.marked, q.kind
 		FROM queue q
 		LEFT JOIN session_links l ON l.child_short = substr(q.session_id, 1, 8)
 		ORDER BY q.priority ASC, q.created_at DESC
@@ -213,7 +229,7 @@ func ResumableCandidates(conn *sql.DB) ([]Row, error) {
 		       e.event_type, e.state AS raw_state, ? AS effective_state,
 		       e.payload, e.created_at,
 		       CASE WHEN p.state IN ('working', 'awaiting_approval') THEN ? ELSE ? END AS priority,
-		       p.state AS prior_state, NULL AS parent_session_id, 0 AS marked
+		       p.state AS prior_state, NULL AS parent_session_id, 0 AS marked, s.kind
 		FROM events e
 		JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
 		  ON e.id = l.mid
@@ -246,7 +262,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		if err := rows.Scan(
 			&r.SessionID, &r.TmuxPane, &r.Cwd, &r.TranscriptPath, &r.ConfigDir,
 			&r.EventType, &r.RawState, &r.EffectiveState, &r.Payload, &r.CreatedAt, &r.Priority,
-			&r.PriorState, &r.ParentSessionID, &r.Marked,
+			&r.PriorState, &r.ParentSessionID, &r.Marked, &r.Kind,
 		); err != nil {
 			return nil, err
 		}

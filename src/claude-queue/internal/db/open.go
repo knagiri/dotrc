@@ -55,6 +55,8 @@ func migrate(conn *sql.DB) error {
 	for _, m := range []struct{ table, column, ddl string }{
 		{"sessions", "config_dir", "ALTER TABLE sessions ADD COLUMN config_dir TEXT"},
 		{"sessions", "waiting_event_id", "ALTER TABLE sessions ADD COLUMN waiting_event_id INTEGER"},
+		{"sessions", "done_at", "ALTER TABLE sessions ADD COLUMN done_at INTEGER"},
+		{"sessions", "kind", "ALTER TABLE sessions ADD COLUMN kind TEXT"},
 	} {
 		has, err := hasColumn(conn, m.table, m.column)
 		if err != nil {

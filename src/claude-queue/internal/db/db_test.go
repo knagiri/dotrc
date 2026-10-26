@@ -408,13 +408,13 @@ func TestTerminateSession(t *testing.T) {
 		t.Errorf("expected 1 ForcedEnd event, got %d", n)
 	}
 
-	// View should no longer surface the terminated session.
+	// The process axis only: the session stays listed, as gone.
 	rows, err := ListRows(conn, ListOpts{ShowWorking: true, ShowStale: true})
 	if err != nil {
 		t.Fatalf("ListRows: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Errorf("ListRows after Terminate = %d, want 0", len(rows))
+	if len(rows) != 1 || rows[0].EffectiveState != StateGone {
+		t.Errorf("ListRows after Terminate = %+v, want one gone row", rows)
 	}
 }
 

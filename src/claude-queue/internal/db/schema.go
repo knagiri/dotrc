@@ -28,7 +28,19 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- session's latest event id, so the next hook event lifts it without anyone
   -- clearing the column. NULL is unmarked. Added by migrate() too, for the same
   -- reason as config_dir.
-  waiting_event_id INTEGER
+  waiting_event_id INTEGER,
+  -- The work axis: when the session's work was declared finished. NULL is
+  -- open. terminated_at is the process axis (NULL running, set gone) and says
+  -- nothing about the work -- a reboot, a reconcile ForcedEnd or a background
+  -- job timing out all set it on sessions whose work is still in flight. Only
+  -- an explicit act writes done_at (see MarkDone), and nothing clears it: done
+  -- is one-way. Added by migrate() too.
+  done_at          INTEGER,
+  -- How the session was started: 'interactive', 'background' (claude --bg) or
+  -- 'print' (claude -p). NULL is unknown and reads as interactive. Recorded by
+  -- the hook from its environment (hook.KindFromEnv), because the SessionEnd
+  -- reason cannot tell them apart. Added by migrate() too.
+  kind             TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_pane_live
@@ -60,37 +72,61 @@ CREATE TABLE IF NOT EXISTS session_links (
 
 // View is the queue view, recreated at Open (DROP VIEW IF EXISTS) so a changed
 // definition takes effect on an existing database.
+//
+// It lists every open session (done_at IS NULL), running or gone. A gone
+// session -- terminated_at set -- surfaces as the pseudo state 'gone' whatever
+// its latest event says, sorted behind every running one: interrupted mid-task
+// (6) ahead of finished-a-turn (7). prior_state is the latest non-ended state,
+// which is what tells those two apart once the latest event is an end.
+//
+// tmux_pane is withheld from a gone session. The ledger never clears it -- the
+// upsert COALESCEs it forward -- so on such a row it names the pane of a
+// process that has ended, and pane ids are a per-server counter a fresh server
+// restarts from %0: after a reboot the recorded id almost certainly resolves to
+// an unrelated live pane. The picker's last-resort fallback trusts a ledger
+// pane when the roster cannot be read, and honouring a gone row's pane there
+// would switch to a stranger's pane instead of resuming. Where the session is
+// in fact reachable the roster names its process and the picker re-derives the
+// pane from its ancestry, so nothing is lost.
 const View = `DROP VIEW IF EXISTS queue;
 CREATE VIEW queue AS
 SELECT
   s.session_id,
-  s.tmux_pane,
+  CASE WHEN s.terminated_at IS NULL THEN s.tmux_pane END AS tmux_pane,
   s.cwd,
   s.transcript_path,
   s.config_dir,
+  s.kind,
   e.event_type,
   e.state AS raw_state,
   e.payload,
   e.created_at,
   CASE
+    WHEN s.terminated_at IS NOT NULL                                           THEN 'gone'
     WHEN e.state = 'working'           AND unixepoch() - e.created_at > 28800 THEN 'stale'
     WHEN e.state = 'awaiting_approval' AND unixepoch() - e.created_at >  7200 THEN 'stale'
     WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at > 14400 THEN 'stale'
     ELSE e.state
   END AS effective_state,
   CASE
+    WHEN s.terminated_at IS NOT NULL THEN
+      CASE WHEN p.state IN ('working', 'awaiting_approval') THEN 6 ELSE 7 END
     WHEN e.state = 'awaiting_approval' AND unixepoch() - e.created_at <=  7200 THEN 1
     WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at <= 14400 THEN 2
     WHEN e.state = 'working'           AND unixepoch() - e.created_at <= 28800 THEN 3
     ELSE 5
   END AS priority,
+  p.state AS prior_state,
   CASE WHEN s.waiting_event_id = e.id THEN 1 ELSE 0 END AS marked
 FROM events e
 JOIN (SELECT session_id, MAX(id) AS mid FROM events GROUP BY session_id) l
   ON e.id = l.mid
 JOIN sessions s ON s.session_id = e.session_id
-WHERE s.terminated_at IS NULL
-  AND e.state != 'ended';
+LEFT JOIN events p ON p.id = (
+  SELECT MAX(id) FROM events
+  WHERE session_id = e.session_id AND state != 'ended'
+)
+WHERE s.done_at IS NULL;
 `
 
 // Pragmas are applied at Open, in order.

@@ -153,7 +153,9 @@ func TestTerminateSessionRemovesRowFromQueue(t *testing.T) {
 	}
 
 	var remaining []string
-	qrows, err := conn.Query("SELECT session_id FROM queue ORDER BY session_id")
+	// The ghost stays in the view as gone -- its work is still open -- so only
+	// the running rows are compared.
+	qrows, err := conn.Query("SELECT session_id FROM queue WHERE effective_state != 'gone' ORDER BY session_id")
 	if err != nil {
 		t.Fatalf("query queue: %v", err)
 	}
