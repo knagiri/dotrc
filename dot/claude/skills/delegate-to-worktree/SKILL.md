@@ -132,11 +132,11 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
 
 6. **報告を受け取ったら**: 委譲先は完了・不足・中断を SendMessage で送ってくる。
    - **完了 / 中断**: 内容をユーザーに伝えたうえで、**質問に返信したかに関わらず**
-     `claude-stop-bg <short-id>` で委譲先を閉じる。委譲先は完遂しても session を終えず
-     `idle` で次の入力を待ち続け（承認待ちの `status: waiting` とは別状態）、放置すると
-     約 60 分居座る。しかもその自然消滅では `SessionEnd` が飛ばないので claude-queue の
-     `terminated_at` は NULL のまま幽霊行が残る。追跡がきれいに閉じるのは
-     `claude stop`（= `claude-stop-bg`）経路だけ。
+     `claude-stop-bg <short-id>` で委譲先を閉じる。`claude-stop-bg` は委譲先の作業を done に
+     する明示的な操作で、プロセスの停止もあわせて行う。プロセスが消えただけでは作業は終わった
+     ことにならず（自然消滅・再起動・休眠はどれも gone にするだけ）、閉じなければ委譲先は open の
+     まま claude-queue の一覧に残る。閉じ忘れた委譲先も休眠でプロセスは止まり、委譲元が done に
+     なれば cascade で done になる。
    - **不足（質問）**: 答えられるなら SendMessage で返信する。判断がユーザーに属する質問は、
      代わりにユーザーへ取り次ぐ。返信後は完了報告を待ち、上のとおり閉じる。
    - **permission 承認の代理はしない。** 承認は harness レベルの UI イベントで、委譲元が

@@ -1,7 +1,8 @@
 // Package link implements `claude-queue link`, which records that one session
 // delegated another. bin/claude-worktree calls it right after `claude --bg`
-// returns, so the picker can draw delegations as a tree and claude-reap-bg can
-// tell a delegate whose delegator is gone.
+// returns, so the picker can draw delegations as a tree, marking the delegator
+// done cascades to its delegates, and hibernation can tell a delegate whose
+// delegator is done or gone.
 package link
 
 import (

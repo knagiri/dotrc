@@ -13,7 +13,7 @@
 | Claude セッション可視化 | `src/claude-queue/`（→ `bin/claude-queue`）。詳細は同梱 README |
 | worktree 分岐起動 | `bin/claude-worktree` |
 | 委譲先の停止 | `bin/claude-stop-bg` |
-| 残存委譲先の掃除 | `bin/claude-reap-bg` |
+| idle な session の休眠 | `claude-queue watch`（`dot/systemd-user/claude-queue-watch.timer`） |
 | エージェント運用ルール | `dot/claude/rules/worktree-scope.md` |
 
 ## レイヤ構成
@@ -92,7 +92,7 @@ worktree は `<repo>/.worktrees/<name>` にあり、ghq が repo として列挙
   になる）。`C-q Q` は絞り込みを外し、working / stale も出す。プロセスが消えただけで作業が open な
   session（gone）はどちらにも並ぶ（→ `docs/design/claude-queue-lifecycle.md`）
 - ④の bg 経路が `claude-queue link` で委譲の親子関係を記録し、picker はそれを木として表示する。
-  親を失った委譲先（孤児）には印が付き、`claude-reap-bg` も孤児を拾える
+  親を失った委譲先（孤児）には印が付き、休眠は孤児を返信待ちとみなさない
   （→ `docs/design/claude-queue-session-tree.md`）
 - **L3 自己修復**: 新規 `SessionStart` 時、同一 `$TMUX_PANE` 上の生存 session を `ForcedEnd`
   （`/exit`・`/clear` で `SessionEnd` が飛ばないバグの後始末）
@@ -130,8 +130,8 @@ claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 4. ユーザーは `claude attach <short-id>` で様子を見る。`C-q q`（③picker）からも同じ場所へ飛べる
    - 承認待ちで止まっていれば、attach した画面にその prompt がそのまま出る
 5. 委譲先は完遂しても session を終えず `idle` で待ち続ける。委譲元は完了報告を受けたら、
-   質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる。閉じ手がいないまま残った
-   session は `claude-reap-bg` の sweep が後から拾う（理由はいずれも後述）
+   質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（作業を done にする）。閉じ手が
+   いないまま残った session は休眠でプロセスだけ止まる（理由はいずれも後述）
 
 ## 設計判断と根拠
 
@@ -191,21 +191,21 @@ hook 側は **pane が window 唯一の pane のときだけ**改名する（spl
 
 一方で **session の滞留は background でも消えない**。タスクを完遂しても session は終わらず、
 `claude agents --json` の `status: idle`（承認待ちの `status: waiting` / `waitingFor: permission
-prompt` とは別状態）で次の入力を待ち続ける。放置すると完遂から約 60 分で roster から消えるが、
-その消滅では `SessionEnd` が飛ばないため③の `terminated_at` は NULL のまま残り、`queue` view に
-幽霊行が残る。追跡がきれいに閉じるのは `claude-stop-bg` で閉じた経路だけ。素の `claude stop` は
-reason `other` で終わり session は gone（作業は open）になる。`claude-stop-bg` は done を台帳に
-書いてから stop するので、作業の完了まで閉じる。
-したがって委譲元は、完了報告を受けたら質問へ返信したかに関わらず `claude-stop-bg <short-id>` で
-閉じる（`delegate-to-worktree` 手順 6 / `worktree-scope.md` §6）。
+prompt` とは別状態）で次の入力を待ち続ける。放置すると完遂から約 60 分で一覧から消え、③は reconcile で
+その session を gone にする（作業は open のまま）。プロセスが消えたことは作業が終わった根拠に
+ならないので、作業を done にするのは明示的な操作だけである。委譲先の場合、その操作が
+`claude-stop-bg`（done を台帳に書いてから stop する）になる。素の `claude stop` は reason `other` で
+終わり gone になるだけで、作業は open のまま一覧に残る。したがって委譲元は、完了報告を受けたら質問へ
+返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（`delegate-to-worktree` 手順 6 /
+`worktree-scope.md` §6）。
 
 委譲元が閉じ損なう経路は残る。報告が届かない、委譲元の session が先に消える、人間が素の shell から
-`claude-worktree` を叩いて閉じ手が誰もいない — いずれでも `idle` の委譲先が居座る。そこを埋める
-二次経路が `claude-reap-bg`（`worktree-scope.md` §8）で、roster・claude-queue・transcript から
-「終わっていて、かつ返信を待っていない」と言える session だけを `claude-stop-bg` 経由で止める。
-外形からの判定は結局のところ推測なので、条件を欠くものは止めずに理由を report する側へ倒し、cron も
-置かず settings.json でも allow しない。引数無しで全 sweep できる道具を無人・無承認で走らせると、
-その推測が黙って生きた会話を消す形になる。
+`claude-worktree` を叩いて閉じ手が誰もいない — いずれでも `idle` の委譲先が居座る。メモリを返すのは
+休眠（`claude-queue watch`、`worktree-scope.md` §8）で、`idle_done` から閾値以上経った session の
+プロセスを止めて gone にする。作業は open のまま残り、委譲元が done になれば cascade で done になる。
+休眠は作業を終わらせないので、外形の判定が外れても失うのはプロセスだけで、resume すれば戻る。それでも
+返信待ちの session（委譲元へ `SendMessage` で質問中、承認待ち）は止めない。止めると返信や承認の
+受け手が居なくなる。
 
 worktree の滞留も同様に残る — ①はどちらの経路でも走り、誰も消さないので、後片付けは
 `worktree-scope.md` §7 の `git-reap-gone`（manual 運用）が担う。tmux session を作る経路は

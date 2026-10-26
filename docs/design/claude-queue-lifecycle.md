@@ -1,7 +1,8 @@
 # claude-queue: session のライフサイクル再設計
 
 > 実装状況: 第 1 部（状態モデルの 2 軸化・gone の一覧表示・mark の持続・`claude-stop-bg` の done 書き込み・
-> 既存台帳の移行）は実装済み。メモ・pin の外部待ち・休眠・PR 監視による自動再開は後続 PR の範囲。
+> 既存台帳の移行）と休眠（`claude-queue watch` と systemd-user timer、`bin/claude-reap-bg` の廃止）は
+> 実装済み。メモ・pin の外部待ち・PR 監視による自動再開は後続 PR の範囲。
 
 ## 目的
 
@@ -89,7 +90,7 @@ hook が再び届いた時点で記録される。
 - background は `claude stop` で止める。この経路では作業を `done` にしない（`claude-stop-bg` の
   完了記録とは別の入口にする）
 
-`bin/claude-reap-bg` は廃止する。取り残された記録の掃除は `open / gone` が正規の状態になることで不要になり、
+`bin/claude-reap-bg` は廃止した。取り残された記録の掃除は `open / gone` が正規の状態になることで不要になり、
 居座るプロセスの停止は休眠が担う。reap のゲート（idle、`idle_done` からの経過、`SendMessage`、
 孤児の例外）は休眠の除外条件に引き継ぐ。
 

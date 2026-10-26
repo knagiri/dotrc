@@ -41,6 +41,7 @@ make install
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
 | `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` で一覧を広げる。Tab でカーソル行の待ちマークをトグルし、`ctrl-x` でカーソル行を done にする（後述）。`--show-resumable` は受け付けるが何もしない（gone は既定で並ぶ） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない running の session を gone にし、done なのに running な background session を `claude stop` する（picker 起動時に自動実行される） |
+| `claude-queue watch [--idle-minutes N] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も停止もせず対象を出すだけ（後述） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue link --parent <session-id> --child <short-id>` | 委譲の親子関係を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示と孤児の判定に使う。設計は `docs/design/claude-queue-session-tree.md` |
 | `claude-queue mark <session-id>` | 手動の待ちマークをトグルする（picker の Tab が呼ぶ）。done・未知の session は何もせず exit 0 |
@@ -235,6 +236,27 @@ Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
 `/exit` `/clear` で `SessionEnd` が発火しないバグ対処：新規 `SessionStart`
 時に **同一 `$TMUX_PANE` 上で生存中の他 session を `ForcedEnd`**（gone にする）。新 session の
 `source` が `clear` のときだけ、旧 session を done にもする。
+
+### 休眠（`claude-queue watch`）
+
+常駐する claude プロセスのメモリを返すため、しばらく動いていない session のプロセスを止める。
+作業は done にせず gone として一覧に残るので、選べば resume できる。止める条件はすべて満たすこと:
+最新 state が `idle_done` でそこから閾値以上経っている、その config dir の `claude agents` の一覧で
+`status` が `idle`、transcript の最後の assistant ターンに `SendMessage` が無い（委譲元が done または
+台帳に居ない孤児はこの検査を省く）。pin は妨げない。
+
+- interactive: pane の window が attach 中の client で表示中なら止めない。pane が見つからなければ
+  止めない。SIGTERM を送り、一覧から 10 秒以内に消えたら pane を閉じる（window の最後の pane なら
+  window ごと）。消えなければ pane は残して失敗として出す
+- background: `claude stop` で止める
+
+timer の有効化:
+
+```
+bin/deploy.sh   # dot/systemd-user/claude-queue-watch.{service,timer} の symlink を張る
+systemctl --user daemon-reload
+systemctl --user enable --now claude-queue-watch.timer
+```
 
 ## Auto-GC
 

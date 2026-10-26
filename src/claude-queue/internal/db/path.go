@@ -6,8 +6,8 @@ import (
 )
 
 // DefaultPath is where the queue database lives. CLAUDE_QUEUE_DB overrides it,
-// which is how the shell tests and bin/claude-reap-bg point at a fixture
-// database instead of the real one.
+// which is how the shell tests point at a fixture database instead of the real
+// one.
 func DefaultPath() string {
 	if p := os.Getenv("CLAUDE_QUEUE_DB"); p != "" {
 		return p

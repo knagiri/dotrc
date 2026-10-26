@@ -4,19 +4,18 @@
 
 `delegate-to-worktree` / `bin/claude-worktree` は委譲元 session から委譲先 session を起こす。その
 親子関係を claude-queue に記録し、picker（`C-q q` / `C-q Q`）で木として表示する。あわせて、親を
-失った background session（孤児）を picker で見分けられるようにし、`bin/claude-reap-bg` が拾える
+失った session（孤児）を picker で見分けられるようにし、休眠が孤児を返信待ちとみなさずに止められる
 ようにする。
 
-委譲先は完遂しても `idle` のまま残り、一次経路では委譲元が `claude-stop-bg` で閉じる
-（`dot/claude/rules/worktree-scope.md` §6）。委譲元が先に消えるとこの経路は構造的にもう発火せず、
-委譲先は約 60 分居座る。親子関係が無いと、この状態を外から判別できない。
+委譲先は完遂しても `idle` のまま残り、委譲元が `claude-stop-bg` で閉じる（作業を done にする）
+（`dot/claude/rules/worktree-scope.md` §6）。委譲元が閉じずに先に done になれば cascade で委譲先も
+done になり、閉じ忘れた委譲先のプロセスは休眠が止める。どちらも親子関係が無いと判別できない。
 
 ## スコープ外
 
 - `claude-worktree --tmux` 経路。interactive claude は pane の中で自分の session id を採番する
   ので、起動時点で子の id が分からない
 - 記録を始める前に起動した session の backfill。親を記録していない session はすべて root として扱う
-- 孤児の自動停止。無人の session killer は作らない（`worktree-scope.md` §8）
 
 ## 記録
 
@@ -71,20 +70,18 @@ resume すれば委譲の関係ごと戻るので、孤児にしない（[claude
 link の循環は `claude-worktree` からは生じないが、テーブルは禁じていない。session id 順に祖先を上り、
 既に訪れた id へ戻る link を切って root にする。
 
-## reap（`bin/claude-reap-bg`）
+## 休眠での扱い（`claude-queue watch`）
 
-孤児 = link が在り、かつ roster のどの entry の `sessionId` も親と一致しない session。pid の無い
-stale job record も「居る」に数え、判定を保守側に倒す。
+休眠（[claude-queue-lifecycle.md](claude-queue-lifecycle.md)「休眠」節）は、最後の assistant ターンに
+`SendMessage` がある session を返信待ちとみなして止めない。委譲元へ質問して返信を待つ委譲先を止めると、
+返信の受け手が居なくなるためである。孤児はその返信が来ないので、この検査と、それが前提にしている
+transcript の読み取り・parse を省く。`idle_done` からの経過時間の閾値と、`claude agents` の一覧で
+idle であることの検査は孤児でも変えない。
+
+ここでの孤児は、link が在り、かつ親の作業が done、または親が台帳に居ない session である。picker の
+孤児判定と同じく作業軸で決め、親のプロセスが gone なだけなら孤児にしない（resume すれば返信できる）。
 
 `/clear` は session を終わらせ、別の session id で新しい session を始める。台帳は `/clear` された
 旧 session を done にし、cascade で子も done にする（running の background 子は reconcile が止める）。
 新しい session は委譲の文脈を引き継がないので、子の閉じ手はもう居ない。compact は session id を
 変えないので、長く動く委譲元が compact を挟んでも link は切れない。
-
-`SendMessage` gate は委譲元へ質問して返信待ちの委譲先を殺さないためにある。委譲元が消えていれば
-その返信は来ないので、孤児に限りこの gate と、それが前提にしている transcript の存在・parse の検査を
-省く。roster の bg + idle、queue の `idle_done` と `--idle-minutes` の閾値、`claude-stop-bg` 経由の
-停止は孤児でも変えない。report には `orphan: parent <親の先頭 8 桁> gone` を添える。
-
-`session_links` が読めない（テーブルが無い古い DB を含む）ときは警告を出し、link が無い場合と同じ
-挙動で続ける。
