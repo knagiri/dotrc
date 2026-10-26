@@ -2,10 +2,13 @@
 # Sourced at the top of every test/*.test.sh, before the test makes its own
 # tmp dirs or stubs. It keeps a test from reaching the real environment:
 #
-#   - HOME points into a mktemp dir, so anything under ~ (~/.claude, mise's
-#     ~/.local/state, ...) lands there. CLAUDE_CONFIG_DIR is unset for the same
-#     reason: it would otherwise point a script at the real config dir no matter
-#     what HOME is.
+#   - HOME points into a mktemp dir, so anything resolved from ~ (~/.claude,
+#     mise's ~/.local/state, ...) lands there. That holds only if nothing
+#     overrides the HOME-derived default, so the variables that do are unset:
+#     CLAUDE_CONFIG_DIR, XDG_{CONFIG,DATA,STATE,CACHE}_HOME, GIT_CONFIG_GLOBAL,
+#     and the MISE_* path/config/env overrides (see sandbox_unset_vars). Left
+#     set, they would point a script at the real dirs no matter what HOME is
+#     (mise would keep writing ~/.local/state/mise/tracked-configs/ symlinks).
 #   - CLAUDE_QUEUE_DB points into the same dir. It is what
 #     src/claude-queue/internal/db/path.go reads before falling back to
 #     ~/.claude/session-queue.db, so a test that reaches a real claude-queue
@@ -28,7 +31,18 @@ sandbox_real_home="$HOME"
 export HOME="$sandbox_dir/home"
 mkdir -p "$HOME"
 export CLAUDE_QUEUE_DB="$sandbox_dir/session-queue.db"
-unset CLAUDE_CONFIG_DIR
+
+# Variables that override a HOME-derived location (or select a real mise
+# profile). sandbox_assert checks each stays unset.
+sandbox_unset_vars=(
+  CLAUDE_CONFIG_DIR
+  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
+  GIT_CONFIG_GLOBAL
+  MISE_GLOBAL_CONFIG_FILE MISE_CONFIG_DIR MISE_DATA_DIR MISE_STATE_DIR
+  MISE_CACHE_DIR MISE_TRUSTED_CONFIG_PATHS MISE_ENV
+)
+for sandbox_v in "${sandbox_unset_vars[@]}"; do unset "$sandbox_v"; done
+unset sandbox_v
 
 # dotrc bin/ dirs to drop, resolved from this file's location rather than cwd.
 sandbox_bindirs=()
@@ -59,7 +73,7 @@ export PATH="$sandbox_path"
 unset sandbox_path sandbox_entries sandbox_e sandbox_common
 
 sandbox_assert() {
-  local bad=0 cq e
+  local bad=0 cq e v
   local -a entries
   case "$HOME" in
     "$sandbox_dir"/*) ;;
@@ -71,8 +85,11 @@ sandbox_assert() {
     "$sandbox_dir"/*) ;;
     *) echo "FAIL: sandbox: CLAUDE_QUEUE_DB is '${CLAUDE_QUEUE_DB:-}', not under $sandbox_dir"; bad=1 ;;
   esac
-  [ -z "${CLAUDE_CONFIG_DIR+x}" ] \
-    || { echo "FAIL: sandbox: CLAUDE_CONFIG_DIR is set ($CLAUDE_CONFIG_DIR)"; bad=1; }
+  for v in "${sandbox_unset_vars[@]}"; do
+    if [ -n "${!v+x}" ]; then
+      echo "FAIL: sandbox: $v is set (${!v})"; bad=1
+    fi
+  done
   if cq="$(command -v claude-queue)"; then
     echo "FAIL: sandbox: claude-queue resolves to $cq; want it absent until a test stubs it"; bad=1
   fi
