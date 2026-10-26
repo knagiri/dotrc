@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/knagiri/dotrc/src/claude-queue/internal/annotate"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/done"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hook"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/link"
@@ -22,6 +23,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       claude-queue link --parent <session-id> --child <short-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue mark <session-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue done <session-id-or-prefix>")
+	fmt.Fprintln(os.Stderr, "       claude-queue memo [--session <id>] [--] [<text>]")
+	fmt.Fprintln(os.Stderr, "       claude-queue pin [--session <id>] [--note <text>]")
+	fmt.Fprintln(os.Stderr, "       claude-queue unpin [--session <id>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue --version")
 }
 
@@ -55,6 +59,8 @@ func main() {
 		mark.Run(os.Args[2:])
 	case "done":
 		done.Run(os.Args[2:])
+	case "memo", "pin", "unpin":
+		annotate.Run(os.Args[1], os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		usage()

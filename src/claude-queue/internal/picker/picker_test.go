@@ -102,7 +102,7 @@ func TestFormatLine_ColumnOrder(t *testing.T) {
 		CreatedAt:      nowMinus(60),
 	}
 	fields := strings.Split(FormatLine(row, "title", "wt", nowUnix(), true), "\t")
-	want := []string{"[*]", "title", "wt", "60s", "working", "sid", "%4", "/w/a", "/t/a.jsonl", "/cfg/a"}
+	want := []string{"[*]", "title", "wt", "60s", "working", "sid", "%4", "/w/a", "/t/a.jsonl", "/cfg/a", "", "", ""}
 	if len(fields) != len(want) {
 		t.Fatalf("got %d columns, want %d", len(fields), len(want))
 	}
@@ -234,11 +234,11 @@ func TestParseSelection(t *testing.T) {
 // ahead of the hidden ones has to move it too. Getting this wrong does not
 // fail either -- it renders the session id and the full cwd as visible text.
 func TestFzfShowsExactlyTheVisibleColumns(t *testing.T) {
-	if got, want := visibleColumns(), "1,2,3,4,5"; got != want {
+	if got, want := visibleColumns(), "1,2,3,4,5,11"; got != want {
 		t.Errorf("visibleColumns = %q, want %q", got, want)
 	}
-	if !slices.Contains(fzfArgs(""), "--with-nth=1,2,3,4,5") {
-		t.Errorf("fzfArgs = %v, want it to carry --with-nth=1,2,3,4,5", fzfArgs(""))
+	if !slices.Contains(fzfArgs(""), "--with-nth=1,2,3,4,5,11") {
+		t.Errorf("fzfArgs = %v, want it to carry --with-nth=1,2,3,4,5,11", fzfArgs(""))
 	}
 	// The list has to stop before the first hidden column, whose contents are
 	// paths and ids no one wants in the popup.
