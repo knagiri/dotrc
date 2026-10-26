@@ -99,7 +99,7 @@ mark_done() {
     echo "claude-stop-bg: claude-queue not found; $id not marked done in the ledger" >&2
     return 0
   fi
-  claude-queue done "$id" >/dev/null || echo "claude-stop-bg: could not mark $id done in the ledger" >&2
+  claude-queue "done" "$id" >/dev/null || echo "claude-stop-bg: could not mark $id done in the ledger" >&2
 }
 
 # Resolve the id against the roster and read its kind: "none" for no match,
