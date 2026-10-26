@@ -1,0 +1,20 @@
+# Run claude-queue watch every few minutes. Each run is one pass and exits;
+# nothing stays resident.
+#
+# OnUnitActiveSec counts from the previous run's start, so passes never
+# overlap: a oneshot still running is not started again.
+#
+# Enable with:
+#   loginctl enable-linger "$USER"
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-queue-watch.timer
+
+[Unit]
+Description=claude-queue watch every 3 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+
+[Install]
+WantedBy=timers.target
