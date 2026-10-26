@@ -554,7 +554,7 @@ func (f pickerFlags) listArgs() []string {
 
 // Run is the CLI entrypoint for `claude-queue picker`.
 func Run(args []string) {
-	run(args, os.Stdout, reconcileSweep, runFzf)
+	run(args, os.Stdout, reconcileSweep, runFzf, time.Now().Unix())
 }
 
 // reconcileSweep is the pre-listing reconcile, with its reporting. Best-effort
@@ -581,8 +581,11 @@ func reconcileSweep(conn *sql.DB) {
 
 // run is Run with its side doors injected -- the reconcile sweep and fzf --
 // so a test can drive both the interactive path and --list over one database
-// and compare what each would show.
-func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input string, args []string) (string, error)) {
+// and compare what each would show. nowSec is the clock the rows' ages are
+// measured against, taken as an argument like FormatLine's: two renders that
+// read the clock themselves straddle a second boundary now and then, and their
+// ages then differ by one.
+func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input string, args []string) (string, error), nowSec int64) {
 	fs := flag.NewFlagSet("picker", flag.ExitOnError)
 	var f pickerFlags
 	fs.BoolVar(&f.ShowWorking, "show-working", false, "include working sessions")
@@ -632,7 +635,7 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 	originPane := f.CurrentPane
 
 	asciiMode := os.Getenv("CLAUDE_QUEUE_ASCII") == "1"
-	input, names, ok := listing(conn, f, asciiMode)
+	input, names, ok := listing(conn, f, asciiMode, nowSec)
 	if !ok {
 		return
 	}
@@ -702,12 +705,13 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 
 // listing renders the rows fzf is given, one FormatLine per line, along with
 // the worktree-name cache the pick reuses. ok is false when there is nothing
-// to list; the reason has already been printed to stderr.
+// to list; the reason has already been printed to stderr. nowSec is the clock
+// the ages are measured against (see run).
 //
 // It is the one place the listing is built: the interactive picker feeds it to
 // fzf, and --list prints it for the Tab bind's reload. Two builders would let
 // the reloaded list drift from the one it replaces.
-func listing(conn *sql.DB, f pickerFlags, asciiMode bool) (string, worktreeCache, bool) {
+func listing(conn *sql.DB, f pickerFlags, asciiMode bool, nowSec int64) (string, worktreeCache, bool) {
 	names := worktreeCache{}
 	// Every live row is read, whatever the flags say: the state filter picks
 	// the rows to show, but buildForest still needs their filtered-out
@@ -753,7 +757,6 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool) (string, worktreeCache
 	}
 
 	var buf bytes.Buffer
-	now := time.Now().Unix()
 	for _, l := range lines {
 		// The title is read here rather than inside FormatLine for the same
 		// reason the worktree name is -- it needs the filesystem. It costs one
@@ -766,7 +769,7 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool) (string, worktreeCache
 		title := prefixedTitle(prefix, func(cols int) string {
 			return label.DisplayTitle(rowTranscript(l.Row), cols)
 		})
-		buf.WriteString(FormatLine(l.Row, title, names.name(rowCwd(l.Row)), now, asciiMode))
+		buf.WriteString(FormatLine(l.Row, title, names.name(rowCwd(l.Row)), nowSec, asciiMode))
 		buf.WriteByte('\n')
 	}
 	return buf.String(), names, true
