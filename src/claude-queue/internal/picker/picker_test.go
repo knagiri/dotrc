@@ -23,14 +23,14 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 	row := db.Row{
 		SessionID:      "s1",
 		TmuxPane:       sql.NullString{String: "%1", Valid: true},
-		Cwd:            sql.NullString{String: "/home/x/projects/everysteel-api", Valid: true},
+		Cwd:            sql.NullString{String: "/home/x/projects/example-repo", Valid: true},
 		EffectiveState: "awaiting_approval",
 		TranscriptPath: sql.NullString{String: "/home/x/.claude/projects/enc/s1.jsonl", Valid: true},
 		ConfigDir:      sql.NullString{String: "/home/x/.claude-personal", Valid: true},
 		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"pnpm prisma migrate"}}`, Valid: true},
 		CreatedAt:      nowMinus(120),
 	}
-	got := FormatLine(row, "prisma migration", "everysteel-api", nowUnix(), false)
+	got := FormatLine(row, "prisma migration", "example-repo", nowUnix(), false)
 	fields := strings.Split(got, "\t")
 	if len(fields) != colCount {
 		t.Fatalf("want %d tab-separated fields, got %d: %q", colCount, len(fields), got)
@@ -43,8 +43,8 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 	if got := strings.TrimSpace(fields[colTitle]); got != "prisma migration" {
 		t.Errorf("title = %q, want prisma migration", got)
 	}
-	if got := strings.TrimSpace(fields[colWorktree]); got != "everysteel-api" {
-		t.Errorf("worktree = %q, want everysteel-api", got)
+	if got := strings.TrimSpace(fields[colWorktree]); got != "example-repo" {
+		t.Errorf("worktree = %q, want example-repo", got)
 	}
 	if fields[colAge] != "2m" {
 		t.Errorf("age = %q, want 2m", fields[colAge])
@@ -58,7 +58,7 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 	if fields[colPane] != "%1" {
 		t.Errorf("hidden tmux_pane = %q, want %%1", fields[colPane])
 	}
-	if fields[colCwd] != "/home/x/projects/everysteel-api" {
+	if fields[colCwd] != "/home/x/projects/example-repo" {
 		t.Errorf("hidden cwd = %q, want the full path", fields[colCwd])
 	}
 	// The resume path refuses to run without a transcript, so the path has to
@@ -226,6 +226,19 @@ func TestParseSelection(t *testing.T) {
 	}
 	if _, ok := parseSelection("a\tb\tc"); ok {
 		t.Error("parseSelection accepted a short line")
+	}
+}
+
+// A --select-1 or --exit-0 in the user's FZF_DEFAULT_OPTS would accept a
+// one-entry list or quit on an empty one before the popup is drawn; fzf reads
+// the defaults first and the last occurrence wins, so the negations have to
+// be on the command line.
+func TestFzfCancelsSelect1AndExit0FromDefaults(t *testing.T) {
+	args := fzfArgs("")
+	for _, want := range []string{"--no-select-1", "--no-exit-0"} {
+		if !slices.Contains(args, want) {
+			t.Errorf("fzfArgs = %v, want it to carry %s", args, want)
+		}
 	}
 }
 

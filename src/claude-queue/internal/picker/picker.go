@@ -870,8 +870,15 @@ const keysHeader = "tab: pin  ctrl-t: pin note  ctrl-e: memo  ctrl-x: done"
 
 // fzfArgs is the fzf invocation, split out of runFzf so the visible-column
 // list and the key binds can be asserted without running fzf.
+//
+// fzf reads FZF_DEFAULT_OPTS before these arguments and the last occurrence
+// of an option wins. --no-select-1 and --no-exit-0 cancel a --select-1 or
+// --exit-0 set there, which would otherwise accept a one-entry list or quit
+// on an empty one before the popup is ever shown.
 func fzfArgs(binds ...string) []string {
 	args := []string{
+		"--no-select-1",
+		"--no-exit-0",
 		"--delimiter=\t",
 		"--with-nth=" + visibleColumns(),
 		"--no-sort",
