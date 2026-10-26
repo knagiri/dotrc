@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 )
@@ -32,13 +33,13 @@ func seedDB(t *testing.T, stmts ...string) string {
 	return path
 }
 
-func listOut(t *testing.T, flags ...string) string {
+func listOut(t *testing.T, nowSec int64, flags ...string) string {
 	t.Helper()
 	var out bytes.Buffer
 	run(append([]string{"--list"}, flags...), &out, func(*sql.DB) {}, func(string, []string) (string, error) {
 		t.Error("--list started fzf")
 		return "", nil
-	})
+	}, nowSec)
 	return out.String()
 }
 
@@ -50,7 +51,7 @@ func TestListing_GoneShownByDefault(t *testing.T) {
 		"UPDATE sessions SET done_at = unixepoch() WHERE session_id = 'done-1'",
 		"INSERT INTO events(session_id, event_type, state, created_at) VALUES ('gone-1', 'SessionEnd', 'ended', unixepoch() - 10), ('done-1', 'SessionEnd', 'ended', unixepoch() - 10)",
 	)
-	out := listOut(t)
+	out := listOut(t, time.Now().Unix())
 	if !strings.Contains(out, "gone-1") || !strings.HasPrefix(out, emoji[db.StateGone]+"\t") {
 		t.Errorf("gone session not listed with %s by default:\n%q", emoji[db.StateGone], out)
 	}
@@ -66,7 +67,9 @@ func TestShowResumableIsANoop(t *testing.T) {
 		"INSERT INTO sessions(session_id, terminated_at) VALUES ('gone-1', unixepoch() - 10)",
 		"INSERT INTO events(session_id, event_type, state, created_at) VALUES ('gone-1', 'SessionEnd', 'ended', unixepoch() - 10)",
 	)
-	if a, b := listOut(t), listOut(t, "--show-resumable"); a != b || a == "" {
+	// One clock for both renders, so the comparison sees only the flag.
+	now := time.Now().Unix()
+	if a, b := listOut(t, now), listOut(t, now, "--show-resumable"); a != b || a == "" {
 		t.Errorf("--show-resumable changed the listing:\n%q\nvs\n%q", a, b)
 	}
 }
@@ -142,7 +145,7 @@ func TestFzfArgs_DoneBind(t *testing.T) {
 	run(nil, &bytes.Buffer{}, func(*sql.DB) {}, func(_ string, args []string) (string, error) {
 		argv = args
 		return "", nil
-	})
+	}, time.Now().Unix())
 	var binds []string
 	for i, a := range argv {
 		if a == "--bind" && i+1 < len(argv) {

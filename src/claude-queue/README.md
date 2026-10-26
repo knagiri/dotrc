@@ -290,6 +290,8 @@ review / comment の種別・時刻・author が bot か（`__typename`）を読
   その session の配送時刻以降の `UserPromptSubmit` が台帳にあれば、既読位置を進めて（merge / close なら pin を外して）記録を消す。
   6 分（timer の 2 tick）経っても無ければ window の中の resume が失敗したとみなして記録を消し、次の pass で再配送する。
   起動自体の失敗・skip は何も記録せず、次の pass で再試行する
+- 確認できない配送が 3 回続いたら、その pin への配送を止め、pin のコメントの先頭に `[自動再開に 3 回失敗]` を付ける。
+  PR の監視は続け、止めた配送より新しい活動か merge / close が来たら配送を再開する。merge / close の配送そのもので止まった pin は、PR が closed のままなら reopen か pin の付け直しまで止まったままになる。付け直しは `claude-queue pin` か ctrl-t で、Tab で外すと PR の監視ごと外れる。再開や配送成功のあとも、note を書き換えない限り、コメント先頭の印は残る
 
 配送は指示文を最初の入力にした resume で行う。interactive は picker の resume と同じ tmux session・window 名で
 （その session が無ければ最後に attach された既存の session に。service から session を作ると `update-environment` で

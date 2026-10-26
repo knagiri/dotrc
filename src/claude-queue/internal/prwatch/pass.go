@@ -25,6 +25,17 @@ const DefaultDebounce = 2 * time.Minute
 // window, and then the message never reached the session.
 const ConfirmWindow = 6 * time.Minute
 
+// MaxFailures is how many deliveries in a row may go unconfirmed before
+// delivery to the pin stops. A resume that fails every time -- a transcript
+// claude cannot load, a config dir it cannot log in with -- would otherwise
+// open a new tmux window every ConfirmWindow and a tick for as long as the PR
+// stays open.
+const MaxFailures = 3
+
+// HaltNote is put in front of the pin's note when delivery stops, so the
+// person sees it in the picker.
+var HaltNote = fmt.Sprintf("[自動再開に %d 回失敗]", MaxFailures)
+
 // Message is what a woken session is given as its first input.
 //
 // It says what happened and nothing anyone else wrote: how many reviews and
@@ -95,6 +106,12 @@ func Message(pr string, a Activity, events []Event) string {
 // delivers again with everything that piled up meanwhile. A skipped or failed
 // launch records nothing and is retried by the next pass the same way.
 //
+// MaxFailures unconfirmed deliveries in a row stop delivery to the pin (see
+// db.FailPRDelivery); a confirmed one resets the count. A stopped pin is still
+// polled, and delivery resumes, the count back at zero, once the PR has
+// something the last failed delivery did not carry: activity newer than it, or
+// a merge or close after it. Putting the pin on again resumes it too.
+//
 // A pin whose PR cannot be read (gh failed: a token, the network) is skipped
 // and the other pins go on.
 func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io.Writer) map[string]bool {
@@ -115,8 +132,26 @@ func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io
 			fmt.Fprintf(out, "pr-watch: skipped %s (%s): %v\n", id, p.PR, err)
 			continue
 		}
-		events := NewSince(a, p.Cursor)
 		closed := a.State == StateMerged || a.State == StateClosed
+		if p.Failures >= MaxFailures {
+			if !outdone(p, a, closed) {
+				fmt.Fprintf(out, "pr-watch: %s (%s): delivery stopped after %d unconfirmed resumes, until the PR has news or a re-pin\n", id, p.PR, p.Failures)
+				continue
+			}
+			// Newer activity goes back through the debounce, from this pass:
+			// it may be the first of a burst. A merge or close skips the
+			// debounce and is delivered at once. ResumePRDelivery also clears
+			// the pending mark left from before the stop, so it cannot count as
+			// an elapsed debounce for the next activity. If the resume fails, try
+			// again on the next pass rather than go on with a stop still set.
+			if err := db.ResumePRDelivery(conn, p.SessionID, p.PR); err != nil {
+				report(out, err)
+				continue
+			}
+			p.SeenAt = 0
+			fmt.Fprintf(out, "pr-watch: %s (%s): the PR has news since delivery stopped, resuming delivery\n", id, p.PR)
+		}
+		events := NewSince(a, p.Cursor)
 		if !closed {
 			switch {
 			case len(events) == 0:
@@ -157,7 +192,8 @@ func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io
 
 // confirm settles the delivery recorded on p: a UserPromptSubmit since it
 // moves the cursor (or takes the pin off), none after ConfirmWindow drops the
-// record so the next pass delivers again, and otherwise it keeps waiting.
+// record and counts a failure, so the next pass delivers again unless that
+// was the MaxFailures-th in a row, and otherwise it keeps waiting.
 func confirm(conn *sql.DB, p db.PRPin, now time.Time, out io.Writer) {
 	id := short(p.SessionID)
 	ok, err := db.PromptSince(conn, p.SessionID, p.DeliveredAt)
@@ -171,11 +207,29 @@ func confirm(conn *sql.DB, p db.PRPin, now time.Time, out io.Writer) {
 		report(out, db.AdvancePRCursor(conn, p.SessionID, p.PR, p.DeliveredUpTo))
 		fmt.Fprintf(out, "pr-watch: %s (%s) took the delivery\n", id, p.PR)
 	case now.Sub(time.Unix(p.DeliveredAt, 0)) >= ConfirmWindow:
-		report(out, db.SetPRDelivered(conn, p.SessionID, p.PR, 0, time.Time{}))
-		fmt.Fprintf(out, "pr-watch: %s (%s): no prompt within %s of the delivery, delivering again on the next pass\n", id, p.PR, hibernate.Minutes(ConfirmWindow))
+		n, err := db.FailPRDelivery(conn, p.SessionID, p.PR, MaxFailures, p.DeliveredUpTo, HaltNote)
+		switch {
+		case err != nil:
+			report(out, err)
+		case n >= MaxFailures:
+			fmt.Fprintf(out, "pr-watch: %s (%s): no prompt within %s of the delivery, %d times in a row; delivery stopped until the PR has news or a re-pin\n", id, p.PR, hibernate.Minutes(ConfirmWindow), n)
+		default:
+			fmt.Fprintf(out, "pr-watch: %s (%s): no prompt within %s of the delivery (%d of %d), delivering again on the next pass\n", id, p.PR, hibernate.Minutes(ConfirmWindow), n, MaxFailures)
+		}
 	default:
 		fmt.Fprintf(out, "pr-watch: %s (%s): awaiting its prompt\n", id, p.PR)
 	}
+}
+
+// outdone reports whether the PR a has something the delivery that stopped
+// p's did not carry: an event newer than it, or, when that delivery was of
+// activity, a merge or close. A stop on a merge or close (HaltedUpTo zero)
+// has nothing to wait for but a reopen, or the pin being put on again.
+func outdone(p db.PRPin, a Activity, closed bool) bool {
+	if closed {
+		return !p.HaltedUpTo.IsZero()
+	}
+	return len(NewSince(a, p.HaltedUpTo)) > 0
 }
 
 func report(out io.Writer, err error) {

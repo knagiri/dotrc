@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 )
@@ -141,18 +142,20 @@ func TestListModeMatchesInteractiveInput(t *testing.T) {
 	}
 	conn.Close()
 
+	// One clock for both paths, so the comparison below sees only the path.
+	now := time.Now().Unix()
 	for _, flags := range [][]string{nil, {"--show-working"}, {"--show-working", "--show-stale"}, {"--show-working", "--current-pane", "%7"}} {
 		var fzfInput string
 		var fzfArgv []string
 		run(flags, &bytes.Buffer{}, func(c *sql.DB) {}, func(in string, args []string) (string, error) {
 			fzfInput, fzfArgv = in, args
 			return "", nil
-		})
+		}, now)
 		var out bytes.Buffer
 		run(append([]string{"--list"}, flags...), &out, func(c *sql.DB) { t.Error("--list ran the reconcile sweep") }, func(string, []string) (string, error) {
 			t.Error("--list started fzf")
 			return "", nil
-		})
+		}, now)
 		if fzfInput == "" {
 			t.Fatalf("flags %v: interactive path gave fzf nothing", flags)
 		}
@@ -225,7 +228,7 @@ func TestInteractiveRunResolvesCurrentPane(t *testing.T) {
 	run(nil, &bytes.Buffer{}, func(c *sql.DB) {}, func(in string, args []string) (string, error) {
 		fzfInput, fzfArgv = in, args
 		return "", nil
-	})
+	}, time.Now().Unix())
 	if fzfInput == "" {
 		t.Fatal("interactive path gave fzf nothing")
 	}

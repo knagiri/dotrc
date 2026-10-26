@@ -37,7 +37,8 @@ func SetMemo(conn *sql.DB, sessionID, text string) error {
 // SetPin pins an open session -- marks it waiting on something outside it --
 // and sets the pin's note. A session already pinned keeps the event id it was
 // pinned at. A nil note keeps the existing note; a non-nil one replaces it,
-// and an empty one clears it.
+// and an empty one clears it. Putting the pin on again lifts a stop on its
+// PR's delivery (see FailPRDelivery): the person has looked at it.
 func SetPin(conn *sql.DB, sessionID string, note *string) error {
 	var keep bool
 	var n sql.NullString
@@ -50,7 +51,8 @@ func SetPin(conn *sql.DB, sessionID string, note *string) error {
 		UPDATE sessions
 		SET waiting_event_id = COALESCE(waiting_event_id,
 		      (SELECT MAX(id) FROM events WHERE session_id = ?1), 0),
-		    pin_note = CASE WHEN ?2 THEN pin_note ELSE ?3 END
+		    pin_note = CASE WHEN ?2 THEN pin_note ELSE ?3 END,
+		    pin_failures = NULL, pin_halted_upto = NULL
 		WHERE session_id = ?1 AND done_at IS NULL`, keep, n)
 }
 
@@ -59,7 +61,7 @@ func ClearPin(conn *sql.DB, sessionID string) error {
 	return annotate(conn, "clear pin", sessionID, `
 		UPDATE sessions
 		SET waiting_event_id = NULL, pin_note = NULL, pin_pr = NULL, pin_cursor = NULL, pin_seen_at = NULL,
-		    pin_delivered_at = NULL, pin_delivered_upto = NULL
+		    pin_delivered_at = NULL, pin_delivered_upto = NULL, pin_failures = NULL, pin_halted_upto = NULL
 		WHERE session_id = ?1 AND done_at IS NULL`)
 }
 
@@ -71,7 +73,7 @@ func ClearPRPin(conn *sql.DB, sessionID, pr string) error {
 	_, err := conn.Exec(`
 		UPDATE sessions
 		SET waiting_event_id = NULL, pin_note = NULL, pin_pr = NULL, pin_cursor = NULL, pin_seen_at = NULL,
-		    pin_delivered_at = NULL, pin_delivered_upto = NULL
+		    pin_delivered_at = NULL, pin_delivered_upto = NULL, pin_failures = NULL, pin_halted_upto = NULL
 		WHERE session_id = ?1 AND pin_pr = ?2`, sessionID, pr)
 	if err != nil {
 		return fmt.Errorf("clear PR pin: %w", err)
@@ -108,7 +110,7 @@ func SetPinPR(conn *sql.DB, sessionID, pr string, now time.Time) error {
 		SET waiting_event_id = COALESCE(waiting_event_id,
 		      (SELECT MAX(id) FROM events WHERE session_id = ?1), 0),
 		    pin_pr = ?2, pin_cursor = ?3, pin_seen_at = NULL,
-		    pin_delivered_at = NULL, pin_delivered_upto = NULL
+		    pin_delivered_at = NULL, pin_delivered_upto = NULL, pin_failures = NULL, pin_halted_upto = NULL
 		WHERE session_id = ?1 AND done_at IS NULL`, pr, now.UTC().Format(time.RFC3339))
 }
 
@@ -126,8 +128,14 @@ type PRPin struct {
 	// activity it has not yet been seen to take in, 0 when there is none.
 	// DeliveredUpTo is where Cursor moves once it has; zero for a merge or
 	// close, whose confirmation takes the pin off instead.
-	DeliveredAt    int64
-	DeliveredUpTo  time.Time
+	DeliveredAt   int64
+	DeliveredUpTo time.Time
+	// Failures counts the deliveries in a row that were never confirmed. At
+	// the cap, delivery has stopped, and HaltedUpTo is the DeliveredUpTo of
+	// the last of them: activity newer than it resumes delivery.
+	// HaltedUpTo is zero when the stopped delivery was a merge or close.
+	Failures       int
+	HaltedUpTo     time.Time
 	Cwd            string
 	TranscriptPath string
 	ConfigDir      string
@@ -143,6 +151,7 @@ func PRPins(conn *sql.DB) ([]PRPin, error) {
 	rows, err := conn.Query(`
 		SELECT session_id, pin_pr, COALESCE(pin_cursor, ''), COALESCE(pin_seen_at, 0),
 		       COALESCE(pin_delivered_at, 0), COALESCE(pin_delivered_upto, ''),
+		       COALESCE(pin_failures, 0), COALESCE(pin_halted_upto, ''),
 		       COALESCE(cwd, ''), COALESCE(transcript_path, ''), config_dir, COALESCE(kind, ''),
 		       terminated_at IS NOT NULL
 		FROM sessions
@@ -155,9 +164,9 @@ func PRPins(conn *sql.DB) ([]PRPin, error) {
 	var out []PRPin
 	for rows.Next() {
 		var p PRPin
-		var cursor, upTo string
+		var cursor, upTo, halted string
 		var dir sql.NullString
-		if err := rows.Scan(&p.SessionID, &p.PR, &cursor, &p.SeenAt, &p.DeliveredAt, &upTo, &p.Cwd, &p.TranscriptPath, &dir, &p.Kind, &p.Gone); err != nil {
+		if err := rows.Scan(&p.SessionID, &p.PR, &cursor, &p.SeenAt, &p.DeliveredAt, &upTo, &p.Failures, &halted, &p.Cwd, &p.TranscriptPath, &dir, &p.Kind, &p.Gone); err != nil {
 			return nil, err
 		}
 		p.ConfigDir = ConfigDirOf(dir)
@@ -174,6 +183,13 @@ func PRPins(conn *sql.DB) ([]PRPin, error) {
 				return nil, fmt.Errorf("PR pin of %s: bad delivered cursor %q: %w", p.SessionID, upTo, err)
 			}
 			p.DeliveredUpTo = t
+		}
+		if halted != "" {
+			t, err := time.Parse(time.RFC3339, halted)
+			if err != nil {
+				return nil, fmt.Errorf("PR pin of %s: bad halted cursor %q: %w", p.SessionID, halted, err)
+			}
+			p.HaltedUpTo = t
 		}
 		out = append(out, p)
 	}
@@ -194,11 +210,13 @@ func SetPRSeen(conn *sql.DB, sessionID, pr string, at int64) error {
 }
 
 // AdvancePRCursor marks the PR's activity up to cursor as delivered and clears
-// the pending mark and the delivery record, while the pin still watches pr.
+// the pending mark, the delivery record and the count of failed deliveries,
+// while the pin still watches pr.
 func AdvancePRCursor(conn *sql.DB, sessionID, pr string, cursor time.Time) error {
 	_, err := conn.Exec(`
 		UPDATE sessions
-		SET pin_cursor = ?3, pin_seen_at = NULL, pin_delivered_at = NULL, pin_delivered_upto = NULL
+		SET pin_cursor = ?3, pin_seen_at = NULL, pin_delivered_at = NULL, pin_delivered_upto = NULL,
+		    pin_failures = NULL, pin_halted_upto = NULL
 		WHERE session_id = ?1 AND pin_pr = ?2`,
 		sessionID, pr, cursor.UTC().Format(time.RFC3339))
 	if err != nil {
@@ -221,6 +239,53 @@ func SetPRDelivered(conn *sql.DB, sessionID, pr string, at int64, upTo time.Time
 		sessionID, pr, sql.NullInt64{Int64: at, Valid: at > 0}, up)
 	if err != nil {
 		return fmt.Errorf("set PR delivered: %w", err)
+	}
+	return nil
+}
+
+// FailPRDelivery records that the delivery on the session's pin was never
+// confirmed, while the pin still watches pr: it drops the delivery record and
+// counts one more failure in a row, which it returns. The count reaching max
+// stops delivery: the delivery's upTo is kept as where newer activity resumes
+// it (pin_halted_upto), and the pin's note gets the prefix note in front, so
+// the stop shows in the picker -- once, however often it stops again. A
+// return of 0 is a pin no longer watching pr, which changed nothing.
+func FailPRDelivery(conn *sql.DB, sessionID, pr string, max int, upTo time.Time, note string) (int, error) {
+	var up sql.NullString
+	if !upTo.IsZero() {
+		up = sql.NullString{String: upTo.UTC().Format(time.RFC3339), Valid: true}
+	}
+	var n int
+	err := conn.QueryRow(`
+		UPDATE sessions
+		SET pin_delivered_at = NULL, pin_delivered_upto = NULL,
+		    pin_failures = COALESCE(pin_failures, 0) + 1,
+		    pin_halted_upto = CASE WHEN COALESCE(pin_failures, 0) + 1 >= ?3 THEN ?4 END,
+		    pin_note = CASE
+		      WHEN COALESCE(pin_failures, 0) + 1 < ?3 THEN pin_note
+		      WHEN substr(COALESCE(pin_note, ''), 1, length(?5)) = ?5 THEN pin_note
+		      ELSE rtrim(?5 || ' ' || COALESCE(pin_note, ''))
+		    END
+		WHERE session_id = ?1 AND pin_pr = ?2
+		RETURNING pin_failures`, sessionID, pr, max, up, note).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("fail PR delivery: %w", err)
+	}
+	return n, nil
+}
+
+// ResumePRDelivery lifts a stop on the PR's delivery (see FailPRDelivery),
+// while the pin still watches pr. It also clears pin_seen_at: the pending mark
+// left from before the stop would otherwise count as an elapsed debounce for
+// the next activity. The pin's note keeps its prefix: the person may still want
+// to know the resumes kept failing.
+func ResumePRDelivery(conn *sql.DB, sessionID, pr string) error {
+	_, err := conn.Exec(`UPDATE sessions SET pin_failures = NULL, pin_halted_upto = NULL, pin_seen_at = NULL WHERE session_id = ?1 AND pin_pr = ?2`, sessionID, pr)
+	if err != nil {
+		return fmt.Errorf("resume PR delivery: %w", err)
 	}
 	return nil
 }
