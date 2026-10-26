@@ -89,8 +89,8 @@ worktree は `<repo>/.worktrees/<name>` にあり、ghq が repo として列挙
 - `C-q q` で popup → fzf picker → 選択 session へ到達（pane への `tmux switch-client` / `claude attach` /
   `claude --resume` を後述の順で選ぶ）。`q` は `--repo-scope` 付きで、popup を開いた pane と
   `--git-common-dir` を共有する session だけに絞る（メイン checkout + その `.worktrees/*` が 1 グループ
-  になる）。`C-q Q` は絞り込みを外し、working / stale と、終了済みだが resume で拾い直せる row
-  （`--show-resumable`）も出す
+  になる）。`C-q Q` は絞り込みを外し、working / stale も出す。プロセスが消えただけで作業が open な
+  session（gone）はどちらにも並ぶ（→ `docs/design/claude-queue-lifecycle.md`）
 - ④の bg 経路が `claude-queue link` で委譲の親子関係を記録し、picker はそれを木として表示する。
   親を失った委譲先（孤児）には印が付き、`claude-reap-bg` も孤児を拾える
   （→ `docs/design/claude-queue-session-tree.md`）
@@ -193,7 +193,9 @@ hook 側は **pane が window 唯一の pane のときだけ**改名する（spl
 `claude agents --json` の `status: idle`（承認待ちの `status: waiting` / `waitingFor: permission
 prompt` とは別状態）で次の入力を待ち続ける。放置すると完遂から約 60 分で roster から消えるが、
 その消滅では `SessionEnd` が飛ばないため③の `terminated_at` は NULL のまま残り、`queue` view に
-幽霊行が残る。追跡がきれいに閉じるのは `claude stop`（= `claude-stop-bg`）で閉じた経路だけ。
+幽霊行が残る。追跡がきれいに閉じるのは `claude-stop-bg` で閉じた経路だけ。素の `claude stop` は
+reason `other` で終わり session は gone（作業は open）になる。`claude-stop-bg` は done を台帳に
+書いてから stop するので、作業の完了まで閉じる。
 したがって委譲元は、完了報告を受けたら質問へ返信したかに関わらず `claude-stop-bg <short-id>` で
 閉じる（`delegate-to-worktree` 手順 6 / `worktree-scope.md` §6）。
 
@@ -211,7 +213,7 @@ worktree の滞留も同様に残る — ①はどちらの経路でも走り、
 委譲のためで、退避路ではない。
 
 ③との噛み合わせは「pane 無し = 追跡は完全、ジャンプだけ不能」になる。status-right のカウントは
-`terminated_at IS NULL` と state だけで絞るので background も普通に乗る。
+running の state（`terminated_at IS NULL`）だけで絞るので background も普通に乗る。
 
 ジャンプ側は **pane を到達手段の第一候補に留め、当てにはしない**。`tmux_pane` は NULL になるだけで
 なく、既に置き換わった tmux server の pane を指し続けることがある — pane id は tmux server 単位の
@@ -266,35 +268,16 @@ flag レベルの詳細（`-d` の要否が経路で逆になる理由、`-t` �
 `internal/multiplexer/tmux.go` のコメントに一本化してあるので、そちらを参照
 （README.md は挙動レベルの説明に留め、flag レベルは書かない）。
 
-### 終了済み row は view を広げず別クエリで拾う
+### gone の session は pane を運ばない
 
-ホストが落ちると全 session が閉じ、`queue` view（`terminated_at IS NULL`）は空になる。会話 jsonl は
-残っているので resume で戻せるが、そのために view の絞り込みを緩めることはしない。view は
-「今どこかで動いている session」の定義であり、status-right のカウントも reconcile も L3 自己修復も
-その定義に乗っている。終了済みを混ぜると、生きている session の数を数える手段が消える。
+プロセスが消えた session（gone）も、作業が open な間は `queue` view に残る
+（`docs/design/claude-queue-lifecycle.md`）。status-right は running の state だけを数え、gone を数えない。
 
-代わりに終了済み側だけを別クエリ（`db.ResumableCandidates`）で引き、`resumable` という擬似 state を
-付けて live な row の後ろへ並べる。既定 off の `--show-resumable` に閉じるのは、平常時の picker が
-GC 保持期間ぶんの終了済み row を抱えて使いにくくなるのを避けるため。判定条件と並び順は README.md
-「終了済み session の掘り起こし」節に一本化してある。
-
-resume できるかの確認を SQL と Go に分けるのは、条件の半分がファイルシステム側にあるため。
-transcript が記録されていても短命 session は jsonl を書かず、cwd は reap 済み worktree なら消えて
-いる。確認を欠いた `--resume` はエラーにならず空 session を作るので、選択時ではなく**列挙の時点で**
-落とす。案内に出す候補数も同じ確認を通したあとの数にする — でなければ、実際には resume できない
-row を数えて勧めることになる。
-
-live な row が 0 件のときに候補数と flag を stderr に出すのは、再起動直後がまさにその状態で、
-popup の中には flag を知る経路が無いからである。ただし `display-popup -E` は command の exit で
-popup を閉じるため、この案内が読めるのは picker をシェルから直接起動した場合に限られる。既存の
-`no active sessions` も同じ構造だが、読ませる前提の操作案内をそこに置いたのはこの変更が最初なので、
-到達性は未解決の論点として残る。
-
-`tmux_pane` を resumable な row では運ばないのは、ledger がこの列を終了時にクリアしないためである。
+gone の session で `tmux_pane` を運ばないのは、ledger がこの列を終了時にクリアしないためである。
 pane id は tmux server 単位のカウンタで新しい server は `%0` から振り直すので、終了したプロセスの
 pane id は再起動後の server では無関係な live pane に衝突する。picker は roster が読めないときだけ
 ledger の pane を信用する（roster が読めないことは session の死の証拠にならないから）が、
-`terminated_at` で選んだ row にはその前提が成り立たない — 死んでいる証拠を別に持っているので、
+`terminated_at` が立った session にはその前提が成り立たない — 死んでいる証拠を別に持っているので、
 信用すると会話の復元ではなく他人の pane への switch になる。
 
 ### ④は **メイン** toplevel 基準でパスを作る

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Functional tests for claude-stop-bg. A PATH stub stands in for the `claude`
-# CLI: `agents --json` prints a fixture roster, `stop` records its argv. No real
-# session is ever started, so the guard can be exercised exhaustively.
+# Functional tests for claude-stop-bg. PATH stubs stand in for the `claude` CLI
+# (`agents --json` prints a fixture roster, `stop` records its argv) and for
+# `claude-queue` (`done` records its argv), and CLAUDE_QUEUE_DB points at a
+# temp path, so no real session is stopped and the real ledger is never read
+# or written. The guard can be exercised exhaustively.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -22,11 +24,28 @@ cat >"$stubbin/claude" <<'EOF'
 [ -n "${CLAUDE_STUB_ENVLOG:-}" ] && printf '%s %s\n' "$1" "${CLAUDE_CONFIG_DIR:-UNSET}" >>"$CLAUDE_STUB_ENVLOG"
 case "$1" in
   agents) cat "$CLAUDE_STUB_ROSTER" ;;
-  stop)   printf '%s\n' "$2" >"$CLAUDE_STUB_STOPLOG" ;;
+  stop)   printf '%s\n' "$2" >"$CLAUDE_STUB_STOPLOG"
+          if [ -n "${CLAUDE_STUB_ORDERLOG:-}" ]; then echo stop >>"$CLAUDE_STUB_ORDERLOG"; fi ;;
   *)      exit 1 ;;
 esac
 EOF
 chmod +x "$stubbin/claude"
+
+# claude-queue stub: records `done <id>`, so a case can assert whether the work
+# was marked done and in what order relative to the stop.
+cat >"$stubbin/claude-queue" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = done ] || exit 2
+printf '%s\n' "$2" >>"$CLAUDE_STUB_DONELOG"
+if [ -n "${CLAUDE_STUB_ORDERLOG:-}" ]; then echo done >>"$CLAUDE_STUB_ORDERLOG"; fi
+EOF
+chmod +x "$stubbin/claude-queue"
+donelog="$tmp/done.log"
+: >"$donelog"
+export CLAUDE_STUB_DONELOG="$donelog"
+# Every run reads this ledger path, which does not exist unless a case creates
+# it, so the real ~/.claude/session-queue.db is never consulted.
+export CLAUDE_QUEUE_DB="$tmp/none.db"
 
 roster="$tmp/roster.json"
 cat >"$roster" <<'EOF'
@@ -39,27 +58,46 @@ EOF
 stoplog="$tmp/stop.log"
 run() { PATH="$stubbin:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" "$src" "$@"; }
 
-# background session -> stopped, and the SHORT id is what reaches `claude stop`.
+# background session -> marked done, then stopped, and the SHORT id is what
+# reaches both. Done comes first: the stop's SessionEnd (reason "other") is the
+# one a reboot sends too, so the ledger keeps the session open unless the done
+# mark is already there.
+orderlog="$tmp/order.log"
+: >"$stoplog"; : >"$donelog"; : >"$orderlog"
+CLAUDE_STUB_ORDERLOG="$orderlog" run aaaaaaaa >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$stoplog")" = "aaaaaaaa" ] && [ "$(cat "$donelog")" = "aaaaaaaa" ] \
+   && [ "$(tr '\n' ' ' <"$orderlog")" = "done stop " ]; then
+  echo "ok: background session is marked done, then stopped, by short id"
+else echo "FAIL: background stop rc=$rc stoplog=$(cat "$stoplog") donelog=$(cat "$donelog") order=$(cat "$orderlog")"; fail=1; fi
+
+# A failing done mark: the running path still stops the session but ends
+# non-zero and says it was not marked; the not-running path has only the mark to
+# do, so it ends non-zero and never claims "marked done".
+failbin="$tmp/failbin"; mkdir -p "$failbin"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$failbin/claude-queue"; chmod +x "$failbin/claude-queue"
 : >"$stoplog"
-run aaaaaaaa >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(cat "$stoplog")" = "aaaaaaaa" ]; then
-  echo "ok: background session is stopped by short id"
-else echo "FAIL: background stop rc=$rc stoplog=$(cat "$stoplog")"; fail=1; fi
+out="$(PATH="$failbin:$stubbin:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" "$src" aaaaaaaa 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && [ "$(cat "$stoplog")" = "aaaaaaaa" ] && grep -qF 'NOT marked done' <<<"$out"; then
+  echo "ok: a failed done mark still stops the session but exits non-zero"
+else echo "FAIL: failed mark on running session rc=$rc out=$out"; fail=1; fi
 
 # interactive session -> refused. This is the whole reason the wrapper exists:
 # a broad `claude stop *` grant would let an agent kill the user's own session.
-: >"$stoplog"
+# A refusal writes no done mark either.
+: >"$stoplog"; : >"$donelog"
 out="$(run bbbbbbbb 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && grep -q 'interactive' <<<"$out"; then
-  echo "ok: interactive session is refused and never reaches claude stop"
-else echo "FAIL: interactive not refused rc=$rc out=$out"; fail=1; fi
+if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && [ ! -s "$donelog" ] \
+   && grep -qF 'refusing to stop a interactive session' <<<"$out"; then
+  echo "ok: interactive session is refused, reaching neither claude stop nor the done mark"
+else echo "FAIL: interactive not refused rc=$rc out=$out donelog=$(cat "$donelog")"; fail=1; fi
 
-# unknown id -> refused (no session matches the prefix).
-: >"$stoplog"
+# Not running, and no ledger to check its kind against -> refused: an
+# unreadable ledger is no evidence the session is a background one.
+: >"$stoplog"; : >"$donelog"
 run cccccccc >/dev/null 2>&1; rc=$?
-if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ]; then
-  echo "ok: unknown short id is refused"
-else echo "FAIL: unknown id accepted rc=$rc"; fail=1; fi
+if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && [ ! -s "$donelog" ]; then
+  echo "ok: an id not running and not checkable against the ledger is refused"
+else echo "FAIL: unchecked id accepted rc=$rc"; fail=1; fi
 
 # Malformed ids must be rejected before any roster lookup: a full UUID is the
 # realistic mistake (claude attach/stop only accept the 8-char form).
@@ -213,6 +251,57 @@ if command -v sqlite3 >/dev/null 2>&1; then
   else echo "FAIL: NULL-vs-explicit-dir prefix not refused rc=$rc out=$out"; fail=1; fi
 else
   echo "skip: sqlite3 not available; config dir resolution not exercised"
+fi
+
+# --- sessions that are no longer running --------------------------------------
+#
+# A delegate whose process already ended (it timed out, the host went down) is
+# not in the roster, but its work is still open in the ledger. Whether it may be
+# closed is decided by the kind the ledger recorded, since the roster has none.
+
+if command -v sqlite3 >/dev/null 2>&1; then
+  kdb="$tmp/kind.db"
+  sqlite3 "$kdb" "
+    CREATE TABLE sessions (session_id TEXT PRIMARY KEY, config_dir TEXT, kind TEXT);
+    INSERT INTO sessions VALUES ('11111111-1111-2222-3333-444444444444', NULL, 'background');
+    INSERT INTO sessions VALUES ('22222222-1111-2222-3333-444444444444', NULL, 'interactive');
+    INSERT INTO sessions VALUES ('33333333-1111-2222-3333-444444444444', NULL, NULL);
+  "
+  runk() { CLAUDE_QUEUE_DB="$kdb" run "$@"; }
+
+  : >"$stoplog"; : >"$donelog"
+  out="$(runk 11111111 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -s "$stoplog" ] && [ "$(cat "$donelog")" = "11111111" ]; then
+    echo "ok: a background session no longer running is marked done without a stop"
+  else echo "FAIL: gone background rc=$rc out=$out donelog=$(cat "$donelog")"; fail=1; fi
+
+  # The done mark fails (claude-queue exits 1): the mark is this path's only
+  # effect, so it must end non-zero and must not claim "marked done".
+  : >"$stoplog"
+  out="$(PATH="$failbin:$stubbin:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" CLAUDE_QUEUE_DB="$kdb" "$src" 11111111 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && ! grep -qF 'is not running; marked done' <<<"$out"; then
+    echo "ok: a gone session whose done mark fails exits non-zero without claiming it was marked"
+  else echo "FAIL: failed mark on gone session rc=$rc out=$out"; fail=1; fi
+
+  # The case the wrapper's grant must not cover: the user's own interactive
+  # session, gone after a reboot. Closing it would drop their WIP from the list.
+  # A row with no kind recorded is read as interactive.
+  for sid in 22222222 33333333; do
+    : >"$stoplog"; : >"$donelog"
+    out="$(runk "$sid" 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && [ ! -s "$donelog" ] \
+       && grep -qF 'refusing to stop a interactive session' <<<"$out"; then
+      echo "ok: a gone session the ledger records as interactive ($sid) is refused, done not written"
+    else echo "FAIL: gone interactive $sid rc=$rc out=$out donelog=$(cat "$donelog")"; fail=1; fi
+  done
+
+  : >"$stoplog"; : >"$donelog"
+  out="$(runk 44444444 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -s "$stoplog" ] && [ ! -s "$donelog" ] && grep -qF 'nothing to do' <<<"$out"; then
+    echo "ok: an id neither running nor in the ledger is a reported no-op"
+  else echo "FAIL: unknown id rc=$rc out=$out"; fail=1; fi
+else
+  echo "skip: sqlite3 not available; ledger kind checks not exercised"
 fi
 
 exit "$fail"

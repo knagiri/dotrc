@@ -212,15 +212,14 @@ func TestDispatch_SessionEndStillTerminatesAfterResurrect(t *testing.T) {
 	}
 }
 
-// queueRows counts how many rows the picker's view surfaces for a session. The
-// view has two predicates -- terminated_at IS NULL and a latest event that is
-// not 'ended' -- so it is the only assertion that covers both halves of a
-// resurrection at once.
+// queueRows counts how many RUNNING rows the picker's view surfaces for a
+// session. A gone session stays in the view (as effective_state 'gone') until
+// its work is done, so "running" is the half a resurrection has to restore.
 func queueRows(t *testing.T, d *Deps, id string) int {
 	t.Helper()
 	var n int
 	if err := d.DB.QueryRow(
-		"SELECT COUNT(*) FROM queue WHERE session_id = ?", id,
+		"SELECT COUNT(*) FROM queue WHERE session_id = ? AND effective_state != 'gone'", id,
 	).Scan(&n); err != nil {
 		t.Fatalf("count queue rows for %s: %v", id, err)
 	}
@@ -264,9 +263,9 @@ func reconcileTerminate(t *testing.T, d *Deps, id string) {
 //
 // Both mechanisms are asserted separately, since either one regressing alone is
 // enough to make the terminate permanent:
-//   - upsertSession clears terminated_at (the view's terminated_at IS NULL)
-//   - the event Dispatch inserts carries a non-'ended' state (the view's
-//     e.state != 'ended'), superseding the synthetic ForcedEnd reconcile wrote
+//   - upsertSession clears terminated_at (the view's 'gone' test)
+//   - the event Dispatch inserts carries a non-'ended' state, superseding the
+//     synthetic ForcedEnd reconcile wrote
 func TestDispatch_AfterReconcileTerminate_LiveEventRestoresRow(t *testing.T) {
 	for _, ev := range []string{
 		"SessionStart", "UserPromptSubmit",
@@ -378,9 +377,9 @@ func TestDispatch_UnknownEvent_NoOp(t *testing.T) {
 func TestDispatch_SessionEnd_TriggersGC(t *testing.T) {
 	d := openTestDB(t)
 
-	// Pre-seed an ancient terminated session that should be gc'd.
+	// Pre-seed a session done long ago that should be gc'd.
 	_, err := d.DB.Exec(`
-		INSERT INTO sessions(session_id, terminated_at) VALUES ('ancient', unixepoch() - 700000);
+		INSERT INTO sessions(session_id, terminated_at, done_at) VALUES ('ancient', unixepoch() - 700000, unixepoch() - 700000);
 	`)
 	if err != nil {
 		t.Fatalf("seed ancient: %v", err)

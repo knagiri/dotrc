@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/state"
@@ -18,6 +19,20 @@ type Deps struct {
 	// what keeps a caller that cannot tell from overwriting a recorded dir with
 	// a guess.
 	ConfigDir string
+	// Kind is how the session was started (db.KindInteractive / KindBackground
+	// / KindPrint), resolved by Run from the environment (see KindFromEnv).
+	// Empty leaves the column as it was.
+	Kind string
+}
+
+// doneReasons are the SessionEnd reasons that mean a human ended the work, not
+// just the process: leaving the REPL (Ctrl-C, /exit) and /clear, after which
+// the next task starts in a new session. Every other reason -- "other" covers
+// `claude stop`, a killed pane and a host shutdown alike -- only ends the
+// process, and the session stays open as gone.
+var doneReasons = map[string]bool{
+	"prompt_input_exit": true,
+	"clear":             true,
 }
 
 // Dispatch applies the state transition for the given event.
@@ -38,11 +53,15 @@ func Dispatch(d *Deps, event string, in *Input) error {
 	// Upsert on every event: when SessionStart hook is dropped (e.g.
 	// /resume, hook registered mid-session) later events still need to
 	// populate tmux_pane so the picker can switch to the live pane.
-	if err := upsertSession(tx, in, d.Pane, d.ConfigDir); err != nil {
+	now := time.Now().Unix()
+	if err := upsertSession(tx, in, d.Pane, d.ConfigDir, d.Kind); err != nil {
 		return err
 	}
 	if event == "SessionStart" && d.Pane != "" {
-		if err := forcedEndSiblings(tx, in.SessionID, d.Pane); err != nil {
+		// A /clear replaces the pane's session with a new one for the next
+		// task, so the one it replaces is done. Any other new session in the
+		// pane only shows the old process is gone.
+		if err := forcedEndSiblings(tx, in.SessionID, d.Pane, in.Source == "clear", now); err != nil {
 			return err
 		}
 	}
@@ -56,6 +75,13 @@ func Dispatch(d *Deps, event string, in *Input) error {
 			in.SessionID,
 		); err != nil {
 			return fmt.Errorf("set terminated_at: %w", err)
+		}
+		// A print-mode run is one-shot: there is no WIP to come back to, so its
+		// end is always the end of its work, whatever the reason says.
+		if doneReasons[in.Reason] || d.Kind == db.KindPrint {
+			if _, err := db.MarkDone(tx, in.SessionID, now); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -81,33 +107,41 @@ func Dispatch(d *Deps, event string, in *Input) error {
 //
 // terminated_at is cleared on EVERY event, not just SessionStart: a live hook
 // event is itself the disproof of a recorded end. `claude --resume <uuid>` keeps
-// the session id, so without this a session that ended once would stay filtered
-// out of the queue view (WHERE terminated_at IS NULL) forever.
+// the session id, so without this a session that ended once would stay gone
+// forever, though its process is running again.
+//
+// done_at is never touched: done is one-way, and a done session that is
+// resumed stays out of the listing. kind is overwritten when known, since a
+// resume can bring a session back as another kind (`claude --bg --resume`).
 //
 // Dispatch relies on running this BEFORE it re-sets terminated_at for SessionEnd
 // -- both happen in the same transaction, so a genuine end still lands closed.
-func upsertSession(tx *sql.Tx, in *Input, pane, cfgDir string) error {
+func upsertSession(tx *sql.Tx, in *Input, pane, cfgDir, kind string) error {
 	var paneVal interface{}
 	if pane != "" {
 		paneVal = pane
 	}
 	_, err := tx.Exec(`
-		INSERT INTO sessions(session_id, tmux_pane, cwd, transcript_path, config_dir)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO sessions(session_id, tmux_pane, cwd, transcript_path, config_dir, kind)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			tmux_pane       = COALESCE(excluded.tmux_pane, sessions.tmux_pane),
 			cwd             = COALESCE(excluded.cwd, sessions.cwd),
 			transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path),
 			config_dir      = COALESCE(excluded.config_dir, sessions.config_dir),
+			kind            = COALESCE(excluded.kind, sessions.kind),
 			terminated_at   = NULL
-	`, in.SessionID, paneVal, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath), nullIfEmpty(cfgDir))
+	`, in.SessionID, paneVal, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath), nullIfEmpty(cfgDir), nullIfEmpty(kind))
 	if err != nil {
 		return fmt.Errorf("upsert session: %w", err)
 	}
 	return nil
 }
 
-func forcedEndSiblings(tx *sql.Tx, newID, pane string) error {
+// forcedEndSiblings marks gone every other running session recorded on pane:
+// a new session starting there means the old process is no longer in it. With
+// markDone (the new session came from /clear) their work is done as well.
+func forcedEndSiblings(tx *sql.Tx, newID, pane string, markDone bool, now int64) error {
 	rows, err := tx.Query(`
 		SELECT session_id FROM sessions
 		WHERE tmux_pane = ? AND session_id != ? AND terminated_at IS NULL
@@ -136,6 +170,11 @@ func forcedEndSiblings(tx *sql.Tx, newID, pane string) error {
 			"INSERT INTO events(session_id, event_type, state) VALUES (?, 'ForcedEnd', 'ended')", id,
 		); err != nil {
 			return fmt.Errorf("insert ForcedEnd %s: %w", id, err)
+		}
+		if markDone {
+			if _, err := db.MarkDone(tx, id, now); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

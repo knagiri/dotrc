@@ -1,21 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# claude-stop-bg -- stop a BACKGROUND claude session by its short id.
+# claude-stop-bg -- close a BACKGROUND claude session by its short id: mark its
+# work done in the claude-queue ledger, then stop it if it is still running.
 #
 # A delegated background session does NOT exit when its task completes. It stays
 # at `status: idle` waiting for further input -- whether or not it ever exchanged
 # messages with its delegator -- and falls off the roster roughly an hour later.
-# That expiry fires no `SessionEnd` hook, so claude-queue is left with a ghost
-# row whose `terminated_at` never gets filled in; stopping the session here is
-# what closes the tracking cleanly. So the delegator runs this once it has the
-# completion report, whether or not it replied to anything, and it already holds
-# the short id from claude-worktree's output.
+# So the delegator runs this once it has the completion report, whether or not
+# it replied to anything, and it already holds the short id from
+# claude-worktree's output.
+#
+# The done mark is written here, not inferred from the hook: `claude stop` ends
+# the session with SessionEnd reason "other", the same reason a host shutdown
+# sends, and the ledger keeps a session ended that way open (gone) so a reboot
+# never loses work. It is written before the stop, and also for a session that
+# is no longer running at all (it timed out, the host went down), so a delegate
+# whose process is already gone can still be closed.
 #
 # This wrapper exists so that ability can be granted without granting `claude
-# stop *`, which would let an agent kill ANY session -- including the user's own
-# interactive one. The guard refuses anything that is not kind=="background",
-# and refuses ids that do not resolve to exactly one live session.
+# stop *`, which would let an agent kill -- or close -- ANY session, including
+# the user's own interactive one. The guard refuses anything that is not
+# kind=="background": the roster's kind for a running session, the ledger's for
+# one that is not. A refusal writes nothing. Ids that match more than one
+# session are refused too.
 #
 # Both the roster and the stop are run under the session's OWN config dir, read
 # out of the claude-queue ledger (bin/lib/claude-configdir.sh). The roster and
@@ -58,10 +66,12 @@ command -v jq >/dev/null 2>&1 || {
   exit 1
 }
 
-# sqlite3 is NOT required: without it (or without a ledger) every lookup answers
-# with the default config dir, which is what every session ran under before a
-# second one existed. A session in another dir then fails the uniqueness check
-# below and is refused -- never silently stopped in the wrong place.
+# sqlite3 is optional for a RUNNING session: without it (or without a ledger)
+# the config-dir lookup answers with the default dir, which is what every
+# session ran under before a second one existed. A session in another dir then
+# fails the uniqueness check below and is refused -- never silently stopped in
+# the wrong place. A session that is NOT running does need it: its kind comes
+# from the ledger (cq_kind_for), and without sqlite3 that is a refusal.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/claude-configdir.sh"
 
 if ! config_dir="$(cq_config_dir_for "$id")"; then
@@ -83,17 +93,64 @@ roster="$(claude agents --json 2>/dev/null)" || {
   exit 1
 }
 
-# Resolve the id to exactly one live session and read its kind. An empty result
-# means either "no match" or "more than one match"; both are refusals, because
-# stopping the wrong session cannot be undone.
+# mark_done writes the work-done mark (cascading to the session's own
+# delegates). Returns non-zero when the mark was not written. A running session
+# is stopped regardless (a ledger that does not know the id, or a missing
+# claude-queue, must not keep it alive), but a session that is not running has
+# nothing else to do, so there the failure is the command's failure.
+mark_done() {
+  if ! command -v claude-queue >/dev/null 2>&1; then
+    echo "claude-stop-bg: claude-queue not found; $id not marked done in the ledger" >&2
+    return 1
+  fi
+  claude-queue "done" "$id" >/dev/null || {
+    echo "claude-stop-bg: could not mark $id done in the ledger" >&2
+    return 1
+  }
+}
+
+# Resolve the id against the roster and read its kind: "none" for no match,
+# "" for more than one. Several matches are a refusal, because stopping the
+# wrong session cannot be undone.
 kind="$(jq -r --arg id "$id" \
-  '[.[] | select(.sessionId | startswith($id))] | if length == 1 then .[0].kind else "" end' \
+  '[.[] | select(.sessionId | startswith($id))] | if length == 1 then .[0].kind elif length == 0 then "none" else "" end' \
   <<<"$roster")"
 
 case "$kind" in
-  background) ;;
+  background)
+    marked=0
+    mark_done || marked=1
+    stop_rc=0
+    claude stop "$id" || stop_rc=$?
+    if [ "$marked" -ne 0 ]; then
+      echo "claude-stop-bg: $id stopped but NOT marked done; its work stays open in the ledger" >&2
+      # Exit 3 = stopped but not marked: claude-reap-bg tells it apart from a
+      # refusal (1) so a stopped session is not reported as skipped. A failed
+      # stop keeps its own code.
+      [ "$stop_rc" -ne 0 ] || stop_rc=3
+    fi
+    exit "$stop_rc"
+    ;;
+  none) ;;
   "") echo "claude-stop-bg: no unique live session matching $id under $config_dir" >&2; exit 1 ;;
   *)  echo "claude-stop-bg: refusing to stop a $kind session: $id" >&2; exit 1 ;;
 esac
 
-claude stop "$id"
+# Not running. Nothing to stop, but the work may still be open in the ledger,
+# and whether it may be closed is the ledger's kind to decide -- the roster no
+# longer has one. An unreadable ledger is a refusal, not "no such session".
+if ! lkind="$(cq_kind_for "$id")"; then
+  echo "claude-stop-bg: $id is not running under $config_dir, and the ledger cannot be read to check its kind" >&2
+  exit 1
+fi
+case "$lkind" in
+  background)
+    mark_done || exit 1
+    echo "claude-stop-bg: $id is not running; marked done" >&2
+    ;;
+  none)
+    echo "claude-stop-bg: $id is neither running nor in the ledger; nothing to do" >&2
+    ;;
+  ambiguous) echo "claude-stop-bg: $id matches ledger sessions of more than one kind; not guessing" >&2; exit 1 ;;
+  *) echo "claude-stop-bg: refusing to stop a $lkind session: $id" >&2; exit 1 ;;
+esac

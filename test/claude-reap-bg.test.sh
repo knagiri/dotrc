@@ -58,6 +58,12 @@ esac
 EOF
 chmod +x "$stubbin/claude"
 
+# claude-queue stub for the REAL claude-stop-bg: its `done` mark must succeed
+# without touching a real ledger, and must not depend on a claude-queue being on
+# PATH (CI has none; bin/claude-queue is an untracked build artifact).
+printf '#!/usr/bin/env bash\n[ "$1" = done ] || exit 2\n' >"$stubbin/claude-queue"
+chmod +x "$stubbin/claude-queue"
+
 # Four background sessions plus one interactive, all `idle`. Only the id prefix
 # matters downstream; the rest mirrors the real roster shape.
 #

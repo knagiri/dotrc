@@ -237,7 +237,7 @@ func TestBuildForest(t *testing.T) {
 			got := buildForest(c.rows, forestOpts{
 				Keep:       defaultKeep,
 				InScope:    c.inScope,
-				ParentLive: c.live,
+				ParentOpen: c.live,
 				ASCII:      c.ascii,
 			})
 			var gotLines []line

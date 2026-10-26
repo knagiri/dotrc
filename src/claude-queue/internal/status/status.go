@@ -8,7 +8,9 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 )
 
-// order drives the left-to-right layout of the status string.
+// order drives the left-to-right layout of the status string. It is also what
+// is counted at all: the queue view's gone rows (open, but no process running)
+// are left out, since the status line is about what is running.
 var order = []string{"awaiting_approval", "idle_done", "working", "stale"}
 
 var emoji = map[string]string{

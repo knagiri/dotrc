@@ -86,8 +86,8 @@ func TestTabBind_QuotesAndDelimits(t *testing.T) {
 }
 
 func TestListArgs(t *testing.T) {
-	got := pickerFlags{ShowWorking: true, ShowStale: true, ShowResumable: true, RepoScope: true}.listArgs()
-	want := []string{"picker", "--list", "--show-working", "--show-stale", "--show-resumable", "--repo-scope"}
+	got := pickerFlags{ShowWorking: true, ShowStale: true, RepoScope: true}.listArgs()
+	want := []string{"picker", "--list", "--show-working", "--show-stale", "--repo-scope"}
 	if !slices.Equal(got, want) {
 		t.Errorf("listArgs = %v, want %v", got, want)
 	}

@@ -16,8 +16,8 @@ type treeGlyphs struct {
 	last     string // this row, last sibling
 	pipe     string // an ancestor level with more siblings to follow
 	blank    string // an ancestor level that was the last sibling
-	detached string // parent is alive but not listed (e.g. another repo)
-	orphan   string // parent is not alive: nobody is left to close this session
+	detached string // parent is open but not listed (e.g. another repo)
+	orphan   string // parent is done: nobody is left to close this session
 }
 
 var (
@@ -49,8 +49,8 @@ func isCurrentRow(row db.Row, pane string) bool {
 }
 
 // forestOpts carries the decisions buildForest needs from outside: the state
-// and repo filters, and whether a session is alive. They are functions so the
-// ledger, git and the filesystem stay in Run.
+// and repo filters, and whether a session's work is open. They are functions
+// so the ledger, git and the filesystem stay in Run.
 type forestOpts struct {
 	// Keep is the state filter. It picks the rows the user asked to see; their
 	// ancestors are listed whether or not they pass it.
@@ -60,8 +60,9 @@ type forestOpts struct {
 	// once this has taken its scope-filtered rows is pruned along with them
 	// (see the loop in buildForest).
 	InScope func(db.Row) bool
-	// ParentLive reports whether the ledger still considers a session running.
-	ParentLive func(sessionID string) bool
+	// ParentOpen reports whether the ledger still has a session's work open
+	// (running or gone).
+	ParentOpen func(sessionID string) bool
 	ASCII      bool
 }
 
@@ -230,7 +231,7 @@ func buildForest(rows []db.Row, o forestOpts) []treeRow {
 		r := byID[id]
 		prefix, childRails := "", ""
 		if root {
-			prefix = rootMark(r, listed, o.ParentLive, g)
+			prefix = rootMark(r, listed, o.ParentOpen, g)
 		} else {
 			prefix = rails + g.branch
 			childRails = rails + g.pipe
@@ -256,15 +257,15 @@ func buildForest(rows []db.Row, o forestOpts) []treeRow {
 // rootMark says why a root has no parent above it. No recorded parent is an
 // ordinary root and gets nothing; a recorded parent that is listed can only
 // mean the link was cut as a cycle, and gets nothing either. Otherwise the
-// parent is off the listing, and whether it is still alive separates a session
+// parent is off the listing, and whether its work is still open separates a session
 // merely filtered out of view from an orphan whose delegator can no longer
-// close it.
-func rootMark(r db.Row, listed map[string]bool, live func(string) bool, g treeGlyphs) string {
+// close it. A gone parent is open: resuming it brings the delegation back.
+func rootMark(r db.Row, listed map[string]bool, open func(string) bool, g treeGlyphs) string {
 	p := r.ParentSessionID
 	if !p.Valid || listed[p.String] {
 		return ""
 	}
-	if live(p.String) {
+	if open(p.String) {
 		return g.detached
 	}
 	return g.orphan

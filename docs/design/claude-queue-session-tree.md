@@ -32,15 +32,16 @@
 `substr(session_id, 1, 8)` で join する。同じ理由で `sessions` への FK も張らない。link を書く時点で
 子の SessionStart hook がまだ走っていないことがあり、親の行も GC で先に消えうる。
 
-GC は `created_at` が GC 期限より古く、かつ子が生きていない link を消す。子の行を基準に消さないのは、
-子の行が一度も書かれない場合があるため。
+GC は `created_at` が GC 期限より古く、かつ親子のどちらも作業が open でない link を消す。子の行を
+基準に消さないのは、子の行が一度も書かれない場合があるため。
 
 ## 表示（picker）
 
 木の順を主にし、priority は兄弟間の順序にだけ効かせる。`q` と `Q` の両方に適用する。
 
-1. 生きている行を全状態で読み、state filter（`--show-working` / `--show-stale`）を通った行を残す
-2. 残した行の祖先を `parent_session_id` で辿り、生きている行に在れば加える。**祖先には state filter
+1. open な行（running と gone）を全状態で読み、state filter（`--show-working` / `--show-stale`）を
+   通った行を残す。gone は filter に関わらず残る
+2. 残した行の祖先を `parent_session_id` で辿り、open な行に在れば加える。**祖先には state filter
    を掛けない**。`q` は `working` を隠すが委譲中の親はたいてい `working` なので、掛けると木が崩れる
 3. repo-scope（`--repo-scope`）を掛ける。これは祖先の引き戻しより後で、戻さない。そのうえで、
    引き戻しでしか入っていない行のうち repo filter 後の一覧に子が残らなかったものを、変化が
@@ -48,7 +49,6 @@ GC は `created_at` が GC 期限より古く、かつ子が生きていない l
    一覧にとってノイズになるため
 4. 森を組み、兄弟（root 同士を含む）を「部分木の最小 priority 昇順 → 部分木の最大 `created_at`
    降順 → session id 昇順」で並べる。承認待ちの子がいれば親ごと上に来る
-5. `--show-resumable` の行は木の末尾に平坦なまま足す
 
 罫線は `tree` と同じ形で、title 列の先頭に付ける。列を増やさないので非表示列の位置は変わらず、
 title は prefix の幅を引いた残りで切り詰める。
@@ -58,15 +58,15 @@ title は prefix の幅を引いた残りで切り詰める。
 | 状態 | 印（emoji / ASCII） |
 |---|---|
 | link が無い（`parent_session_id` が NULL） | なし |
-| 親は生きているが一覧に居ない（repo-scope で除外された等） | `↑` / `^` |
-| 親が生きていない（terminated、または GC 済みで行が無い） | `✂` / `x`（孤児） |
+| 親の作業は open（running / gone）だが一覧に居ない（repo-scope で除外された等） | `↑` / `^` |
+| 親が done（または GC 済みで行が無い） | `✂` / `x`（孤児） |
 
 NULL は「記録が無い」だけで、親が居ないことを意味しない。この 3 つを混同すると、backfill していない
 既存 session がすべて孤児に見える。
 
-生死は ledger（`terminated_at IS NULL`）で判定する。picker は起動時に reconcile するので ledger は
-roster とほぼ一致する。reconcile や生死の読み出しに失敗したときは親を生きているとみなし、孤児の印を
-出さない側に倒す。
+判定は ledger の作業軸（`done_at IS NULL`）で行い、プロセスの生死は見ない。親が gone なだけなら
+resume すれば委譲の関係ごと戻るので、孤児にしない（[claude-queue-lifecycle.md](claude-queue-lifecycle.md)）。
+読み出しに失敗したときは親を open とみなし、孤児の印を出さない側に倒す。
 
 link の循環は `claude-worktree` からは生じないが、テーブルは禁じていない。session id 順に祖先を上り、
 既に訪れた id へ戻る link を切って root にする。
@@ -76,10 +76,10 @@ link の循環は `claude-worktree` からは生じないが、テーブルは�
 孤児 = link が在り、かつ roster のどの entry の `sessionId` も親と一致しない session。pid の無い
 stale job record も「居る」に数え、判定を保守側に倒す。
 
-`/clear` は session を終わらせ、別の session id で新しい session を始める。委譲元が `/clear` すると
-その子は ledger でも roster でも親を失って孤児になる。新しい session は委譲の文脈を引き継がないので
-子を閉じず、閉じ手が居ないという孤児の状態に合う。compact は session id を変えないので、
-長く動く委譲元が compact を挟んでも link は切れない。
+`/clear` は session を終わらせ、別の session id で新しい session を始める。台帳は `/clear` された
+旧 session を done にし、cascade で子も done にする（running の background 子は reconcile が止める）。
+新しい session は委譲の文脈を引き継がないので、子の閉じ手はもう居ない。compact は session id を
+変えないので、長く動く委譲元が compact を挟んでも link は切れない。
 
 `SendMessage` gate は委譲元へ質問して返信待ちの委譲先を殺さないためにある。委譲元が消えていれば
 その返信は来ないので、孤児に限りこの gate と、それが前提にしている transcript の存在・parse の検査を

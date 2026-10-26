@@ -43,9 +43,11 @@ set -euo pipefail
 # waiting for further input (a different state from `status: waiting` /
 # `waitingFor: permission prompt`). It falls off the roster roughly an hour
 # later, but that expiry fires no `SessionEnd` hook, so claude-queue is left
-# with a ghost row whose `terminated_at` never gets filled in. Only `claude
-# stop` (= `claude-stop-bg`) closes the tracking cleanly, which is why the
-# delegator closes the session itself once it has the completion report --
+# with a ghost row whose `terminated_at` never gets filled in. Only
+# `claude-stop-bg` closes the tracking cleanly (it writes the done mark before
+# stopping; a bare `claude stop` ends with reason "other" and leaves the work
+# open), which is why the delegator closes the session itself once it has the
+# completion report --
 # whether or not it replied to anything. Worktrees outlive the session either
 # way; `git-reap-gone` reaps them.
 #

@@ -41,3 +41,12 @@ func TestFormat_EmptyReturnsEmpty(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+// Gone sessions are open work but not running, and the status line counts what
+// is running: a reboot must not light it up with every session it stopped.
+func TestFormat_OmitsGone(t *testing.T) {
+	got := Format(map[string]int{"gone": 40, "idle_done": 1}, false)
+	if want := "✅1"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
