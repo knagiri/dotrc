@@ -29,8 +29,13 @@ import (
 // shares the icon tables rather than having its own column.
 const iconMarked = "marked"
 
+// iconMemo keys the prefix of a memo in the annotation column. Like iconMarked
+// it is not a state.
+const iconMemo = "memo"
+
 var emoji = map[string]string{
 	iconMarked:          "📌",
+	iconMemo:            "📝",
 	"awaiting_approval": "⏳",
 	"idle_done":         "✅",
 	"working":           "⚙️",
@@ -40,6 +45,7 @@ var emoji = map[string]string{
 
 var ascii = map[string]string{
 	iconMarked:          "[P]",
+	iconMemo:            "[M]",
 	"awaiting_approval": "[!]",
 	"idle_done":         "[.]",
 	"working":           "[*]",
@@ -48,8 +54,13 @@ var ascii = map[string]string{
 }
 
 // Column positions in a rendered row, in the order FormatLine writes them.
-// The first five are shown (see fzfArgs); the last five ride along hidden
-// because the pick needs them and the eye does not.
+// The first five are shown (see fzfArgs); the five after them ride along
+// hidden because the pick needs them and the eye does not.
+//
+// The annotation column is shown too, after the summary, but sits behind the
+// hidden ones so adding it left their positions alone. It is what makes memos
+// and pin notes searchable: fzf matches the shown columns only. The raw memo
+// and pin note after it are hidden, and are what the edit keys prefill from.
 //
 // FormatLine writes these positions and parseSelection reads them back off the
 // line fzf returns, so the two have to agree: the hidden columns are addressed
@@ -66,6 +77,9 @@ const (
 	colCwd
 	colTranscript
 	colConfigDir
+	colAnnotation
+	colMemo
+	colPinNote
 	colCount
 )
 
@@ -96,7 +110,10 @@ const (
 // layout lost: several sessions in one repo share a worktree name and all read
 // "working", and the title is the only column that tells them apart.
 //
-// Hidden columns: session_id, tmux_pane, full cwd, transcript_path, config_dir.
+// Then the annotation column (pin note and memo), shown after the summary.
+//
+// Hidden columns: session_id, tmux_pane, full cwd, transcript_path, config_dir,
+// and after the annotation the raw memo and pin note.
 // The full cwd is carried separately from the worktree name because a background
 // session is opened in a window that needs a real working directory; the
 // transcript path rides along because the resume path must not run without
@@ -147,7 +164,26 @@ func FormatLine(row db.Row, title, worktree string, nowSec int64, asciiMode bool
 	fields[colCwd] = rowCwd(row)
 	fields[colTranscript] = rowTranscript(row)
 	fields[colConfigDir] = rowConfigDir(row)
+	fields[colAnnotation] = annotation(row, icons)
+	fields[colMemo] = row.Memo.String
+	if row.Marked {
+		fields[colPinNote] = row.PinNote.String
+	}
 	return strings.Join(fields, "\t")
+}
+
+// annotation renders the pin note (on a pinned row that has one) and the memo,
+// each behind its icon. Both are flattened to one line when they are written
+// (db.SetMemo), so neither can carry a tab into the line.
+func annotation(row db.Row, icons map[string]string) string {
+	var parts []string
+	if row.Marked && row.PinNote.String != "" {
+		parts = append(parts, icons[iconMarked]+" "+row.PinNote.String)
+	}
+	if row.Memo.String != "" {
+		parts = append(parts, icons[iconMemo]+" "+row.Memo.String)
+	}
+	return strings.Join(parts, " ")
 }
 
 // padWidth trims s to cols terminal columns and pads it back out to exactly
@@ -704,7 +740,7 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 	}
 
 	self := selfPath()
-	selected, err := fzf(input, fzfArgs(tabBind(self, f), doneBind(self, f)))
+	selected, err := fzf(input, fzfArgs(tabBind(self, f), memoBind(self, f), pinNoteBind(self, f), doneBind(self, f)))
 	if err != nil || selected == "" {
 		return
 	}
@@ -927,6 +963,9 @@ func isDir(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
+// keysHeader is the one-line key list fzf shows above the rows.
+const keysHeader = "tab: pin  ctrl-t: pin note  ctrl-e: memo  ctrl-x: done"
+
 // fzfArgs is the fzf invocation, split out of runFzf so the visible-column
 // list and the key binds can be asserted without running fzf.
 func fzfArgs(binds ...string) []string {
@@ -936,6 +975,7 @@ func fzfArgs(binds ...string) []string {
 		"--no-sort",
 		"--reverse",
 		"--height=100%",
+		"--header=" + keysHeader,
 	}
 	for _, b := range binds {
 		args = append(args, "--bind", b)
@@ -963,9 +1003,65 @@ func tabBind(self string, f pickerFlags) string {
 
 // doneBind is the --bind value that makes ctrl-x mark the cursor row's work
 // done (`claude-queue done`, delegates included) and redraw the list, which no
-// longer carries it. Built the same way as tabBind.
+// longer carries it.
+//
+// It asks first (doneScript), because done hides the session and its delegates
+// from the list and cannot be undone, and ctrl-x sits next to keys typed into
+// the query. It runs under execute rather than execute-silent so the question
+// and a failure can be shown: fzf hands the terminal to the command, as stdin
+// too.
 func doneBind(self string, f pickerFlags) string {
-	return rowBind("ctrl-x", "done", self, f)
+	return scriptBind("ctrl-x", doneScript(self), self, f, colSessionID)
+}
+
+// doneScript is the bash script behind ctrl-x, run with the session id as $1.
+// Anything but y leaves the session alone. A failed done shows its stderr and
+// waits for a key, so it is not wiped by the redraw.
+func doneScript(self string) string {
+	exe := shellQuote(self)
+	return `printf '%s' 'done にしますか? [y/N] '; IFS= read -r -n 1 ans || exit 0; echo; ` +
+		`case $ans in y|Y) ;; *) exit 0 ;; esac; ` + failOut(exe+` done "$1"`)
+}
+
+// memoBind is the --bind value that makes ctrl-e edit the cursor row's memo on
+// one line, prefilled with the current one, and redraw the list.
+func memoBind(self string, f pickerFlags) string {
+	return scriptBind("ctrl-e", editScript(self, "memo> ", `memo --session "$1" "$line"`), self, f, colSessionID, colMemo)
+}
+
+// pinNoteBind is ctrl-e's twin for the pin note on ctrl-t. Saving pins the
+// session if it was not pinned (db.SetPin).
+func pinNoteBind(self string, f pickerFlags) string {
+	return scriptBind("ctrl-t", editScript(self, "pin note> ", `pin --session "$1" --note "$line"`), self, f, colSessionID, colPinNote)
+}
+
+// editScript is the bash script behind the edit keys, run with the session id
+// as $1 and the current text as $2. It reads one line from the terminal with
+// readline, prefilled with $2, and saves it with `<self> <save>`; an empty line
+// clears the text. Ctrl-D cancels.
+func editScript(self, prompt, save string) string {
+	exe := shellQuote(self)
+	return `IFS= read -r -e -i "$2" -p ` + shellQuote(prompt) + ` line </dev/tty || exit 0; ` + failOut(exe+" "+save)
+}
+
+// failOut runs cmd with its stdout dropped, and on failure shows its stderr
+// and waits for a key before the bind's reload redraws the list over it.
+func failOut(cmd string) string {
+	return `if ! err=$(` + cmd + ` 2>&1 >/dev/null); then printf '%s\n' "$err"; ` +
+		`IFS= read -r -n 1 -s -p 'press any key' _ </dev/tty; fi`
+}
+
+// scriptBind runs script under `bash -c` with the cursor row's columns cols as
+// $1, $2, ... and reloads the listing in place. fzf quotes each {N} it
+// substitutes, so the values reach the script as arguments and are never
+// parsed as shell. The scripts are kept on one line because they travel inside
+// a --bind value.
+func scriptBind(key, script, self string, f pickerFlags, cols ...int) string {
+	cmd := "bash -c " + shellQuote(script) + " _"
+	for _, c := range cols {
+		cmd += " {" + strconv.Itoa(c+1) + "}"
+	}
+	return key + ":" + fzfAction("execute", cmd) + "+" + fzfAction("reload", reloadCmd(self, f))
 }
 
 // rowBind runs `<self> <sub> <session id of the cursor row>` and reloads the
@@ -973,12 +1069,17 @@ func doneBind(self string, f pickerFlags) string {
 func rowBind(key, sub, self string, f pickerFlags) string {
 	exe := shellQuote(self)
 	cmd := exe + " " + sub + " {" + strconv.Itoa(colSessionID+1) + "} >/dev/null 2>&1"
-	list := exe
+	return key + ":" + fzfAction("execute-silent", cmd) + "+" + fzfAction("reload", reloadCmd(self, f))
+}
+
+// reloadCmd re-renders the listing with the picker's own flags, for a bind's
+// reload.
+func reloadCmd(self string, f pickerFlags) string {
+	list := shellQuote(self)
 	for _, a := range f.listArgs() {
 		list += " " + shellQuote(a)
 	}
-	list += " 2>/dev/null"
-	return key + ":" + fzfAction("execute-silent", cmd) + "+" + fzfAction("reload", list)
+	return list + " 2>/dev/null"
 }
 
 // fzfAction renders name(arg) with the first bracket pair fzf accepts whose
@@ -1013,10 +1114,11 @@ func selfPath() string {
 // position, so a column inserted ahead of the hidden ones has to move it too;
 // deriving the list is what keeps that from being a separate thing to remember.
 func visibleColumns() string {
-	parts := make([]string, 0, colSummary+1)
+	parts := make([]string, 0, colSummary+2)
 	for i := colIcon; i <= colSummary; i++ {
 		parts = append(parts, strconv.Itoa(i+1))
 	}
+	parts = append(parts, strconv.Itoa(colAnnotation+1))
 	return strings.Join(parts, ",")
 }
 
