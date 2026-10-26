@@ -79,7 +79,7 @@ func TestPoll_PassesRepo(t *testing.T) {
 	if _, err := Poll("example-org/example-repo#12", "/elsewhere", stub(fixture, nil, &argv, &dir)); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"gh", "api", "graphql", "-f", "query=" + query, "-F", "owner=example-org", "-F", "repo=example-repo", "-F", "number=12"}
+	want := []string{"gh", "api", "graphql", "-f", "query=" + query, "-f", "owner=example-org", "-f", "repo=example-repo", "-F", "number=12"}
 	if !slices.Equal(argv, want) || dir != "/elsewhere" {
 		t.Errorf("ran %q in %q, want %q", argv, dir, want)
 	}

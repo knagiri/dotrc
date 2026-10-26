@@ -109,9 +109,9 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 // That also leaves the launch nothing long-lived to start inside the
 // service's cgroup, which systemd kills when the pass exits.
 //
-// For a running session the check is made before it is stopped, and again for
-// a background one right before the resume: stopping it may have been what
-// let the daemon exit.
+// For a running session the check is made before it is stopped, and again right
+// before the resume: stopping it may have been what let the daemon (background)
+// or the tmux server (interactive, if its pane was the last window) exit.
 func Deliver(p db.PRPin, msg string, deps Deps) error {
 	delegates, err := deps.RunningDelegates()
 	if err != nil {
@@ -146,10 +146,11 @@ func Deliver(p db.PRPin, msg string, deps Deps) error {
 			}
 			return fmt.Errorf("stop before resume: %w", err)
 		}
-		if background {
-			if err := hostUp(p, background, deps); err != nil {
-				return &hibernate.SkipError{Reason: "stopped, but not resumed: " + err.Error()}
-			}
+		// Re-check for both kinds: closing an interactive session's pane may
+		// have been the last window, which makes tmux exit its server
+		// (exit-empty), and new-session would then start one here.
+		if err := hostUp(p, background, deps); err != nil {
+			return &hibernate.SkipError{Reason: "stopped, but not resumed: " + err.Error()}
 		}
 	}
 

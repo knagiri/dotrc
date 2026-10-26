@@ -525,3 +525,21 @@ func TestDeliver_DaemonGoneAfterStop(t *testing.T) {
 		t.Errorf("stopped %v ran %q", w.stopped, w.ran)
 	}
 }
+
+// Closing an interactive session's pane can be what ends the tmux server (it
+// was the last window); the resume must not start a new one with this
+// process's environment.
+func TestDeliver_TmuxServerGoneAfterStop(t *testing.T) {
+	w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindInteractive, Status: roster.StatusIdle}}}
+	d := w.deps()
+	d.TmuxServerRunning = func() bool { return len(w.killed) == 0 }
+	p := pin(t)
+	p.Gone = false
+	err := Deliver(p, "m", d)
+	if !hibernate.IsSkip(err) || !strings.Contains(err.Error(), "stopped, but not resumed") {
+		t.Fatalf("err = %v", err)
+	}
+	if !slices.Equal(w.killed, []string{"%7"}) || len(w.ran) != 0 {
+		t.Errorf("killed %v ran %q", w.killed, w.ran)
+	}
+}

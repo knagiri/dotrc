@@ -90,8 +90,10 @@ func Poll(pr, dir string, run Runner) (Activity, error) {
 	if !ok || !ok2 || owner == "" || name == "" || num == "" {
 		return Activity{}, fmt.Errorf("bad PR reference %q", pr)
 	}
+	// owner and repo go in with -f (raw string): -F would turn a repo named
+	// 2048, true or null into a non-String and fail the String! variables.
 	out, err := run([]string{"gh", "api", "graphql", "-f", "query=" + query,
-		"-F", "owner=" + owner, "-F", "repo=" + name, "-F", "number=" + num}, dir)
+		"-f", "owner=" + owner, "-f", "repo=" + name, "-F", "number=" + num}, dir)
 	if err != nil {
 		return Activity{}, fmt.Errorf("gh api graphql %s: %w", pr, err)
 	}
