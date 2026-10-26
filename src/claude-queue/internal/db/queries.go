@@ -195,7 +195,9 @@ func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
 		    pin_note = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_note END,
 		    pin_pr = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_pr END,
 		    pin_cursor = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_cursor END,
-		    pin_seen_at = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_seen_at END
+		    pin_seen_at = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_seen_at END,
+		    pin_delivered_at = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_delivered_at END,
+		    pin_delivered_upto = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_delivered_upto END
 		WHERE session_id = ?1 AND done_at IS NULL
 		RETURNING waiting_event_id IS NOT NULL
 	`, sessionID).Scan(&marked)

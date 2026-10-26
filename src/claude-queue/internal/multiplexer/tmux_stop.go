@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -66,15 +67,56 @@ func SessionExists(name string) bool {
 	return exec.Command("tmux", "has-session", "-t="+sanitizeSessionName(name)).Run() == nil
 }
 
+// LastAttachedSession returns the session a client was attached to most
+// recently (the largest session_last_attached; one never attached counts as
+// 0). With exit-empty on (the default) a running server always has a session,
+// because tmux exits its server when the last one goes, so an error here means
+// the server could not be asked or has just gone.
+func LastAttachedSession() (string, error) {
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_last_attached} #{session_name}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux list-sessions: %w", err)
+	}
+	return lastAttached(string(out))
+}
+
+func lastAttached(out string) (string, error) {
+	best, bestAt := "", int64(-1)
+	for _, line := range strings.Split(out, "\n") {
+		at, name, ok := strings.Cut(line, " ")
+		if !ok || name == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(at, 10, 64)
+		if err != nil {
+			n = 0
+		}
+		if n > bestAt {
+			best, bestAt = name, n
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf("tmux list-sessions: no session")
+	}
+	return best, nil
+}
+
 // DetachedOpenArgs is the tmux argv (without "tmux") that opens a window named
-// window running argv in session name -- creating the session when exists is
-// false -- without moving any client to it. It is OpenSession for a caller that
-// has no client of its own (the watch pass, run from a systemd timer): a
-// switch-client there has nothing to switch and would only fail, and a
-// new-window without -d would change what a person attached to that session is
-// looking at.
+// window running argv in the existing session name, without moving any client
+// to it. It is OpenSession for a caller that has no client of its own (the
+// watch pass, run from a systemd timer): a switch-client there has nothing to
+// switch and would only fail, and a new-window without -d would change what a
+// person attached to that session is looking at.
 //
-// An existing session gets a window without -S. With -S, tmux selects a
+// It never creates a session. A session made from that caller would take its
+// environment from the caller: tmux copies each update-environment variable
+// (SSH_AUTH_SOCK among them) from the client into the new session, and one
+// the caller lacks is recorded as removed, which hides the server's value
+// from every window of that session. A systemd service has no SSH agent, so
+// the session's windows would have none either. The caller picks a session
+// that is already there instead (see LastAttachedSession).
+//
+// The window has no -S. With -S, tmux selects a
 // same-named window instead of creating one, and "unless -d is also given in
 // which case the command does nothing" (tmux(1)): the command would exit 0
 // without starting claude, and the delivery would be recorded as done. So the
@@ -82,11 +124,8 @@ func SessionExists(name string) bool {
 //
 // The names are sanitized here for the same reason OpenSession does it: every
 // tmux target built from them has to agree on one spelling.
-func DetachedOpenArgs(name, window, cwd string, env map[string]string, argv []string, exists bool) []string {
+func DetachedOpenArgs(name, window, cwd string, env map[string]string, argv []string) []string {
 	name, window = sanitizeSessionName(name), sanitizeWindowName(window)
-	if !exists {
-		return newSessionArgs(name, window, cwd, "", env, argv)
-	}
 	args := newWindowArgs(name, window, cwd, "", env, argv)
 	i := slices.Index(args, "-S")
 	return slices.Concat([]string{args[0], "-d"}, args[1:i], args[i+1:])

@@ -51,10 +51,17 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- activity already handed to the session; pin_seen_at is the unix time of
   -- the watch pass that first saw newer activity not yet handed over (NULL
   -- when there is none), which is what the one-tick debounce measures from.
-  -- All three are cleared with the pin. Added by migrate() too.
-  pin_pr           TEXT,
-  pin_cursor       TEXT,
-  pin_seen_at      INTEGER
+  -- pin_delivered_at is the unix time of the pass that resumed the session
+  -- with that activity, NULL when no delivery awaits confirmation, and
+  -- pin_delivered_upto the RFC3339 time pin_cursor moves to once the
+  -- session's UserPromptSubmit confirms it (NULL for a merge / close, whose
+  -- confirmation takes the pin off instead). All five are cleared with the
+  -- pin. Added by migrate() too.
+  pin_pr             TEXT,
+  pin_cursor         TEXT,
+  pin_seen_at        INTEGER,
+  pin_delivered_at   INTEGER,
+  pin_delivered_upto TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_pane_live

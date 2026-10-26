@@ -18,6 +18,13 @@ import (
 // instead of one per comment.
 const DefaultDebounce = 2 * time.Minute
 
+// ConfirmWindow is how long a delivery waits for the resumed session's
+// UserPromptSubmit before it is taken as failed: two ticks of the 3-minute
+// timer. Launching the resume only says that tmux opened a window or that
+// `claude --bg` accepted it; `claude --resume` can still fail inside the
+// window, and then the message never reached the session.
+const ConfirmWindow = 6 * time.Minute
+
 // Message is what a woken session is given as its first input.
 //
 // It says what happened and nothing anyone else wrote: how many reviews and
@@ -72,16 +79,21 @@ func Message(pr string, a Activity, events []Event) string {
 // the rest of the watch pass it reports failures as lines on out and goes on.
 //
 // For one pin:
-//   - a merged or closed PR is delivered at once, and the pin comes off once
-//     the delivery succeeded;
+//   - a merged or closed PR is delivered at once;
 //   - activity newer than the cursor is delivered once it has been pending for
 //     debounce (see DefaultDebounce): the first pass that sees it only records
-//     when it did. The cursor moves to the newest delivered event only after
-//     the delivery succeeded, so a skipped or failed one is retried by the
-//     next pass with everything that piled up meanwhile, and nothing is
-//     handed over twice;
+//     when it did;
 //   - no new activity clears a pending mark left by activity that is no
 //     longer there (a deleted comment).
+//
+// A delivery is not taken as done when it is launched. The pass records when
+// it launched it and how far it reached, and a later pass confirms it from
+// the ledger: a UserPromptSubmit of the session since then is taken as the
+// message arriving (its text is not matched), and only then does the cursor move to the newest delivered event
+// (or, for a merge or close, the pin come off). With none after ConfirmWindow
+// the record is dropped and, the cursor not having moved, the next pass
+// delivers again with everything that piled up meanwhile. A skipped or failed
+// launch records nothing and is retried by the next pass the same way.
 //
 // A pin whose PR cannot be read (gh failed: a token, the network) is skipped
 // and the other pins go on.
@@ -94,6 +106,10 @@ func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io
 	}
 	for _, p := range pins {
 		id := short(p.SessionID)
+		if p.DeliveredAt != 0 {
+			confirm(conn, p, now, out)
+			continue
+		}
 		a, err := deps.Poll(p.PR, p.Cwd)
 		if err != nil {
 			fmt.Fprintf(out, "pr-watch: skipped %s (%s): %v\n", id, p.PR, err)
@@ -127,15 +143,39 @@ func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io
 			continue
 		}
 		resumed[p.SessionID] = true
-		if closed {
-			report(out, db.ClearPRPin(conn, p.SessionID, p.PR))
-			fmt.Fprintf(out, "pr-watch: woke %s (%s %s), unpinned\n", id, p.PR, strings.ToLower(a.State))
-			continue
+		var upTo time.Time
+		what := strings.ToLower(a.State)
+		if !closed {
+			upTo = events[len(events)-1].At
+			what = fmt.Sprintf("%d new event(s)", len(events))
 		}
-		report(out, db.AdvancePRCursor(conn, p.SessionID, p.PR, events[len(events)-1].At))
-		fmt.Fprintf(out, "pr-watch: woke %s (%s: %d new event(s))\n", id, p.PR, len(events))
+		report(out, db.SetPRDelivered(conn, p.SessionID, p.PR, now.Unix(), upTo))
+		fmt.Fprintf(out, "pr-watch: woke %s (%s: %s), awaiting its prompt\n", id, p.PR, what)
 	}
 	return resumed
+}
+
+// confirm settles the delivery recorded on p: a UserPromptSubmit since it
+// moves the cursor (or takes the pin off), none after ConfirmWindow drops the
+// record so the next pass delivers again, and otherwise it keeps waiting.
+func confirm(conn *sql.DB, p db.PRPin, now time.Time, out io.Writer) {
+	id := short(p.SessionID)
+	ok, err := db.PromptSince(conn, p.SessionID, p.DeliveredAt)
+	switch {
+	case err != nil:
+		fmt.Fprintf(out, "pr-watch: failed %s (%s): %v\n", id, p.PR, err)
+	case ok && p.DeliveredUpTo.IsZero():
+		report(out, db.ClearPRPin(conn, p.SessionID, p.PR))
+		fmt.Fprintf(out, "pr-watch: %s (%s) took the delivery, unpinned\n", id, p.PR)
+	case ok:
+		report(out, db.AdvancePRCursor(conn, p.SessionID, p.PR, p.DeliveredUpTo))
+		fmt.Fprintf(out, "pr-watch: %s (%s) took the delivery\n", id, p.PR)
+	case now.Sub(time.Unix(p.DeliveredAt, 0)) >= ConfirmWindow:
+		report(out, db.SetPRDelivered(conn, p.SessionID, p.PR, 0, time.Time{}))
+		fmt.Fprintf(out, "pr-watch: %s (%s): no prompt within %s of the delivery, delivering again on the next pass\n", id, p.PR, hibernate.Minutes(ConfirmWindow))
+	default:
+		fmt.Fprintf(out, "pr-watch: %s (%s): awaiting its prompt\n", id, p.PR)
+	}
 }
 
 func report(out io.Writer, err error) {
