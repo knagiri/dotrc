@@ -146,6 +146,16 @@ func TestCandidates_RosterBusySkipped(t *testing.T) {
 	}
 }
 
+func TestCandidates_DuplicateEntrySkipped(t *testing.T) {
+	conn := openDB(t)
+	session(t, conn, "aaaaaaaa-1", dirA, "idle_done", hours3)
+	a := idleAgent("aaaaaaaa-1", roster.KindInteractive)
+	cs, skips, _ := Candidates(conn, now, DefaultIdle, lists(map[string][]roster.Agent{dirA: {a, a}}), noSend)
+	if len(cs) != 0 || !strings.Contains(skipReason(skips, "aaaaaaaa-1"), "listed 2 times") {
+		t.Fatalf("candidates = %v, skips = %v", ids(cs), skips)
+	}
+}
+
 func TestCandidates_GoneAndDoneIgnored(t *testing.T) {
 	conn := openDB(t)
 	session(t, conn, "aaaaaaaa-1", dirA, "idle_done", hours3)
@@ -283,6 +293,9 @@ const (
 	sideSend     = `{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"tool_use","name":"SendMessage"}]}}`
 	sidePrompt   = `{"type":"user","isSidechain":true,"message":{"content":"subagent prompt"}}`
 	otherEntries = `{"type":"summary","summary":"x"}`
+	stringReply  = `{"type":"assistant","message":{"content":"done"}}`
+	objectReply  = `{"type":"assistant","message":{"content":{"type":"text"}}}`
+	numberReply  = `{"type":"assistant","message":{"content":7}}`
 )
 
 func TestLastTurnSendsMessage(t *testing.T) {
@@ -300,6 +313,7 @@ func TestLastTurnSendsMessage(t *testing.T) {
 		{"sidechain prompt does not end the turn", []string{userPrompt, sendMsg, sidePrompt, textReply}, true},
 		{"other entry types are ignored", []string{userPrompt, sendMsg, otherEntries}, true},
 		{"no turns", []string{otherEntries}, false},
+		{"string content has no tool_use", []string{userPrompt, sendMsg, userPrompt, stringReply}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -317,6 +331,13 @@ func TestLastTurnSendsMessage(t *testing.T) {
 			t.Fatal("want an error")
 		}
 	})
+	for name, line := range map[string]string{"object": objectReply, "number": numberReply} {
+		t.Run(name+" assistant content is an error", func(t *testing.T) {
+			if _, err := LastTurnSendsMessage(writeTranscript(t, userPrompt, line)); err == nil {
+				t.Fatal("want an error")
+			}
+		})
+	}
 	t.Run("missing file is an error", func(t *testing.T) {
 		if _, err := LastTurnSendsMessage(filepath.Join(t.TempDir(), "absent.jsonl")); err == nil {
 			t.Fatal("want an error")

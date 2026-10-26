@@ -1,8 +1,8 @@
 # Run claude-queue watch every few minutes. Each run is one pass and exits;
 # nothing stays resident.
 #
-# OnUnitActiveSec counts from the previous run's start, so passes never
-# overlap: a oneshot still running is not started again.
+# Passes do not overlap because systemd does not start a oneshot service
+# again while it is still activating; a tick that lands mid-pass is a no-op.
 #
 # Enable with:
 #   loginctl enable-linger "$USER"

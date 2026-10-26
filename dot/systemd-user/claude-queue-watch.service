@@ -14,7 +14,12 @@
 # `claude` (agents, stop) and `tmux` on it as well.
 #
 # KillMode is left at its default (control-group), which kills whatever the
-# service started when it exits. This pass only stops processes and starts none;
+# service started when it exits, so the question is whether this pass can start
+# a long-lived claude daemon inside the cgroup. Measured with an empty config
+# dir (no daemon running): `claude agents --json` returned [] with exit 0 and
+# `claude stop deadbeef` printed "No job matching 'deadbeef'." with exit 1;
+# neither added a `claude daemon run` process. The existing daemons were all
+# spawned by `claude --bg`. So this pass only stops processes and starts none;
 # once it starts tmux windows or claude, those must leave the cgroup first.
 #
 # Requires `loginctl enable-linger <user>` to run while logged out.

@@ -10,7 +10,8 @@ const fixture = `[
     "cwd": "/home/x/ghq/github.com/knagiri/dotrc",
     "kind": "interactive",
     "startedAt": 1776422217714,
-    "sessionId": "2d6f9783-fc23-4dbf-ba51-5c7d1c1a4804"
+    "sessionId": "2d6f9783-fc23-4dbf-ba51-5c7d1c1a4804",
+    "status": "busy"
   },
   {
     "pid": 198617,
@@ -35,11 +36,12 @@ func TestParse(t *testing.T) {
 		PID:       2249851,
 		Kind:      "interactive",
 		Cwd:       "/home/x/ghq/github.com/knagiri/dotrc",
+		Status:    "busy",
 	}
 	if agents[0] != want {
 		t.Errorf("agents[0] = %+v, want %+v", agents[0], want)
 	}
-	if agents[1].Kind != "background" || agents[1].PID != 198617 {
+	if agents[1].Kind != "background" || agents[1].PID != 198617 || agents[1].Status != StatusIdle {
 		t.Errorf("agents[1] = %+v, want the background entry with pid 198617", agents[1])
 	}
 }

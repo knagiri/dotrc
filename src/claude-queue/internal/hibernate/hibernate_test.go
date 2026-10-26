@@ -21,10 +21,27 @@ type recorder struct {
 	visible map[string]bool
 	endErr  error
 	present bool // PaneExists after the end
+	// agents is what List returns; nil means the one idle session the
+	// candidates in these tests name.
+	agents  []roster.Agent
+	listErr error
 }
 
 func (r *recorder) deps() Deps {
 	return Deps{
+		List: func(dir string) ([]roster.Agent, error) {
+			r.calls = append(r.calls, "list")
+			if r.listErr != nil {
+				return nil, r.listErr
+			}
+			if r.agents != nil {
+				return r.agents, nil
+			}
+			return []roster.Agent{
+				{SessionID: "aaaaaaaa-1", Status: roster.StatusIdle},
+				{SessionID: "bbbbbbbb-1", Status: roster.StatusIdle},
+			}, nil
+		},
 		FindPane: func(pid int) (string, bool) {
 			r.calls = append(r.calls, "find")
 			return r.pane, r.pane != ""
@@ -81,7 +98,7 @@ func TestHibernate_StubsCatchEveryEffect(t *testing.T) {
 	if err := Hibernate(interactive(), r.deps()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"find", "window %5", "visible", "end aaaaaaaa-1", "exists %5", "kill-pane %5"}
+	want := []string{"list", "find", "window %5", "visible", "end aaaaaaaa-1", "exists %5", "kill-pane %5"}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("calls = %v, want %v", r.calls, want)
 	}
@@ -114,7 +131,7 @@ func TestHibernate_NoPaneSkipped(t *testing.T) {
 	if !IsSkip(err) || !strings.Contains(err.Error(), "no tmux pane") {
 		t.Fatalf("err = %v, want a no-pane skip", err)
 	}
-	if !reflect.DeepEqual(r.calls, []string{"find"}) {
+	if !reflect.DeepEqual(r.calls, []string{"list", "find"}) {
 		t.Fatalf("calls = %v, want only the pane lookup", r.calls)
 	}
 }
@@ -151,7 +168,7 @@ func TestHibernate_BackgroundUsesStop(t *testing.T) {
 	if err := Hibernate(c, r.deps()); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(r.calls, []string{"stop bbbbbbbb-1"}) {
+	if !reflect.DeepEqual(r.calls, []string{"list", "stop bbbbbbbb-1"}) {
 		t.Fatalf("calls = %v, want only the stop", r.calls)
 	}
 }
@@ -162,7 +179,7 @@ func TestCheck_ReadsOnly(t *testing.T) {
 	if err := Check(interactive(), r.deps()); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(r.calls, []string{"find", "window %5", "visible"}) {
+	if !reflect.DeepEqual(r.calls, []string{"list", "find", "window %5", "visible"}) {
 		t.Fatalf("calls = %v, want only the reads", r.calls)
 	}
 	r = &recorder{pane: "%5", window: "@2", visible: map[string]bool{"@2": true}}
@@ -171,7 +188,48 @@ func TestCheck_ReadsOnly(t *testing.T) {
 	}
 	r = &recorder{}
 	bg := Candidate{SessionID: "bbbbbbbb-1", Kind: roster.KindBackground}
-	if err := Check(bg, r.deps()); err != nil || len(r.calls) != 0 {
+	if err := Check(bg, r.deps()); err != nil || !reflect.DeepEqual(r.calls, []string{"list"}) {
 		t.Fatalf("background: err = %v, calls = %v", err, r.calls)
+	}
+}
+
+// Candidates' read can be minutes old by the time a later candidate comes up.
+// A session that went busy since is left alone on both paths, with no stop.
+func TestHibernate_BusyOnRecheckSkipped(t *testing.T) {
+	cases := map[string]Candidate{
+		"interactive": interactive(),
+		"background":  {SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := &recorder{pane: "%5", window: "@2", visible: map[string]bool{}, present: true,
+				agents: []roster.Agent{{SessionID: c.SessionID, Status: "busy"}}}
+			err := Hibernate(c, r.deps())
+			if !IsSkip(err) || !strings.Contains(err.Error(), "busy") {
+				t.Fatalf("err = %v, want a busy skip", err)
+			}
+			if !reflect.DeepEqual(r.calls, []string{"list"}) {
+				t.Fatalf("calls = %v, want only the re-read", r.calls)
+			}
+		})
+	}
+}
+
+func TestHibernate_RecheckUnreadableOrNotOnceSkipped(t *testing.T) {
+	idle := roster.Agent{SessionID: "aaaaaaaa-1", Status: roster.StatusIdle}
+	cases := map[string]*recorder{
+		"unreadable": {listErr: errors.New("claude agents failed")},
+		"absent":     {agents: []roster.Agent{{SessionID: "other", Status: roster.StatusIdle}}},
+		"duplicated": {agents: []roster.Agent{idle, idle}},
+	}
+	for name, r := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := Hibernate(interactive(), r.deps()); !IsSkip(err) {
+				t.Fatalf("err = %v, want a skip", err)
+			}
+			if !reflect.DeepEqual(r.calls, []string{"list"}) {
+				t.Fatalf("calls = %v, want only the re-read", r.calls)
+			}
+		})
 	}
 }

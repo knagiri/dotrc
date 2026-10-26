@@ -2,8 +2,9 @@
 // tmux pane an interactive session runs in, and the SIGTERM-and-wait that ends
 // it without racing its transcript flush.
 //
-// The picker needs both to switch to or resume a session, and hibernation
-// needs both to stop one, so they live here rather than in either caller.
+// The picker needs both to switch to or resume a session. Hibernation needs
+// only End: it finds the pane itself through the multiplexer's FindPane. They
+// live here rather than in the picker so End has a home outside it.
 package sessionproc
 
 import (

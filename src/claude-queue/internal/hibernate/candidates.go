@@ -145,10 +145,16 @@ func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir strin
 			skip(id, "roster of %s unreadable: %v", dir, err)
 			continue
 		}
-		a, ok := agentFor(agents, id)
-		if !ok {
+		a, n := agentFor(agents, id)
+		switch {
+		case n == 0:
 			// reconcile closes these; nothing is running to stop.
 			skip(id, "not in the roster of %s", dir)
+			continue
+		case n > 1:
+			// Which pid to stop would be a guess, and reconcile does not
+			// close it: the session is running.
+			skip(id, "listed %d times in the roster of %s", n, dir)
 			continue
 		}
 		if a.Status != roster.StatusIdle {
@@ -190,9 +196,10 @@ func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir strin
 	return cands, skips, nil
 }
 
-// agentFor returns the roster entry for id. A session listed more than once
-// (it has been observed) is refused: which pid to stop would be a guess.
-func agentFor(agents []roster.Agent, id string) (roster.Agent, bool) {
+// agentFor returns the roster entry for id and how many entries matched. A
+// session listed more than once (it has been observed) has no single entry to
+// return: which pid to stop would be a guess, so callers act only on n == 1.
+func agentFor(agents []roster.Agent, id string) (roster.Agent, int) {
 	var found []roster.Agent
 	for _, a := range agents {
 		if a.SessionID == id {
@@ -200,9 +207,9 @@ func agentFor(agents []roster.Agent, id string) (roster.Agent, bool) {
 		}
 	}
 	if len(found) != 1 {
-		return roster.Agent{}, false
+		return roster.Agent{}, len(found)
 	}
-	return found[0], true
+	return found[0], 1
 }
 
 // transcriptEntry is the part of a transcript line LastTurnSendsMessage reads.
@@ -268,7 +275,16 @@ func lastTurnSendsMessage(r io.Reader) (bool, error) {
 		case "assistant":
 			var blocks []contentBlock
 			if json.Unmarshal(e.Message.Content, &blocks) != nil {
-				continue
+				// A string is plain text: no tool_use. Anything else is a
+				// shape we cannot read, which must hold the session back
+				// rather than read as "sent nothing". A missing or null
+				// content is also an error: whether Claude Code writes such
+				// assistant lines is unverified, so fail toward not stopping.
+				var text string
+				if json.Unmarshal(e.Message.Content, &text) == nil {
+					continue
+				}
+				return false, fmt.Errorf("parse transcript: assistant content is neither an array nor a string")
 			}
 			for _, b := range blocks {
 				if b.Type == "tool_use" && b.Name == "SendMessage" {

@@ -30,6 +30,9 @@ type Deps struct {
 	KillPane func(pane string) error
 	// Stop stops a background session (`claude stop`) under its config dir.
 	Stop func(dir, sessionID string) error
+	// List reads the config dir's `claude agents` listing. check calls it again
+	// right before acting, because Candidates' read can be minutes old.
+	List func(dir string) ([]roster.Agent, error)
 }
 
 // RealDeps wires Deps to tmux, signals and `claude stop`.
@@ -43,6 +46,7 @@ func RealDeps() Deps {
 		PaneExists:     mux.PaneExists,
 		KillPane:       multiplexer.KillPane,
 		Stop:           reconcile.StopIn,
+		List:           roster.ListIn,
 	}
 }
 
@@ -71,6 +75,10 @@ func IsSkip(err error) bool {
 //     another tmux server): closing it would leave nothing for the person to
 //     find, and stopping it without the pane would leave an empty shell
 //     behind in some unknown place;
+//   - the session is no longer listed exactly once by its config dir with
+//     status idle. Candidates judged that some time ago, and each interactive
+//     stop before this one can wait up to 10s, so the session may have started
+//     a turn since; a listing that cannot be read is a skip too;
 //   - the pane's window is on screen in an attached client. Someone is looking
 //     at it, whatever the idle clock says.
 //
@@ -106,6 +114,19 @@ func Check(c Candidate, deps Deps) error {
 // check is the read-only half of Hibernate. It returns the pane an interactive
 // session runs in ("" for a background one), or a SkipError.
 func check(c Candidate, deps Deps) (string, error) {
+	// Re-read the status: Candidates' read is older by every earlier stop in
+	// the same pass. Applies to both kinds, ahead of the kind switch.
+	agents, err := deps.List(c.ConfigDir)
+	if err != nil {
+		return "", &SkipError{Reason: fmt.Sprintf("cannot re-read %s to confirm the session is idle: %v", c.ConfigDir, err)}
+	}
+	a, n := agentFor(agents, c.SessionID)
+	if n != 1 {
+		return "", &SkipError{Reason: fmt.Sprintf("session is listed %d times in %s on re-check, not once", n, c.ConfigDir)}
+	}
+	if a.Status != roster.StatusIdle {
+		return "", &SkipError{Reason: fmt.Sprintf("status is %q on re-check, not idle", a.Status)}
+	}
 	switch c.Kind {
 	case roster.KindBackground:
 		return "", nil
