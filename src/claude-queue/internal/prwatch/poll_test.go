@@ -56,7 +56,7 @@ func TestPoll_ParsesReviewsAndComments(t *testing.T) {
 	}
 }
 
-// Review Focus 3: the repo comes from the pin, never from the cwd, and only
+// The repo comes from the pin, never from the cwd, and only
 // the needed fields are asked for (no statusCheckRollup).
 func TestPoll_PassesRepo(t *testing.T) {
 	var argv []string
@@ -70,7 +70,7 @@ func TestPoll_PassesRepo(t *testing.T) {
 	}
 }
 
-// Review Focus 2, the Poll half: a failing gh is an error, not an empty PR.
+// A failing gh is an error, not an empty PR.
 func TestPoll_GhErrorSkipsPin(t *testing.T) {
 	var argv []string
 	var dir string
