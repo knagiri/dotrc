@@ -77,7 +77,7 @@ failbin="$tmp/failbin"; mkdir -p "$failbin"
 printf '#!/usr/bin/env bash\nexit 1\n' >"$failbin/claude-queue"; chmod +x "$failbin/claude-queue"
 : >"$stoplog"
 out="$(PATH="$failbin:$stubbin:$PATH" CLAUDE_STUB_ROSTER="$roster" CLAUDE_STUB_STOPLOG="$stoplog" "$src" aaaaaaaa 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && [ "$(cat "$stoplog")" = "aaaaaaaa" ] && grep -qF 'NOT marked done' <<<"$out"; then
+if [ "$rc" -eq 3 ] && [ "$(cat "$stoplog")" = "aaaaaaaa" ] && grep -qF 'NOT marked done' <<<"$out"; then
   echo "ok: a failed done mark still stops the session but exits non-zero"
 else echo "FAIL: failed mark on running session rc=$rc out=$out"; fail=1; fi
 

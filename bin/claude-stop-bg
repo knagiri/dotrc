@@ -124,7 +124,10 @@ case "$kind" in
     claude stop "$id" || stop_rc=$?
     if [ "$marked" -ne 0 ]; then
       echo "claude-stop-bg: $id stopped but NOT marked done; its work stays open in the ledger" >&2
-      [ "$stop_rc" -ne 0 ] || stop_rc=1
+      # Exit 3 = stopped but not marked: claude-reap-bg tells it apart from a
+      # refusal (1) so a stopped session is not reported as skipped. A failed
+      # stop keeps its own code.
+      [ "$stop_rc" -ne 0 ] || stop_rc=3
     fi
     exit "$stop_rc"
     ;;

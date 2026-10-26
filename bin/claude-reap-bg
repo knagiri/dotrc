@@ -343,8 +343,13 @@ for sid in "${candidates[@]}"; do
     reap_ok "$short" "would stop (idle $(( age / 60 ))m${orphan_note})"
     continue
   fi
-  if claude-stop-bg "$short"; then
+  stop_rc=0
+  claude-stop-bg "$short" || stop_rc=$?
+  if [ "$stop_rc" -eq 0 ]; then
     reap_ok "$short" "stopped (idle $(( age / 60 ))m${orphan_note})"
+  elif [ "$stop_rc" -eq 3 ]; then
+    # claude-stop-bg exit 3: the session WAS stopped but the done mark failed.
+    reap_ok "$short" "stopped (idle $(( age / 60 ))m${orphan_note}), WARNING: not marked done in the ledger"
   else
     reap_skip "$short" "claude-stop-bg refused"
   fi
