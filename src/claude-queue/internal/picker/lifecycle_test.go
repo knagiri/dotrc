@@ -110,15 +110,16 @@ func TestForest_GoneParentIsNotOrphan(t *testing.T) {
 	}
 }
 
-// ctrl-x runs `claude-queue done` on the cursor row's session id and reloads
-// with the same flags, and the picker hands it to fzf.
+// ctrl-x runs `claude-queue done` on the cursor row's session id (behind a
+// confirmation, see TestDoneConfirmScript_DefaultNo) and reloads with the same
+// flags, and the picker hands it to fzf.
 func TestFzfArgs_DoneBind(t *testing.T) {
 	f := pickerFlags{ShowStale: true}
 	bind := doneBind("/opt/x/claude-queue", f)
-	if !strings.HasPrefix(bind, "ctrl-x:execute-silent(") || !strings.Contains(bind, ")+reload(") {
-		t.Fatalf("done bind = %q, want ctrl-x:execute-silent(...)+reload(...)", bind)
+	if !strings.HasPrefix(bind, "ctrl-x:execute") || !strings.Contains(bind, "+reload(") {
+		t.Fatalf("done bind = %q, want ctrl-x:execute...+reload(...)", bind)
 	}
-	m := regexp.MustCompile(`'/opt/x/claude-queue' done \{(\d+)\}`).FindStringSubmatch(bind)
+	m := regexp.MustCompile(` _ \{(\d+)\}`).FindStringSubmatch(bind)
 	if m == nil {
 		t.Fatalf("done bind %q does not run `done {N}`", bind)
 	}
@@ -148,7 +149,7 @@ func TestFzfArgs_DoneBind(t *testing.T) {
 			binds = append(binds, strings.SplitN(argv[i+1], ":", 2)[0])
 		}
 	}
-	if !slices.Equal(binds, []string{"tab", "ctrl-x"}) {
-		t.Errorf("fzf binds = %v, want [tab ctrl-x]", binds)
+	if !slices.Equal(binds, []string{"tab", "ctrl-e", "ctrl-t", "ctrl-x"}) {
+		t.Errorf("fzf binds = %v, want [tab ctrl-e ctrl-t ctrl-x]", binds)
 	}
 }
