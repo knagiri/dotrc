@@ -167,6 +167,12 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
    レビュー・required CI 確認を経て自律 merge する。
 
+   **委譲プロンプトが既存 PR への対応を指示しているとき**（「既存 PR #N の指摘への対応。新しい PR
+   は作らない」）は PR を作らない。その PR の branch に push し、既存 PR #N に対して
+   `pr-review-automerge` を呼ぶ。委譲元は review で修正が要ると、同じ worktree・branch に新しい
+   委譲先を起こしてこの形で渡す（`dot/claude/rules/worktree-scope.md` §6）。ここで PR を新しく
+   作ると同じ head に open PR が 2 本立ち、PR 監視の pin も review の指摘も元の PR に残ったままになる。
+
    このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しは
    `pr-review-automerge` 手順 3.c が `gh-automerge` の直前に行い、PR 本文との食い違いは
    `gh-pr-edit-body` で直して、直した箇所を最終サマリに載せる。戻った時点では既に

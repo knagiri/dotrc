@@ -41,13 +41,13 @@ make install
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
 | `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` で一覧を広げる。キー操作は「pin とメモ」と「session の状態」の節を参照。`--show-resumable` は受け付けるが何もしない（gone は既定で並ぶ） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない running の session を gone にし、done なのに running な background session を `claude stop` する（picker 起動時に自動実行される） |
-| `claude-queue watch [--idle-minutes N] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も停止もせず対象を出すだけ（後述） |
+| `claude-queue watch [--idle-minutes N] [--pr-debounce-minutes M] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile、PR 監視（pin の PR に新しい活動があれば session を起こす。後述）のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も PR 監視も停止もせず、休眠の対象を出すだけ（後述） |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue link --parent <session-id> --child <short-id>` | 委譲の親子関係を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示と孤児の判定に使う。設計は `docs/design/claude-queue-session-tree.md` |
 | `claude-queue mark <session-id>` | pin をトグルする（picker の Tab が呼ぶ）。外すと pin のコメントも消える。done・未知の session は何もせず exit 0 |
 | `claude-queue memo [--session <id>] [--] [<text>]` | session のメモを設定する。`<text>` を省くと現在のメモを出力し、空文字を渡すと消す |
-| `claude-queue pin [--session <id>] [--note <text>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す |
-| `claude-queue unpin [--session <id>]` | pin とそのコメントを外す |
+| `claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N \| PR URL>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す。`--pr` を渡すとその PR を監視する（既読位置は今の時刻から。後述の「PR 監視」） |
+| `claude-queue unpin [--session <id>]` | pin とそのコメント・PR 監視を外す |
 | `claude-queue done <session-id-or-prefix>` | session の作業を done にする（委譲先も cascade で done）。picker の `ctrl-x` と `bin/claude-stop-bg` が呼ぶ。8 桁以上の前方一致で 1 件に決まらなければ exit 1。既に done でも exit 0 |
 | `claude-queue --version` | バージョン表示 |
 
@@ -275,6 +275,24 @@ Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
   止めない。SIGTERM を送り、一覧から 10 秒以内に消えたら pane を閉じる（window の最後の pane なら
   window ごと）。消えなければ pane は残して失敗として出す
 - background: `claude stop` で止める
+
+### PR 監視（`claude-queue watch`）
+
+`claude-queue pin --pr <PR>` で PR を監視している open な session について、`gh pr view --repo <owner/repo> --json state,reviews,comments`
+で PR を読む。gh は `bin/lib/gh-mise.sh` と同じく `MISE_ENV=gh mise exec -C <session の cwd> --` 経由で呼ぶ
+（cwd が消えていれば `$HOME`）。gh が失敗した pin は skip して理由を出し、他の pin は続ける。
+
+- 既読位置（`pin_cursor`）より新しい review / comment は、author を問わず数える。最初に見た pass では記録だけして、
+  `--pr-debounce-minutes`（既定 2。timer の 1 tick から揺らぎの余裕を引いた値）以上経った pass でまとめて配送する。bot の review の
+  連続コメントを 1 回で渡すため。配送に成功してから既読位置を最新の活動へ進める（失敗・skip なら次の pass で再試行）
+- merge / close は待たずに配送し、成功したら pin を外す
+
+配送は指示文を最初の入力にした resume で行う。interactive は picker の resume と同じ tmux session・window 名で
+`claude --resume <id> "<指示文>"` の window を detached で開き（client は動かさない）、background は
+`claude --bg --resume <id> "<指示文>"`。どちらも台帳に記録された config dir で起動し、`systemd-run --user --scope`
+で包んで service の cgroup から出す（無ければ包まない）。running な session には入力欄へ打ち込まず、休眠と同じ手順で
+止めてから resume する。次のときは配送せず次の pass に回す: running かつ open な委譲先がいる、running で `idle_done` に
+いない、window が表示中、cwd か transcript が無い。この pass で起こした session は同じ pass の休眠で止めない。
 
 timer の有効化:
 

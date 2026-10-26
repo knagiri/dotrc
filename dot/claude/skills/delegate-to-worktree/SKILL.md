@@ -138,6 +138,13 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
      まま claude-queue の一覧に残る。閉じ忘れた委譲先は、最後のターンが完了報告の SendMessage なので
      委譲元が done になるまで休眠もしない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による
      cascade だけ。
+   - **PR が人の review・merge 待ち**: 閉じたあと、自分の session に
+     `claude-queue pin --pr <PR> --note "<何を待つか>"` を付ける。PR に新しい review / comment が
+     付くか merge / close されると、claude-queue の PR 監視がこの session を起こして指示を渡す
+     （`dot/claude/rules/worktree-scope.md` §6）。
+   - **PR 監視に起こされ、修正が要ると判断したら**: 前の委譲先は再開しない。同じ `<name>` と
+     `-b <branch>` で手順 4 の `claude-worktree` を呼び、委譲プロンプトの WHAT に「既存 PR #N の
+     指摘への対応。新しい PR は作らない」と明記する。理由は `worktree-scope.md` §6。
    - **不足（質問）**: 答えられるなら SendMessage で返信する。判断がユーザーに属する質問は、
      代わりにユーザーへ取り次ぐ。返信後は完了報告を待ち、上のとおり閉じる。
    - **permission 承認の代理はしない。** 承認は harness レベルの UI イベントで、委譲元が
