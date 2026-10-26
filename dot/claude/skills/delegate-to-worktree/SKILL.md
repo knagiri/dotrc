@@ -135,8 +135,9 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
      `claude-stop-bg <short-id>` で委譲先を閉じる。`claude-stop-bg` は委譲先の作業を done に
      する明示的な操作で、プロセスの停止もあわせて行う。プロセスが消えただけでは作業は終わった
      ことにならず（自然消滅・再起動・休眠はどれも gone にするだけ）、閉じなければ委譲先は open の
-     まま claude-queue の一覧に残る。閉じ忘れた委譲先も休眠でプロセスは止まり、委譲元が done に
-     なれば cascade で done になる。
+     まま claude-queue の一覧に残る。閉じ忘れた委譲先は、最後のターンが完了報告の SendMessage なので
+     委譲元が done になるまで休眠もしない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による
+     cascade だけ。
    - **不足（質問）**: 答えられるなら SendMessage で返信する。判断がユーザーに属する質問は、
      代わりにユーザーへ取り次ぐ。返信後は完了報告を待ち、上のとおり閉じる。
    - **permission 承認の代理はしない。** 承認は harness レベルの UI イベントで、委譲元が

@@ -74,17 +74,30 @@ type Skip struct {
 // and a Skip for each one that may not.
 //
 // A session passes only when all of these hold:
+//
 //   - its latest event is idle_done, at least idle old. The ledger is the only
 //     record of WHEN the turn ended; the roster has no timestamp for it.
+//
 //   - its own config dir's roster lists it with status idle. A dir whose roster
 //     cannot be read leaves its sessions alone: an unreadable roster is no
 //     evidence of anything.
+//
 //   - the last assistant turn of its transcript sent no SendMessage. A delegate
 //     that asked its delegator a question also sits at idle, and stopping it
 //     leaves the reply with no one to land on. An orphan -- a session whose
 //     delegator is done or no longer in the ledger -- is exempt: no reply is
 //     coming. A transcript that cannot be read or parsed is a skip, since it
 //     is indistinguishable from one holding a pending question.
+//
+//     The completion report a delegate sends is a SendMessage too, so a
+//     delegate left unclosed is not hibernated while its delegator is open.
+//     It is closed by the delegator's claude-stop-bg, or by the cascade when
+//     the delegator is marked done.
+//
+//   - none of its delegates is still running with its work open. A delegator
+//     sits at idle while it waits for their reports, and stopping it leaves
+//     those reports with no one to land on -- the same reason as above, from
+//     the other end.
 //
 // A pin does not hold a session back. A session waiting on something external
 // is exactly the one whose process has nothing to do until that resolves.
@@ -100,6 +113,10 @@ func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir strin
 	open := make(map[string]bool, len(openIDs))
 	for _, id := range openIDs {
 		open[id] = true
+	}
+	delegates, err := db.RunningDelegateCounts(conn)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	rosters := map[string][]roster.Agent{}
@@ -137,6 +154,10 @@ func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir strin
 		age := time.Duration(now-r.CreatedAt) * time.Second
 		if age < idle {
 			skip(id, "idle for %s, under the %s threshold", Minutes(age), Minutes(idle))
+			continue
+		}
+		if n := delegates[id]; n > 0 {
+			skip(id, "%d delegate(s) still running with open work (their reports would have no one to land on)", n)
 			continue
 		}
 		dir := db.ConfigDirOf(r.ConfigDir)

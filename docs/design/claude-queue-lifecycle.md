@@ -84,7 +84,9 @@ hook が再び届いた時点で記録される。
 
 - 対象: 最新 state が `idle_done` で、そこから閾値以上経っている session。interactive・background の両方
 - 除外: `working` / `awaiting_approval`、最後の assistant ターンに `SendMessage` がある session
-  （返信待ち）。ただし親が `done`、または台帳に居ない孤児は返信が来ないので除外しない
+  （返信待ち）。ただし親が `done`、または台帳に居ない孤児は返信が来ないので除外しない。完了報告も
+  `SendMessage` なので、閉じ忘れた委譲先は親が `done` になるまで休眠しない
+- 除外: `running` かつ `open` な子を持つ session。子の報告の受け手が居なくなるため
 - interactive は claude プロセスを終了し、その tmux pane も閉じる（window の最後の pane なら window
   ごと）。再開時は picker / 自動再開が新しい window を開くので、shell に戻った pane は不要になる
 - background は `claude stop` で止める。この経路では作業を `done` にしない（`claude-stop-bg` の

@@ -243,7 +243,8 @@ Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
 作業は done にせず gone として一覧に残るので、選べば resume できる。止める条件はすべて満たすこと:
 最新 state が `idle_done` でそこから閾値以上経っている、その config dir の `claude agents` の一覧で
 `status` が `idle`、transcript の最後の assistant ターンに `SendMessage` が無い（委譲元が done または
-台帳に居ない孤児はこの検査を省く）。pin は妨げない。
+台帳に居ない孤児はこの検査を省く）、running かつ open な委譲先を持たない。pin は妨げない。完了報告も
+`SendMessage` なので、閉じ忘れた委譲先は委譲元が done になるまで休眠しない。
 
 - interactive: pane の window が attach 中の client で表示中なら止めない。pane が見つからなければ
   止めない。SIGTERM を送り、一覧から 10 秒以内に消えたら pane を閉じる（window の最後の pane なら

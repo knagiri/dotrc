@@ -130,8 +130,8 @@ claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
 4. ユーザーは `claude attach <short-id>` で様子を見る。`C-q q`（③picker）からも同じ場所へ飛べる
    - 承認待ちで止まっていれば、attach した画面にその prompt がそのまま出る
 5. 委譲先は完遂しても session を終えず `idle` で待ち続ける。委譲元は完了報告を受けたら、
-   質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（作業を done にする）。閉じ手が
-   いないまま残った session は休眠でプロセスだけ止まる（理由はいずれも後述）
+   質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（作業を done にする）。閉じ忘れた
+   委譲先は委譲元が done になるまで休眠しない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による cascade（理由はいずれも後述）
 
 ## 設計判断と根拠
 
@@ -200,12 +200,13 @@ prompt` とは別状態）で次の入力を待ち続ける。放置すると完
 `worktree-scope.md` §6）。
 
 委譲元が閉じ損なう経路は残る。報告が届かない、委譲元の session が先に消える、人間が素の shell から
-`claude-worktree` を叩いて閉じ手が誰もいない — いずれでも `idle` の委譲先が居座る。メモリを返すのは
-休眠（`claude-queue watch`、`worktree-scope.md` §8）で、`idle_done` から閾値以上経った session の
-プロセスを止めて gone にする。作業は open のまま残り、委譲元が done になれば cascade で done になる。
-休眠は作業を終わらせないので、外形の判定が外れても失うのはプロセスだけで、resume すれば戻る。それでも
-返信待ちの session（委譲元へ `SendMessage` で質問中、承認待ち）は止めない。止めると返信や承認の
-受け手が居なくなる。
+`claude-worktree` を叩いて閉じ手が誰もいない — いずれでも `idle` の委譲先が居座る。休眠
+（`claude-queue watch`、`worktree-scope.md` §8）は `idle_done` から閾値以上経った session のプロセスを
+止めて gone にするが、返信待ちの session（最後のターンに `SendMessage` がある、承認待ち）は止めない。
+止めると返信や承認の受け手が居なくなる。完了報告も `SendMessage` なので、閉じ忘れた委譲先は委譲元が
+done になるまで休眠しない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による cascadeで、委譲元自身が休眠・done になれば
+委譲先も cascade で done になる。逆向きに、running かつ open な委譲先を持つ委譲元も報告の受け手なので
+休眠しない。休眠は作業を終わらせないので、判定が外れても失うのはプロセスだけで、resume すれば戻る。
 
 worktree の滞留も同様に残る — ①はどちらの経路でも走り、誰も消さないので、後片付けは
 `worktree-scope.md` §7 の `git-reap-gone`（manual 運用）が担う。tmux session を作る経路は

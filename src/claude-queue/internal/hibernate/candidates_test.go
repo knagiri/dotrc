@@ -356,3 +356,36 @@ func TestMinutes(t *testing.T) {
 		}
 	}
 }
+
+// A delegator waiting on a running delegate is held back; one whose delegates
+// are all gone or done is not.
+func TestCandidates_RunningDelegateHoldsDelegator(t *testing.T) {
+	conn := openDB(t)
+	session(t, conn, "parentrn-1", dirA, "idle_done", hours3)
+	session(t, conn, "parentok-1", dirA, "idle_done", hours3)
+	for _, c := range []struct{ child, parent string }{
+		{"childrun-1", "parentrn-1"}, // running, open
+		{"childgon-1", "parentok-1"}, // gone
+		{"childdon-1", "parentok-1"}, // done
+	} {
+		session(t, conn, c.child, dirA, "working", 60)
+		if err := db.LinkSession(conn, c.child[:8], c.parent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(t, conn, "UPDATE sessions SET terminated_at = ? WHERE session_id = 'childgon-1'", now)
+	exec(t, conn, "UPDATE sessions SET done_at = ? WHERE session_id = 'childdon-1'", now)
+	cs, skips, err := Candidates(conn, now, DefaultIdle, lists(map[string][]roster.Agent{dirA: {
+		idleAgent("parentrn-1", roster.KindInteractive),
+		idleAgent("parentok-1", roster.KindInteractive),
+	}}), noSend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(cs); len(got) != 1 || got[0] != "parentok-1" {
+		t.Fatalf("candidates = %v, want only the delegator with no running delegate", got)
+	}
+	if r := skipReason(skips, "parentrn-1"); !strings.Contains(r, "1 delegate(s) still running") {
+		t.Fatalf("skip reason = %q", r)
+	}
+}

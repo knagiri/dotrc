@@ -154,3 +154,31 @@ func GC(conn *sql.DB, maxAgeSec int64) error {
 	}
 	return tx.Commit()
 }
+
+// RunningDelegateCounts maps each session to how many of its delegates are
+// still running with their work open -- the delegates that may yet send it a
+// report. A delegate is matched by its 8-char short id, as session_links
+// records it.
+func RunningDelegateCounts(conn *sql.DB) (map[string]int, error) {
+	rows, err := conn.Query(`
+		SELECT l.parent_session_id, COUNT(*)
+		FROM session_links l
+		JOIN sessions s ON substr(s.session_id, 1, 8) = l.child_short
+		WHERE s.done_at IS NULL AND s.terminated_at IS NULL
+		GROUP BY l.parent_session_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("running delegates: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
