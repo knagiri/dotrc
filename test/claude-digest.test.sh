@@ -10,11 +10,14 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 bin="$here/../bin/claude-digest"
 fail=0
 
 sandbox="$(mktemp -d)"
-trap 'rm -rf "$sandbox"' EXIT
+trap 'sandbox_cleanup; rm -rf "$sandbox"' EXIT
 
 projects="$sandbox/projects"
 digests="$sandbox/digests"

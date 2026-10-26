@@ -7,11 +7,14 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 src="$here/../bin/claude-stop-bg"
 fail=0
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
 stubbin="$tmp/stubbin"
 mkdir -p "$stubbin"

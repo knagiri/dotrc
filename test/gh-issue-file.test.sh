@@ -9,6 +9,9 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 # The wrapper resolves its repo from cwd (git rev-parse --show-toplevel), so
 # pin cwd to this checkout instead of wherever the test was launched from.
 cd "$here/.." || exit 1
@@ -16,7 +19,7 @@ bindir="$here/../bin"
 fail=0
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
 # A body that satisfies every heading the templates require.
 full_body="$tmp/full.md"
