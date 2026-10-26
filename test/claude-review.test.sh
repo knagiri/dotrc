@@ -5,6 +5,9 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 # The wrapper derives the repo name (origin URL, else --show-toplevel) and the
 # branch from cwd's git repo, so pin cwd to this checkout instead of wherever
 # the test was launched from.
@@ -13,7 +16,7 @@ script="$here/../bin/claude-review"
 fail=0
 
 stubdir="$(mktemp -d)"
-trap 'rm -rf "$stubdir"' EXIT
+trap 'sandbox_cleanup; rm -rf "$stubdir"' EXIT
 cat >"$stubdir/tmux" <<'STUB'
 #!/usr/bin/env bash
 : >"$TMUX_ARGS_FILE"

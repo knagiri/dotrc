@@ -14,11 +14,14 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 src="${GIT_REAP_GONE_BIN:-$here/../bin/git-reap-gone}"
 fail=0
 
 tmp="$(mktemp -d)"
-trap 'chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
+trap 'sandbox_cleanup; chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
 
 # Deterministic identity/branch names regardless of the host's git config.
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \

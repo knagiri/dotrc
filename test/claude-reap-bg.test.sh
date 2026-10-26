@@ -10,6 +10,9 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 src="$here/../bin/claude-reap-bg"
 bindir="$here/../bin"
 fail=0
@@ -31,7 +34,7 @@ for tool in jq sqlite3; do
 done
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
 stubbin="$tmp/stubbin"
 mkdir -p "$stubbin"

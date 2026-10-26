@@ -17,11 +17,14 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=test/lib/sandbox.sh
+. "$here/lib/sandbox.sh"
+sandbox_assert
 src="$here/../bin/deploy.sh"
 fail=0
 
 sandbox="$(mktemp -d)"
-trap 'rm -rf "$sandbox"' EXIT
+trap 'sandbox_cleanup; rm -rf "$sandbox"' EXIT
 # mise walks up from cwd for .config/mise/config.toml and reads it as project
 # config, so a cwd under the real HOME (a dotrc checkout) picks up the real
 # global trusted_config_paths over the sandbox's. Pin cwd outside HOME.
