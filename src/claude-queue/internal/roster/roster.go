@@ -33,7 +33,14 @@ type Agent struct {
 	PID       int    `json:"pid"`
 	Kind      string `json:"kind"` // KindInteractive | KindBackground
 	Cwd       string `json:"cwd"`
+	// Status is what the session is doing right now ("idle", "busy", ...).
+	// Hibernation stops only an "idle" one: anything else is mid-turn or
+	// waiting on a person.
+	Status string `json:"status"`
 }
+
+// StatusIdle is the Agent.Status of a session sitting between turns.
+const StatusIdle = "idle"
 
 // ListIn reads the roster of one config dir, by running `claude agents --json`
 // with CLAUDE_CONFIG_DIR set to it (or unset, for the default dir -- see

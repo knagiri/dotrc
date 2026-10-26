@@ -1,0 +1,20 @@
+# Run claude-queue watch every few minutes. Each run is one pass and exits;
+# nothing stays resident.
+#
+# Passes do not overlap because systemd does not start a oneshot service
+# again while it is still activating; a tick that lands mid-pass is a no-op.
+#
+# Enable with:
+#   loginctl enable-linger "$USER"
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-queue-watch.timer
+
+[Unit]
+Description=claude-queue watch every 3 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+
+[Install]
+WantedBy=timers.target

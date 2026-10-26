@@ -560,7 +560,7 @@ done
 # file a live session under another dir as RESUMABLE or CWD_GONE. This loop runs
 # even when CLAUDE_PROJECTS_DIR pins the transcript search, since that pin says
 # where to read transcripts, not which daemons are up. A dir whose roster cannot
-# be read or parsed costs only its own entries, the same as in claude-reap-bg.
+# be read or parsed costs only its own entries.
 roster="[]"
 while IFS= read -r cfg_dir; do
   [ -n "$cfg_dir" ] || continue

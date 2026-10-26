@@ -137,7 +137,7 @@ claude-worktree [--global] [--tmux] [--model <alias>] [--seed <path>]... <name> 
 - `--` の後ろにプロンプトを渡すと、**既定では `claude --bg`（background agent, permission mode `auto`）が worktree dir で起動する**。`auto` なのは、人間不在の委譲先では allowlist 外の呼び出しが prompt を出しても誰も承認できず凍結するため。`auto` では allow/deny のどちらにも該当しない呼び出しを classifier が判断する。既存の allow/deny は依然として優先され、classifier が block を重ねると通常の prompt へ戻る（詳細は `bin/claude-worktree` の header）。tmux session も pane も作らない。委譲先はタスクを完遂しても session を終えず `idle` で残るので、委譲元が下記のとおり閉じる（**worktree も残る**ので、後片付けは §7 の `git-reap-gone`）。到達は `claude attach <short-id>`（`claude-worktree` が stdout に出す）か、claude-queue の picker（`C-q q`）から。承認待ちで止まった委譲先へ入る経路もこれ
 - `--tmux` を付けると従来どおり **detached tmux セッション（名前 = 上の正準規約 `<basename(メインリポジトリ toplevel)>_<name>`）を作り、その pane で interactive claude を起動**する。人間が同席して協同する委譲（HOW をその場で詰める等）に使う。permission mode はこの経路だけ `acceptEdits` のままで、同席する人間の判断こそがここで欲しいものであり、prompt が出ても答える人がいるので障害にならない。`gts <session>` でいつでも attach でき、REPL に留まる
 - `claude-worktree` が委譲元 session の name を解決し、プロンプト末尾へ `## 委譲元` 節（`報告先 name: <name>`）を自動付加する（`--tmux` 経路でも同じ。解決できないときは何も付かない）。委譲先はこれを受け取り、完了・不足・中断を SendMessage で委譲元へ報告する。**permission 承認だけはこの経路に乗らない**（tool call の途中で凍結するため委譲先自身が動けない）。承認は人間が attach して行う
-- 委譲元は委譲先から完了報告を受けたら、質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（§7 の後片付けと同じく、保守的なラッパー経由で行う）。自然終了に任せない理由は 2 つ: 委譲先は完遂しても `idle`（承認待ちの `status: waiting` とは別状態）で次の入力を待ち続け、放置すると約 60 分居座る。しかもその自然消滅では `SessionEnd` が飛ばないため claude-queue の `terminated_at` が NULL のまま幽霊行が残る。追跡がきれいに閉じるのは `claude stop`（= `claude-stop-bg`）経路だけ。この一次経路が取りこぼした session は §8 の `claude-reap-bg` が拾う
+- 委譲元は委譲先から完了報告を受けたら、質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（§7 の後片付けと同じく、保守的なラッパー経由で行う）。閉じる理由は、それが委譲先の作業を done にする明示的な操作だから。claude-queue は作業の完了を推測で決めず、プロセスが消えること（自然消滅・ホスト再起動・休眠・素の `claude stop`）はどれも gone にするだけで作業は open のまま一覧に残る。`claude-stop-bg` は done を台帳に書いてから stop する。閉じ忘れた委譲先は、最後のターンが完了報告の `SendMessage` なので委譲元が done になるまで §8 の休眠もしない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による cascadeだけ
 - プロンプト無しなら worktree 追加のみ（stdout にパスのみ出力。`git wa` の置き換え）
 - `--global` は worktree の基準 repo を、cwd の repo ではなく **`claude-worktree` 自身が置かれている repo**（symlink 解決後。= dotrc）にする。無関係な project で作業中に dotrc のグローバル harness（rules / skills / bin）を切りたいときに使う。`--seed` のコピー元は `--global` の有無に関わらず cwd の checkout のまま。旧名 `--self` も deprecated alias として動く（stderr に注意書きを出すだけで失敗はしない）。名前を機構（スクリプト自身の位置）ではなく意図（グローバル層を選ぶ）に寄せたのは、`harness-from-feedback` 手順 3 や [claude-settings.md](./claude-settings.md) の 3 層の表が既に「グローバル」の語で同じ区別をしているため
 - `--seed <path>`（繰り返し可）は、現 checkout の `<path>` を新 worktree の同じ相対位置へコピーする。存在しない／checkout 外の seed は worktree 作成前に fail する
@@ -202,20 +202,19 @@ git-reap-gone [--no-fetch] [<branch>...]
 - **manual 運用**。cron/janitor の常駐は当面作らない。ただし全 `[gone]` を sweep できる形なので、将来そのまま cron/loop に挿せる。
 - settings.json で allow 済み（`git-reap-gone` / `git-reap-gone *`）なので承認なしで実行できる。
 
-### 8. 残存 background session の後片付け（`claude-reap-bg`）
+### 8. idle な session の休眠（`claude-queue watch`）
 
-§7 がブランチと worktree を扱うのに対し、こちらは session を扱う。一次経路は §6 のとおり「委譲元が完了報告を受けて `claude-stop-bg <short-id>` で閉じる」で、`claude-reap-bg`（`bin/`）は**その取りこぼしを拾う二次経路**である。報告が届かない・委譲元の session が先に消える・人間が素の shell から `claude-worktree` を叩いて閉じ手が誰もいない、といった形で `idle` の委譲先が居座り、claude-queue に幽霊行が残る（理由は §6 の該当項）。閉じるべき主体が分かっているなら一次経路を使う。外から「終わっている」と判定するより、当事者が閉じるほうが確実。
+§7 がブランチと worktree を扱うのに対し、こちらは session のプロセスを扱う。常駐する claude プロセスは 1 本あたり数百 MB を使い、閉じられずに残った session が数十本になると十数 GB を占める。`systemd-user` の timer（`claude-queue-watch.timer`）が数分おきに `claude-queue watch` を 1 回起動し、しばらく動いていない session のプロセスを止めてメモリを返す。止めても作業は open のまま gone として一覧に残り、resume すれば同じ session id で戻る。
 
 ```
-claude-reap-bg [--dry-run] [--idle-minutes <n>] [<short-id>...]
+claude-queue watch [--idle-minutes <n>] [--dry-run]
 ```
 
-- **`git-reap-gone`（§7）と同じ思想**。保守的な predicate を全通過したものだけ停止し、欠けるものは skip して blocking 理由を report する。skip があっても exit 0（manual な best-effort）。
-- **stop してよい条件（全通過のみ）**: ①roster（`claude agents --json`）が `kind == "background"` かつ `status == "idle"`、②claude-queue の最新 state が `idle_done`（`Stop` hook が書く）で、その event から `--idle-minutes`（既定 15）以上経っている、③transcript の最後の assistant ターンに `SendMessage` の tool_use が無い。③が bulk sweep を成立させている条件で、委譲元へ質問を送って返信を待つ委譲先も外からは `idle` に見えるため、これが無いと生きた作業を殺す。ただし孤児（claude-queue の `session_links` に記録された委譲元が roster のどこにも居ない session）は返信が構造的に来ないので、③とその前提の transcript 検査を省く（①②と `claude-stop-bg` 経由の停止は変えない。詳細は `docs/design/claude-queue-session-tree.md`）。確認そのものができないもの（claude-queue に生きた row が無い・transcript が読めない／parse できない）も、止めずに skip する。
-- **停止は `claude-stop-bg` 経由**で、`claude stop` を直接は呼ばない。あちらの guard（background 以外を拒否、一意に解決しない id を拒否）が上の条件に重ねて効く。
-- 引数で short-id（8 桁）を指定するとその対象だけを（同じゲートを通して）stop する。無指定なら全 sweep。ゲートに掛からなかった id は skip として report されるので、名指ししたのに何も起きない理由が分かる。`--dry-run` は対象を report するだけで何も止めない。
-- roster には kind=="background" かつ `pid` の無い entry も現れる。これはプロセスが既に消えた job の残骸（`<config dir>/jobs/<id>/state.json`、既定なら `~/.claude/jobs/<id>/state.json`、が居座っているだけ）で、そもそも `status` を持たないので上の stop ゲートには乗らず、`stale job records` という別節で report するだけに留める。判定は `kind == "background"` かつ `pid` の不在で、併記する `state` は claude 内部の語彙にすぎないので判定には使わない（診断表示のみ）。名指しした id がこれに該当する場合は skip 扱いにはならず、この節で説明される。表示する `rm -rf <config dir>/jobs/<id>` は読ませるための文字列であって実行はせず、job dir には成果物が残ることもあるので削除するかは人間に委ねる。
-- **manual 運用**。cron/daemon の常駐は作らない。無人で走る session killer は、上の保守的な predicate がまさに避けようとしているものだから。
-- **settings.json では allow していない**（単一 id 指定に閉じた `claude-stop-bg` を allow しているのとは非対称）。引数無しで全 sweep できる形なので、allow すると agent へ session の一括 kill 権限を渡すことになり、grant の射程が読めない。実行ごとに承認プロンプトを踏むのは意図した摩擦で、まず `--dry-run` で対象を出してから承認を仰ぐ。
+- **作業は done にしない**。interactive は claude プロセスに SIGTERM を送り、`claude agents` の一覧から消えたらその tmux pane を閉じる。background は `claude stop` で止める。どちらも `SessionEnd`（reason `other`）になり gone として記録される。done にするのは §6 の `claude-stop-bg` や picker の完了操作など、明示的な操作だけ。
+- **止めてよい条件（全通過のみ）**: ①最新 state が `idle_done` で、その event から `--idle-minutes`（既定 120）以上経っている、②その session の config dir の `claude agents` の一覧で `status` が `idle`、③transcript の最後の assistant ターンに `SendMessage` の tool_use が無い。③が要るのは、委譲元へ質問して返信を待つ委譲先も外からは `idle` に見え、止めると返信の受け手が居なくなるため。`awaiting_approval` の session も①で外れる。ただし孤児（委譲元が done、または台帳に居ない session）は返信が来ないので③を省く。委譲元が gone なだけなら resume すれば返信できるので孤児にしない（詳細は `docs/design/claude-queue-session-tree.md`）。完了報告も `SendMessage` なので、閉じ忘れた委譲先は委譲元が done になるまで③で外れ続ける（§6）。④running かつ open な委譲先を持たない。委譲元は報告を待って `idle` に見えるが、止めると委譲先の報告の受け手が居なくなるため。確認そのものができないもの（その config dir の一覧が読めない・transcript が読めない／parse できない）は止めずに skip する。
+- **人が見ている session は止めない**。interactive は、pane の window が attach 中の tmux client のどれかで表示中なら skip する。pane が見つからない（tmux 外で起動した等）ものも skip する。SIGTERM 後 10 秒で一覧から消えなければ pane は閉じずに失敗として report する（SIGKILL へは上げない）。
+- pin は休眠を妨げない。外部待ちの session こそ、待ちが解けるまでプロセスを持つ理由が無い。
+- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile も stop もせず、pane の解決と表示中の判定までを読み取りだけで行って対象を report する。
+- 判定は推測を含むが、外れても失うのはプロセスだけで作業は残る。だから無人の timer で回してよい。逆に、作業を done にする判定は無人で回さない。
 
-設計上の位置づけ（一次経路と二次経路の天秤、cron を置かない理由）は `docs/design/claude-tmux-worktree.md` の「④の既定は `claude --bg`」節に一本化してある。
+実例: dotrc/docs/incidents/claude-queue-reboot-closes-wip.md

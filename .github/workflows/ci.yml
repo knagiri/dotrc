@@ -46,7 +46,6 @@ jobs:
         run: |
           shellcheck -S warning \
             bin/claude-digest \
-            bin/claude-reap-bg \
             bin/claude-review \
             bin/claude-stop-bg \
             bin/claude-worktree \
@@ -64,7 +63,6 @@ jobs:
             bin/lib/claude-configdir.sh \
             bin/lib/gh-mise.sh \
             test/claude-digest.test.sh \
-            test/claude-reap-bg.test.sh \
             test/claude-review.test.sh \
             test/claude-stop-bg.test.sh \
             test/claude-worktree.test.sh \

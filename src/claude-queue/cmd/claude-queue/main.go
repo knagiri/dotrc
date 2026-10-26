@@ -13,13 +13,14 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reset"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/status"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/watch"
 )
 
 // version is set via -ldflags "-X main.version=..." at build time.
 var version = "dev"
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: claude-queue {hook <event>|status|picker|reconcile|reset} [flags]")
+	fmt.Fprintln(os.Stderr, "usage: claude-queue {hook <event>|status|picker|reconcile|watch|reset} [flags]")
 	fmt.Fprintln(os.Stderr, "       claude-queue link --parent <session-id> --child <short-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue mark <session-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue done <session-id-or-prefix>")
@@ -51,6 +52,8 @@ func main() {
 		picker.Run(os.Args[2:])
 	case "reconcile":
 		reconcile.Run(os.Args[2:])
+	case "watch":
+		watch.Run(os.Args[2:])
 	case "reset":
 		reset.Run(os.Args[2:])
 	case "link":

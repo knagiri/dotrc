@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mattn/go-runewidth"
@@ -21,6 +20,7 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/sessionproc"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/summary"
 )
 
@@ -493,7 +493,7 @@ func shortID(sessionID string) string {
 // live pane on the current one almost certainly, and PaneExists reports that
 // collision as true. So whenever the roster can identify the session's actual
 // process, its pane is re-derived by walking that process's ancestry
-// (paneForSession) instead -- an identity check the ledger id cannot offer.
+// (sessionproc.PaneForSession) instead -- an identity check the ledger id cannot offer.
 //
 // The ledger pane is used as-is only when the roster could not be consulted
 // at all (rosterOK is false): there is nothing better to fall back to, and an
@@ -506,111 +506,13 @@ func shortID(sessionID string) string {
 // Returning "" here instead routes DecideAction to the resume path, which is
 // the correct outcome for a session the roster no longer lists.
 func reachablePane(mux multiplexer.Multiplexer, agents []roster.Agent, sessionID, ledgerPane string, rosterOK bool) string {
-	if len(agentsFor(agents, sessionID)) > 0 {
-		return paneForSession(agents, sessionID, mux.FindPane)
+	if len(sessionproc.AgentsFor(agents, sessionID)) > 0 {
+		return sessionproc.PaneForSession(agents, sessionID, mux.FindPane)
 	}
 	if !rosterOK && ledgerPane != "" && mux.PaneExists(ledgerPane) {
 		return ledgerPane
 	}
 	return ""
-}
-
-// paneForSession is the process-tree lookup itself, taking the pane finder as an
-// argument so the roster-to-pane wiring can be tested without tmux.
-//
-// It tries every roster entry for sessionID, not just the first: `claude
-// agents --json` has been observed to list the same session id twice (see
-// Target.RosterMatches), and stopping at the first entry risks missing the
-// one pid that actually resolves to a pane.
-//
-// Background agents are skipped rather than looked up, because the ancestry
-// walk is only meaningful for a process that was started inside a pane. A
-// background agent is not: it is forked by the host-shared `claude daemon run`
-// singleton, and that daemon is itself a descendant of whichever process first
-// needed it. When that happened to be inside a pane, every background agent
-// under the daemon walks up into that pane -- and since the daemon is shared
-// across worktrees, unrelated sessions resolve to the same one. Selecting such
-// a row would switch to a third session's window with no error. Skipping keeps
-// DecideAction's premise that a background session has no pane.
-func paneForSession(agents []roster.Agent, sessionID string, find func(int) (string, bool)) string {
-	for _, a := range agentsFor(agents, sessionID) {
-		if a.Kind == roster.KindBackground {
-			continue
-		}
-		if pane, found := find(a.PID); found {
-			return pane
-		}
-	}
-	// The session is live but has no pane of ours: an interactive session that
-	// outlived the server it started in, or a background agent, which never had
-	// one. Which of the two it is decides whether the session may be killed and
-	// resumed, and that is originOf's question, not this one's.
-	return ""
-}
-
-// agentsFor returns every roster entry for sessionID. Session ids are not
-// guaranteed unique there -- see Target.RosterMatches -- so callers that act
-// on identity (pane resolution, kill, resume) need to see all of them rather
-// than assume the first is the only one.
-func agentsFor(agents []roster.Agent, sessionID string) []roster.Agent {
-	if sessionID == "" {
-		return nil
-	}
-	var matches []roster.Agent
-	for _, a := range agents {
-		if a.SessionID == sessionID {
-			matches = append(matches, a)
-		}
-	}
-	return matches
-}
-
-// killPollAttempts and killPollInterval bound the wait for a SIGTERM'd session
-// to leave the roster: 10s in half-second steps. Claude flushes its transcript
-// on the way out, so resuming before it is gone would reopen a half-written
-// conversation -- and would also be the two-processes-one-transcript state the
-// kill exists to avoid.
-const (
-	killPollAttempts = 20
-	killPollInterval = 500 * time.Millisecond
-)
-
-// endSession asks pid to exit and waits for the roster to stop listing
-// sessionID.
-//
-// SIGTERM only, never SIGKILL: a session that ignores the signal is a session
-// still holding its transcript, and forcing it out risks losing the very
-// conversation the resume is trying to recover. Refusing to resume is the
-// conservative answer -- the user keeps a live process and an intact transcript
-// and can decide what to do with them.
-func endSession(pid int, sessionID, cfgDir string) error {
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("SIGTERM to pid %d: %w", pid, err)
-	}
-	list := func() ([]roster.Agent, error) { return roster.ListIn(cfgDir) }
-	if !waitGone(sessionID, list, func() { time.Sleep(killPollInterval) }, killPollAttempts) {
-		return fmt.Errorf("session %s is still in the roster after SIGTERM to pid %d", shortID(sessionID), pid)
-	}
-	return nil
-}
-
-// waitGone polls until the roster stops listing sessionID, with the roster read
-// and the sleep injected so the loop is testable without a process to kill.
-//
-// A roster that cannot be read counts as "still there": it is not evidence the
-// session ended, and the whole point of the wait is to be sure it did.
-func waitGone(sessionID string, list func() ([]roster.Agent, error), tick func(), attempts int) bool {
-	for i := 0; i < attempts; i++ {
-		tick()
-		agents, err := list()
-		if err != nil {
-			continue
-		}
-		if len(agentsFor(agents, sessionID)) == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // pickerFlags are the listing flags, kept together because they are parsed
@@ -783,7 +685,7 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		// being replaced by a second one. The full UUID is required: the short
 		// form is what `claude attach` takes, not this.
 		if act.KillPID != 0 {
-			if err := endSession(act.KillPID, act.Resume, act.ConfigDir); err != nil {
+			if err := sessionproc.End(act.KillPID, act.Resume, act.ConfigDir); err != nil {
 				fmt.Fprintf(os.Stderr, "not resuming: %v\n", err)
 				return
 			}
@@ -879,7 +781,7 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool) (string, worktreeCache
 // panes of rows the user did not select are never needed.
 //
 // list is injected -- Run passes roster.ListIn -- for the same reason findPane
-// and waitGone take their dependency as an argument: it is the only way to
+// and sessionproc.WaitGone take their dependency as an argument: it is the only way to
 // assert WHICH config dir the roster was asked about without a claude binary in
 // the loop, and asking the wrong one is a silent failure rather than an error
 // (an absent session routes to the resume path, which opens an empty session
@@ -907,7 +809,7 @@ func describeTarget(mux multiplexer.Multiplexer, sel selection, list func(string
 		CwdExists:        isDir(cwd),
 		ConfigDir:        sel.ConfigDir,
 	}
-	matches := agentsFor(agents, sessionID)
+	matches := sessionproc.AgentsFor(agents, sessionID)
 	t.RosterMatches = len(matches)
 	if t.RosterMatches > 1 {
 		for _, a := range matches {

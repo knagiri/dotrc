@@ -1,0 +1,37 @@
+# One pass of claude-queue's unattended upkeep: reconcile the ledger, then
+# hibernate sessions idle past the threshold (stop the process, keep the work
+# open). Paired with claude-queue-watch.timer.
+#
+# `deploy.sh` symlinks dot/systemd-user/* into ~/.config/systemd/user, so this
+# file is not templated at deploy time and the repo path below is written out in
+# full.
+# It follows the ghq layout every other absolute path in this setup uses
+# (~/.bashrc has the same one). Move the checkout and this unit needs editing.
+#
+# PATH is set explicitly because a systemd user unit inherits none of the
+# shell's: ~/.bashrc returns early for non-interactive shells, so the
+# dotrc bin directory it appends is never on the PATH here. The pass needs
+# `claude` (agents, stop) and `tmux` on it as well.
+#
+# KillMode is left at its default (control-group), which kills whatever the
+# service started when it exits, so the question is whether this pass can start
+# a long-lived claude daemon inside the cgroup. Measured with an empty config
+# dir (no daemon running): `claude agents --json` returned [] with exit 0 and
+# `claude stop deadbeef` printed "No job matching 'deadbeef'." with exit 1;
+# neither added a `claude daemon run` process. The existing daemons were all
+# spawned by `claude --bg`. So this pass only stops processes and starts none;
+# once it starts tmux windows or claude, those must leave the cgroup first.
+#
+# Requires `loginctl enable-linger <user>` to run while logged out.
+
+[Unit]
+Description=claude-queue watch: reconcile and hibernate idle Claude Code sessions
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/ghq/github.com/knagiri/dotrc/bin:%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/ghq/github.com/knagiri/dotrc/bin/claude-queue watch
+# Each interactive stop waits up to 10s for the session to leave the roster, so
+# a pass over many idle sessions takes a while; it should still never pile up
+# behind the next tick.
+TimeoutStartSec=5min

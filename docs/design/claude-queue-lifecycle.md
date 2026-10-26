@@ -1,7 +1,8 @@
 # claude-queue: session のライフサイクル再設計
 
 > 実装状況: 第 1 部（状態モデルの 2 軸化・gone の一覧表示・mark の持続・`claude-stop-bg` の done 書き込み・
-> 既存台帳の移行）は実装済み。メモ・pin の外部待ち・休眠・PR 監視による自動再開は後続 PR の範囲。
+> 既存台帳の移行）、メモと pin のコメント、休眠（`claude-queue watch` と systemd-user timer、`bin/claude-reap-bg`
+> の廃止）は実装済み。PR 監視による自動再開は後続 PR の範囲。
 
 ## 目的
 
@@ -83,13 +84,15 @@ hook が再び届いた時点で記録される。
 
 - 対象: 最新 state が `idle_done` で、そこから閾値以上経っている session。interactive・background の両方
 - 除外: `working` / `awaiting_approval`、最後の assistant ターンに `SendMessage` がある session
-  （返信待ち）。ただし親が `done` の孤児は返信が来ないので除外しない
+  （返信待ち）。ただし親が `done`、または台帳に居ない孤児は返信が来ないので除外しない。完了報告も
+  `SendMessage` なので、閉じ忘れた委譲先は親が `done` になるまで休眠しない
+- 除外: `running` かつ `open` な子を持つ session。子の報告の受け手が居なくなるため
 - interactive は claude プロセスを終了し、その tmux pane も閉じる（window の最後の pane なら window
   ごと）。再開時は picker / 自動再開が新しい window を開くので、shell に戻った pane は不要になる
 - background は `claude stop` で止める。この経路では作業を `done` にしない（`claude-stop-bg` の
   完了記録とは別の入口にする）
 
-`bin/claude-reap-bg` は廃止する。取り残された記録の掃除は `open / gone` が正規の状態になることで不要になり、
+`bin/claude-reap-bg` は廃止した。取り残された記録の掃除は `open / gone` が正規の状態になることで不要になり、
 居座るプロセスの停止は休眠が担う。reap のゲート（idle、`idle_done` からの経過、`SendMessage`、
 孤児の例外）は休眠の除外条件に引き継ぐ。
 

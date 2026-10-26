@@ -679,7 +679,8 @@ if [ "$use_tmux" = 0 ]; then
     | awk '/backgrounded/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9a-f]{8}$/) { print $i; exit } }')"
 
   # Record the delegation in claude-queue so the picker can show this session
-  # under its delegator and claude-reap-bg can tell when the delegator is gone
+  # under its delegator, a delegator marked done cascades to it, and
+  # hibernation can tell when the delegator is done or gone
   # (docs/design/claude-queue-session-tree.md). The child is recorded by the
   # short id because that is all the banner gives us -- --bg ignores
   # --session-id, and the roster may not list the new session yet. Best-effort
