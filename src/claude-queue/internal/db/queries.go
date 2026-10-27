@@ -22,12 +22,16 @@ type Row struct {
 	EffectiveState string
 	Payload        sql.NullString
 	CreatedAt      int64
-	Priority       int
+
+	// ActivityAt is the time of the latest non-ended event (CreatedAt when
+	// there is none): what the listing is ordered by, newest first. Unlike
+	// CreatedAt it is not moved by the session ending.
+	ActivityAt int64
 
 	// PriorState is the session's latest non-ended state. On a running row it
 	// repeats RawState; on a gone row it is what separates "the host went down
-	// mid-task" from "it had finished a turn", which decides both the gone
-	// ordering and what the summary column says.
+	// mid-task" from "it had finished a turn", which decides what the summary
+	// column says.
 	PriorState sql.NullString
 
 	// Kind is how the session was started (KindInteractive / KindBackground /
@@ -42,7 +46,7 @@ type Row struct {
 
 	// Marked is the manual "waiting" mark (see ToggleMark), held until it is
 	// toggled off. It changes the picker's icon and nothing else -- not the
-	// state, the priority or the ordering.
+	// state or the ordering.
 	Marked bool
 
 	// Memo and PinNote are the free-text annotations (see SetMemo, SetPin).
@@ -113,16 +117,16 @@ func (o ListOpts) Includes(effectiveState string) bool {
 	return false
 }
 
-// ListRows returns rows sorted by priority ASC, created_at DESC, filtered by
-// opts.Includes, each carrying its recorded delegation parent (if any).
+// ListRows returns rows sorted by activity_at DESC (newest activity first),
+// then session id, filtered by opts.Includes, each carrying its recorded delegation parent (if any).
 func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	rows, err := conn.Query(`
 		SELECT q.session_id, q.tmux_pane, q.cwd, q.transcript_path, q.config_dir,
-		       q.event_type, q.raw_state, q.effective_state, q.payload, q.created_at, q.priority,
+		       q.event_type, q.raw_state, q.effective_state, q.payload, q.created_at, q.activity_at,
 		       q.prior_state, l.parent_session_id, q.marked, q.kind, q.memo, q.pin_note
 		FROM queue q
 		LEFT JOIN session_links l ON l.child_short = substr(q.session_id, 1, 8)
-		ORDER BY q.priority ASC, q.created_at DESC
+		ORDER BY q.activity_at DESC, q.session_id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
@@ -240,7 +244,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		var r Row
 		if err := rows.Scan(
 			&r.SessionID, &r.TmuxPane, &r.Cwd, &r.TranscriptPath, &r.ConfigDir,
-			&r.EventType, &r.RawState, &r.EffectiveState, &r.Payload, &r.CreatedAt, &r.Priority,
+			&r.EventType, &r.RawState, &r.EffectiveState, &r.Payload, &r.CreatedAt, &r.ActivityAt,
 			&r.PriorState, &r.ParentSessionID, &r.Marked, &r.Kind, &r.Memo, &r.PinNote,
 		); err != nil {
 			return nil, err

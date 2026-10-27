@@ -128,7 +128,7 @@ pin は「外部待ち」の印で、人の返信待ち・保留・後回しに�
 潰す。agent は CLI（`claude-queue pin` / `memo`）で自分の session に付けられる。
 
 いずれのキーでも popup は閉じず、`picker --list`（同じ flag で行だけを出すモード）で一覧をその場で再描画する。
-pin が変えるのはアイコンだけで、並び順・state・priority・age・summary は変えない。別グループに
+pin が変えるのはアイコンだけで、並び順・state・age・summary は変えない。別グループに
 すると並びが動いて行を見失うため。stale 判定も変えないので、印の付いた session も時間が
 経てば既定の picker から消え、`--show-stale` では 📌 のまま見える。tmux status-right の
 カウンタは pin を数えない。
@@ -141,9 +141,12 @@ done の session には pin もメモも書けない（一覧に出ないので�
 
 台帳は session ごとに、作業（`done_at`。NULL が open）とプロセス（`terminated_at`。NULL が
 running、非 NULL が gone）を別々に持つ。picker の既定一覧は open な session で、gone は 💤
-（`[~]`）・summary `gone (was <直前の state>)` で running の後ろに並ぶ。直前の state が
-`working` / `awaiting_approval` のもの（作業途中で落ちた可能性が高い）が先。選べば上の到達手段で
-resume する。done は一覧に出ない。設計は
+（`[~]`）・summary `gone (was <直前の state>)` で並ぶ。選べば上の到達手段で resume する。
+
+一覧は state で段を分けず、最後のアクティビティ（`ended` 以外の最新 event の時刻）の新しい順に
+並ぶ。休眠や再起動の `SessionEnd` はこの時刻を動かさないので、休眠した session は止まる前の
+位置に留まり、resume すると新しい event で上へ来る。承認待ちも先頭に固定されず、要求が出た
+時刻で並ぶ。委譲の木では、兄弟（root 同士を含む）を部分木の中で最も新しいアクティビティで並べる。done は一覧に出ない。設計は
 [docs/design/claude-queue-lifecycle.md](../../docs/design/claude-queue-lifecycle.md)。
 
 done にするのは次だけで、idle の長さ・`claude agents` の一覧に居ないこと・`reason: other` の `SessionEnd` は
@@ -390,7 +393,7 @@ make -C src/claude-queue test vet fmt-check
 - [ ] transcript が無い / cwd が reap 済みの session を picker から選ぶと、resume されずどちらが欠けたかが出る
 - [ ] `SessionEnd` 後に `claude --resume` した session が picker に再び現れる
 - [ ] ホスト再起動後、`C-q q` / `C-q Q` に再起動前の session が 💤 で並び、pin（📌）と委譲の木が残っている
-- [ ] gone の session が running の session の後ろに並び、終了直前が `working` / `awaiting_approval` のものが先頭に来る
+- [ ] 一覧が state に関わらず最後のアクティビティの新しい順に並び、休眠した session（💤）が止まる前の位置に留まる（休眠した時刻で上へ来ない）
 - [ ] gone の session を選ぶと同じ session id のまま会話が復元され、💤 が running の state に戻る
 - [ ] Ctrl-C / `/exit` で閉じた session は一覧から消える
 - [ ] 同 pane で `/clear` 後、旧 session が一覧から消える（L3）
