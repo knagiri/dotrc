@@ -187,6 +187,8 @@ background の委譲元も、daemon は最後の client が切れて数秒で終
 ## 一覧と GC
 
 - picker の既定一覧は `open` な session。`gone` は 💤 で区別し、選べば resume する。`done` は出さない
+- 並び順は state で段を分けず、最後のアクティビティ（`ended` 以外の最新 event の時刻）の新しい順。
+  休眠・再起動の `SessionEnd` はこの時刻を動かさないので、休眠した session は止まる前の位置に留まる
 - 現在の `--show-resumable` の役割（終了済みから resume 候補を拾い直す）は、`open / gone` が既定一覧に
   載ることで吸収される
 - GC は `done` になってから 7 日経った session だけを削除する。`gone` は期間に関わらず消さない

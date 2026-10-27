@@ -2,7 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -119,33 +121,55 @@ func TestCounts(t *testing.T) {
 	}
 }
 
-func TestListRows_SortsByPriorityThenRecency(t *testing.T) {
+// The listing is one order -- newest activity first -- with no tier per state.
+// A hibernated session ranks by what it last did, not by when it was stopped,
+// and awaiting_approval does not jump ahead of newer activity.
+func TestListRows_SortsByActivity(t *testing.T) {
 	conn, err := Open(filepath.Join(t.TempDir(), "c.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer conn.Close()
 
-	insertSession(t, conn, "w", "%1")
-	insertSession(t, conn, "i", "%2")
-	insertSession(t, conn, "p", "%3")
+	for i, sid := range []string{"wnew", "i", "g", "wold", "p"} {
+		insertSession(t, conn, sid, fmt.Sprintf("%%%d", i))
+	}
+	insertEvent(t, conn, "wnew", "UserPromptSubmit", "working", 100)
+	insertEvent(t, conn, "i", "Stop", "idle_done", 250)
+	// Put to sleep: its last activity is 300s ago, its end only 10s ago.
+	insertEvent(t, conn, "g", "Stop", "idle_done", 300)
+	insertEventPayload(t, conn, "g", "SessionEnd", "ended", `{"reason":"other"}`, 10)
+	terminate(t, conn, "g", 10)
+	insertEvent(t, conn, "wold", "UserPromptSubmit", "working", 400)
+	insertEvent(t, conn, "p", "PermissionRequest", "awaiting_approval", 500)
 
-	insertEvent(t, conn, "w", "UserPromptSubmit", "working", 60)
-	insertEvent(t, conn, "i", "Stop", "idle_done", 60)
-	insertEvent(t, conn, "p", "PermissionRequest", "awaiting_approval", 60)
-
-	rows, err := ListRows(conn, ListOpts{})
+	rows, err := ListRows(conn, ListOpts{ShowWorking: true})
 	if err != nil {
 		t.Fatalf("ListRows: %v", err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("len(rows) = %d, want 2 (working filtered by default)", len(rows))
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.SessionID)
 	}
-	if rows[0].SessionID != "p" {
-		t.Errorf("rows[0] = %q, want p (awaiting_approval first)", rows[0].SessionID)
+	want := []string{"wnew", "i", "g", "wold", "p"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v", got, want)
 	}
-	if rows[1].SessionID != "i" {
-		t.Errorf("rows[1] = %q, want i", rows[1].SessionID)
+}
+
+// With no non-ended event at all, activity falls back to the latest event.
+func TestListRows_ActivityFallsBackToLatestEvent(t *testing.T) {
+	conn := openTest(t)
+	insertSession(t, conn, "e", "%1")
+	insertEvent(t, conn, "e", "SessionEnd", "ended", 10)
+	terminate(t, conn, "e", 10)
+
+	r, ok := findRow(t, conn, "e")
+	if !ok {
+		t.Fatal("session not listed")
+	}
+	if r.ActivityAt == 0 || r.ActivityAt != r.CreatedAt {
+		t.Errorf("ActivityAt = %d, want CreatedAt %d", r.ActivityAt, r.CreatedAt)
 	}
 }
 
@@ -544,7 +568,7 @@ func TestListRows_GoneKeepsMarkAndParent(t *testing.T) {
 	}
 }
 
-// Marking changes the icon only: state, priority and order stay as they were.
+// Marking changes the icon only: state, activity and order stay as they were.
 func TestToggleMark_LeavesStateAndOrder(t *testing.T) {
 	conn, err := Open(filepath.Join(t.TempDir(), "m.db"))
 	if err != nil {
@@ -578,7 +602,7 @@ func TestToggleMark_LeavesStateAndOrder(t *testing.T) {
 	}
 	for k := range before {
 		b, a := before[k], after[k]
-		if a.SessionID != b.SessionID || a.EffectiveState != b.EffectiveState || a.Priority != b.Priority {
+		if a.SessionID != b.SessionID || a.EffectiveState != b.EffectiveState || a.ActivityAt != b.ActivityAt {
 			t.Errorf("row %d changed: %+v -> %+v", k, b, a)
 		}
 		if want := a.SessionID == "i"; a.Marked != want {

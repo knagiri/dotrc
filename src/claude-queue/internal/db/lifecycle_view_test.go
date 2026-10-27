@@ -33,7 +33,7 @@ func findRow(t *testing.T, conn *sql.DB, sid string) (Row, bool) {
 
 // A session whose process ended without its work being declared done -- the
 // SessionEnd(reason=other) a host shutdown sends -- stays listed as gone,
-// carrying what it was doing and sorted behind the running rows.
+// carrying what it was doing.
 func TestQueueView_GoneStaysListed(t *testing.T) {
 	conn := openTest(t)
 	insertSession(t, conn, "g", "%1")
@@ -46,8 +46,8 @@ func TestQueueView_GoneStaysListed(t *testing.T) {
 	if !ok {
 		t.Fatal("gone session not listed")
 	}
-	if r.EffectiveState != StateGone || r.PriorState.String != "idle_done" || r.Priority != 7 {
-		t.Errorf("row = {%q, prior %q, prio %d}, want {gone, idle_done, 7}", r.EffectiveState, r.PriorState.String, r.Priority)
+	if r.EffectiveState != StateGone || r.PriorState.String != "idle_done" {
+		t.Errorf("row = {%q, prior %q}, want {gone, idle_done}", r.EffectiveState, r.PriorState.String)
 	}
 	// The recorded pane names a process that has ended; it must not be offered.
 	if r.TmuxPane.Valid {
@@ -55,8 +55,8 @@ func TestQueueView_GoneStaysListed(t *testing.T) {
 	}
 }
 
-// Cut off mid-task sorts ahead of finished-a-turn among the gone rows.
-func TestQueueView_GoneInterruptedSortsFirst(t *testing.T) {
+// A gone row's activity is its last non-ended event, not the end itself.
+func TestQueueView_GoneKeepsPriorActivity(t *testing.T) {
 	conn := openTest(t)
 	insertSession(t, conn, "w", "%1")
 	insertEvent(t, conn, "w", "UserPromptSubmit", "working", 200)
@@ -64,8 +64,11 @@ func TestQueueView_GoneInterruptedSortsFirst(t *testing.T) {
 	terminate(t, conn, "w", 100)
 
 	r, ok := findRow(t, conn, "w")
-	if !ok || r.Priority != 6 || r.PriorState.String != "working" {
-		t.Errorf("row = %+v (listed %v), want priority 6, prior working", r, ok)
+	if !ok || r.PriorState.String != "working" {
+		t.Fatalf("row = %+v (listed %v), want prior working", r, ok)
+	}
+	if d := r.CreatedAt - r.ActivityAt; d != 100 {
+		t.Errorf("CreatedAt - ActivityAt = %d, want 100 (activity is the working event)", d)
 	}
 }
 

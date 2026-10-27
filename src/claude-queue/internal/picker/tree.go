@@ -82,9 +82,9 @@ type treeRow struct {
 // lives in another repo is shown as a root, marked. A pulled-back row left
 // with no child in the listing after the repo filter is dropped.
 //
-// Siblings -- roots included -- are ordered by the most urgent priority in
-// their subtree, then its most recent event, then session id, so a delegate
-// waiting on approval lifts its whole delegation to the top.
+// Siblings -- roots included -- are ordered by the most recent activity in
+// their subtree (newest first), then session id, so a delegate that just did
+// something lifts its whole delegation however long its parent has been quiet.
 func buildForest(rows []db.Row, o forestOpts) []treeRow {
 	byID := make(map[string]db.Row, len(rows))
 	for _, r := range rows {
@@ -188,22 +188,17 @@ func buildForest(rows []db.Row, o forestOpts) []treeRow {
 		}
 	}
 
-	minPrio := map[string]int{}
-	maxCreated := map[string]int64{}
+	maxActivity := map[string]int64{}
 	var measure func(id string)
 	measure = func(id string) {
-		r := byID[id]
-		mp, mc := r.Priority, r.CreatedAt
+		m := byID[id].ActivityAt
 		for _, k := range children[id] {
 			measure(k)
-			if minPrio[k] < mp {
-				mp = minPrio[k]
-			}
-			if maxCreated[k] > mc {
-				mc = maxCreated[k]
+			if maxActivity[k] > m {
+				m = maxActivity[k]
 			}
 		}
-		minPrio[id], maxCreated[id] = mp, mc
+		maxActivity[id] = m
 	}
 	for _, id := range roots {
 		measure(id)
@@ -211,11 +206,8 @@ func buildForest(rows []db.Row, o forestOpts) []treeRow {
 	bySubtree := func(s []string) {
 		sort.Slice(s, func(i, j int) bool {
 			a, b := s[i], s[j]
-			if minPrio[a] != minPrio[b] {
-				return minPrio[a] < minPrio[b]
-			}
-			if maxCreated[a] != maxCreated[b] {
-				return maxCreated[a] > maxCreated[b]
+			if maxActivity[a] != maxActivity[b] {
+				return maxActivity[a] > maxActivity[b]
 			}
 			return a < b
 		})

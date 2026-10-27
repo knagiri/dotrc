@@ -104,9 +104,14 @@ CREATE TABLE IF NOT EXISTS session_links (
 //
 // It lists every open session (done_at IS NULL), running or gone. A gone
 // session -- terminated_at set -- surfaces as the pseudo state 'gone' whatever
-// its latest event says, sorted behind every running one: interrupted mid-task
-// (6) ahead of finished-a-turn (7). prior_state is the latest non-ended state,
-// which is what tells those two apart once the latest event is an end.
+// its latest event says. prior_state is the latest non-ended state, which is
+// what tells interrupted mid-task from finished-a-turn once the latest event
+// is an end.
+//
+// activity_at is when that latest non-ended event was recorded (the latest
+// event's time when there is none). An end -- hibernation, a reboot -- does
+// not move it and a resume does, so ordering by it keeps a session that was
+// merely put to sleep where its work left it.
 //
 // tmux_pane is withheld from a gone session. The ledger never clears it -- the
 // upsert COALESCEs it forward -- so on such a row it names the pane of a
@@ -137,14 +142,7 @@ SELECT
     WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at > 14400 THEN 'stale'
     ELSE e.state
   END AS effective_state,
-  CASE
-    WHEN s.terminated_at IS NOT NULL THEN
-      CASE WHEN p.state IN ('working', 'awaiting_approval') THEN 6 ELSE 7 END
-    WHEN e.state = 'awaiting_approval' AND unixepoch() - e.created_at <=  7200 THEN 1
-    WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at <= 14400 THEN 2
-    WHEN e.state = 'working'           AND unixepoch() - e.created_at <= 28800 THEN 3
-    ELSE 5
-  END AS priority,
+  COALESCE(p.created_at, e.created_at) AS activity_at,
   p.state AS prior_state,
   CASE WHEN s.waiting_event_id IS NOT NULL THEN 1 ELSE 0 END AS marked,
   s.memo,

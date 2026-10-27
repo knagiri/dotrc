@@ -10,16 +10,14 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 )
 
-// priorityOf mirrors the queue view's priorities for the states used here.
-var priorityOf = map[string]int{"awaiting_approval": 1, "idle_done": 2, "working": 3, "stale": 5}
-
-// trow builds a live row; parent "" means no link was recorded.
+// trow builds a live row whose latest event is its latest activity; parent ""
+// means no link was recorded.
 func trow(id, state string, created int64, parent string) db.Row {
 	return db.Row{
 		SessionID:       id,
 		EffectiveState:  state,
-		Priority:        priorityOf[state],
 		CreatedAt:       created,
+		ActivityAt:      created,
 		ParentSessionID: sql.NullString{String: parent, Valid: parent != ""},
 	}
 }
@@ -67,21 +65,61 @@ func TestBuildForest(t *testing.T) {
 		live: liveOf("P", "C"),
 		want: nil,
 	}, {
-		// A root's rank is its subtree's most urgent priority, so a grandchild
-		// awaiting approval lifts its whole delegation above a root that is
-		// itself more urgent than that root.
-		name: "subtree priority lifts a root with an awaiting grandchild",
+		// A root's rank is the newest activity in its subtree, so a child that
+		// just did something lifts a parent quiet for longer than another root.
+		name: "a newly active child lifts its quiet parent",
 		rows: []db.Row{
 			trow("R1", "idle_done", 500, ""),
 			trow("R2", "working", 50, ""),
-			trow("C", "working", 40, "R2"),
-			trow("G", "awaiting_approval", 30, "C"),
+			trow("C", "idle_done", 900, "R2"),
+		},
+		live: liveOf("R1", "R2", "C"),
+		want: []line{{"R2", ""}, {"C", "└─ "}, {"R1", ""}},
+	}, {
+		// Activity propagates through every level, not just to the direct
+		// parent: G lifts C, which lifts R2 above R1.
+		name: "a newly active grandchild lifts the whole chain",
+		rows: []db.Row{
+			trow("R1", "idle_done", 500, ""),
+			trow("R2", "idle_done", 50, ""),
+			trow("C", "idle_done", 40, "R2"),
+			trow("G", "idle_done", 900, "C"),
 		},
 		live: liveOf("R1", "R2", "C", "G"),
 		want: []line{{"R2", ""}, {"C", "└─ "}, {"G", "   └─ "}, {"R1", ""}},
 	}, {
-		// Equal priority falls back to the subtree's newest event, then id.
-		name: "ties break on newest subtree event, then session id",
+		// No tier per state: awaiting approval sits below newer activity.
+		name: "awaiting approval ranks by its time like any other state",
+		rows: []db.Row{
+			trow("A", "awaiting_approval", 100, ""),
+			trow("I", "idle_done", 200, ""),
+		},
+		live: liveOf("A", "I"),
+		want: []line{{"I", ""}, {"A", ""}},
+	}, {
+		// A hibernated session is gone with its end newer than its activity;
+		// it ranks by the activity.
+		name: "a gone row ranks by its activity, not its end",
+		rows: []db.Row{
+			{SessionID: "G", EffectiveState: "gone", CreatedAt: 1000, ActivityAt: 300},
+			trow("W1", "idle_done", 500, ""),
+			trow("W2", "idle_done", 200, ""),
+		},
+		live: liveOf("W1", "W2"),
+		want: []line{{"W1", ""}, {"G", ""}, {"W2", ""}},
+	}, {
+		// Children follow the same rule as roots.
+		name: "children are ordered by newest activity too",
+		rows: []db.Row{
+			trow("P", "idle_done", 100, ""),
+			trow("C1", "idle_done", 10, "P"),
+			trow("C2", "idle_done", 20, "P"),
+		},
+		live: liveOf("P", "C1", "C2"),
+		want: []line{{"P", ""}, {"C2", "├─ "}, {"C1", "└─ "}},
+	}, {
+		// Equal activity falls back to session id.
+		name: "ties break on session id",
 		rows: []db.Row{
 			trow("A", "idle_done", 100, ""),
 			trow("B", "idle_done", 100, ""),
