@@ -142,11 +142,13 @@ done の session には pin もメモも書けない（一覧に出ないので�
 台帳は session ごとに、作業（`done_at`。NULL が open）とプロセス（`terminated_at`。NULL が
 running、非 NULL が gone）を別々に持つ。picker の既定一覧は open な session で、gone は 💤
 （`[~]`）・summary `gone (was <直前の state>)` で並ぶ。選べば上の到達手段で resume する。
+done は一覧に出ない。
 
 一覧は state で段を分けず、最後のアクティビティ（`ended` 以外の最新 event の時刻）の新しい順に
 並ぶ。休眠や再起動の `SessionEnd` はこの時刻を動かさないので、休眠した session は止まる前の
 位置に留まり、resume すると新しい event で上へ来る。承認待ちも先頭に固定されず、要求が出た
-時刻で並ぶ。委譲の木では、兄弟（root 同士を含む）を部分木の中で最も新しいアクティビティで並べる。done は一覧に出ない。設計は
+時刻で並ぶ。委譲の木では、兄弟（root 同士を含む）を部分木の中で最も新しい
+アクティビティで並べる。設計は
 [docs/design/claude-queue-lifecycle.md](../../docs/design/claude-queue-lifecycle.md)。
 
 done にするのは次だけで、idle の長さ・`claude agents` の一覧に居ないこと・`reason: other` の `SessionEnd` は

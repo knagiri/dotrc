@@ -76,6 +76,18 @@ func TestBuildForest(t *testing.T) {
 		live: liveOf("R1", "R2", "C"),
 		want: []line{{"R2", ""}, {"C", "└─ "}, {"R1", ""}},
 	}, {
+		// Activity propagates through every level, not just to the direct
+		// parent: G lifts C, which lifts R2 above R1.
+		name: "a newly active grandchild lifts the whole chain",
+		rows: []db.Row{
+			trow("R1", "idle_done", 500, ""),
+			trow("R2", "idle_done", 50, ""),
+			trow("C", "idle_done", 40, "R2"),
+			trow("G", "idle_done", 900, "C"),
+		},
+		live: liveOf("R1", "R2", "C", "G"),
+		want: []line{{"R2", ""}, {"C", "└─ "}, {"G", "   └─ "}, {"R1", ""}},
+	}, {
 		// No tier per state: awaiting approval sits below newer activity.
 		name: "awaiting approval ranks by its time like any other state",
 		rows: []db.Row{
