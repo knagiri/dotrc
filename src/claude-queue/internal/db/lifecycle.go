@@ -21,8 +21,10 @@ type execer interface {
 // so it is matched on the prefix of its full id. The recursive CTE uses UNION,
 // which discards rows it has already produced, so a cycle in the links ends
 // the walk instead of looping. A session already done keeps its earlier
-// done_at -- done is one-way and its first time is the one the GC ages -- but
-// is still walked through, so a child left open under a done parent is caught.
+// done_at -- its first time is the one the GC ages -- but is still walked
+// through, so a child left open under a done parent is caught. A session
+// reopened (Reopen) and marked done again is aged from the new time, since
+// the write only touches rows whose done_at is NULL.
 //
 // Only the work axis moves. A descendant whose process is still running is
 // left running; stopping it is reconcile's job (see DoneButRunning).
@@ -47,6 +49,64 @@ func MarkDone(x execer, sessionID string, now int64) (int, error) {
 		return 0, fmt.Errorf("mark done: %w", err)
 	}
 	return int(n), nil
+}
+
+// Reopen takes back a done: it clears sessionID's done_at, and reports false
+// when the session is not done (open already, or not in the ledger). It is
+// the only thing that clears done_at -- no hook event does, a resume included.
+//
+// Unlike MarkDone it does not cascade. The delegates a done marked with it
+// stay done: the session reopened is the one a human picked, and which of its
+// delegates also deserve it back is theirs to say, one at a time.
+func Reopen(x execer, sessionID string) (bool, error) {
+	res, err := x.Exec(
+		"UPDATE sessions SET done_at = NULL WHERE session_id = ? AND done_at IS NOT NULL",
+		sessionID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("reopen: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("reopen: %w", err)
+	}
+	return n > 0, nil
+}
+
+// DoneRetentionSec is how long a done session is kept before the GC deletes
+// it: the window in which it can still be reopened, and so how far back the
+// picker's done list reaches.
+const DoneRetentionSec = 7 * 24 * 3600
+
+// ListDoneRows returns the sessions done within the last maxAgeSec, most
+// recently done first -- the picker's done list, which a reopen picks from.
+//
+// They are not in the queue view, which is open sessions only, so the row is
+// built here with what the list shows: EffectiveState is the pseudo state
+// "done", and CreatedAt (the age column) and ActivityAt are done_at, so the
+// age reads how long ago the session was marked done. No pane is carried: a
+// done row is reopened, never switched to.
+func ListDoneRows(conn *sql.DB, maxAgeSec int64) ([]Row, error) {
+	rows, err := conn.Query(`
+		SELECT session_id, cwd, transcript_path, config_dir, kind, memo, done_at
+		FROM sessions
+		WHERE done_at IS NOT NULL AND done_at >= unixepoch() - ?
+		ORDER BY done_at DESC, session_id
+	`, maxAgeSec)
+	if err != nil {
+		return nil, fmt.Errorf("list done: %w", err)
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		r := Row{EffectiveState: StateDone, RawState: StateDone}
+		if err := rows.Scan(&r.SessionID, &r.Cwd, &r.TranscriptPath, &r.ConfigDir, &r.Kind, &r.Memo, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		r.ActivityAt = r.CreatedAt
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // minPrefix is the shortest id prefix ResolveSessionID accepts: the 8 chars
@@ -90,8 +150,10 @@ func ResolveSessionID(conn *sql.DB, prefix string) (string, error) {
 
 // DoneButRunning returns the background sessions whose work is done but whose
 // process the ledger still has running -- what a cascade leaves behind when it
-// marks a running delegate done. Interactive sessions are not returned: their
-// process is a REPL a human may be looking at, and ending it is theirs to do.
+// marks a running delegate done. A session reopened before reconcile gets to
+// it is open again, so it drops out of this list and keeps running.
+// Interactive sessions are not returned: their process is a REPL a human may
+// be looking at, and ending it is theirs to do.
 func DoneButRunning(conn *sql.DB) ([]LiveSession, error) {
 	rows, err := conn.Query(`
 		SELECT session_id, config_dir FROM sessions
@@ -116,7 +178,8 @@ func DoneButRunning(conn *sql.DB) ([]LiveSession, error) {
 
 // GC deletes the sessions (and their events) whose work has been done for
 // longer than maxAgeSec, and the delegation links older than that with no open
-// session at either end.
+// session at either end. Until then a done session can be reopened (Reopen);
+// after, it is gone for good.
 //
 // A gone session is never collected, however long ago its process ended: its
 // work is still open, and deleting it is exactly the silent loss of WIP the

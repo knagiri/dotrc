@@ -80,7 +80,7 @@ func TestMarkDone_CycleTerminates(t *testing.T) {
 	}
 }
 
-// done is one-way and its first time is the one GC ages: a repeat neither moves
+// A done keeps its first time, the one GC ages: a repeat neither moves
 // it nor counts it, but a descendant still open under it is caught.
 func TestMarkDone_KeepsEarlierDoneAt(t *testing.T) {
 	conn := openTest(t)
@@ -245,5 +245,52 @@ func TestDoneButRunning(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].SessionID != "bg-done" {
 		t.Errorf("DoneButRunning = %+v, want only bg-done", got)
+	}
+}
+
+// The done list holds the sessions the GC has not aged out, most recently
+// done first, each carrying its done time as the age; open sessions and ones
+// past the window are left out.
+func TestListDoneRows_WindowAndOrder(t *testing.T) {
+	conn := openTest(t)
+	for _, id := range []string{"open", "old", "recent", "older"} {
+		insertSession(t, conn, id, "")
+	}
+	setDone(t, conn, "recent", 100)
+	setDone(t, conn, "older", 6*day)
+	setDone(t, conn, "old", 8*day)
+
+	got, err := ListDoneRows(conn, 7*day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, r := range got {
+		ids = append(ids, r.SessionID)
+		if r.EffectiveState != StateDone {
+			t.Errorf("%s state = %q, want %q", r.SessionID, r.EffectiveState, StateDone)
+		}
+		if at := doneAt(t, conn, r.SessionID); r.CreatedAt != at.Int64 {
+			t.Errorf("%s CreatedAt = %d, want its done_at %d", r.SessionID, r.CreatedAt, at.Int64)
+		}
+	}
+	if strings.Join(ids, ",") != "recent,older" {
+		t.Errorf("ListDoneRows = %v, want [recent older]", ids)
+	}
+}
+
+// Reopen clears done_at and reports whether it did.
+func TestReopen(t *testing.T) {
+	conn := openTest(t)
+	insertSession(t, conn, "s", "")
+	if ok, err := Reopen(conn, "s"); err != nil || ok {
+		t.Errorf("Reopen of an open session = %v, %v; want false", ok, err)
+	}
+	setDone(t, conn, "s", 10)
+	if ok, err := Reopen(conn, "s"); err != nil || !ok {
+		t.Errorf("Reopen of a done session = %v, %v; want true", ok, err)
+	}
+	if at := doneAt(t, conn, "s"); at.Valid {
+		t.Errorf("done_at = %v after Reopen, want NULL", at)
 	}
 }

@@ -132,9 +132,9 @@ func TestDispatch_ResumeRevivesGone(t *testing.T) {
 	}
 }
 
-// done is one-way: a done session that is resumed keeps its done_at and stays
-// out of the listing.
-func TestDispatch_DoneIsOneWay(t *testing.T) {
+// No hook event takes a done back (only a reopen does): a done session that
+// is resumed keeps its done_at and stays out of the listing.
+func TestDispatch_ResumeKeepsDone(t *testing.T) {
 	d := openTestDB(t)
 	dispatchAll(t, d, start("s", "startup"), end("s", "prompt_input_exit"))
 	first := doneAtOf(t, d, "s")

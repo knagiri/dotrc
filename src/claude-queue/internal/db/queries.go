@@ -67,6 +67,10 @@ const (
 // the session stays listed until its work is marked done.
 const StateGone = "gone"
 
+// StateDone is the pseudo effective_state of the rows ListDoneRows returns.
+// Like StateGone no hook writes it; the queue view never carries it.
+const StateDone = "done"
+
 // ListOpts filters the queue listing.
 type ListOpts struct {
 	ShowWorking bool

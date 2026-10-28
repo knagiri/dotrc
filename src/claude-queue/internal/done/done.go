@@ -18,7 +18,8 @@ import (
 
 // Run is the CLI entrypoint. It exits 1 on a bad argument, an id that does not
 // resolve to exactly one session, or a failed write. Marking a session that is
-// already done succeeds: done is one-way, so a repeat is the state asked for.
+// already done succeeds: the session is in the state asked for. Taking a done
+// back is `claude-queue reopen` (internal/reopen).
 func Run(args []string) {
 	if len(args) != 1 || args[0] == "" {
 		fmt.Fprintln(os.Stderr, "usage: claude-queue done <session-id-or-prefix>")
