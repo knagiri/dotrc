@@ -9,7 +9,7 @@ tmux popup + fzf picker で該当 pane にジャンプするための Go CLI。
 
 - Go 1.22+（ビルド時）
 - SQLite は `modernc.org/sqlite` に同梱、CGO 不要
-- ランタイム: `tmux` 3.2+, `fzf`
+- ランタイム: `tmux` 3.2+, `fzf` 0.46+（`transform` アクションは 0.45、`$FZF_PROMPT` は 0.46 で入った。古いと done 一覧の切り替えがエラーなしに誤動作する）
 
 ## Multiplexer 抽象
 
@@ -162,8 +162,8 @@ done にするのは次だけで、idle の長さ・`claude agents` の一覧に
 - `claude-queue done`（picker の `ctrl-x`、`bin/claude-stop-bg`）
 - 親が done になったときの子孫（`session_links` を辿る cascade）
 
-done は後続の hook event（resume 等）では戻らず、明示的な reopen（次節）でだけ open に戻る。gone は同じ session id の hook が
-届いた時点で running に戻る。kind（`interactive` / `background` / `print`）は hook の環境変数
+done は後続の hook event（resume 等）では戻らず、明示的な reopen（次節）でだけ
+open に戻る。gone は同じ session id の hook が届いた時点で running に戻る。kind（`interactive` / `background` / `print`）は hook の環境変数
 （`CLAUDE_JOB_DIR` / `CLAUDE_CODE_ENTRYPOINT`）で決める。`SessionEnd` の `reason` は
 `claude -p` の終了・`claude stop`・pane の kill・ホスト停止のいずれも `other` で、kind を区別
 できないため。
@@ -176,7 +176,7 @@ done 一覧を切り替える。done 一覧には GC 前（done から 7 日以�
 
 | キー（done 一覧） | 操作 |
 |---|---|
-| `ctrl-x` | reopen する（確認なし。もう一度 done にすれば戻る）。通常の一覧に戻り、done 一覧から消える |
+| `ctrl-x` | reopen する（確認なし。もう一度 done にすれば戻る）。その session は done 一覧から消えて通常の一覧に戻る（表示は done 一覧のまま。通常の一覧へは `ctrl-r`） |
 | `ctrl-r` | 通常の一覧に戻る |
 
 done 一覧では `tab` / `ctrl-t` / `ctrl-e` / Enter は効かない（done の session には pin もメモも

@@ -111,8 +111,9 @@ func Dispatch(d *Deps, event string, in *Input) error {
 // forever, though its process is running again.
 //
 // done_at is never touched: only an explicit reopen (db.Reopen) takes a done
-// back, so a done session that is resumed stays out of the listing. kind is overwritten when known, since a
-// resume can bring a session back as another kind (`claude --bg --resume`).
+// back, so a done session that is resumed stays out of the listing. kind is
+// overwritten when known, since a resume can bring a session back as another
+// kind (`claude --bg --resume`).
 //
 // Dispatch relies on running this BEFORE it re-sets terminated_at for SessionEnd
 // -- both happen in the same transaction, so a genuine end still lands closed.

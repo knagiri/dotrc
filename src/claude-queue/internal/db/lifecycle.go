@@ -151,8 +151,9 @@ func ResolveSessionID(conn *sql.DB, prefix string) (string, error) {
 // DoneButRunning returns the background sessions whose work is done but whose
 // process the ledger still has running -- what a cascade leaves behind when it
 // marks a running delegate done. A session reopened before reconcile gets to
-// it is open again, so it drops out of this list and keeps running. Interactive sessions are not returned: their
-// process is a REPL a human may be looking at, and ending it is theirs to do.
+// it is open again, so it drops out of this list and keeps running.
+// Interactive sessions are not returned: their process is a REPL a human may
+// be looking at, and ending it is theirs to do.
 func DoneButRunning(conn *sql.DB) ([]LiveSession, error) {
 	rows, err := conn.Query(`
 		SELECT session_id, config_dir FROM sessions

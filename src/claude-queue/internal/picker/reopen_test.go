@@ -199,7 +199,8 @@ func TestRun_EmptyOpenListOpensForDone(t *testing.T) {
 	}
 }
 
-// A pick that reaches the picker from the done list is refused.
+// isDone tells a done session from an open or unknown one. The refusal in
+// run() that uses it is covered by TestRun_RefusesPickOfDoneSession.
 func TestIsDone(t *testing.T) {
 	path := seedDB(t, "INSERT INTO sessions(session_id, done_at) VALUES ('o', NULL), ('d', unixepoch())")
 	conn, err := db.Open(path)
@@ -209,5 +210,46 @@ func TestIsDone(t *testing.T) {
 	defer conn.Close()
 	if isDone(conn, "o") || !isDone(conn, "d") || isDone(conn, "missing") {
 		t.Errorf("isDone(o, d, missing) = %v, %v, %v; want false, true, false", isDone(conn, "o"), isDone(conn, "d"), isDone(conn, "missing"))
+	}
+}
+
+// A pick of a done session that reaches run() (a double-click accepts even
+// though the done list unbinds Enter) is refused with the reopen hint, and
+// never reaches the switch / attach / resume decision.
+func TestRun_RefusesPickOfDoneSession(t *testing.T) {
+	seedDB(t,
+		"INSERT INTO sessions(session_id, done_at) VALUES ('done-pick', unixepoch() - 60)",
+		"INSERT INTO events(session_id, event_type, state) VALUES ('done-pick', 'Stop', 'idle_done')",
+	)
+	now := time.Now().Unix()
+	line := strings.TrimRight(listOut(t, now, "--done"), "\n")
+	if !strings.Contains(line, "done-pick") {
+		t.Fatalf("done list = %q, want the seeded session", line)
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	run(nil, &bytes.Buffer{}, func(*sql.DB) {}, func(string, []string) (string, error) {
+		return line, nil
+	}, now)
+	os.Stderr = orig
+	w.Close()
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	got := buf.String()
+
+	if !strings.Contains(got, "is done: reopen it") {
+		t.Errorf("stderr = %q, want the reopen hint", got)
+	}
+	// The other paths print their own messages (no pane, roster unreadable,
+	// open/resume failure); none of them may appear.
+	for _, bad := range []string{"not resuming", "no tmux pane", "switch to", "open session failed"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("stderr = %q, contains %q: the pick got past the done guard", got, bad)
+		}
 	}
 }
