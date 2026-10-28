@@ -20,6 +20,10 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 
 `gh api` を使うのは、高位コマンドに該当機能が無い場合に限る（例：特定エンドポイントの未対応フィールド取得、bulk 操作など）。
 
+ラッパーの無い書き込み操作（issue へのコメント、label 付け替え、本文編集など）は、dotrc では `MISE_ENV=gh mise exec -- gh ...` の形で呼ぶ。素の `gh` は `~/.config/gh/hosts.yml` のトークンに落ち、それは issue への書き込み権限を持たないので `Resource not accessible by personal access token` で失敗する。書き込み権限を持つ個人用アクセストークンは `MISE_ENV=gh` のときだけ読まれる（仕組みは `bin/lib/gh-mise.sh` の冒頭コメントと [worktree-scope.md](./worktree-scope.md) §6）。投稿してよいかの判断は §3 と [issue-workflow.md](./issue-workflow.md) §4 のまま変わらない。
+
+実例: dotrc/docs/incidents/bare-gh-issue-write-denied.md
+
 ### 2. `gh api` を使うときは引数順を固定
 
 permission pattern が予測できるよう、`gh api` の引数順は以下に統一する。
