@@ -150,7 +150,7 @@ func Run(args []string) {
 		"hibernate sessions idle at least this many minutes since their idle_done event")
 	debounceMinutes := fs.Int("pr-debounce-minutes", int(prwatch.DefaultDebounce/time.Minute),
 		"deliver new PR activity once it has been pending at least this many minutes")
-	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; change nothing")
+	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; skip reconcile, PR watch and stop (opening the DB may still write)")
 	_ = fs.Parse(args)
 	if *idleMinutes < 0 || *debounceMinutes < 0 {
 		fmt.Fprintln(os.Stderr, "watch: --idle-minutes and --pr-debounce-minutes must not be negative")
