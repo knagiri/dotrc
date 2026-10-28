@@ -29,9 +29,11 @@ type Options struct {
 	// PRDebounce is how long new PR activity is held before it is delivered
 	// (prwatch.DefaultDebounce).
 	PRDebounce time.Duration
-	// DryRun reports what would be hibernated and changes nothing: no
-	// reconcile (it writes the ledger and stops done background sessions), no
-	// PR watch (it resumes sessions and moves their cursors), no stop.
+	// DryRun reports what would be hibernated without the pass's own effects:
+	// no reconcile (it writes the ledger and stops done background sessions),
+	// no PR watch (it resumes sessions and moves their cursors), no stop. It
+	// does not keep the database untouched: opening it (db.Open) still
+	// recreates the queue view and applies pending migrations.
 	DryRun bool
 }
 
