@@ -14,7 +14,7 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 | PR の CI 状態を見る | `gh-pr-checks <N>`（§5 参照） | `gh pr checks` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks` は読み取り専用の `gh api`（`actions/runs` と `commits/<sha>/status`）2 本を合成する薄いラッパーで、高位コマンドが使えない代替であって「`gh api` を避けている」わけではない |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
 | PR に review を提出する | `gh pr review <N> [--approve\|--request-changes\|--comment] -b "..."` | 高位コマンドが review object を正しく扱う |
-| Issue 操作 | `gh issue *`。ただし**起票のみ** `gh-issue-file`（[issue-workflow.md](./issue-workflow.md) §1）。閲覧（`gh issue view` / `gh issue list`）は高位コマンドのまま | 同上 |
+| Issue 操作 | `gh issue *`。ただし**起票のみ** `gh-issue-file`（[issue-workflow.md](./issue-workflow.md) §1）、`ready → delegated` の label 付け替えは `gh-issue-mark-delegated`（同 §3）。閲覧（`gh issue view` / `gh issue list`）は高位コマンドのまま | 同上 |
 | Run（GH Actions）を見る | `gh run view *` | 同上 |
 | Repo 情報を見る | `gh repo view *` | 同上 |
 
@@ -82,6 +82,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 - **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`, `gh-pr-create *`）
   - `gh-pr-create *` は §5 のラッパー用。素の `gh pr create *` も残す（ラッパーが env を載せるだけで権限は同じなので、どちらが通っても grant の広さは変わらない）
   - PR 本文の更新は §5 の `gh-pr-edit-body *` だけを allow する。素の `gh pr edit *` は title / base / reviewer / label まで書き換えられるので allow しない
+  - issue の label 付け替えは §5 の `gh-issue-mark-delegated *` だけを allow する。素の `gh issue edit *` は任意の label・title・本文を書き換えられるので allow しない
   - CI 状態の確認は `gh pr checks *` を allow しない。pattern 自体は正しくマッチするが、fine-grained PAT では実行すれば必ず失敗する（§1 / §5 の理由）ので、allow しておいても許可する意味が無い（`claude-settings.md` が定義する「pattern がマッチしない dead rule」とは別物）。代わりに §5 の `gh-pr-checks *` を allow する
   - コメント取得の `gh pr view <N> --comments` も `gh pr view *` の pattern にはマッチするが、fine-grained PAT では失敗しうる（§1）。ただし `gh pr view *` は他の read 用途で必要なので allow は維持し、コメント取得には §5 の `gh-pr-comments *` を使う
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ
@@ -104,6 +105,7 @@ prompt injection / 権限バイパスの経路になる。
 | CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
 | PR 作成 | `gh-pr-create [flags]` | `gh pr create`（フラグは素通し） | `Bash(gh-pr-create *)` |
 | PR 本文の更新 | `gh-pr-edit-body <PR> <body-file>` | `gh pr edit <PR> --body-file <body-file>` のみ。本文を置き換える（追記は `gh pr view <PR> --json body` で現本文を取って編集したファイルを渡す） | `Bash(gh-pr-edit-body *)` |
+| issue の `status/ready → status/delegated` | `gh-issue-mark-delegated <issue>` | `gh issue view <issue> --json labels` で `status/*` がちょうど `status/ready` 1 個であることを確かめてから `gh issue edit <issue> --remove-label status/ready --add-label status/delegated`。それ以外の遷移は拒否する | `Bash(gh-issue-mark-delegated *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>`、clean 拒否のときだけ `gh pr merge --merge <PR>` へ fallback | `Bash(gh-automerge *)` |
 
 - ラッパーはフラグ素通しをしない（**`gh-pr-create` だけは例外**で全フラグを素通しする。

@@ -69,9 +69,10 @@ exit 2 のときは既存 agent task の一覧が stderr に出る。候補の t
 
 `ready → delegated` の付け替えは**着手した側**（委譲を起こした session、またはインラインで
 実装に入った session）が
-`gh issue edit <N> --remove-label status/ready --add-label status/delegated` で行う。
-`gh issue edit` は allowlist に入っていないので承認プロンプトを踏むが、着手するのは人間が
-同席する session なので摩擦は小さい。人間不在の委譲先はこの付け替えを行わない
+`gh-issue-mark-delegated <N>`（`bin/`）で行う。ラッパーは `status/*` がちょうど
+`status/ready` 1 個の issue だけを付け替え、それ以外は拒否する。素の `gh issue edit` は
+使わない。hosts.yml の token に落ちて権限不足で失敗するうえ、現在の label を確かめないので
+triage の issue にも撃てて、人間ゲートを飛ばしうるため。人間不在の委譲先はこの付け替えを行わない
 （担い手を「委譲」に限定すると、§6 が広げたインライン経路で付け替え役が不在になるため）。
 
 ### 4. issue へのコメント投稿はしない
@@ -134,7 +135,10 @@ PR reply ポリシーと同じ扱いで、既定は指摘の整理・要約・�
 別途明示的に押さなくても、その場の指示が「このまま着手してよい」という承認を代替する）。
 この経路では label を人間に押させず、着手した側が `triage → delegated` へ直接付け替える
 （6.1 の「`triage → ready` を自分で付け替えない」は、ゲートが人間の明示的な指示で満たされて
-いない場合の規定であり、この同一ターン経路には当たらない）。
+いない場合の規定であり、この同一ターン経路には当たらない）。付け替えは §3 のラッパーでは
+通らない（ラッパーは同一ターンの指示の有無を区別できないので、triage からの遷移を拒否する）。
+`MISE_ENV=gh mise exec -- gh issue edit <N> --remove-label status/triage --add-label status/delegated`
+で撃ち、承認プロンプトを通す（ラッパーの無い書き込みの呼び方は [gh-commands.md](./gh-commands.md) §1）。
 
 **消化側を状況から推測しない。** 緊急そうだから・文脈がロードされているから・今なら安いから、
 を理由に自分で引き取らない。割り当ては人間（または crawler）が明示的に行う。

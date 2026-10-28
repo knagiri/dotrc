@@ -85,8 +85,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    - harness を足す issue なら、incident doc の扱いも明記する（issue 本文の `## 由来` を写す。
      harness の範囲・置き場所・対象 repo が dotrc 以外のときの扱い・書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）。
    - 起動後、issue の label を `status/ready` → `status/delegated` へ替える
-     （`gh issue edit` は allowlist に無いので承認プロンプトを踏む。委譲を起こすのは人間が
-     同席する session なので摩擦は小さい）。
+     （手段は `dot/claude/rules/issue-workflow.md` §3）。
 
    起票側の規範は `dot/claude/rules/issue-workflow.md`。
 
