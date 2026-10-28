@@ -25,8 +25,8 @@ wip
  1 file changed, 1 insertion(+)
 ```
 
-`git checkout` は最後の commit に戻すので変異前の未 commit 分も消え、退避したコピーからなら
-変異前の差分に戻る。
+`git checkout -- <path>` は index の内容に戻すので、stage していない変異前の未 commit 分も消え
+（この再現では wip を stage していない）、退避したコピーからなら変異前の差分に戻る。
 
 ## 直し方
 

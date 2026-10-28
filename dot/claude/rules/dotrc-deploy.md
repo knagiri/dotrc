@@ -157,8 +157,9 @@ claude-queue（`internal/configdir` の `Env` / `IsDefault`）と `bin/lib/claud
 
 ### 7. claude-queue を実データで確かめるときは DB のコピーを指す
 
-claude-queue はどのサブコマンドも DB を開いた時点で `queue` view を作り直し、未適用の移行も
-走らせる（`internal/db/open.go` の `Open`）。したがって `--dry-run` や読むだけのつもりの
+claude-queue の DB を開くサブコマンドは（status や picker のような読むだけのものも含めて）
+どれも、開いた時点で `queue` view を作り直し、未適用の移行も走らせる（`internal/db/open.go` の
+`Open`）。`reset` は DB ファイルそのものを消すので、なおさら実 DB を指さない。したがって `--dry-run` や読むだけのつもりの
 コマンドでも、指した DB に書き込む。`--dry-run` が止めるのは休眠などの副作用であって、DB を
 開くことによる書き込みではない。
 

@@ -14,7 +14,8 @@ dry run した。
 `View`（`DROP VIEW IF EXISTS queue; CREATE VIEW queue ...`）の順に毎回実行する。
 `migrateLifecycle` は `PRAGMA user_version` で gate されており、適用済みなら書かない。
 
-この doc の作成時に、実 DB のコピーで dry run 前後の mtime を見た:
+この doc の作成時に、実 DB のコピーで dry run 前後の mtime を見た（下は `-readonly` 無しで
+実行した出力。rule の手順では `-readonly` を付ける）:
 
 ```
 $ sqlite3 ~/.claude/session-queue.db ".backup $T/q.db"

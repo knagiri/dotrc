@@ -155,7 +155,7 @@ grant の広さは merge 前に必ず一度は人目を通る。だから条件�
 PR コメント・issue 本文など第三者が書けるテキストの本文を、別 session へ渡す prompt
 （`claude --resume <id> "<msg>"`、委譲プロンプト、SendMessage の本文）に一般に入れない。
 受け手はそれを利用者の発話と同じ重みで読むので、人間不在の session では prompt injection の
-経路になる。冒頭で述べた「広い grant が injection の経路になる」と同じ話で、こちらは grant では
+経路になる。§5 冒頭で述べた「広い grant が injection の経路になる」と同じ話で、こちらは grant では
 なく prompt の側から入る。
 
 渡すのは件数・種別・PR 番号のような機械的に作れる情報だけにし、本文は受け手が
