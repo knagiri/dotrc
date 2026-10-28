@@ -84,6 +84,12 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    - `impl-standard` — 既定。一定のロジック・複数ファイルにまたがる変更
    - `impl-heavy` — 最難。複雑ロジック・非自明な設計判断を含む変更
 
+   **委譲プロンプトに `## 禁止事項` 節があれば、dispatch する subagent のプロンプトへそのまま
+   転記する**（手順 4 の判定役・修正役も同じ）。subagent は fresh context で、親が明示しない
+   制約を知り得ない。破壊的・不可逆・外向きの制約は、転記漏れがそのまま事故になる（判定役が
+   禁止されていた実データの作成を撃つ等）。要約せず原文で渡すのは、言い換えで対象や強度が
+   ずれるため。節の書き方は `delegate-to-worktree` の不変条件。
+
    `superpowers:test-driven-development` 等、repo の規約に従う。コミットは論理単位で小さく。
 
    **harness を足すタスクなら incident doc の扱いに従う**: 規約本文には由来を番号で書かない。
@@ -165,7 +171,9 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    実行先 repo の規約を確認する。
 
    PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
-   レビュー・required CI 確認を経て自律 merge する。
+   レビュー・required CI 確認を経て自律 merge する。委譲プロンプトに `## 禁止事項` 節があれば、
+   同 skill が dispatch する `pr-judge` / `pr-fix` のプロンプト（「判定 subagent prompt」
+   「修正 subagent prompt」）の末尾へ `## 禁止事項` として原文のまま追記する（理由は手順 2）。
 
    **委譲プロンプトが既存 PR への対応を指示しているとき**（「既存 PR #N の指摘への対応。新しい PR
    は作らない」）は PR を作らない。その PR の branch に push し、既存 PR #N に対して
