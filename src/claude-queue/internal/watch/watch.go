@@ -29,9 +29,11 @@ type Options struct {
 	// PRDebounce is how long new PR activity is held before it is delivered
 	// (prwatch.DefaultDebounce).
 	PRDebounce time.Duration
-	// DryRun reports what would be hibernated and changes nothing: no
-	// reconcile (it writes the ledger and stops done background sessions), no
-	// PR watch (it resumes sessions and moves their cursors), no stop.
+	// DryRun reports what would be hibernated without the pass's own effects:
+	// no reconcile (it writes the ledger and stops done background sessions),
+	// no PR watch (it resumes sessions and moves their cursors), no stop. It
+	// does not keep the database untouched: opening it (db.Open) still
+	// recreates the queue view and applies pending migrations.
 	DryRun bool
 }
 
@@ -148,7 +150,7 @@ func Run(args []string) {
 		"hibernate sessions idle at least this many minutes since their idle_done event")
 	debounceMinutes := fs.Int("pr-debounce-minutes", int(prwatch.DefaultDebounce/time.Minute),
 		"deliver new PR activity once it has been pending at least this many minutes")
-	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; change nothing")
+	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; skip reconcile, PR watch and stop (opening the DB may still write)")
 	_ = fs.Parse(args)
 	if *idleMinutes < 0 || *debounceMinutes < 0 {
 		fmt.Fprintln(os.Stderr, "watch: --idle-minutes and --pr-debounce-minutes must not be negative")
