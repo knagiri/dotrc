@@ -32,8 +32,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- open. terminated_at is the process axis (NULL running, set gone) and says
   -- nothing about the work -- a reboot, a reconcile ForcedEnd or a background
   -- job timing out all set it on sessions whose work is still in flight. Only
-  -- an explicit act writes done_at (see MarkDone), and nothing clears it: done
-  -- is one-way. Added by migrate() too.
+  -- an explicit act writes done_at (see MarkDone), and only an explicit act
+  -- clears it (Reopen): no hook event does, a resume included. Added by
+  -- migrate() too.
   done_at          INTEGER,
   -- How the session was started: 'interactive', 'background' (claude --bg) or
   -- 'print' (claude -p). NULL is unknown and reads as interactive. Recorded by

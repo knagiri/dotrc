@@ -11,6 +11,7 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/mark"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/picker"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/reopen"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reset"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/status"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/watch"
@@ -24,6 +25,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       claude-queue link --parent <session-id> --child <short-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue mark <session-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue done <session-id-or-prefix>")
+	fmt.Fprintln(os.Stderr, "       claude-queue reopen <session-id-or-prefix>")
 	fmt.Fprintln(os.Stderr, "       claude-queue memo [--session <id>] [--] [<text>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N | PR URL>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue unpin [--session <id>]")
@@ -62,6 +64,8 @@ func main() {
 		mark.Run(os.Args[2:])
 	case "done":
 		done.Run(os.Args[2:])
+	case "reopen":
+		reopen.Run(os.Args[2:])
 	case "memo", "pin", "unpin":
 		annotate.Run(os.Args[1], os.Args[2:])
 	default:
