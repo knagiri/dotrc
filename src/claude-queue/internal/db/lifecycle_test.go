@@ -80,7 +80,7 @@ func TestMarkDone_CycleTerminates(t *testing.T) {
 	}
 }
 
-// done is one-way and its first time is the one GC ages: a repeat neither moves
+// A done keeps its first time, the one GC ages: a repeat neither moves
 // it nor counts it, but a descendant still open under it is caught.
 func TestMarkDone_KeepsEarlierDoneAt(t *testing.T) {
 	conn := openTest(t)

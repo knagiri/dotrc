@@ -49,6 +49,7 @@ make install
 | `claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N \| PR URL>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す。`--pr` を渡すとその PR を監視する（既読位置は今の時刻から。後述の「PR 監視」） |
 | `claude-queue unpin [--session <id>]` | pin とそのコメント・PR 監視を外す |
 | `claude-queue done <session-id-or-prefix>` | session の作業を done にする（委譲先も cascade で done）。picker の `ctrl-x` と `bin/claude-stop-bg` が呼ぶ。8 桁以上の前方一致で 1 件に決まらなければ exit 1。既に done でも exit 0 |
+| `claude-queue reopen <session-id-or-prefix>` | done を取り消し、作業を open に戻す。委譲先には波及しない（done の cascade と非対称）。picker の done 一覧の `ctrl-x` が呼ぶ。id の解決は `done` と同じ。done でない・1 件に決まらなければ exit 1 |
 | `claude-queue --version` | バージョン表示 |
 
 `memo` / `pin` / `unpin` は `--session`（8 桁以上の前方一致）を省くと `CLAUDE_CODE_SESSION_ID` を使う。Claude Code は
@@ -123,6 +124,7 @@ pin は「外部待ち」の印で、人の返信待ち・保留・後回しに�
 | `ctrl-t` | pin のコメントを 1 行編集する。保存すると pin も立つ |
 | `ctrl-e` | メモを 1 行編集する。空にして保存すると消える |
 | `ctrl-x` | done にする。`y` 以外を押すと何もしない。失敗したら理由を出し、キー入力を待つ |
+| `ctrl-r` | done 一覧に切り替える（後述の「done の取り消し」） |
 
 編集は現在の値を初期値にした readline で、`Ctrl-U` で行を空にしてから `Ctrl-D` で取り消す（行が空でない間の `Ctrl-D` は 1 文字削除になる）。空のまま Enter すると消去になる。`-` で始まるメモも保存できる。保存したテキストのタブと改行は空白に
 潰す。agent は CLI（`claude-queue pin` / `memo`）で自分の session に付けられる。
@@ -160,11 +162,30 @@ done にするのは次だけで、idle の長さ・`claude agents` の一覧に
 - `claude-queue done`（picker の `ctrl-x`、`bin/claude-stop-bg`）
 - 親が done になったときの子孫（`session_links` を辿る cascade）
 
-done は一方向で、後続の hook event（resume 等）でも戻らない。gone は同じ session id の hook が
+done は後続の hook event（resume 等）では戻らず、明示的な reopen（次節）でだけ open に戻る。gone は同じ session id の hook が
 届いた時点で running に戻る。kind（`interactive` / `background` / `print`）は hook の環境変数
 （`CLAUDE_JOB_DIR` / `CLAUDE_CODE_ENTRYPOINT`）で決める。`SessionEnd` の `reason` は
 `claude -p` の終了・`claude stop`・pane の kill・ホスト停止のいずれも `other` で、kind を区別
 できないため。
+
+### done の取り消し（reopen）
+
+`ctrl-x` を誤って押した session は、picker の done 一覧から戻せる。`ctrl-r` で通常の一覧と
+done 一覧を切り替える。done 一覧には GC 前（done から 7 日以内）の session が、done にした時刻の
+新しい順に並び、age 列は done からの経過を出す。session id を覚えていなくても選べる。
+
+| キー（done 一覧） | 操作 |
+|---|---|
+| `ctrl-x` | reopen する（確認なし。もう一度 done にすれば戻る）。通常の一覧に戻り、done 一覧から消える |
+| `ctrl-r` | 通常の一覧に戻る |
+
+done 一覧では `tab` / `ctrl-t` / `ctrl-e` / Enter は効かない（done の session には pin もメモも
+書けず、resume もしない）。どちらの一覧を表示中かは prompt（`> ` / `done> `）で分かり、header の
+キー一覧も切り替わる。開いている session が 1 つも無くても done 一覧に戻せるものがあれば popup は開く。
+
+reopen は委譲先に波及しない。cascade で一緒に done になった委譲先は done のまま残るので、
+要るものは個別に reopen する。もう一度 done にすると GC の起点はその時刻になる。GC 済みの
+session は戻せない。CLI では `claude-queue reopen <session-id-or-prefix>`。
 
 gone の session は `tmux_pane` を運ばない（view が NULL にする）。ledger はこの列を終了時に
 クリアせず持ち回るため、gone の pane は必ず「終わったプロセスの pane」であり、pane id は server

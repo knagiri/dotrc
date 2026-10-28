@@ -43,7 +43,7 @@ session は kind（`interactive` / `background`）を持ち、状態は独立し
 
 | 軸 | 値 | 誰が決めるか |
 |---|---|---|
-| 作業 | `open` → `done`（一方向） | 利用者・委譲元の明示的な操作だけ |
+| 作業 | `open` → `done`（reopen でだけ戻る） | 利用者・委譲元の明示的な操作だけ |
 | プロセス | `running` ↔ `gone` | 観測（hook・`claude agents` の一覧）と休眠 |
 
 既存の hook 由来の state（`working` / `awaiting_approval` / `idle_done`）は `running` の中の細分として
@@ -59,6 +59,17 @@ session は kind（`interactive` / `background`）を持ち、状態は独立し
 | background | `claude-stop-bg` で閉じたとき。`claude stop` 由来の `SessionEnd` は `reason: other` で再起動時の SIGTERM と区別できないので、`claude-stop-bg` が台帳へ完了を書き、`claude agents` の一覧に居れば続けて stop する（休眠で既に `gone` の子にも効くよう、一覧に居ないことを拒否理由にしない）。interactive（kind 不明を含む）は一覧に居ても居なくても拒否し、done を書かない |
 | 非対話（`claude -p` 等） | プロセス終了時に常に `done`。一回きりの実行で、再開する WIP ではない |
 | 両方 | 親が `done` になったとき（cascade。下記） |
+
+### `done` からの取り消し（reopen）
+
+`done` → `open` は明示的な reopen（`claude-queue reopen`、picker の done 一覧の `ctrl-x`）でだけ起きる。
+picker の `ctrl-x` の誤操作を戻すための経路で、hook event は `done_at` に触れないので resume しても
+`done` は外れない。
+
+- 委譲先には波及しない。cascade で一緒に `done` になった子は `done` のまま残る。どの子を戻すかは
+  利用者が個別に決める
+- 戻せるのは GC 前（`done` から 7 日以内）の session だけ。GC 済みの記録は復元しない
+- もう一度 `done` にすると、GC の起点はその時刻になる
 
 ### `gone` への遷移（作業は `open` のまま）
 
@@ -186,7 +197,8 @@ background の委譲元も、daemon は最後の client が切れて数秒で終
 
 ## 一覧と GC
 
-- picker の既定一覧は `open` な session。`gone` は 💤 で区別し、選べば resume する。`done` は出さない
+- picker の既定一覧は `open` な session。`gone` は 💤 で区別し、選べば resume する。`done` は出さず、
+  `ctrl-r` で切り替える done 一覧（GC 前の `done` を done にした時刻の新しい順）にだけ出る
 - 並び順は state で段を分けず、最後のアクティビティ（`ended` 以外の最新 event の時刻）の新しい順。
   休眠・再起動の `SessionEnd` はこの時刻を動かさないので、休眠した session は止まる前の位置に留まる
 - 現在の `--show-resumable` の役割（終了済みから resume 候補を拾い直す）は、`open / gone` が既定一覧に
