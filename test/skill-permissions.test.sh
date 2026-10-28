@@ -29,11 +29,10 @@ fail=0
 tmp="$(mktemp -d)"
 trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
-# Skills deliberately left out of the Skill(...) allowlist.
-# es-create-pr: its allowed-tools carry raw `gh pr edit` / `gh pr close`, so
-# each invocation keeps a human confirmation. check_skill_allow also fails if an
-# excluded skill gains a Skill(...) allow, or if the name no longer exists.
-excluded_skills="es-create-pr"
+# Skills deliberately left out of the Skill(...) allowlist, each with a reason.
+# No skill is excluded at present. check_skill_allow also fails if an excluded
+# skill gains a Skill(...) allow, or if the name no longer exists.
+excluded_skills=""
 
 # Prints the allowed-tools entries of a SKILL.md frontmatter, one per line.
 # Accepts the inline form (`a, b c`, optionally `[a, b]`) and the YAML block
@@ -164,10 +163,15 @@ out="$(check_skill_allow "$skills_dir" "$tmp/settings.json")"
 case "$out" in *"missing allow: Skill(implement-and-review)"*) echo "ok: catches a missing Skill(implement-and-review) allow" ;;
   *) echo "FAIL: missed a missing Skill(implement-and-review) allow"; fail=1 ;; esac
 
-jq '.permissions.allow += ["Skill(es-create-pr)"]' "$settings" >"$tmp/settings.json"
-out="$(check_skill_allow "$skills_dir" "$tmp/settings.json")"
-case "$out" in *"excluded but allowed: Skill(es-create-pr)"*) echo "ok: catches an excluded skill that gains a Skill(...) allow" ;;
+# Exclude a real skill whose Skill(...) allow is present (added if missing).
+jq '.permissions.allow |= (if index("Skill(my-commit)") then . else . + ["Skill(my-commit)"] end)' "$settings" >"$tmp/settings.json"
+out="$(excluded_skills="my-commit" check_skill_allow "$skills_dir" "$tmp/settings.json")"
+case "$out" in *"excluded but allowed: Skill(my-commit)"*) echo "ok: catches an excluded skill that gains a Skill(...) allow" ;;
   *) echo "FAIL: missed an excluded skill that gains a Skill(...) allow"; fail=1 ;; esac
+
+out="$(excluded_skills="no-such-skill" check_skill_allow "$skills_dir" "$settings")"
+case "$out" in *"stale exclusion: no-such-skill"*) echo "ok: catches a stale exclusion" ;;
+  *) echo "FAIL: missed a stale exclusion"; fail=1 ;; esac
 
 jq '.permissions.allow += ["Skill(no-such-skill)", "Skill(some-plugin:skill)"]' "$settings" >"$tmp/settings.json"
 out="$(check_skill_allow "$skills_dir" "$tmp/settings.json")"
