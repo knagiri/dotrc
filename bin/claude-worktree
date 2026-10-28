@@ -472,9 +472,9 @@ elif [ -n "$new_base" ]; then
   # new branch's upstream by default (branch.autoSetupMerge). That upstream is
   # wrong for a brand-new delegate branch: a plain `git push` then fails with
   # "The upstream branch of your current branch does not match the name of your
-  # current branch", and es-create-pr's SKILL.md checks `@{upstream}` to decide
-  # whether the branch has been pushed yet, so an unpushed branch would read as
-  # already pushed. This is only about the START POINT above (an existing local
+  # current branch". Anything that reads `@{upstream}` (my-create-pr's
+  # `git log @{upstream}..HEAD`, `git status` ahead/behind) would also measure
+  # against origin/main instead of the branch's own remote. This is only about the START POINT above (an existing local
   # or origin/<branch> checkout should still track normally); a freshly created
   # branch should start with no upstream at all.
   git -C "$repo_dir" worktree add --no-track -b "$branch" "$wt_path" "$new_base" >&2 # new branch off origin's default
