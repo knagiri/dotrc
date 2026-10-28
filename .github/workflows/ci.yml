@@ -47,6 +47,7 @@ jobs:
           shellcheck -S warning \
             bin/claude-digest \
             bin/claude-review \
+            bin/claude-spinoff \
             bin/claude-stop-bg \
             bin/claude-worktree \
             bin/gh-automerge \
@@ -64,6 +65,7 @@ jobs:
             bin/lib/gh-mise.sh \
             test/claude-digest.test.sh \
             test/claude-review.test.sh \
+            test/claude-spinoff.test.sh \
             test/claude-stop-bg.test.sh \
             test/claude-worktree.test.sh \
             test/deploy.test.sh \

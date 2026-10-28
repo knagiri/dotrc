@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-spinoff -- spin a task that is out of the current session's scope off
+# into a NEW, independent interactive claude session, handed only a summary.
+#
+# Keeping the original session on its own task keeps its ai-title honest and its
+# life short; following the tangent in place grows a long-lived session full of
+# context the new task does not need. The spin-off-session skill decides WHEN to
+# use this (vs. delegate-to-worktree or filing an issue); this script only
+# launches.
+#
+# Why not claude-worktree:
+#
+#   * claude-worktree always creates <main>/.worktrees/<name> on a new branch.
+#     A spin-off is often still investigation or design and needs no branch, and
+#     a branch that is never pushed never turns `[gone]`, so git-reap-gone never
+#     collects it either.
+#   * claude-worktree resolves its caller, appends `## 委譲元` to the prompt and
+#     records `claude-queue link --parent`. For a spin-off that is the wrong
+#     shape: marking the original done would cascade to the spin-off, and the
+#     original would be kept alive as the receiver of a report it does not want
+#     (hibernation never stops a session with a running child). A spin-off is an
+#     independent root, so neither is done here, and no link is recorded.
+#
+# The session runs in the MAIN working tree, even when this is called from a
+# linked worktree: if the spun-off task turns into implementation, that session
+# delegates it to a worktree itself (worktree-scope.md §5), so there is no
+# --worktree option. It is placed in the tmux session named after the main
+# checkout -- the name gts and claude-queue's picker give that checkout -- as a
+# new detached window if the session exists, or as a new detached session if
+# not. The caller's client is never switched. The window is left unnamed;
+# claude-queue names it from the ai-title.
+#
+# Permission mode is `acceptEdits`, as with `claude-worktree --tmux`: a human is
+# meant to sit with this session, so prompts have someone to answer them.
+#
+# Usage:
+#   claude-spinoff [--global] [--model <alias>] -- <prompt...>
+#
+#   --global       anchor to the repo this script lives in (e.g. your dotfiles
+#                  repo), not cwd. Same meaning and spelling as in
+#                  claude-worktree.
+#   --model <alias>
+#                  pass --model <alias> to the launched claude. Omitted means the
+#                  inherited default; an empty value is rejected.
+#   -- <prompt>    the handoff prompt (required, non-empty).
+
+usage() {
+  # Print the first contiguous "# " comment block, stripping the leading "# ".
+  awk '/^#!/ {next} /^#/ {sub(/^# ?/, ""); print; seen=1; next} seen {exit}' "$0"
+  exit "${1:-1}"
+}
+
+prompt=""
+have_prompt=0
+anchor_global=0
+model=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    # Empty is rejected for the same reason as in claude-worktree: it is almost
+    # always an unset variable at the call site, not a request for the default.
+    --model)
+      shift; [ $# -gt 0 ] || usage 1
+      [ -n "$1" ] || { echo "claude-spinoff: --model needs a non-empty alias" >&2; exit 1; }
+      model="$1"; shift ;;
+    --global) anchor_global=1; shift ;;
+    --) shift; prompt="$*"; have_prompt=1; break ;;
+    *) echo "claude-spinoff: unexpected argument: $1" >&2; usage 1 ;;
+  esac
+done
+if [ "$have_prompt" = 0 ] || [ -z "$prompt" ]; then
+  echo "claude-spinoff: a prompt is required after --" >&2
+  usage 1
+fi
+
+command -v tmux >/dev/null 2>&1 || { echo "claude-spinoff: tmux not found on PATH" >&2; exit 1; }
+
+repo_dir="."
+if [ "$anchor_global" = 1 ]; then
+  repo_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+fi
+# The common dir's parent is the main toplevel from any linked worktree too
+# (same resolution as claude-worktree's main_top).
+if ! common_git="$(git -C "$repo_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+  echo "claude-spinoff: $repo_dir is not inside a git checkout" >&2
+  exit 1
+fi
+main_top="$(dirname "$common_git")"
+
+# `.` and `:` are target delimiters in `tmux -t`; replace them the way
+# claude-queue does (src/claude-queue/internal/multiplexer/tmux.go,
+# sanitizeSessionName), so both name the same session.
+session="$(basename "$main_top")"
+session="${session//./_}"
+session="${session//:/_}"
+
+# The account follows the main checkout's mise config, not the caller -- same as
+# claude-worktree's launch_env (see its comment, and dotrc-deploy.md §6).
+#
+# The caller's session markers are stripped too. When no tmux server is running,
+# the `tmux new-session` below STARTS one, and that server's environment -- hence
+# the pane's -- is this script's, i.e. the calling claude session's Bash env.
+# Measured: a claude started that way inherits CLAUDE_CODE_CHILD_SESSION and
+# turns transcript saving off ("inherited CLAUDE_CODE_CHILD_SESSION marker"),
+# and would see the caller's CLAUDE_CODE_SESSION_ID as its own. An already
+# running server does not leak them, but stripping costs nothing either way.
+launch_env=(env -u CLAUDE_CONFIG_DIR -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_JOB_DIR)
+while IFS= read -r var; do
+  launch_env+=(-u "$var")
+done < <(compgen -e | grep '^CLAUDE_CODE_' || true)
+if command -v mise >/dev/null 2>&1; then
+  launch_env+=(mise exec -C "$main_top" --)
+fi
+
+# Prompt and model ride as separate argv elements -- tmux preserves argv -- so
+# quotes in the handoff cannot break the command.
+claude_cmd=(claude --permission-mode acceptEdits)
+[ -z "$model" ] || claude_cmd+=(--model "$model")
+claude_cmd+=("$prompt")
+
+if tmux has-session -t "=$session" 2>/dev/null; then
+  how="new-window"
+  # Trailing ':' makes the target a session, so the window gets the next free
+  # index rather than colliding with an existing one.
+  if ! tmux new-window -d -t "=$session:" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}"; then
+    echo "claude-spinoff: tmux new-window in session '$session' failed" >&2
+    exit 1
+  fi
+else
+  how="new-session"
+  if ! tmux new-session -d -s "$session" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}"; then
+    echo "claude-spinoff: tmux new-session '$session' failed" >&2
+    exit 1
+  fi
+fi
+
+attach="gts $session"
+[ -n "${TMUX:-}" ] || attach="tmux attach -t $session"
+
+echo "repo-dir : $main_top"
+echo "tmux     : $session ($how; detached, claude running with acceptEdits)"
+[ -z "$model" ] || echo "model    : $model"
+echo "attach   : $attach"
