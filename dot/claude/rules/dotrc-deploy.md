@@ -154,3 +154,26 @@ account が cwd ではなく起動元で決まってしまう経路は 2 つあ�
 オンボーディング完了状態も無く、`claude --bg` が "Workspace not trusted" で拒否された（実測）。
 claude-queue（`internal/configdir` の `Env` / `IsDefault`）と `bin/lib/claude-configdir.sh`
 （`cq_in_config_dir`）がこの判定を持つので、row の config dir で claude を呼ぶ箇所はそこを通す。
+
+### 7. claude-queue を実データで確かめるときは DB のコピーを指す
+
+claude-queue の DB を開くサブコマンドは（status や picker のような読むだけのものも含めて）
+どれも、開いた時点で `queue` view を作り直し、未適用の移行も走らせる（`internal/db/open.go` の
+`Open`）。`reset` は DB ファイルそのものを消すので、なおさら実 DB を指さない。したがって `--dry-run` や読むだけのつもりの
+コマンドでも、指した DB に書き込む。`--dry-run` が止めるのは休眠などの副作用であって、DB を
+開くことによる書き込みではない。
+
+実 DB（`~/.claude/session-queue.db`）の挙動を確かめたいときは、`.backup` で取ったコピーを
+`CLAUDE_QUEUE_DB` で指して実行する。
+
+```
+sqlite3 -readonly ~/.claude/session-queue.db ".backup <コピー先>"
+CLAUDE_QUEUE_DB=<コピー先> claude-queue watch --dry-run
+```
+
+ファイルの `cp` ではなく `.backup` を使うのは、WAL モードで hook が書き込み中の DB を一貫した
+状態で写すため。コピーが隔離するのは DB だけで、プロセスや tmux への副作用は隔離しない。
+コピーにも実在の session が載っているので、`--dry-run` を外した `watch` は実在の session を
+止めうる。
+
+実例: dotrc/docs/incidents/claude-queue-dry-run-writes-db.md
