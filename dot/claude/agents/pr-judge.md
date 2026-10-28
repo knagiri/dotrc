@@ -41,9 +41,12 @@ model: opus
    `blocker: false, out_of_scope: true`（thread 由来なら `threads_pending` に同じ要領で）。
    担当内のものは `out_of_scope: false`。担当領域は仕分けの情報であってファイルの許可・禁止
    リストではなく、「担当外」は「直すにはこの PR の担当を超える作業が要るか」で判断する。
-   この PR の diff 自体が作り込んだ欠陥は、どのファイルにあっても担当内である。担当外の
+   この PR の diff 自体が作り込んだ欠陥は、どのファイルにあっても担当内である。ここで言う diff は
+   PR の base からの差分全体で、同じ branch に先に積まれた commit（前の委譲先や人間のものを含む）
+   も含む。差分の外にある既存の欠陥は、担当領域がそれを含まない限り担当外である。担当外の
    `blocker: true` だけが残ると orchestrator はループを打ち切って人間へ返すので、担当内で
    直せるものを担当外と仕分けない。
+   実例: dotrc/docs/incidents/review-fix-scope-beyond-delegation.md
    coverage-first は「載せるか落とすか」の話であって
    「どのバケットに載せるか」ではない。修正の価値が薄い低 severity / 低 confidence の指摘は、
    `findings_to_fix` ではなく `findings_gated`（`blocker: false`）に寄せてよい（`findings_to_fix`
