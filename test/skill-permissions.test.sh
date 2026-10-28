@@ -169,6 +169,13 @@ out="$(excluded_skills="my-commit" check_skill_allow "$skills_dir" "$tmp/setting
 case "$out" in *"excluded but allowed: Skill(my-commit)"*) echo "ok: catches an excluded skill that gains a Skill(...) allow" ;;
   *) echo "FAIL: missed an excluded skill that gains a Skill(...) allow"; fail=1 ;; esac
 
+# An excluded skill must not be reported as missing an allow even when its
+# Skill(...) allow is absent (guards the `&& continue` exclusion branch).
+jq '.permissions.allow -= ["Skill(my-commit)"]' "$settings" >"$tmp/settings.json"
+out="$(excluded_skills="my-commit" check_skill_allow "$skills_dir" "$tmp/settings.json")"
+if [ -z "$out" ]; then echo "ok: an excluded skill is not reported as missing an allow"
+else echo "FAIL: excluded skill reported: $out"; fail=1; fi
+
 out="$(excluded_skills="no-such-skill" check_skill_allow "$skills_dir" "$settings")"
 case "$out" in *"stale exclusion: no-such-skill"*) echo "ok: catches a stale exclusion" ;;
   *) echo "FAIL: missed a stale exclusion"; fail=1 ;; esac

@@ -804,9 +804,9 @@ fi
 
 # A new branch off a remote-tracking start point must NOT pick up that ref as
 # its upstream (branch.autoSetupMerge would otherwise set it to origin/main).
-# An untracked new branch has no upstream at all, so my-create-pr's
-# @{upstream}-based pushed-check is not fooled into thinking an unpushed branch
-# is already pushed. (What actually pushes it is that skill's explicit
+# An untracked new branch has no upstream at all, so anything reading
+# `@{upstream}` (my-create-pr's `git log @{upstream}..HEAD`, ahead/behind) is
+# not silently measured against origin/main. (What actually pushes it is that skill's explicit
 # `git push -u origin HEAD` -- NOT a plain `git push`, which would fail here:
 # this repo sets neither push.default=current nor push.autoSetupRemote, so with
 # no upstream configured git has nothing to push to.)
