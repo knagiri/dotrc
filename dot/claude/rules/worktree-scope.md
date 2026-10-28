@@ -27,6 +27,19 @@ git worktree list                          # worktree ↔ ブランチ対応
 
 いずれも settings.json の allow（`git rev-parse *` / `git worktree list`）に含まれ、承認なしで実行できる。
 
+#### deploy 済みの checkout と比べるときは `--show-toplevel` を使わない
+
+linked worktree では `git rev-parse --show-toplevel` は worktree 自身の root を返し、
+`bin/deploy.sh` を実行した checkout（PATH に載る `bin/`、`~/.claude` 配下の symlink の実体）を
+指さない。それらと比べる・PATH から外す処理では、main working tree を
+`git rev-parse --path-format=absolute --git-common-dir` の親ディレクトリから引く。
+
+取り違えてもエラーにはならず、PATH から外したつもりの `bin/` が残る、symlink の実体と一致しない、
+という形で黙って壊れる。main working tree で試すと両者が一致するので、そこでのテストでも
+気づけない。
+
+実例: dotrc/docs/incidents/show-toplevel-in-linked-worktree.md
+
 #### 状態の確認は `.git/` のパスを直接見ず、git コマンドに問う
 
 linked worktree の `.git` は**ディレクトリではなくファイル**である（`gitdir: <path>` を書いた
