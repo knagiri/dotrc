@@ -27,13 +27,14 @@ issue は 0 件で、実害は無かった。
 ## 直し方
 
 - 書く側: 雛形へ `## 禁止事項` 節を足し、スコープ外の破壊的・不可逆・外向きの操作があれば必ず書く
-  不変条件を置く。並列委譲の担当領域の宣言はこの節の特殊ケースとして繋ぐ。節名は強度を名前に
+  不変条件を置く。並列委譲の担当領域は別の `## 並行している委譲` 節に分ける（`## 禁止事項` は制約として転記されるので、情報を混ぜると禁止として読まれる）。節名は強度を名前に
   埋め込まない `禁止事項` にする
-- 渡す側: `## 禁止事項` 節があれば、実装役・判定役・修正役のプロンプトへ原文のまま転記する
+- 渡す側: `## 禁止事項` 節があれば、実装役へ原文のまま転記し、判定役・修正役・専門レビュー agent へは `pr-review-automerge` の `<PROHIBITIONS>` 経由で原文のまま渡す
 
 片方だけでは塞がらない。転記元が任意記述のままなら、委譲元が書き忘れた回は何も転記されない。
 
 ## 反映先
 
 - `dot/claude/skills/delegate-to-worktree/SKILL.md` 不変条件・手順 2 の雛形
-- `dot/claude/skills/implement-and-review/SKILL.md` 手順 2・手順 4
+- `dot/claude/skills/implement-and-review/SKILL.md` 入力・手順 2・手順 4
+- `dot/claude/skills/pr-review-automerge/SKILL.md` 手順 2.a-0.5 / a-1 / a-2・判定 / 修正 subagent prompt（`<PROHIBITIONS>`）

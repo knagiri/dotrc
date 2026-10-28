@@ -37,4 +37,5 @@ commit もこの diff に含まれるという点で、担当領域が一部の�
 ## 反映先
 
 - `dot/claude/agents/pr-judge.md` 手順 5（担当領域の段落）
+- `dot/claude/skills/pr-review-automerge/SKILL.md` 判定 subagent prompt（担当領域の段落。pr-judge.md と同文に保つ）
 - `dot/claude/rules/worktree-scope.md` §6（review で修正が要るときの箇条から参照）
