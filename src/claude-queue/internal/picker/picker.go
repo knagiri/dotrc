@@ -41,6 +41,7 @@ var emoji = map[string]string{
 	"working":           "⚙️",
 	"stale":             "🧟",
 	db.StateGone:        "💤",
+	db.StateDone:        "☑️",
 }
 
 var ascii = map[string]string{
@@ -51,6 +52,7 @@ var ascii = map[string]string{
 	"working":           "[*]",
 	"stale":             "[X]",
 	db.StateGone:        "[~]",
+	db.StateDone:        "[D]",
 }
 
 // Column positions in a rendered row, in the order FormatLine writes them.
@@ -522,6 +524,9 @@ type pickerFlags struct {
 	ShowWorking bool
 	ShowStale   bool
 	RepoScope   bool
+	// Done selects the done list (ctrl-r) in place of the open one. Only the
+	// reload passes it: the picker always opens on the open list.
+	Done bool
 	// CurrentPane is the pane the popup was opened over, whose row gets the
 	// current-session mark. The interactive picker reads it once and hands it
 	// to the reload, so the first listing and every Tab redraw mark the same
@@ -541,6 +546,7 @@ func (f pickerFlags) listArgs() []string {
 		{f.ShowWorking, "--show-working"},
 		{f.ShowStale, "--show-stale"},
 		{f.RepoScope, "--repo-scope"},
+		{f.Done, "--done"},
 	} {
 		if fl.on {
 			args = append(args, fl.name)
@@ -596,8 +602,12 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 	_ = fs.Bool("show-resumable", false, "no-op: gone sessions are always listed")
 	fs.BoolVar(&f.RepoScope, "repo-scope", false, "only sessions whose cwd is in the same git repo as the picker's cwd")
 	fs.StringVar(&f.CurrentPane, "current-pane", "", "internal: the pane whose row is marked current, passed to the Tab bind's reload")
+	fs.BoolVar(&f.Done, "done", false, "internal: with --list, print the done list (the ctrl-r bind's reload)")
 	listOnly := fs.Bool("list", false, "print the rows fzf would be given and exit (the Tab bind's reload)")
 	_ = fs.Parse(args)
+	if !*listOnly {
+		f.Done = false
+	}
 
 	conn, err := db.Open(db.DefaultPath())
 	if err != nil {
@@ -643,9 +653,20 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		io.WriteString(stdout, input)
 		return
 	}
+	// An empty open list still opens the popup when there is something done
+	// to reopen: a done pressed by mistake on the last open session would
+	// otherwise leave the picker no way back to it.
+	if input == "" {
+		doneFlags := f
+		doneFlags.Done = true
+		if done, _, ok := listing(conn, doneFlags, asciiMode, nowSec); !ok || done == "" {
+			fmt.Fprintln(os.Stderr, emptyMessage(f))
+			return
+		}
+	}
 
 	self := selfPath()
-	selected, err := fzf(input, fzfArgs(tabBind(self, f), memoBind(self, f), pinNoteBind(self, f), doneBind(self, f)))
+	selected, err := fzf(input, fzfArgs(tabBind(self, f), memoBind(self, f), pinNoteBind(self, f), doneBind(self, f), modeBind(self, f)))
 	if err != nil || selected == "" {
 		return
 	}
@@ -655,6 +676,14 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		return
 	}
 	sessionID, transcript := sel.SessionID, sel.Transcript
+
+	// The done list unbinds Enter (modeBind), but a pick can still arrive from
+	// it some other way -- a double-click accepts too. Resuming a done session
+	// would run it with its work still declared finished, out of every list.
+	if isDone(conn, sessionID) {
+		fmt.Fprintf(os.Stderr, "session %s is done: reopen it from the done list (ctrl-r, then ctrl-x) first\n", shortID(sessionID))
+		return
+	}
 
 	switch act := DecideAction(describeTarget(mux, sel, roster.ListIn)); act.Kind {
 	case "switch":
@@ -704,15 +733,23 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 }
 
 // listing renders the rows fzf is given, one FormatLine per line, along with
-// the worktree-name cache the pick reuses. ok is false when there is nothing
-// to list; the reason has already been printed to stderr. nowSec is the clock
-// the ages are measured against (see run).
+// the worktree-name cache the pick reuses. ok is false when the listing could
+// not be built; the reason has already been printed to stderr. A list with no
+// rows is "" with ok true -- the caller decides what to say (emptyMessage).
+// nowSec is the clock the ages are measured against (see run).
 //
 // It is the one place the listing is built: the interactive picker feeds it to
 // fzf, and --list prints it for the Tab bind's reload. Two builders would let
 // the reloaded list drift from the one it replaces.
 func listing(conn *sql.DB, f pickerFlags, asciiMode bool, nowSec int64) (string, worktreeCache, bool) {
 	names := worktreeCache{}
+	inScope, ok := repoScope(f)
+	if !ok {
+		return "", names, false
+	}
+	if f.Done {
+		return doneListing(conn, inScope, names, asciiMode, nowSec)
+	}
 	// Every live row is read, whatever the flags say: the state filter picks
 	// the rows to show, but buildForest still needs their filtered-out
 	// ancestors to hang them from.
@@ -726,38 +763,11 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool, nowSec int64) (string,
 		Keep:       func(r db.Row) bool { return filter.Includes(r.EffectiveState) },
 		ParentOpen: openSessions(conn),
 		ASCII:      asciiMode,
-	}
-
-	// --repo-scope (prefix q): keep only rows in the same repo as the pane the
-	// popup was opened from. The popup's cwd is that pane's cwd (tmux.conf
-	// passes -d "#{pane_current_path}"), and every working tree of a repo
-	// shares one --git-common-dir, so main checkout + all its .worktrees/*
-	// collapse to one group. A picker cwd outside any repo cannot scope, so
-	// say so and stop rather than silently listing everything.
-	keys := repoKeyCache{}
-	wantKey := ""
-	if f.RepoScope {
-		wd, _ := os.Getwd()
-		wantKey = repoKey(wd)
-		if wantKey == "" {
-			fmt.Fprintln(os.Stderr, "not in a git repo; use prefix Q for all sessions")
-			return "", names, false
-		}
-		opts.InScope = func(r db.Row) bool { return keys.key(rowCwd(r)) == wantKey }
-	}
-
-	lines := buildForest(rows, opts)
-	if len(lines) == 0 {
-		if f.RepoScope {
-			fmt.Fprintln(os.Stderr, "no open sessions in this repo (prefix Q lists all)")
-		} else {
-			fmt.Fprintln(os.Stderr, "no open sessions")
-		}
-		return "", names, false
+		InScope:    inScope,
 	}
 
 	var buf bytes.Buffer
-	for _, l := range lines {
+	for _, l := range buildForest(rows, opts) {
 		// The title is read here rather than inside FormatLine for the same
 		// reason the worktree name is -- it needs the filesystem. It costs one
 		// bounded tail read per row (see label's tailScanBytes), which the
@@ -773,6 +783,70 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool, nowSec int64) (string,
 		buf.WriteByte('\n')
 	}
 	return buf.String(), names, true
+}
+
+// doneListing is listing for the done list (ctrl-r): the sessions done within
+// the GC's retention, most recently done first, with their age counted from
+// the done. It is flat -- a reopen does not cascade, so the delegation tree
+// says nothing about what a pick here does -- and ignores the state filters,
+// which are about open sessions.
+func doneListing(conn *sql.DB, inScope func(db.Row) bool, names worktreeCache, asciiMode bool, nowSec int64) (string, worktreeCache, bool) {
+	rows, err := db.ListDoneRows(conn, db.DoneRetentionSec)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return "", names, false
+	}
+	var buf bytes.Buffer
+	for _, r := range rows {
+		if inScope != nil && !inScope(r) {
+			continue
+		}
+		title := prefixedTitle("", func(cols int) string {
+			return label.DisplayTitle(rowTranscript(r), cols)
+		})
+		buf.WriteString(FormatLine(r, title, names.name(rowCwd(r)), nowSec, asciiMode))
+		buf.WriteByte('\n')
+	}
+	return buf.String(), names, true
+}
+
+// repoScope is --repo-scope (prefix q) as a row filter: keep only rows in the
+// same repo as the pane the popup was opened from. The popup's cwd is that
+// pane's cwd (tmux.conf passes -d "#{pane_current_path}"), and every working
+// tree of a repo shares one --git-common-dir, so main checkout + all its
+// .worktrees/* collapse to one group. nil keeps every row.
+//
+// A picker cwd outside any repo cannot scope, so it says so and reports false
+// rather than silently listing everything.
+func repoScope(f pickerFlags) (func(db.Row) bool, bool) {
+	if !f.RepoScope {
+		return nil, true
+	}
+	wd, _ := os.Getwd()
+	wantKey := repoKey(wd)
+	if wantKey == "" {
+		fmt.Fprintln(os.Stderr, "not in a git repo; use prefix Q for all sessions")
+		return nil, false
+	}
+	keys := repoKeyCache{}
+	return func(r db.Row) bool { return keys.key(rowCwd(r)) == wantKey }, true
+}
+
+// emptyMessage is what the picker says instead of opening on nothing.
+func emptyMessage(f pickerFlags) string {
+	if f.RepoScope {
+		return "no open sessions in this repo (prefix Q lists all)"
+	}
+	return "no open sessions"
+}
+
+// isDone reports whether the ledger has sessionID's work done. A failed read
+// answers false: the guard it backs is a second line behind the unbound
+// Enter, and refusing every pick on a read error would cost more than it saves.
+func isDone(conn *sql.DB, sessionID string) bool {
+	var done bool
+	err := conn.QueryRow("SELECT done_at IS NOT NULL FROM sessions WHERE session_id = ?", sessionID).Scan(&done)
+	return err == nil && done
 }
 
 // describeTarget gathers the state DecideAction routes on: the reachable pane,
@@ -868,8 +942,27 @@ func isDir(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// keysHeader is the one-line key list fzf shows above the rows.
-const keysHeader = "tab: pin  ctrl-t: pin note  ctrl-e: memo  ctrl-x: done"
+// keysHeader is the one-line key list fzf shows above the open list, and
+// doneKeysHeader the one above the done list (modeBind swaps them).
+const (
+	keysHeader     = "tab: pin  ctrl-t: pin note  ctrl-e: memo  ctrl-x: done  ctrl-r: done list"
+	doneKeysHeader = "ctrl-x: reopen  ctrl-r: open list  (done list: enter, tab, ctrl-t, ctrl-e are off)"
+)
+
+// The prompts of the two lists. The prompt is also the picker's record of
+// which list is showing: fzf exports it to every command a bind runs as
+// $FZF_PROMPT, which is how ctrl-x and ctrl-r tell the lists apart (see
+// inDoneList). Set explicitly rather than left to FZF_DEFAULT_OPTS, so the
+// open list's prompt is a known value too.
+const (
+	promptOpen = "> "
+	promptDone = "done> "
+)
+
+// doneListOff are the keys the done list unbinds: what they do -- pin, the
+// two edits, resume -- does not apply to a done session, and an unbound key
+// does nothing rather than act on a session the list says is finished.
+const doneListOff = "tab,ctrl-t,ctrl-e,enter"
 
 // fzfArgs is the fzf invocation, split out of runFzf so the visible-column
 // list and the key binds can be asserted without running fzf.
@@ -888,6 +981,7 @@ func fzfArgs(binds ...string) []string {
 		"--reverse",
 		"--height=100%",
 		"--header=" + keysHeader,
+		"--prompt=" + promptOpen,
 	}
 	for _, b := range binds {
 		args = append(args, "--bind", b)
@@ -913,17 +1007,60 @@ func tabBind(self string, f pickerFlags) string {
 	return rowBind("tab", "mark", self, f)
 }
 
-// doneBind is the --bind value that makes ctrl-x mark the cursor row's work
-// done (`claude-queue done`, delegates included) and redraw the list, which no
-// longer carries it.
+// doneBind is the --bind value for ctrl-x. On the open list it marks the
+// cursor row's work done (`claude-queue done`, delegates included); on the
+// done list it reopens it (`claude-queue reopen`, the session alone) -- the
+// key that set the done is the one that takes it back. Either way the list
+// shown is redrawn, and no longer carries the row.
 //
-// It asks first (doneScript), because done hides the session and its delegates
-// from the list and cannot be undone, and ctrl-x sits next to keys typed into
-// the query. It runs under execute rather than execute-silent so the question
-// and a failure can be shown: fzf hands the terminal to the command, as stdin
-// too.
+// done asks first (doneScript), because it hides the session and its
+// delegates from the list -- reopen brings back only the one -- and ctrl-x
+// sits next to keys typed into the query. reopen does not ask: it is undone by
+// the same key. It runs under execute rather than execute-silent so the
+// question and a failure can be shown: fzf hands the terminal to the command,
+// as stdin too.
 func doneBind(self string, f pickerFlags) string {
-	return scriptBind("ctrl-x", doneScript(self), self, f, colSessionID)
+	script := inDoneList(reopenScript(self), doneScript(self))
+	reload := "bash -c " + shellQuote(inDoneList(reloadCmd(self, f.withDone(true)), reloadCmd(self, f)))
+	return scriptBind("ctrl-x", script, reload, colSessionID)
+}
+
+// reopenScript is the bash script behind ctrl-x on the done list, run with the
+// session id as $1.
+func reopenScript(self string) string {
+	return failOut(shellQuote(self) + ` reopen "$1"`)
+}
+
+// modeBind is the --bind value that makes ctrl-r switch between the open list
+// and the done list: it swaps the prompt (the record of which list shows, see
+// promptOpen), the header and the keys the done list turns off, and reloads.
+//
+// transform runs the script and performs the actions it prints, which is what
+// lets one key go both ways. The script carries no fzf placeholder, so fzf
+// substitutes nothing into the actions it prints.
+func modeBind(self string, f pickerFlags) string {
+	toDone := fzfAction("change-prompt", promptDone) + "+" +
+		fzfAction("change-header", doneKeysHeader) + "+" +
+		fzfAction("unbind", doneListOff) + "+" +
+		fzfAction("reload", reloadCmd(self, f.withDone(true)))
+	toOpen := fzfAction("change-prompt", promptOpen) + "+" +
+		fzfAction("change-header", keysHeader) + "+" +
+		fzfAction("rebind", doneListOff) + "+" +
+		fzfAction("reload", reloadCmd(self, f.withDone(false)))
+	script := inDoneList(`printf '%s' `+shellQuote(toOpen), `printf '%s' `+shellQuote(toDone))
+	return "ctrl-r:" + fzfAction("transform", "bash -c "+shellQuote(script))
+}
+
+// inDoneList is a bash if that runs inDone while the done list is showing and
+// inOpen otherwise, telling them apart by the prompt fzf exports.
+func inDoneList(inDone, inOpen string) string {
+	return `if [ "$FZF_PROMPT" = ` + shellQuote(promptDone) + ` ]; then ` + inDone + `; else ` + inOpen + `; fi`
+}
+
+// withDone is f with the list it selects set to the done list or not.
+func (f pickerFlags) withDone(done bool) pickerFlags {
+	f.Done = done
+	return f
 }
 
 // doneScript is the bash script behind ctrl-x, run with the session id as $1.
@@ -938,13 +1075,13 @@ func doneScript(self string) string {
 // memoBind is the --bind value that makes ctrl-e edit the cursor row's memo on
 // one line, prefilled with the current one, and redraw the list.
 func memoBind(self string, f pickerFlags) string {
-	return scriptBind("ctrl-e", editScript(self, "memo> ", `memo --session "$1" -- "$line"`), self, f, colSessionID, colMemo)
+	return scriptBind("ctrl-e", editScript(self, "memo> ", `memo --session "$1" -- "$line"`), reloadCmd(self, f), colSessionID, colMemo)
 }
 
 // pinNoteBind is ctrl-e's twin for the pin note on ctrl-t. Saving pins the
 // session if it was not pinned (db.SetPin).
 func pinNoteBind(self string, f pickerFlags) string {
-	return scriptBind("ctrl-t", editScript(self, "pin note> ", `pin --session "$1" --note "$line"`), self, f, colSessionID, colPinNote)
+	return scriptBind("ctrl-t", editScript(self, "pin note> ", `pin --session "$1" --note "$line"`), reloadCmd(self, f), colSessionID, colPinNote)
 }
 
 // editScript is the bash script behind the edit keys, run with the session id
@@ -964,16 +1101,16 @@ func failOut(cmd string) string {
 }
 
 // scriptBind runs script under `bash -c` with the cursor row's columns cols as
-// $1, $2, ... and reloads the listing in place. fzf quotes each {N} it
-// substitutes, so the values reach the script as arguments and are never
-// parsed as shell. The scripts are kept on one line because they travel inside
-// a --bind value.
-func scriptBind(key, script, self string, f pickerFlags, cols ...int) string {
+// $1, $2, ... and then reload, the command that redraws the listing in place.
+// fzf quotes each {N} it substitutes, so the values reach the script as
+// arguments and are never parsed as shell. The scripts are kept on one line
+// because they travel inside a --bind value.
+func scriptBind(key, script, reload string, cols ...int) string {
 	cmd := "bash -c " + shellQuote(script) + " _"
 	for _, c := range cols {
 		cmd += " {" + strconv.Itoa(c+1) + "}"
 	}
-	return key + ":" + fzfAction("execute", cmd) + "+" + fzfAction("reload", reloadCmd(self, f))
+	return key + ":" + fzfAction("execute", cmd) + "+" + fzfAction("reload", reload)
 }
 
 // rowBind runs `<self> <sub> <session id of the cursor row>` and reloads the

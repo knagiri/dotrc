@@ -132,11 +132,9 @@ func TestFzfArgs_DoneBind(t *testing.T) {
 	if n < 1 || n > len(fields) || fields[n-1] != "sid-123" {
 		t.Errorf("{%d} does not address the session id in %q", n, fields)
 	}
-	if !strings.Contains(bind, "'picker' '--list' '--show-stale'") {
-		t.Errorf("done bind %q does not reload with the same flags", bind)
-	}
+	// The reload is checked by running it (TestDoneBind_ByList).
 
-	// The interactive picker passes both binds.
+	// The interactive picker passes every bind.
 	seedDB(t,
 		"INSERT INTO sessions(session_id) VALUES ('a')",
 		"INSERT INTO events(session_id, event_type, state) VALUES ('a', 'Stop', 'idle_done')",
@@ -152,7 +150,7 @@ func TestFzfArgs_DoneBind(t *testing.T) {
 			binds = append(binds, strings.SplitN(argv[i+1], ":", 2)[0])
 		}
 	}
-	if !slices.Equal(binds, []string{"tab", "ctrl-e", "ctrl-t", "ctrl-x"}) {
-		t.Errorf("fzf binds = %v, want [tab ctrl-e ctrl-t ctrl-x]", binds)
+	if !slices.Equal(binds, []string{"tab", "ctrl-e", "ctrl-t", "ctrl-x", "ctrl-r"}) {
+		t.Errorf("fzf binds = %v, want [tab ctrl-e ctrl-t ctrl-x ctrl-r]", binds)
 	}
 }

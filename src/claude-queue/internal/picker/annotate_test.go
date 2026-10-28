@@ -113,7 +113,9 @@ func TestFzfArgs_Binds(t *testing.T) {
 		if !slices.Equal(got, c.want) {
 			t.Errorf("%s passes %v, want %v", c.key, got, c.want)
 		}
-		if !strings.Contains(c.bind, "'picker' '--list' '--show-stale'") {
+		// ctrl-x reloads whichever list is showing, so its reload is a bash if
+		// that quotes the flags once more; TestDoneBind_ByList runs it.
+		if c.key != "ctrl-x" && !strings.Contains(c.bind, "'picker' '--list' '--show-stale'") {
 			t.Errorf("%s bind does not reload with the same flags", c.key)
 		}
 	}
@@ -127,7 +129,7 @@ func TestFzfArgs_Binds(t *testing.T) {
 	if i < 0 {
 		t.Fatalf("fzfArgs = %v, want a --header", args)
 	}
-	for _, k := range []string{"tab", "ctrl-e", "ctrl-t", "ctrl-x"} {
+	for _, k := range []string{"tab", "ctrl-e", "ctrl-t", "ctrl-x", "ctrl-r"} {
 		if !strings.Contains(args[i], k+":") {
 			t.Errorf("header %q does not list %s", args[i], k)
 		}
