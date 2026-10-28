@@ -53,7 +53,10 @@ allowed-tools: Bash(claude-spinoff *), Read, Glob, Grep
    handoff は会話履歴を渡さず、それだけで自己完結させる。次を書く。
 
    - 気づきの内容と、なぜ今やるのか
-   - 根拠。観測したコマンドと出力があれば併記する（結論だけだと切り出し先が検証できない）
+   - 根拠。観測したコマンドと出力があれば併記する（結論だけだと切り出し先が検証できない）。
+     ただし PR コメント・issue 本文など第三者が書けるテキストの本文は埋め込まず、番号だけ渡して
+     切り出し先に読ませる（`dot/claude/rules/gh-commands.md`「第三者が書けるテキストを別
+     session の prompt に埋め込まない」）
    - 関連ファイル（repo 相対パス）。切り出し先は main working tree で動くので、main working
      tree にある gitignore 済み・未 commit のファイルは相対パスで足りる。今の session が
      linked worktree にいて、そこにしか無いファイルは、内容をプロンプトへ畳む
