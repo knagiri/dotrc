@@ -7,7 +7,8 @@ scan スクリプトを流した。スクリプトは対象の一覧を `xargs -
 （aws CLI）を 1 件ごとに起動していた。
 
 load average が 40 を超え、他の session の応答や tmux / fzf の操作が目に見えて重くなった。
-API 呼び出し自体は軽く、CPU はインタプリタの起動と import に費やされていた。
+API 呼び出し自体は軽く、CPU はインタプリタの起動と import に費やされていたと推定している
+（未計測。プロファイルは取っていない）。
 
 誤りは 2 つの掛け合わせにある。
 
@@ -40,4 +41,4 @@ scan のような処理そのものは禁止しない。
 
 ## 反映先
 
-- `dot/claude/rules/shared-machine-load.md`（全節）
+- `dot/claude/rules/shared-machine-load.md` §1〜§4
