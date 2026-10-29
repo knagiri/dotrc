@@ -1,7 +1,5 @@
 # claude-queue: プロセス（instance）の軸を独立して持つ
 
-> 実装状況: 未着手。
-
 ## 目的
 
 claude-queue の台帳は session の状態を作業の軸（`done_at`）とプロセスの軸（`terminated_at`）に
