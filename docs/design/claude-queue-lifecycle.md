@@ -49,6 +49,9 @@ session は kind（`interactive` / `background`）を持ち、状態は独立し
 既存の hook 由来の state（`working` / `awaiting_approval` / `idle_done`）は `running` の中の細分として
 そのまま残る。メモ・pin・親子関係は `open` の間、プロセス軸がどう動いても消えない。
 
+同じ session id を複数のプロセスが握る場合のプロセス軸の持ち方は
+[claude-queue-instances.md](claude-queue-instances.md)。
+
 ### `done` への遷移
 
 | kind | トリガー |
