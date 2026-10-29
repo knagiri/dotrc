@@ -38,3 +38,4 @@ dry run だけで DB ファイルの mtime が進んだ。実 DB を直接指し
 ## 反映先
 
 - `dot/claude/rules/dotrc-deploy.md` §7「claude-queue を実データで確かめるときは DB のコピーを指す」
+- `dot/claude/rules/worktree-scope.md` §8「idle な session の休眠」（dry run が止めないものとして DB への書き込みを明記し、`dotrc-deploy.md` §7 を参照させる）

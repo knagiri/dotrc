@@ -233,7 +233,7 @@ claude-queue watch [--idle-minutes <n>] [--dry-run]
 - **止めてよい条件（全通過のみ）**: ①最新 state が `idle_done` で、その event から `--idle-minutes`（既定 120）以上経っている、②その session の config dir の `claude agents` の一覧で `status` が `idle`、③transcript の最後の assistant ターンに `SendMessage` の tool_use が無い。③が要るのは、委譲元へ質問して返信を待つ委譲先も外からは `idle` に見え、止めると返信の受け手が居なくなるため。`awaiting_approval` の session も①で外れる。ただし孤児（委譲元が done、または台帳に居ない session）は返信が来ないので③を省く。委譲元が gone なだけなら resume すれば返信できるので孤児にしない（詳細は `docs/design/claude-queue-session-tree.md`）。完了報告も `SendMessage` なので、閉じ忘れた委譲先は委譲元が done になるまで③で外れ続ける（§6）。④running かつ open な委譲先を持たない。委譲元は報告を待って `idle` に見えるが、止めると委譲先の報告の受け手が居なくなるため。確認そのものができないもの（その config dir の一覧が読めない・transcript が読めない／parse できない）は止めずに skip する。
 - **人が見ている session は止めない**。interactive は、pane の window が attach 中の tmux client のどれかで表示中なら skip する。pane が見つからない（tmux 外で起動した等）ものも skip する。SIGTERM 後 10 秒で一覧から消えなければ pane は閉じずに失敗として report する（SIGKILL へは上げない）。
 - pin は休眠を妨げない。外部待ちの session こそ、待ちが解けるまでプロセスを持つ理由が無い。
-- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile も stop もせず、pane の解決と表示中の判定までを読み取りだけで行って対象を report する。
+- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile・PR 監視・停止をせず、pane の解決と表示中の判定までを行って対象を report する。ただし DB を開くことによる書き込みは止めないので、実データで確かめるときは [dotrc-deploy.md](./dotrc-deploy.md) §7 に従う。
 - 判定は推測を含むが、外れても失うのはプロセスだけで作業は残る。だから無人の timer で回してよい。逆に、作業を done にする判定は無人で回さない。
 
 実例: dotrc/docs/incidents/claude-queue-reboot-closes-wip.md
