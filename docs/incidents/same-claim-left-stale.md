@@ -26,7 +26,7 @@ $ git show 7605fb8 | rg '^[-+]\s+dryRun'
 ```
 
 1 件目は洗い出しを実測しておらず、旧い見出しを repo 全体で検索すれば見つかったはず、という
-類推である。2 件目は修正前の commit 854ec0c で実測した。doc comment の文言（三単現の
+類推である。2 件目は flag ヘルプを直す前の commit 854ec0c で実測した。doc comment の文言（三単現の
 `changes nothing`）をそのまま検索語にすると flag ヘルプの `change nothing` には一致しない。
 語尾の揺れを許す検索なら、flag ヘルプに一致する。
 
