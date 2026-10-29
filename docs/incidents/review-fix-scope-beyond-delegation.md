@@ -18,7 +18,7 @@ commit もこの diff に含まれるという点で、担当領域が一部の�
 
 ## 観測
 
-`dot/claude/agents/pr-judge.md` 手順 5 と `dot/claude/skills/pr-review-automerge/SKILL.md` の
+`dot/claude/agents/pr-judge.md` 手順 5 と `dot/claude/skills/pr-review-loop/SKILL.md` の
 「判定 subagent prompt」を読み、担当内外の線引きが「直すにはこの PR の担当を超える作業が
 要るか」で、diff の範囲の定義は無いことを確かめた。担当外で妥当な指摘は
 `blocker: true, out_of_scope: true` になり、それだけが残ると orchestrator は停止して報告する
@@ -37,5 +37,5 @@ commit もこの diff に含まれるという点で、担当領域が一部の�
 ## 反映先
 
 - `dot/claude/agents/pr-judge.md` 手順 5（担当領域の段落）
-- `dot/claude/skills/pr-review-automerge/SKILL.md` 判定 subagent prompt（担当領域の段落。pr-judge.md と同文に保つ）
+- `dot/claude/skills/pr-review-loop/SKILL.md` 判定 subagent prompt（担当領域の段落。pr-judge.md と同文に保つ）
 - `dot/claude/rules/worktree-scope.md` §6（review で修正が要るときの箇条から参照）

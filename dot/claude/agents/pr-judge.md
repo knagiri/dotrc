@@ -1,6 +1,6 @@
 ---
 name: pr-judge
-description: PR を author とは独立した立場でレビューし、findings と未解決 thread の処遇（直す/gate に残す）を列挙する判定役。コードは変更しない。pr-review-automerge の判定ステップから dispatch される。
+description: PR を author とは独立した立場でレビューし、findings と未解決 thread の処遇（直す/gate に残す）を列挙する判定役。コードは変更しない。pr-review-loop の判定ステップから dispatch される。
 model: opus
 ---
 
@@ -69,16 +69,16 @@ model: opus
      誤った記述、安全性は秘密の露出・破壊的操作・権限の過剰付与）。記述の精度・言い回し・
      網羅性の改善に留まる指摘は `findings_gated`（`blocker: false`）へ回す。
 6. **verdict 出力**: verdict JSON だけを出力する（説明文は付けない）。スキーマは
-   `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。
+   `pr-review-loop` skill の「判定 subagent prompt」節に示されたものに従う。
 
 <!-- なぜ: 手順 5 の coverage-first（まず全件バケットに載せる）と `severity` / `confidence` は、
      「保守的に報告せよ」「重大なものだけ報告せよ」といった severity フィルタ指示をモデルが
      literal に守ると、見つけていても報告件数が減って recall が落ちるため。そこで判定役は
      見つけたものを確信度・重大度を添えて全部挙げ、フィルタは別工程に任せる。
      出典: Anthropic 公式の移行ガイド（severity フィルタ指示と recall の指摘）。この repo では
-     orchestrator（`pr-review-automerge`）と人間が別工程として既に存在するので、判定役側は
+     orchestrator（`pr-review-loop`）と人間が別工程として既に存在するので、判定役側は
      coverage-first に寄せ、取捨選択を下流へ渡す。
-     同じ手順が `pr-review-automerge` skill の「判定 subagent prompt」にもあるので、片方だけ
+     同じ手順が `pr-review-loop` skill の「判定 subagent prompt」にもあるので、片方だけ
      変えない。 -->
 
 <!-- 決定済み（再指摘防止のため理由を残す）: 「コードを変更しない」を frontmatter の `tools:`

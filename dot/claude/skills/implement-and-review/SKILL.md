@@ -1,6 +1,6 @@
 ---
 name: implement-and-review
-description: worktree に委譲されたタスクを実装→merge で完遂する。HOW は委譲元で確定済みなので brainstorm せず、必要に応じて難度別の実装 subagent へ dispatch しつつ実装し、verification を経て pr-review-automerge で自律 merge する。最後に（委譲プロンプトが内省スキップを明示しない限り）harness-from-retrospective で自己内省し、恒久ハーネスの候補を方針として提示する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
+description: worktree に委譲されたタスクを実装→merge で完遂する。HOW は委譲元で確定済みなので brainstorm せず、必要に応じて難度別の実装 subagent へ dispatch しつつ実装し、verification を経て pr-review-loop で review し、pr-automerge で自律 merge する。最後に（委譲プロンプトが内省スキップを明示しない限り）harness-from-retrospective で自己内省し、恒久ハーネスの候補を方針として提示する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
 ---
 
 # implement-and-review
@@ -86,7 +86,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    - `impl-heavy` — 最難。複雑ロジック・非自明な設計判断を含む変更
 
    **委譲プロンプトに `## 禁止事項` 節があれば、dispatch する subagent のプロンプトへそのまま
-   転記する**（手順 4 の判定役・修正役・専門レビュー agent は `pr-review-automerge` の
+   転記する**（手順 4 の判定役・修正役・専門レビュー agent は `pr-review-loop` の
    `<PROHIBITIONS>` 経由）。subagent は fresh context で、親が明示しない
    制約を知り得ない。破壊的・不可逆・外向きの制約は、転記漏れがそのまま事故になる（判定役が
    禁止されていた実データの作成を撃つ等）。要約せず原文で渡すのは、言い換えで対象や強度が
@@ -172,23 +172,26 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    そこでこの skill の指示だけを見て `my-create-pr` を撃つと PR が二重に立つ。PR を出す前に
    実行先 repo の規約を確認する。
 
-   PR を出したら `pr-review-automerge` を呼び、author とは独立した立場での
-   レビュー・required CI 確認を経て自律 merge する。委譲プロンプトに `## 禁止事項` 節があれば、
-   同 skill の `<PROHIBITIONS>` に原文のまま渡す（差し込み先と規定は同 skill。理由は手順 2）。
+   PR を出したら `pr-review-loop` を呼び、author とは独立した立場でレビューして収束させる。
+   委譲プロンプトに `## 禁止事項` 節があれば、同 skill の `<PROHIBITIONS>` に原文のまま渡す
+   （差し込み先と規定は同 skill。理由は手順 2）。収束したら、merge を見送る理由が無ければ
+   `pr-automerge` を呼び、収束時の `head_sha` / `last_seen` を渡して自律 merge する。merge を
+   見送る理由（委譲プロンプトの禁止事項、grant 変更を含む PR（`dot/claude/rules/gh-commands.md` §5）
+   等）があれば `pr-automerge` は呼ばず、見送った理由を手順 6 で報告する。
 
    **委譲プロンプトが既存 PR への対応を指示しているとき**（「既存 PR #N の指摘への対応。新しい PR
    は作らない」）は PR を作らない。その PR の branch に push し、既存 PR #N に対して
-   `pr-review-automerge` を呼ぶ。委譲元は review で修正が要ると、同じ worktree・branch に新しい
+   `pr-review-loop` → `pr-automerge` を同じ形で呼ぶ。委譲元は review で修正が要ると、同じ worktree・branch に新しい
    委譲先を起こしてこの形で渡す（`dot/claude/rules/worktree-scope.md` §6）。ここで PR を新しく
    作ろうとしても、同じ head / base の open PR があるので GitHub が拒否する。base を変えて別 PR に
    すると、PR 監視の pin も review の指摘も元の PR に残ったままになる。
 
    このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しは
-   `pr-review-automerge` 手順 3.c が `gh-automerge` の直前に行い、PR 本文との食い違いは
+   `pr-automerge` 手順 2 が `gh-automerge` の直前に行い、PR 本文との食い違いは
    `gh-pr-edit-body` で直して、直した箇所を最終サマリに載せる。戻った時点では既に
    merge 済みでありうるので、ここで直せる前提に立たない。
-5. **自己内省（末尾ハーネス）**: `pr-review-automerge` から戻ったら（auto-merge 有効化に至らず
-   停止・報告して終わった場合も、停止理由を問わず含む。停止経路は同 skill の手順 4）、委譲プロンプトに
+5. **自己内省（末尾ハーネス）**: 手順 4 から戻ったら（`pr-review-loop` が収束せず停止した場合、
+   merge を見送った場合、`pr-automerge` が auto-merge 有効化に至らず停止した場合も、停止理由を問わず含む）、委譲プロンプトに
    自己内省をスキップする明示（例: 「harness-from-retrospective はスキップ」）が**無い限り**、
    `harness-from-retrospective` を呼ぶ。自分の作業を振り返り、恒久ハーネスに値する改善点を
    方針として提示する（**提案のみ・無ければ no-op**）。承認・実装はしない — 人間が承認した
@@ -197,13 +200,13 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    次の 3 つの事象で SendMessage を送る。**送信に失敗しても無視して自分の終了処理を続ける**
    （委譲元の session が既に消えていることがある）。
 
-   - **完了**: PR URL と auto-merge を有効化できたかを 1〜3 行で。手順 5 の自己内省に提案が
+   - **完了**: PR URL と、review が収束したか・auto-merge を有効化できたか（見送ったならその理由）を 1〜3 行で。手順 5 の自己内省に提案が
      あればその要点も添える（既定の background 委譲先は人間不在で走り、最終メッセージは
      誰にも読まれないまま委譲元に閉じられるため、この報告が唯一の到達経路）。
    - **不足**: 手順 1 のとおり。質問を送って待機する。
-   - **中断**: `pr-review-automerge` が auto-merge に至らず停止したとき（同 skill の手順 4）、
-     その報告の停止理由をそのまま載せる。停止経路をここで列挙しないのは、`pr-review-automerge`
-     側で停止経路が増えるたびに食い違うため。
+   - **中断**: `pr-review-loop` が収束せず停止したとき、または `pr-automerge` が auto-merge に至らず
+     停止したとき（各 skill の停止・報告の手順）、その報告の停止理由をそのまま載せる。停止経路を
+     ここで列挙しないのは、各 skill 側で停止経路が増えるたびに食い違うため。
 
    **permission 承認はこの経路に乗らない。** 承認が要る tool call はブロックしたまま待てばよく、
    人間が `claude attach` で入って承認する。委譲元に承認を代行させようとしない
@@ -216,3 +219,8 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 - worktree ディレクトリ外への書き込みはしない（read-only 参照は可）。
 - 末尾の自己内省は**提案まで**。承認・実装・grant 記述はしない（実装は人間承認後の harness-from-feedback）。
 - 承認の代行を委譲元に求めない。ブロックしたまま待つのが正しい振る舞い。
+- merge を見送る理由は、一般に review を見送る理由にならない。merge を見送るときも
+  `pr-review-loop` は回し、見送った理由を報告する。review と merge を別 skill に分けたのは
+  このためで、merge を止める事情（grant 変更・禁止事項）は review の独立性の必要を何も
+  減らさない。review まで止めると、人間は独立した review を経ていない差分を approve することになる。
+  実例: dotrc/docs/incidents/review-skipped-with-merge.md

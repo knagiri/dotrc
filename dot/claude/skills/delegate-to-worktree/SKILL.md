@@ -133,7 +133,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    ## 進め方
    1. 設計は確定済み。brainstorm せず実行に入る
    2. 実装
-   3. pr-review-automerge で merge
+   3. pr-review-loop で review、merge してよければ pr-automerge で merge
    ```
 
    末尾の `## 委譲元` 節（`報告先 name: <name>`）は書かない。`claude-worktree` が委譲元 session の

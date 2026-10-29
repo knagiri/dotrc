@@ -15,7 +15,7 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 
 ## いつ呼ばれるか
 
-- `implement-and-review` の末尾（pr-review-automerge の後）。ただし委譲プロンプトに自己内省を
+- `implement-and-review` の末尾（pr-review-loop / pr-automerge の後）。ただし委譲プロンプトに自己内省を
   スキップする明示があれば呼ばれない（ハーネスタスク自身の内省による再帰ノイズを避けるため）。
 - 手動（「この作業を振り返ってハーネス提案して」等）。
 

@@ -46,7 +46,7 @@ fresh context の sub-agent（最賢モデル）へ外部化する。sub-agent �
 
 ### 2. sub-agent 起動
 
-Task tool で起動する（repo の subagent dispatch は Task に統一。pr-review-automerge
+Task tool で起動する（repo の subagent dispatch は Task に統一。pr-review-loop
 skill も同様）。Task は結果が返るまでブロックする同期実行なので、診断を待って受け取れる。
 利用可能な最賢モデルを使う（この環境では `model: fable`。モデル名は環境に合わせて
 読み替える）。プロンプトは以下の template にブリーフを埋め込む。

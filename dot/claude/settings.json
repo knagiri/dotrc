@@ -111,7 +111,8 @@
       "Skill(harness-from-feedback)",
       "Skill(harness-from-retrospective)",
       "Skill(implement-and-review)",
-      "Skill(pr-review-automerge)",
+      "Skill(pr-review-loop)",
+      "Skill(pr-automerge)",
       "Skill(proofread-doc)"
     ],
     "deny": [

@@ -125,7 +125,7 @@ main checkout は「いつ来ても clean な main である」ことが期待�
   無関係な feature branch を土台にしてしまう。
 - **手戻りをユーザーに要求する**: 「main に戻して」という後始末の指示が要る。委譲していれば
   main checkout はそもそも動いていない。
-- **自走ラインに乗らない**: 委譲先は permission mode `auto` + `pr-review-automerge` で実装から
+- **自走ラインに乗らない**: 委譲先は permission mode `auto` + `pr-review-loop` → `pr-automerge` で実装から
   merge まで自律的に進む。main checkout でインラインに進めると、その仕組みに乗らず人間が逐一伴走する形になる。
 
 **例外**（ソフト指針。当てはまるなら委譲せずこの場で進めてよい）:
