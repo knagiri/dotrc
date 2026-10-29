@@ -99,17 +99,24 @@ session="${session//:/_}"
 # The account follows the main checkout's mise config, not the caller -- same as
 # claude-worktree's launch_env (see its comment, and dotrc-deploy.md §6).
 #
-# The caller's session markers are stripped too. When no tmux server is running,
-# the `tmux new-session` below STARTS one, and that server's environment -- hence
-# the pane's -- is this script's, i.e. the calling claude session's Bash env.
-# Measured: a claude started that way inherits CLAUDE_CODE_CHILD_SESSION and
-# turns transcript saving off ("inherited CLAUDE_CODE_CHILD_SESSION marker"),
-# and would see the caller's CLAUDE_CODE_SESSION_ID as its own. An already
-# running server does not leak them, but stripping costs nothing either way.
-launch_env=(env -u CLAUDE_CONFIG_DIR -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_JOB_DIR)
+# The caller's session markers are stripped too, and not only from the pane
+# command but from tmux itself. When no tmux server is running, `tmux
+# new-session` STARTS one, and that server's global environment -- which every
+# pane opened later on the same server inherits, not just this one -- is this
+# script's, i.e. the calling claude session's Bash env. Measured: a claude started
+# that way inherits CLAUDE_CODE_CHILD_SESSION and turns transcript saving off
+# ("inherited CLAUDE_CODE_CHILD_SESSION marker"), sees the caller's
+# CLAUDE_CODE_SESSION_ID as its own, and keeps the caller's CLAUDE_CONFIG_DIR.
+# So every tmux call goes through strip_env; an already running server ignores
+# it harmlessly. The pane command is stripped as well (launch_env), so a server
+# that an earlier caller already polluted does not reach this claude either, and
+# mise sees no inherited CLAUDE_CONFIG_DIR when it picks the account from the
+# main checkout's config.
+strip_env=(env -u CLAUDE_CONFIG_DIR -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_JOB_DIR)
 while IFS= read -r var; do
-  launch_env+=(-u "$var")
+  strip_env+=(-u "$var")
 done < <(compgen -e | grep '^CLAUDE_CODE_' || true)
+launch_env=("${strip_env[@]}")
 if command -v mise >/dev/null 2>&1; then
   launch_env+=(mise exec -C "$main_top" --)
 fi
@@ -120,17 +127,17 @@ claude_cmd=(claude --permission-mode acceptEdits)
 [ -z "$model" ] || claude_cmd+=(--model "$model")
 claude_cmd+=("$prompt")
 
-if tmux has-session -t "=$session" 2>/dev/null; then
+if "${strip_env[@]}" tmux has-session -t "=$session" 2>/dev/null; then
   how="new-window"
   # Trailing ':' makes the target a session, so the window gets the next free
   # index rather than colliding with an existing one.
-  if ! tmux new-window -d -t "=$session:" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}"; then
+  if ! "${strip_env[@]}" tmux new-window -d -t "=$session:" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}"; then
     echo "claude-spinoff: tmux new-window in session '$session' failed" >&2
     exit 1
   fi
 else
   how="new-session"
-  if ! tmux new-session -d -s "$session" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}"; then
+  if ! "${strip_env[@]}" tmux new-session -d -s "$session" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}"; then
     echo "claude-spinoff: tmux new-session '$session' failed" >&2
     exit 1
   fi

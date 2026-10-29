@@ -22,6 +22,12 @@ allowed-tools: Bash(claude-spinoff *), Read, Glob, Grep
 - 勝手に実行しない。下の表で決めた出し先と理由を示し、ユーザーの了承を取ってから実行する。
   出し先の判断はユーザーが覆してよい。
 
+**人間不在の委譲先（background・permission mode `auto`）では `claude-spinoff` を呼ばない。**
+`claude-spinoff` は人間が同席する interactive session を起こし、この skill の手順もユーザーの
+了承と `claude-queue done` の承認に依存するので、誰も答えない場で止まる。委譲先は気づきを
+完了報告に書いて委譲元へ回す（`issue-workflow.md` §5 の粒度を満たすなら `gh-issue-file` で
+起票してもよい）。以下の手順は人間が同席する session 向け。
+
 「担当範囲」は、その session の最初の依頼と、ユーザーがその後明示的に広げた範囲で決まる。
 委譲先（`implement-and-review` で走る session）では委譲プロンプトの WHAT が担当範囲になる。
 

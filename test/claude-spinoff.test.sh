@@ -48,6 +48,7 @@ case "$1" in
   has-session) [ "${TMUX_STUB_HAS:-0}" = 1 ]; exit ;;
   new-session|new-window)
     printf '%s\n' "$@" >"$TMUX_STUB_LOG"
+    env >"$TMUX_STUB_ENV"
     [ "${TMUX_STUB_FAIL:-0}" = 1 ] && exit 1
     shift; dir=.
     while [ $# -gt 0 ]; do
@@ -85,12 +86,12 @@ EOF
 chmod +x "$stubbin"/*
 
 export PATH="$stubbin:$PATH"
-export TMUX_STUB_LOG="$tmp/tmux.log" CLAUDE_STUB_ARGV="$tmp/claude.argv" \
+export TMUX_STUB_LOG="$tmp/tmux.log" TMUX_STUB_ENV="$tmp/tmux.env" CLAUDE_STUB_ARGV="$tmp/claude.argv" \
   CLAUDE_STUB_CWD="$tmp/claude.cwd" CLAUDE_STUB_ENV="$tmp/claude.env" \
   MISE_STUB_LOG="$tmp/mise.log" CQ_STUB_LOG="$tmp/cq.log" CLAUDE_STUB_PARENT_PID=$$
 unset TMUX TMUX_PANE
 
-reset_logs() { rm -f "$TMUX_STUB_LOG" "$CLAUDE_STUB_ARGV" "$CLAUDE_STUB_CWD" "$CLAUDE_STUB_ENV" "$MISE_STUB_LOG" "$CQ_STUB_LOG"; }
+reset_logs() { rm -f "$TMUX_STUB_LOG" "$TMUX_STUB_ENV" "$CLAUDE_STUB_ARGV" "$CLAUDE_STUB_CWD" "$CLAUDE_STUB_ENV" "$MISE_STUB_LOG" "$CQ_STUB_LOG"; }
 real() { (cd "$1" && pwd -P); }
 
 prompt='look into "X" -- it'\''s out of scope here'
@@ -137,12 +138,17 @@ else echo "FAIL: sanitize rc=$rc"; sed 's/^/  tmux| /' "$TMUX_STUB_LOG" 2>/dev/n
 reset_logs
 (cd "$cwdrepo" && CLAUDE_CODE_SESSION_ID=parent-sid-0000 CLAUDE_CODE_CHILD_SESSION=1 \
    CLAUDECODE=1 CLAUDE_CONFIG_DIR="$tmp/caller-config" "$so" -- "$prompt") >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] && ! grep -q '委譲元' "$CLAUDE_STUB_ARGV" && [ ! -e "$CQ_STUB_LOG" ]; then
+if [ "$rc" -eq 0 ] && [ -s "$CLAUDE_STUB_ARGV" ] && ! grep -q '委譲元' "$CLAUDE_STUB_ARGV" && [ -s "$TMUX_STUB_LOG" ] && [ ! -e "$CQ_STUB_LOG" ]; then
   echo "ok: no '## 委譲元' appended and no claude-queue link, even under a claude parent"
 else echo "FAIL: parent link rc=$rc cq=$(cat "$CQ_STUB_LOG" 2>/dev/null)"; fail=1; fi
-if [ "$rc" -eq 0 ] && ! grep -qE '^(CLAUDE_CODE_SESSION_ID|CLAUDE_CODE_CHILD_SESSION|CLAUDECODE|CLAUDE_CONFIG_DIR)=' "$CLAUDE_STUB_ENV"; then
+if [ "$rc" -eq 0 ] && [ -s "$CLAUDE_STUB_ENV" ] && ! grep -qE '^(CLAUDE_CODE_SESSION_ID|CLAUDE_CODE_CHILD_SESSION|CLAUDECODE|CLAUDE_CONFIG_DIR)=' "$CLAUDE_STUB_ENV"; then
   echo "ok: caller's session markers and CLAUDE_CONFIG_DIR do not reach the new claude"
 else echo "FAIL: env leaked: $(grep -E '^(CLAUDE_|CLAUDECODE)' "$CLAUDE_STUB_ENV" | paste -sd' ')"; fail=1; fi
+# tmux itself must not carry them either: a server that tmux starts keeps its
+# own env as the global environment for every later pane.
+if [ "$rc" -eq 0 ] && [ -s "$TMUX_STUB_ENV" ] && ! grep -qE '^(CLAUDE_CODE_SESSION_ID|CLAUDE_CODE_CHILD_SESSION|CLAUDECODE|CLAUDE_CONFIG_DIR)=' "$TMUX_STUB_ENV"; then
+  echo "ok: caller's session markers and CLAUDE_CONFIG_DIR do not reach tmux (server global env)"
+else echo "FAIL: env leaked into tmux: $(grep -E '^(CLAUDE_|CLAUDECODE)' "$TMUX_STUB_ENV" 2>/dev/null | paste -sd' ')"; fail=1; fi
 if grep -qxF "exec -C $cwdrepo -- claude --permission-mode acceptEdits $prompt" "$MISE_STUB_LOG"; then
   echo "ok: claude is launched through mise exec -C <main toplevel>"
 else echo "FAIL: mise exec"; sed 's/^/  mise| /' "$MISE_STUB_LOG" 2>/dev/null; fail=1; fi
