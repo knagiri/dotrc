@@ -15,9 +15,11 @@ claude-queue の台帳は session の状態を作業の軸（`done_at`）とプ�
    プロセスはまだ生きていて作業も続いている
 2. `terminated_at` が立ち、gone になる（新しいプロセスが生きているのに）
 3. 新しいプロセスの後に古い側の hook が `upsertSession` を通るので、`sessions.tmux_pane` が古い pane
-   （既に存在しない）に上書きされ、生きている pane へ switch できなくなる
+   （もう claude が居ない）に上書きされ、生きている pane へ switch できなくなる
 
-3 つとも「プロセスを session ごとに 1 つの値で持つ」1 点から生じる。この設計はプロセスの軸を
+症状 1 は恒久的に残る。症状 2・3 は、新しいプロセスが次の hook event を出すまで続く食い違いである
+（`upsertSession` は全 event で `terminated_at` を消し、`tmux_pane` を上書きする）。ただし idle の
+まま event を出さない間はずっと続く。3 つとも「プロセスを session ごとに 1 つの値で持つ」1 点から生じる。この設計はプロセスの軸を
 instance の集合として台帳に持たせ、gone・done・pane をそこから導く。
 
 ## instance 表
@@ -37,6 +39,9 @@ pid にする。
 - `SessionStart` は自分の key の instance を開く。同じ key で開いている instance（同じ pane に別の
   session が来た、または `SessionEnd` が届かずに同じ pane で同じ session が再開した）は先に閉じる。
   これが現在の `forcedEndSiblings` を置き換える
+- 同じ session に本来の key で instance を開くとき、その session の仮の key の instance（「移行」節）は
+  閉じずに key を置き換える。閉じると別の instance が最後の 1 個になって done を誤って書きうるし、
+  閉じずに残すと開いた instance が 2 個になって重複警告が誤って出る
 - `SessionStart` 以外の event も、自分の key の instance が開いていなければ開く。`SessionStart` が
   落ちる経路（hook の途中登録等）があるので、現在の `upsertSession` が全 event で `terminated_at` を
   消しているのと同じ理由で、生きた hook の到着そのものを instance が開いている証拠として扱う
@@ -45,8 +50,8 @@ pid にする。
 ### 導出
 
 - **gone**: 開いている instance が 0 個。`terminated_at` は保存せず `queue` view で計算する
-- **終了による done**: `doneReasons` に当たる `SessionEnd`（と `/clear` による `forcedEndSiblings` の
-  done、print 実行の終了）は、それが閉じた instance が最後の 1 個だったときだけ `done_at` を書く。
+- **終了による done**: `doneReasons` に当たる `SessionEnd`（と `SessionStart`(source: clear) が同じ pane の
+  instance を閉じたときの done、print 実行の終了）は、それが閉じた instance が最後の 1 個だったときだけ `done_at` を書く。
   他の instance が開いていれば作業の軸は動かさない。最後に閉じた instance の理由で決めるので、
   2 つのプロセスのうち古いほうを `/exit` し、新しいほうを後で `/exit` すれば、後者の時点で done になる
 - **pane**: 開いている instance のうち `started_at` が最新のものの pane。gone の session は開いている
@@ -62,10 +67,11 @@ pid にする。
 
 `internal/reconcile` は、開いている instance を、その session の config dir の `claude agents` の一覧と
 instance 単位で突き合わせ、一覧に対応するプロセスが居ない instance を閉じる。background は pid の
-一致で、interactive は一覧の pid から pane を引いて（`internal/sessionproc` の `PaneForSession` と同じ
-経路）key と比べる。一覧が読めない config dir の instance は閉じない、という現在の保守側の規則は
+一致で、interactive は一覧の各 pid を pane に引いて、instance の key と比べる
+（`PaneForSession` は session ごとに最初の 1 つを返すだけなので、instance 単位の照合には使えない）。一覧が読めない config dir の instance は閉じない、という現在の保守側の規則は
 instance 単位でも同じで、interactive の pane が引けない（tmux server に届かない）場合も読めない側に
-倒す。休眠・`claude-stop-bg` がプロセスを止めた結果も、`SessionEnd` か reconcile で該当 instance が
+倒す。仮の key の instance は key では突き合わせられないので、session id が一覧にあるかだけで
+判定する（tmux 外の interactive や background で、生きているのに閉じる／閉じられない、を避ける）。休眠・`claude-stop-bg` がプロセスを止めた結果も、`SessionEnd` か reconcile で該当 instance が
 閉じることで台帳に入る。
 
 ## 重複の可視化
@@ -78,6 +84,9 @@ picker の resume には既に重複チェックがある（`internal/picker/pic
 何もしない）。これも同じ instance 表を参照させ、「重複している」の判定を台帳の 1 箇所にまとめる。
 picker は起動時に reconcile を回すので、resume の判定時点で表は一覧と揃っている。止める対象の pid は
 従来どおり `claude agents` の一覧から取る。
+
+休眠（`claude-queue watch`）と PR 監視の配送も session 単位でプロセスを止めて resume する。開いている
+instance が 2 個以上の session は、どのプロセスを止めるか決められないので、どちらの経路でも skip する。
 
 Claude Code 側では、同じ session の transcript を 2 つのプロセスが書くと、後から終えた側の書き込みが
 resume の起点を古い時点へ戻すことがある（終了時に transcript 末尾へ書かれる `last-prompt` の
@@ -102,7 +111,7 @@ resume の起点を古い時点へ戻すことがある（終了時に transcrip
 `SessionEnd` の hook で `claude agents` の一覧を読み、同じ session id の別プロセスが居れば done を
 付けない、という局所修正は採らない。hook はすべての event の hot path にあり、そこへ外部プロセスの
 起動を入れることになる。さらにこれで止まるのは症状 1 だけで、`terminated_at` が立つこと（症状 2）と
-`tmux_pane` が古い pane を指すこと（症状 3）は残る。
+`tmux_pane` が古い pane を指すこと（症状 3）は残る。後者は一時的だが、idle な session では長く続きうる。
 
 ## 実装者に任せること
 
