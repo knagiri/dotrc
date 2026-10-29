@@ -85,8 +85,9 @@ picker の resume には既に重複チェックがある（`internal/picker/pic
 picker は起動時に reconcile を回すので、resume の判定時点で表は一覧と揃っている。止める対象の pid は
 従来どおり `claude agents` の一覧から取る。
 
-休眠（`claude-queue watch`）と PR 監視の配送も session 単位でプロセスを止めて resume する。開いている
-instance が 2 個以上の session は、どのプロセスを止めるか決められないので、どちらの経路でも skip する。
+休眠（`claude-queue watch`）は session 単位でプロセスを止め、PR 監視の配送は止めてから resume する。
+開いている instance が 2 個以上の session は、どのプロセスを止めるか決められないので、どちらの経路でも
+skip する。
 
 Claude Code 側では、同じ session の transcript を 2 つのプロセスが書くと、後から終えた側の書き込みが
 resume の起点を古い時点へ戻すことがある（終了時に transcript 末尾へ書かれる `last-prompt` の
