@@ -261,6 +261,9 @@ review と merge を別 skill に分けているのは、merge を見送る理�
       収束: head_sha=<head_sha> last_seen=<LAST_SEEN>
       ```
 
+      `LAST_SEEN` が null（HEAD 宛の activity が無かった）のときは `last_seen=null` と書く。
+      キーを省略しない（`pr-automerge` は省略を未受領として止める）。
+
       merge はしない。merge してよいかの判断と実行は呼び出し側（`pr-automerge`）に委ねる。
 4. **停止・報告**（収束しなかった場合）: 各イテレーションの 指摘→対応、gate に残した findings
    （却下済み分は `GATED_CARRYOVER` の累積、**`blocker: true` の未解決分は carryover には乗らず

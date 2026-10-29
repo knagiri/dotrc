@@ -115,7 +115,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - 置いた場所（rules / CLAUDE.md / lint / test / hook）と対象 repo
    - ロードされる条件（paths と想定シナリオ。rule の場合）
    - branch 名とマージ方法（委譲先が pr-review-loop → pr-automerge まで自走。マージは保護ゲート依存。
-     ただし allowlist（grant）を含む場合は review の収束で止まるので、**人間の approve と merge が
+     ただし allowlist（grant）を含む場合は pr-review-loop の終了（収束または停止）で止まるので、**人間の approve と merge が
      要る**旨を報告する）
    - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
      保守的に reap。詳細は worktree-scope.md §7）

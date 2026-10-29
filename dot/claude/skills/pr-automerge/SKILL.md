@@ -30,8 +30,11 @@ allowed-tools: Read, Grep, Glob
    - `<HEAD_SHA>` が渡されていない
    - `gh pr view <PR> --json headRefOid --jq .headRefOid` が `<HEAD_SHA>` と一致しない
      （収束後に commit が積まれた）
+   - `last_seen=` キー自体が渡されていない（未受領）
    - `gh-await-reviews <PR>` が返す `last_activity_at` が `<LAST_SEEN>` より新しい（収束後に
-     review が届いた）。`<LAST_SEEN>` が渡されていないときも同じ扱いにする
+     review が届いた）。`last_seen=null` は収束時点で HEAD 宛の activity が無かったことを示す
+     正当な値で、現在の `last_activity_at` も null なら一致とみなしてゲートを通す。現在の値が
+     非 null なら収束後に review が届いたものとして止める
 
    review を経ない merge を手順側で塞ぐためのゲートである。呼び出し側が `pr-review-loop` を
    飛ばしても、ここで止まる。
