@@ -70,9 +70,10 @@ exit 2 のときは既存 agent task の一覧が stderr に出る。候補の t
 `ready → delegated` の付け替えは**着手した側**（委譲を起こした session、またはインラインで
 実装に入った session）が
 `gh-issue-mark-delegated <N>`（`bin/`）で行う。ラッパーは `status/*` がちょうど
-`status/ready` 1 個の issue だけを付け替え、それ以外は拒否する。素の `gh issue edit` は
-使わない。hosts.yml の token に落ちて権限不足で失敗するうえ、現在の label を確かめないので
-triage の issue にも撃てて、人間ゲートを飛ばしうるため。人間不在の委譲先はこの付け替えを行わない
+`status/ready` 1 個の issue だけを付け替え、それ以外は拒否する。この遷移に `gh issue edit` を
+直接使わない。素の形は hosts.yml の token に落ちて権限不足で失敗し、`MISE_ENV=gh` を付けても
+現在の label を確かめないので triage の issue にも撃てて、人間ゲートを飛ばしうるため。
+直接撃つのは §6.2 の triage 経路だけである。人間不在の委譲先はこの付け替えを行わない
 （担い手を「委譲」に限定すると、§6 が広げたインライン経路で付け替え役が不在になるため）。
 
 ### 4. issue へのコメント投稿はしない

@@ -82,7 +82,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 - **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`, `gh-pr-create *`）
   - `gh-pr-create *` は §5 のラッパー用。素の `gh pr create *` も残す（ラッパーが env を載せるだけで権限は同じなので、どちらが通っても grant の広さは変わらない）
   - PR 本文の更新は §5 の `gh-pr-edit-body *` だけを allow する。素の `gh pr edit *` は title / base / reviewer / label まで書き換えられるので allow しない
-  - issue の label 付け替えは §5 の `gh-issue-mark-delegated *` だけを allow する。素の `gh issue edit *` は任意の label・title・本文を書き換えられるので allow しない
+  - issue の `ready → delegated` の付け替えは §5 の `gh-issue-mark-delegated *` だけを allow する。素の `gh issue edit *` は任意の label・title・本文を書き換えられるので allow しない
   - CI 状態の確認は `gh pr checks *` を allow しない。pattern 自体は正しくマッチするが、fine-grained PAT では実行すれば必ず失敗する（§1 / §5 の理由）ので、allow しておいても許可する意味が無い（`claude-settings.md` が定義する「pattern がマッチしない dead rule」とは別物）。代わりに §5 の `gh-pr-checks *` を allow する
   - コメント取得の `gh pr view <N> --comments` も `gh pr view *` の pattern にはマッチするが、fine-grained PAT では失敗しうる（§1）。ただし `gh pr view *` は他の read 用途で必要なので allow は維持し、コメント取得には §5 の `gh-pr-comments *` を使う
 - **allow しない:** `gh api *`, `gh pr comment *`, `gh pr review *`, `gh pr merge *` 等の書き込み・低レイヤ

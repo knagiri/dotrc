@@ -296,7 +296,8 @@ install_mise_stub "$mddir"
 
 md_run() {  # md_run <bindir> <labels> [args...]; returns the wrapper's rc
   : >"$mddir/args"
-  env GH_ARGS_FILE="$mddir/args" GH_LABELS="$2" PATH="$mddir:$PATH" \
+  : >"$mddir/mise-args"
+  env GH_ARGS_FILE="$mddir/args" MISE_ARGS_FILE="$mddir/mise-args" GH_LABELS="$2" PATH="$mddir:$PATH" \
     "$1/gh-issue-mark-delegated" "${@:3}" >/dev/null 2>&1
 }
 md_edited() { grep -qxF '[edit]' "$mddir/args"; }
@@ -309,6 +310,18 @@ if [ "$rc" -eq 0 ] && [ "$(cat "$mddir/args")" = "$md_expected" ]; then
   echo "ok: gh-issue-mark-delegated turns ready into delegated, and the stub catches the edit"
 else echo "FAIL: gh-issue-mark-delegated rc=$rc args=$(cat "$mddir/args" 2>/dev/null)"; fail=1; fi
 
+# Both the view and the edit must go through gh_mise (MISE_ENV=gh mise exec):
+# the gh stub sits on PATH, so a bare `gh issue edit` would be caught by it and
+# pass the case above, yet fail against the real token (hosts.yml).
+md_via_mise() {  # 0 iff the last md_run called mise exactly twice, both with MISE_ENV=gh
+  [ "$(grep -cxF '[mise:MISE_ENV=gh]' "$mddir/mise-args")" -eq 2 ] \
+    && grep -qxF '[mise:edit]' "$mddir/mise-args"
+}
+md_run "$bindir" $'bug\nstatus/ready' 42
+if md_via_mise; then
+  echo "ok: gh-issue-mark-delegated runs both view and edit under MISE_ENV=gh mise exec"
+else echo "FAIL: gh-issue-mark-delegated mise calls=$(cat "$mddir/mise-args" 2>/dev/null)"; fail=1; fi
+
 # Rejections: each must fail AND never issue the edit.
 md_rejects() {  # md_rejects <bindir> -> 0 iff every bad call fails without an edit
   local bad=0
@@ -317,6 +330,7 @@ md_rejects() {  # md_rejects <bindir> -> 0 iff every bad call fails without an e
   md_run "$1" 'bug' 42                             && bad=1; md_edited && bad=1
   md_run "$1" '' 42                                && bad=1; md_edited && bad=1
   md_run "$1" $'status/triage\nstatus/ready' 42    && bad=1; md_edited && bad=1
+  md_run "$1" $'status/ready\nstatus/delegated' 42  && bad=1; md_edited && bad=1
   md_run "$1" 'status/ready' 4x2                   && bad=1; [ -s "$mddir/args" ] && bad=1
   md_run "$1" 'status/ready'                       && bad=1; [ -s "$mddir/args" ] && bad=1
   md_run "$1" 'status/ready' 42 --add-label x      && bad=1; [ -s "$mddir/args" ] && bad=1
@@ -341,11 +355,17 @@ md_mutant() {  # md_mutant <name> <sed expression>; the mutant bindir is $mddir/
 md_mutant nostatus 's|\[ "\$status" != "status/ready" \]|false|'
 md_mutant nonumeric 's|\[\[ ! "\$issue" =~ ^\[0-9\]+\$ \]\]|false|'
 md_mutant noargc 's|\[ \$# -eq 1 \] |true |'
-for m in nostatus nonumeric noargc; do
+md_mutant bareedit 's|gh_mise issue edit|gh issue edit|'
+md_mutant firstonly 's|grep '"'"'^status/'"'"'|grep -m1 '"'"'^status/'"'"'|'
+for m in nostatus nonumeric noargc firstonly; do
   if ! md_rejects "$mddir/mutant-$m"; then
     echo "ok: mutant '$m' lets a bad call through (the rejection case is discriminating)"
   else echo "FAIL: gh-issue-mark-delegated mutant '$m' still rejected every bad call"; fail=1; fi
 done
+md_run "$mddir/mutant-bareedit" $'bug\nstatus/ready' 42
+if ! md_via_mise; then
+  echo "ok: a bare gh issue edit is caught (the via-mise assertion is discriminating)"
+else echo "FAIL: bareedit mutant still looked like it went through mise"; fail=1; fi
 # The transition-source check specifically: without it a triage issue is edited.
 md_run "$mddir/mutant-nostatus" 'status/triage' 42
 if md_edited; then

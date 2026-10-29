@@ -51,6 +51,7 @@ $ MISE_ENV=gh mise exec -- gh issue edit <N> --remove-label status/triage --add-
 
 反映先:
 
+- `docs/design/agent-issue-workflow.md` の allowlist 節
 - `dot/claude/rules/issue-workflow.md` §3（ラッパーへ）、§6.2（triage 経路の呼び方）
 - `dot/claude/rules/gh-commands.md` §1 の表、§4、§5 の表
 - `dot/claude/settings.json`（`Bash(gh-issue-mark-delegated *)`）

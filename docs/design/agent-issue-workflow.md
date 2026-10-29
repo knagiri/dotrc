@@ -99,18 +99,19 @@ gh label create status/ready   --description "HOW 確定。着手してよい（
 gh label create status/delegated --description "着手済み（委譲またはインライン）" --color c5def5
 ```
 
-あわせて `dot/claude/settings.json` の allow へ次の 3 行を足す。allowlist は grant なので agent に
+あわせて `dot/claude/settings.json` の allow へ次の 4 行を足す。allowlist は grant なので agent に
 書かせず、人間が直接編集する。
 
 ```
 Bash(gh-issue-file *)
 Bash(gh issue view *)
 Bash(gh issue list *)
+Bash(gh-issue-mark-delegated *)
 ```
 
 `Bash(gh issue edit *)` は入れない。issue の title / body / label を任意に書き換えられる広い grant
-になるうえ、`status/ready → status/delegated` の付け替えを行うのは人間が同席する session なので、
-承認プロンプトの摩擦が小さい。
+になるため、`status/ready → status/delegated` の付け替えは、遷移元を検査する
+`Bash(gh-issue-mark-delegated *)` だけを allow する。
 
 ## 委譲との接続
 
