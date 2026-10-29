@@ -276,6 +276,102 @@ if ! pe_exact && grep -qxF '[--body]' "$stubdir/args"; then
   echo "ok: changing the flag handed to gh fails the exact-argv case (it is discriminating)"
 else echo "FAIL: gh-pr-edit-body flag mutant args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
 
+# --- gh-issue-mark-delegated ------------------------------------------------
+# The wrapper writes labels on a real issue, so its stub must swallow the edit:
+# it answers `issue view` with GH_LABELS (one name per line, i.e. what gh prints
+# after the wrapper's --jq) and only records every other call. It never runs the
+# real gh. The first case below doubles as the control that the edit is caught
+# by this stub on the wrapper's actual path (gh_mise -> mise stub -> gh stub).
+mddir="$stubdir/markdel"; mkdir -p "$mddir"
+cat >"$mddir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
+case "$1 $2" in
+  "issue view") [ -z "$GH_LABELS" ] || printf '%s\n' "$GH_LABELS" ;;
+esac
+exit 0
+STUB
+chmod +x "$mddir/gh"
+install_mise_stub "$mddir"
+
+md_run() {  # md_run <bindir> <labels> [args...]; returns the wrapper's rc
+  : >"$mddir/args"
+  : >"$mddir/mise-args"
+  env GH_ARGS_FILE="$mddir/args" MISE_ARGS_FILE="$mddir/mise-args" GH_LABELS="$2" PATH="$mddir:$PATH" \
+    "$1/gh-issue-mark-delegated" "${@:3}" >/dev/null 2>&1
+}
+md_edited() { grep -qxF '[edit]' "$mddir/args"; }
+# The whole log is compared: one read, then exactly this edit and nothing else.
+md_expected="$(printf '[%s]\n' issue view 42 --json labels --jq '.labels[].name' \
+  issue edit 42 --remove-label status/ready --add-label status/delegated)"
+
+md_run "$bindir" $'bug\nstatus/ready' 42; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$mddir/args")" = "$md_expected" ]; then
+  echo "ok: gh-issue-mark-delegated turns ready into delegated, and the stub catches the edit"
+else echo "FAIL: gh-issue-mark-delegated rc=$rc args=$(cat "$mddir/args" 2>/dev/null)"; fail=1; fi
+
+# Both the view and the edit must go through gh_mise (MISE_ENV=gh mise exec):
+# the gh stub sits on PATH, so a bare `gh issue edit` would be caught by it and
+# pass the case above, yet fail against the real token (hosts.yml).
+md_via_mise() {  # 0 iff the last md_run called mise exactly twice, both with MISE_ENV=gh
+  [ "$(grep -cxF '[mise:MISE_ENV=gh]' "$mddir/mise-args")" -eq 2 ] \
+    && grep -qxF '[mise:edit]' "$mddir/mise-args"
+}
+md_run "$bindir" $'bug\nstatus/ready' 42
+if md_via_mise; then
+  echo "ok: gh-issue-mark-delegated runs both view and edit under MISE_ENV=gh mise exec"
+else echo "FAIL: gh-issue-mark-delegated mise calls=$(cat "$mddir/mise-args" 2>/dev/null)"; fail=1; fi
+
+# Rejections: each must fail AND never issue the edit.
+md_rejects() {  # md_rejects <bindir> -> 0 iff every bad call fails without an edit
+  local bad=0
+  md_run "$1" 'status/triage' 42                   && bad=1; md_edited && bad=1
+  md_run "$1" 'status/delegated' 42                && bad=1; md_edited && bad=1
+  md_run "$1" 'bug' 42                             && bad=1; md_edited && bad=1
+  md_run "$1" '' 42                                && bad=1; md_edited && bad=1
+  md_run "$1" $'status/triage\nstatus/ready' 42    && bad=1; md_edited && bad=1
+  md_run "$1" $'status/ready\nstatus/delegated' 42  && bad=1; md_edited && bad=1
+  md_run "$1" 'status/ready' 4x2                   && bad=1; [ -s "$mddir/args" ] && bad=1
+  md_run "$1" 'status/ready'                       && bad=1; [ -s "$mddir/args" ] && bad=1
+  md_run "$1" 'status/ready' 42 --add-label x      && bad=1; [ -s "$mddir/args" ] && bad=1
+  return "$bad"
+}
+md_rejects "$bindir" \
+  && echo "ok: gh-issue-mark-delegated rejects triage/delegated/no/multiple status labels, a non-numeric issue and bad argc" \
+  || { echo "FAIL: gh-issue-mark-delegated accepted a bad call args=$(cat "$mddir/args" 2>/dev/null)"; fail=1; }
+
+# Discrimination (evidence-over-guesswork §4): the wrapper is new, so its own
+# checks are neutralised one at a time and each mutant must let a bad call
+# through. `cmp` keeps a sed that matched nothing from becoming a no-op.
+md_mutant() {  # md_mutant <name> <sed expression>; the mutant bindir is $mddir/mutant-<name>
+  local d="$mddir/mutant-$1"
+  rm -rf "$d"; mkdir -p "$d"; cp -a "$bindir/." "$d/"
+  sed "$2" "$bindir/gh-issue-mark-delegated" >"$d/gh-issue-mark-delegated"
+  chmod +x "$d/gh-issue-mark-delegated"
+  if cmp -s "$bindir/gh-issue-mark-delegated" "$d/gh-issue-mark-delegated"; then
+    echo "FAIL: gh-issue-mark-delegated mutant '$1' is identical; the check is a no-op"; fail=1
+  fi
+}
+md_mutant nostatus 's|\[ "\$status" != "status/ready" \]|false|'
+md_mutant nonumeric 's|\[\[ ! "\$issue" =~ ^\[0-9\]+\$ \]\]|false|'
+md_mutant noargc 's|\[ \$# -eq 1 \] |true |'
+md_mutant bareedit 's|gh_mise issue edit|gh issue edit|'
+md_mutant firstonly 's|grep '"'"'^status/'"'"'|grep -m1 '"'"'^status/'"'"'|'
+for m in nostatus nonumeric noargc firstonly; do
+  if ! md_rejects "$mddir/mutant-$m"; then
+    echo "ok: mutant '$m' lets a bad call through (the rejection case is discriminating)"
+  else echo "FAIL: gh-issue-mark-delegated mutant '$m' still rejected every bad call"; fail=1; fi
+done
+md_run "$mddir/mutant-bareedit" $'bug\nstatus/ready' 42
+if ! md_via_mise; then
+  echo "ok: a bare gh issue edit is caught (the via-mise assertion is discriminating)"
+else echo "FAIL: bareedit mutant still looked like it went through mise"; fail=1; fi
+# The transition-source check specifically: without it a triage issue is edited.
+md_run "$mddir/mutant-nostatus" 'status/triage' 42
+if md_edited; then
+  echo "ok: without the status check a status/triage issue is marked delegated (the triage case is discriminating)"
+else echo "FAIL: nostatus mutant did not edit a triage issue args=$(cat "$mddir/args" 2>/dev/null)"; fail=1; fi
+
 # --- gh-pr-checks -----------------------------------------------------------
 # gh-pr-checks consumes gh's *output*, so it needs a stub that answers each call
 # with a fixture. The stub does not implement --jq, so every fixture holds what
@@ -761,7 +857,7 @@ git -C "$miserepo" init -q
 miserepo_real="$(cd "$miserepo" && pwd -P)"
 miseargs="$stubdir/miseargs"
 
-wrappers="gh-automerge gh-await-reviews gh-list-threads gh-pr-checks gh-pr-comments gh-pr-edit-body gh-resolve-thread"
+wrappers="gh-automerge gh-await-reviews gh-issue-mark-delegated gh-list-threads gh-pr-checks gh-pr-comments gh-pr-edit-body gh-resolve-thread"
 printf 'body\n' >"$miserepo/sub/body.md"
 wrapper_arg() {  # the arguments each wrapper's validation accepts
   case "$1" in
