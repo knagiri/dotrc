@@ -8,7 +8,7 @@
 
 design doc の template も、design doc に何を書かないかの規約も無かった。既存の
 `docs/design/claude-queue-lifecycle.md` が冒頭に同じ形の「実装状況」行を持っており、その形が
-そのまま真似された。
+真似されたと考えられる（確かめてはいない。既存 doc に同じ形の行があったことだけが観測できている）。
 
 ## 観測
 
