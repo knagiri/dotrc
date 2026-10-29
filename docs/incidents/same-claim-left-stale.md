@@ -9,14 +9,15 @@
 1. 委譲プロンプトの雛形の見出しを変えた作業で、雛形本体だけを直した。その雛形を写していた
    agent 定義（`dot/claude/agents/pr-judge.md`）、`pr-review-automerge` の判定 prompt、
    「雛形と一致」と書いた箇所が古い見出しのまま残り、1 巡目の指摘 7 件の大半がこれだった
-2. `claude-queue watch --dry-run` は DB を書かない、という誤った記述を Go の doc comment
-   （`internal/watch` の `DryRun`）で直した作業で、同じ主張を持つ CLI の flag ヘルプ
-   （`"report what would be hibernated; change nothing"`）を見落とした
+2. `claude-queue watch --dry-run` は DB を書かない、という誤った記述を、doc comment
+   （`src/claude-queue/internal/watch/watch.go` の `Options.DryRun`）と
+   `src/claude-queue/README.md` では直した（commit 854ec0c）が、同じ主張を持つ CLI の flag
+   ヘルプ（`"report what would be hibernated; change nothing"`）を見落とした
 
 ## 観測
 
-コマンドの実測は無い。観測したのはレビューの指摘と、後追いで入った修正 commit である。
-2 件目は、doc comment を直した commit の後に、flag ヘルプだけを直す commit が別に入っている。
+観測したのはレビューの指摘と、後追いで入った修正 commit である。2 件目は、doc comment と
+README を直した commit 854ec0c の後に、flag ヘルプだけを直す commit 7605fb8 が別に入っている。
 
 ```
 $ git show 7605fb8 | rg '^[-+]\s+dryRun'
@@ -24,8 +25,19 @@ $ git show 7605fb8 | rg '^[-+]\s+dryRun'
 +	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; skip reconcile, PR watch and stop (opening the DB may still write)")
 ```
 
-どちらも、直す前に旧い文言（見出し・`change nothing`）を `rg` で repo 全体から洗っていれば
-見つかる位置にあった。
+1 件目は洗い出しを実測しておらず、旧い見出しを repo 全体で検索すれば見つかったはず、という
+類推である。2 件目は修正前の commit 854ec0c で実測した。doc comment の文言（三単現の
+`changes nothing`）をそのまま検索語にすると flag ヘルプの `change nothing` には一致しない。
+語尾の揺れを許す検索なら、flag ヘルプに一致する。
+
+```
+$ git grep -n 'changes nothing' 854ec0c -- src/claude-queue/internal/watch/watch.go
+(一致なし)
+$ git grep -n 'change.\? nothing' 854ec0c -- src/claude-queue/internal/watch/watch.go
+854ec0c:src/claude-queue/internal/watch/watch.go:153:	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; change nothing")
+```
+
+（修正前の `854ec0c^` では前者が doc comment の 32 行目に一致する。）
 
 ## 直し方
 
