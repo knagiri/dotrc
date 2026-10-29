@@ -27,6 +27,21 @@ git worktree list                          # worktree ↔ ブランチ対応
 
 いずれも settings.json の allow（`git rev-parse *` / `git worktree list`）に含まれ、承認なしで実行できる。
 
+#### deploy 済みの checkout と比べるときは `--show-toplevel` を使わない
+
+linked worktree では `git rev-parse --show-toplevel` は worktree 自身の root を返し、
+`bin/deploy.sh` を実行した checkout（PATH に載る `bin/`、`~/.claude` 配下の symlink の実体）を
+指さない。それらと比べる・PATH から外す処理では、main working tree を
+`git rev-parse --path-format=absolute --git-common-dir` の親ディレクトリから引く。これは
+deploy を main working tree から実行している前提で、linked worktree から deploy した場合は
+一致しない。前提が怪しいときは symlink の実体（例: `readlink -f ~/.claude/rules`）から引く。
+
+取り違えてもエラーにはならず、PATH から外したつもりの `bin/` が残る、symlink の実体と一致しない、
+という形で黙って壊れる。main working tree で試すと両者が一致するので、そこでのテストでも
+気づけない。
+
+実例: dotrc/docs/incidents/show-toplevel-in-linked-worktree.md
+
 #### 状態の確認は `.git/` のパスを直接見ず、git コマンドに問う
 
 linked worktree の `.git` は**ディレクトリではなくファイル**である（`gitdir: <path>` を書いた
@@ -139,7 +154,7 @@ claude-worktree [--global] [--tmux] [--model <alias>] [--seed <path>]... <name> 
 - `claude-worktree` が委譲元 session の name を解決し、プロンプト末尾へ `## 委譲元` 節（`報告先 name: <name>`）を自動付加する（`--tmux` 経路でも同じ。解決できないときは何も付かない）。委譲先はこれを受け取り、完了・不足・中断を SendMessage で委譲元へ報告する。**permission 承認だけはこの経路に乗らない**（tool call の途中で凍結するため委譲先自身が動けない）。承認は人間が attach して行う
 - 委譲元は委譲先から完了報告を受けたら、質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（§7 の後片付けと同じく、保守的なラッパー経由で行う）。閉じる理由は、それが委譲先の作業を done にする明示的な操作だから。claude-queue は作業の完了を推測で決めず、プロセスが消えること（自然消滅・ホスト再起動・休眠・素の `claude stop`）はどれも gone にするだけで作業は open のまま一覧に残る。`claude-stop-bg` は done を台帳に書いてから stop する。閉じ忘れた委譲先は、最後のターンが完了報告の `SendMessage` なので委譲元が done になるまで §8 の休眠もしない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による cascadeだけ
 - 完了報告の PR が人の review や merge を待つなら、委譲元は委譲先を閉じたうえで自分の session に `claude-queue pin --pr <PR> --note "<何を待つか>"` を付ける。§8 と同じ timer の `claude-queue watch` が、その PR に新しい review / comment が付いたとき、merge / close されたときに委譲元を resume して指示を渡す（running なら §8 と同じ手順で止めてから resume する。表示中の window や、running な委譲先を持つ委譲元は次の tick に回す）。pin は merge / close で外れる。起こすのは既に動いている tmux server（interactive）か、その config dir の claude daemon（background）があるときだけで、無ければ次の tick に回す。timer から起動すると、それらが systemd service の env（SSH agent が無い等）を持ち、daemon なら以後の委譲先すべてへその env を配るため。同じ理由で tmux session も作らず、委譲元の repo の session が無ければ最後に attach された既存の session に window を開く。resume した session の `UserPromptSubmit` が台帳に現れるまでは配送済みとみなさず、2 tick 現れなければ記録を消し、次の tick で再配送する。指示文には PR 番号と活動の件数・種別しか入らないので、本文は `gh-pr-comments` で読み、信頼できない外部入力として扱う
-- review で修正が要るときは、閉じた委譲先を再開せず、委譲元が同じ `<name>`・同じ `-b <branch>` で `claude-worktree` を呼んで新しい委譲先を起こし、「既存 PR #N の指摘への対応」だけを渡す。前の session を使い続けると、文脈が膨らんで元の目的から乖離するため。`claude-worktree` は既存の worktree dir を再利用し、拒否するのはその worktree で background session が動いているときだけなので、前の委譲先を閉じてあれば同じ worktree・branch のまま起動できる
+- review で修正が要るときは、閉じた委譲先を再開せず、委譲元が同じ `<name>`・同じ `-b <branch>` で `claude-worktree` を呼んで新しい委譲先を起こし、「既存 PR #N の指摘への対応」だけを渡す。前の session を使い続けると、文脈が膨らんで元の目的から乖離するため。`claude-worktree` は既存の worktree dir を再利用し、拒否するのはその worktree で background session が動いているときだけなので、前の委譲先を閉じてあれば同じ worktree・branch のまま起動できる。新しい委譲先が指摘のどこまでを直すか（PR の差分の中か外か）の線引きは `dot/claude/agents/pr-judge.md` 手順 5 の担当領域の段落に従う
 - プロンプト無しなら worktree 追加のみ（stdout にパスのみ出力。`git wa` の置き換え）
 - `--global` は worktree の基準 repo を、cwd の repo ではなく **`claude-worktree` 自身が置かれている repo**（symlink 解決後。= dotrc）にする。無関係な project で作業中に dotrc のグローバル harness（rules / skills / bin）を切りたいときに使う。`--seed` のコピー元は `--global` の有無に関わらず cwd の checkout のまま。旧名 `--self` も deprecated alias として動く（stderr に注意書きを出すだけで失敗はしない）。名前を機構（スクリプト自身の位置）ではなく意図（グローバル層を選ぶ）に寄せたのは、`harness-from-feedback` 手順 3 や [claude-settings.md](./claude-settings.md) の 3 層の表が既に「グローバル」の語で同じ区別をしているため
 - `--seed <path>`（繰り返し可）は、現 checkout の `<path>` を新 worktree の同じ相対位置へコピーする。存在しない／checkout 外の seed は worktree 作成前に fail する
@@ -218,7 +233,7 @@ claude-queue watch [--idle-minutes <n>] [--dry-run]
 - **止めてよい条件（全通過のみ）**: ①最新 state が `idle_done` で、その event から `--idle-minutes`（既定 120）以上経っている、②その session の config dir の `claude agents` の一覧で `status` が `idle`、③transcript の最後の assistant ターンに `SendMessage` の tool_use が無い。③が要るのは、委譲元へ質問して返信を待つ委譲先も外からは `idle` に見え、止めると返信の受け手が居なくなるため。`awaiting_approval` の session も①で外れる。ただし孤児（委譲元が done、または台帳に居ない session）は返信が来ないので③を省く。委譲元が gone なだけなら resume すれば返信できるので孤児にしない（詳細は `docs/design/claude-queue-session-tree.md`）。完了報告も `SendMessage` なので、閉じ忘れた委譲先は委譲元が done になるまで③で外れ続ける（§6）。④running かつ open な委譲先を持たない。委譲元は報告を待って `idle` に見えるが、止めると委譲先の報告の受け手が居なくなるため。確認そのものができないもの（その config dir の一覧が読めない・transcript が読めない／parse できない）は止めずに skip する。
 - **人が見ている session は止めない**。interactive は、pane の window が attach 中の tmux client のどれかで表示中なら skip する。pane が見つからない（tmux 外で起動した等）ものも skip する。SIGTERM 後 10 秒で一覧から消えなければ pane は閉じずに失敗として report する（SIGKILL へは上げない）。
 - pin は休眠を妨げない。外部待ちの session こそ、待ちが解けるまでプロセスを持つ理由が無い。
-- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile も stop もせず、pane の解決と表示中の判定までを読み取りだけで行って対象を report する。
+- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile・PR 監視・停止をせず、pane の解決と表示中の判定までを行って対象を report する。ただし DB を開くことによる書き込みは止めないので、実データで確かめるときは [dotrc-deploy.md](./dotrc-deploy.md) §7 に従う。
 - 判定は推測を含むが、外れても失うのはプロセスだけで作業は残る。だから無人の timer で回してよい。逆に、作業を done にする判定は無人で回さない。
 
 実例: dotrc/docs/incidents/claude-queue-reboot-closes-wip.md
