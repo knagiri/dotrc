@@ -90,7 +90,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 
 ### 5. merge と review thread 操作（自律レビューループ用）
 
-`pr-review-automerge` skill による自律的な review→merge ループでは、raw な `gh pr merge` /
+`pr-review-loop` skill（review）と `pr-automerge` skill（merge）による自律的な review→merge ループでは、raw な `gh pr merge` /
 `gh api graphql` を allow せず、操作を最小化した `bin/` ラッパーだけを許可する。ループを回す
 判定役・修正役は信頼できない PR コメントを読んで自律実行するため、広い grant は
 prompt injection / 権限バイパスの経路になる。
@@ -132,7 +132,7 @@ prompt injection / 権限バイパスの経路になる。
   PR 作成直後にこの状態へ入るので、fallback が無いと auto-merge が構造的に届かないため。
   それ以外の失敗（required check 未達、conflict、**repo で auto-merge が無効**、など）は
   fallback せず終了コードごと呼び出し元へ返す。したがって auto-merge が無効な repo では
-  引き続き merge ステップが完了せず、`pr-review-automerge` は report して停止する
+  引き続き merge ステップが完了せず、`pr-automerge` は report して停止する
   （fallback はこのケースを救わない）。
 
 実例: dotrc/docs/incidents/automerge-clean-status-unreachable.md
@@ -140,8 +140,12 @@ prompt injection / 権限バイパスの経路になる。
 #### grant 変更を含む PR は auto-merge させない
 
 allowlist（grant）の変更は agent に委譲してよい。ただし **grant 変更を含む PR は
-`pr-review-automerge` で auto-merge させず、人間の approve を待つ**。委譲プロンプトでは
-`pr-review-automerge` を起動させず PR 作成で停止させ、merge は人間が行う。
+auto-merge させず、人間の approve を待つ**。委譲プロンプトでは `pr-review-loop` までは回させ、
+`pr-automerge` は呼ばせない。merge は人間が approve してから行う。
+
+review まで止めないのは、merge を見送る理由は review を見送る理由にならないためである。
+review の独立性（author とは別文脈の判定役）は grant 変更を含む PR でも同じだけ要り、ここで
+止めると人間は review を経ていない差分を approve することになる。
 
 以前の規約は「grant は agent に書かせず、人間が settings.json を直接編集する」だったが、
 禁じたいのは agent が grant 行を書くこと自体ではなく、**権限を広げる変更が人間のレビューを
@@ -149,6 +153,8 @@ allowlist（grant）の変更は agent に委譲してよい。ただし **grant
 人目を通らずそのまま main へ入り、規約がそのまま無効化される。逆に approve を人間に残せば、
 grant の広さは merge 前に必ず一度は人目を通る。だから条件を「誰が書くか」ではなく merge
 ゲート側へ置く。
+
+実例: dotrc/docs/incidents/review-skipped-with-merge.md
 
 #### 第三者が書けるテキストを別 session の prompt に埋め込まない
 

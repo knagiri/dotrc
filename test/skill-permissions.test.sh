@@ -13,7 +13,7 @@
 # that reproduce each failure, to show the checks actually discriminate. No
 # test framework; run with bash. SKILLS_DIR / SETTINGS_JSON override the real
 # tree. Part of the discrimination fixtures is derived from the override targets
-# too, and assumes the current tree's shape (they sed pr-review-automerge's
+# too, and assumes the current tree's shape (they sed pr-review-loop's
 # allowed-tools line and drop Skill(implement-and-review)), so pointing the
 # override at a different revision can produce FAILs there.
 set -u
@@ -149,14 +149,14 @@ out="$(check_bare_tools "$fx")"
 case "$out" in *bad/SKILL.md*) echo "ok: catches bare Bash in a YAML block list" ;;
   *) echo "FAIL: missed bare Bash in a YAML block list"; fail=1 ;; esac
 
-# The old bare-Bash shape of pr-review-automerge, applied to a copy of the real tree.
+# The old bare-Bash shape of pr-review-loop, applied to a copy of the real tree.
 rm -rf "$fx"; cp -R "$skills_dir" "$fx"
-sed -i 's/^allowed-tools: Read, Grep, Glob, Task$/allowed-tools: Bash, Read, Grep, Glob, Task/' "$fx/pr-review-automerge/SKILL.md"
+sed -i 's/^allowed-tools: Read, Grep, Glob, Task$/allowed-tools: Bash, Read, Grep, Glob, Task/' "$fx/pr-review-loop/SKILL.md"
 out="$(check_bare_tools "$fx")"
-if ! grep -qx 'allowed-tools: Bash, Read, Grep, Glob, Task' "$fx/pr-review-automerge/SKILL.md"; then
+if ! grep -qx 'allowed-tools: Bash, Read, Grep, Glob, Task' "$fx/pr-review-loop/SKILL.md"; then
   echo "FAIL: could not reproduce the bare-Bash allowed-tools (sed did not apply)"; fail=1
-else case "$out" in *pr-review-automerge/SKILL.md*) echo "ok: catches the bare-Bash pr-review-automerge allowed-tools" ;;
-  *) echo "FAIL: missed the bare-Bash pr-review-automerge allowed-tools"; fail=1 ;; esac; fi
+else case "$out" in *pr-review-loop/SKILL.md*) echo "ok: catches the bare-Bash pr-review-loop allowed-tools" ;;
+  *) echo "FAIL: missed the bare-Bash pr-review-loop allowed-tools"; fail=1 ;; esac; fi
 
 jq '.permissions.allow -= ["Skill(implement-and-review)"]' "$settings" >"$tmp/settings.json"
 out="$(check_skill_allow "$skills_dir" "$tmp/settings.json")"

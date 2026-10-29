@@ -24,7 +24,7 @@ set -euo pipefail
 # - "required" is not evaluated -- reading branch protection needs yet another
 #   permission. Callers use this only to confirm that *nothing has failed*;
 #   whether the required checks are satisfied is left to auto-merge, which
-#   branch protection enforces. This matches pr-review-automerge's existing
+#   branch protection enforces. This matches pr-automerge's existing
 #   stance that pending checks are not waited on (auto-merge waits instead).
 # - At most 100 Actions runs for the head SHA are read (no pagination).
 #
@@ -186,7 +186,7 @@ printf '%s\n%s\n' "$runs" "$statuses" | jq -n --argjson pr "$pr" --arg sha "$sha
   | ($checks | length) as $total
   | ($checks | map(select(is_failure)) | length) as $failure
   | ($checks | map(select(is_pending)) | length) as $pending
-  # The top-level shape is fixed -- pr-review-automerge reads has_failure,
+  # The top-level shape is fixed -- pr-review-loop and pr-automerge read has_failure,
   # pending_count and summary -- so superseded runs are still listed and still
   # counted in $total; the summary just buckets them with the successes, and the
   # per-check `superseded` flag is what lets a reader reconcile the two.
