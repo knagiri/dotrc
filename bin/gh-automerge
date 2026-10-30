@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # gh-automerge <PR#> -- merge a pull request, preferring auto-merge.
+# gh-automerge --disable <PR#> -- turn its auto-merge off again (see below).
 #
 # Runs EXACTLY `gh pr merge --auto --merge <PR>` with no flag passthrough, so a
 # caller (incl. a prompt-injected reviewer agent) cannot append --admin or other
@@ -18,25 +19,80 @@ set -euo pipefail
 # --admin remains unreachable. Any other failure (unmet required check,
 # conflict, ...) is passed back to the caller untouched.
 #
+# --disable: `gh-automerge --disable <PR#>` turns an already enabled auto-merge
+# off again, for the window in which more fix commits are pushed onto an open PR
+# (implement-and-review, "既存 PR への対応"). Without it, auto-merge enabled in an
+# earlier round fires as soon as a human approves one of those pushes, before
+# the new review round has finished. Re-enabling is the normal `gh-automerge
+# <PR#>` call that pr-automerge makes once the review converges.
+#   - state MERGED / CLOSED -> exit 3, nothing issued. Pushing more commits to
+#     that branch would land nowhere, so the caller must stop rather than push;
+#     3 keeps this apart from 1 (bad arguments).
+#   - autoMergeRequest null -> exit 0, nothing issued (idempotent). We decide
+#     this from the PR state ourselves instead of relying on how
+#     `gh pr merge --disable-auto` treats a PR with nothing to disable.
+#   - otherwise -> `gh pr merge --disable-auto <PR#>`, then read the PR again and
+#     fail (exit 1) unless autoMergeRequest is now null.
+# The accepted forms are exactly the two below; no other option is parsed or
+# passed through, so --admin stays unreachable in both.
+#
 # Usage: gh-automerge <PR-number>
+#        gh-automerge --disable <PR-number>
 
-usage() { echo "usage: gh-automerge <PR-number>" >&2; exit "${1:-1}"; }
+usage() {
+  echo "usage: gh-automerge <PR-number>" >&2
+  echo "       gh-automerge --disable <PR-number>" >&2
+  exit "${1:-1}"
+}
 
+disable=0
+case "${1:-}" in
+  -h|--help) [ $# -eq 1 ] || usage 1; usage 0 ;;
+  --disable) disable=1; shift ;;
+esac
 [ $# -eq 1 ] || usage 1
-case "$1" in -h|--help) usage 0 ;; esac
 pr="$1"
 if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
   echo "gh-automerge: PR number must be numeric (got: $pr)" >&2
   exit 1
 fi
 
-err="$(mktemp)"
-trap 'rm -f "$err"' EXIT
-
 # Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
 # is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
 gh_mise_use "$(gh_mise_repo_root)"
+
+if [ "$disable" -eq 1 ]; then
+  # One line: "<state> <true|false>", the latter whether auto-merge is enabled.
+  read_state() {
+    gh_mise pr view "$pr" --json state,autoMergeRequest \
+      --jq '"\(.state) \(.autoMergeRequest != null)"'
+  }
+  view="$(read_state)"
+  case "$view" in
+    "MERGED "*|"CLOSED "*)
+      echo "gh-automerge: #$pr is ${view%% *}; do not push to its branch" >&2
+      exit 3 ;;
+    *" false")
+      echo "gh-automerge: auto-merge is already disabled on #$pr" >&2
+      exit 0 ;;
+    *" true") ;;
+    *)
+      echo "gh-automerge: unexpected PR state for #$pr: $view" >&2
+      exit 1 ;;
+  esac
+  gh_mise pr merge --disable-auto "$pr"
+  view="$(read_state)"
+  if [ "${view##* }" != "false" ]; then
+    echo "gh-automerge: auto-merge is still enabled on #$pr after --disable-auto ($view)" >&2
+    exit 1
+  fi
+  echo "gh-automerge: disabled auto-merge on #$pr" >&2
+  exit 0
+fi
+
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
 
 rc=0
 gh_mise pr merge --auto --merge "$pr" 2>"$err" || rc=$?
