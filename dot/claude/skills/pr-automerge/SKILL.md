@@ -20,7 +20,7 @@ allowed-tools: Read, Grep, Glob
 
 - **この skill の終端状態は「auto-merge を有効化したこと（clean な PR では `gh-automerge` の fallback による直接 merge）」であって「PR が merge されたこと」ではない。** 実際に merge されるかは repo の branch protection（required checks / required approvals）が決める。**merge されていないことを異常とみなして調査してはならない。** 裏返しに、**既に merge が成立している状態も等しく正常な終端**である（required check の無い repo では `--auto` がその場で merge を成立させ、clean 拒否のときは手順 2 の fallback が直接 merge する）。終端は「有効化されて待っている」か「もう merge された」かのどちらかで、後者も異常とみなさない（手順 3）。
 - **review を経ていない HEAD を merge しない。** 手順 0 のゲートを通らなければ、それ以降の手順へ進まない。
-- auto-merge の有効化は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
+- auto-merge の有効化は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。同じラッパーの `--disable` 形（無効化）はこの skill では使わない（既存 PR へ修正を積む間の一時停止として `implement-and-review` が使う）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
 - 結果は **PR に投稿しない**。**session の最終メッセージとして出力するだけ**にする。raw `gh pr comment` は使わない。
 
 ## 手順

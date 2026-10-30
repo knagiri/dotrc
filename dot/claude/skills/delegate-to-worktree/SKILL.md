@@ -163,7 +163,8 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
      （`dot/claude/rules/worktree-scope.md` §6）。
    - **PR 監視に起こされ、修正が要ると判断したら**: 前の委譲先は再開しない。同じ `<name>` と
      `-b <branch>` で手順 4 の `claude-worktree` を呼び、委譲プロンプトの WHAT に「既存 PR #N の
-     指摘への対応。新しい PR は作らない」と明記する。理由は `worktree-scope.md` §6。
+     指摘への対応。新しい PR は作らない」と明記する。理由は `worktree-scope.md` §6。有効化済みの
+     auto-merge は委譲先が着手直後に止める（`implement-and-review` 手順 4）。
    - **不足（質問）**: 答えられるなら SendMessage で返信する。判断がユーザーに属する質問は、
      代わりにユーザーへ取り次ぐ。返信後は完了報告を待ち、上のとおり閉じる。
    - **permission 承認の代理はしない。** 承認は harness レベルの UI イベントで、委譲元が
