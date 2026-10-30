@@ -29,6 +29,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       claude-queue memo [--session <id>] [--] [<text>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N | PR URL>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue unpin [--session <id>]")
+	fmt.Fprintln(os.Stderr, "       claude-queue nav {back|forward} [--client <name>] [--pane <id>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue --version")
 }
 
@@ -66,6 +67,8 @@ func main() {
 		done.Run(os.Args[2:])
 	case "reopen":
 		reopen.Run(os.Args[2:])
+	case "nav":
+		picker.RunNav(os.Args[2:])
 	case "memo", "pin", "unpin":
 		annotate.Run(os.Args[1], os.Args[2:])
 	default:
