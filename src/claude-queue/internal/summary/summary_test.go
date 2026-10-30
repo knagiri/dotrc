@@ -99,25 +99,18 @@ func TestSummaryForWorking(t *testing.T) {
 	}
 }
 
-func TestSummaryForStale(t *testing.T) {
-	got := Summarize(Input{EffectiveState: "stale", RawState: "idle_done"})
-	if got != "stale (was idle_done)" {
-		t.Errorf("got %q, want %q", got, "stale (was idle_done)")
-	}
-}
-
 // A gone row's own state is 'ended' and its payload holds only the end
 // reason, so the prior state is the only thing that distinguishes one of these
 // rows from another.
 func TestSummaryForGone(t *testing.T) {
-	got := Summarize(Input{EffectiveState: "gone", RawState: "ended", PriorState: "working"})
+	got := Summarize(Input{EffectiveState: "gone", PriorState: "working"})
 	if got != "gone (was working)" {
 		t.Errorf("got %q, want %q", got, "gone (was working)")
 	}
 }
 
 func TestSummaryForGone_NoPriorState(t *testing.T) {
-	got := Summarize(Input{EffectiveState: "gone", RawState: "ended"})
+	got := Summarize(Input{EffectiveState: "gone"})
 	if got != "gone" {
 		t.Errorf("got %q, want %q", got, "gone")
 	}

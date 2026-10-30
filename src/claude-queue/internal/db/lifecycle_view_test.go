@@ -19,7 +19,7 @@ func openTest(t *testing.T) *sql.DB {
 // findRow returns sid's row in the full listing, and whether it is there.
 func findRow(t *testing.T, conn *sql.DB, sid string) (Row, bool) {
 	t.Helper()
-	rows, err := ListRows(conn, ListOpts{ShowWorking: true, ShowStale: true})
+	rows, err := ListRows(conn, ListOpts{ShowWorking: true})
 	if err != nil {
 		t.Fatalf("ListRows: %v", err)
 	}
@@ -81,5 +81,39 @@ func TestQueueView_DoneIsHidden(t *testing.T) {
 	}
 	if _, ok := findRow(t, conn, "d"); ok {
 		t.Error("done session is listed")
+	}
+}
+
+// Age alone never rewrites a state: an approval wait hours old is still the
+// one row the user most needs to see, so it keeps its own state and is in the
+// default listing. Long idles are hibernation's business and dead processes
+// reconcile's, not the view's.
+func TestQueueView_OldStatesKeepTheirState(t *testing.T) {
+	conn := openTest(t)
+	for _, c := range []struct {
+		sid, state string
+		ago        int64
+	}{
+		{"wait", "awaiting_approval", 3 * 3600},
+		{"idle", "idle_done", 5 * 3600},
+		{"work", "working", 9 * 3600},
+	} {
+		insertSession(t, conn, c.sid, "%1")
+		insertEvent(t, conn, c.sid, "Stop", c.state, c.ago)
+		r, ok := findRow(t, conn, c.sid)
+		if !ok || r.EffectiveState != c.state {
+			t.Errorf("%s after %ds: effective_state = %q (listed %v), want %q", c.sid, c.ago, r.EffectiveState, ok, c.state)
+		}
+	}
+	rows, err := ListRows(conn, ListOpts{})
+	if err != nil {
+		t.Fatalf("ListRows: %v", err)
+	}
+	listed := map[string]bool{}
+	for _, r := range rows {
+		listed[r.SessionID] = true
+	}
+	if !listed["wait"] || !listed["idle"] || listed["work"] {
+		t.Errorf("default listing = %v, want wait and idle without work", listed)
 	}
 }

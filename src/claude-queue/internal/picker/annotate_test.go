@@ -72,7 +72,7 @@ func TestFormatLine_AnnotationColumn(t *testing.T) {
 // Each edit key passes the session id and the raw text it edits as {N}s that
 // land on those columns of a rendered line, and the header lists every key.
 func TestFzfArgs_Binds(t *testing.T) {
-	f := pickerFlags{ShowStale: true}
+	f := pickerFlags{ShowWorking: true}
 	row := db.Row{
 		SessionID: "sid-123", EffectiveState: "idle_done", CreatedAt: nowMinus(60), Marked: true,
 		Memo: sql.NullString{String: "the memo", Valid: true}, PinNote: sql.NullString{String: "the note", Valid: true},
@@ -115,7 +115,7 @@ func TestFzfArgs_Binds(t *testing.T) {
 		}
 		// ctrl-x reloads whichever list is showing, so its reload is a bash if
 		// that quotes the flags once more; TestDoneBind_ByList runs it.
-		if c.key != "ctrl-x" && !strings.Contains(c.bind, "'picker' '--list' '--show-stale'") {
+		if c.key != "ctrl-x" && !strings.Contains(c.bind, "'picker' '--list' '--show-working'") {
 			t.Errorf("%s bind does not reload with the same flags", c.key)
 		}
 	}

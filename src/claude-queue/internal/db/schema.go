@@ -157,10 +157,7 @@ SELECT
   e.payload,
   e.created_at,
   CASE
-    WHEN s.terminated_at IS NOT NULL                                           THEN 'gone'
-    WHEN e.state = 'working'           AND unixepoch() - e.created_at > 28800 THEN 'stale'
-    WHEN e.state = 'awaiting_approval' AND unixepoch() - e.created_at >  7200 THEN 'stale'
-    WHEN e.state = 'idle_done'         AND unixepoch() - e.created_at > 14400 THEN 'stale'
+    WHEN s.terminated_at IS NOT NULL THEN 'gone'
     ELSE e.state
   END AS effective_state,
   COALESCE(p.created_at, e.created_at) AS activity_at,

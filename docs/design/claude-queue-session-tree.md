@@ -39,7 +39,7 @@ GC は `created_at` が GC 期限より古く、かつ親子のどちらも作�
 
 木の順を主にし、アクティビティの新しさは兄弟間の順序にだけ効かせる。`q` と `Q` の両方に適用する。
 
-1. open な行（running と gone）を全状態で読み、state filter（`--show-working` / `--show-stale`）を
+1. open な行（running と gone）を全状態で読み、state filter（`--show-working`）を
    通った行を残す。gone は filter に関わらず残る
 2. 残した行の祖先を `parent_session_id` で辿り、open な行に在れば加える。**祖先には state filter
    を掛けない**。`q` は `working` を隠すが委譲中の親はたいてい `working` なので、掛けると木が崩れる

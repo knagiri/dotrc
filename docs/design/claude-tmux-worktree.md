@@ -91,7 +91,7 @@ worktree は `<repo>/.worktrees/<name>` にあり、ghq が repo として列挙
 - `C-q q` で popup → fzf picker → 選択 session へ到達（pane への `tmux switch-client` / `claude attach` /
   `claude --resume` を後述の順で選ぶ）。`q` は `--repo-scope` 付きで、popup を開いた pane と
   `--git-common-dir` を共有する session だけに絞る（メイン checkout + その `.worktrees/*` が 1 グループ
-  になる）。`C-q Q` は絞り込みを外し、working / stale も出す。プロセスが消えただけで作業が open な
+  になる）。`C-q Q` は絞り込みを外し、working も出す。プロセスが消えただけで作業が open な
   session（gone）はどちらにも並ぶ（→ `docs/design/claude-queue-lifecycle.md`）
 - ④の bg 経路が `claude-queue link` で委譲の親子関係を記録し、picker はそれを木として表示する。
   親を失った委譲先（孤児）には印が付き、休眠は孤児を返信待ちとみなさない

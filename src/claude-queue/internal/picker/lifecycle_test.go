@@ -74,6 +74,24 @@ func TestShowResumableIsANoop(t *testing.T) {
 	}
 }
 
+// --show-stale is a no-op for the same reason: the state it added back no
+// longer exists. A row old enough to have been stale under the old thresholds
+// is in the default listing under its own icon, and the flag changes nothing.
+func TestShowStaleIsANoop(t *testing.T) {
+	seedDB(t,
+		"INSERT INTO sessions(session_id) VALUES ('wait-1')",
+		"INSERT INTO events(session_id, event_type, state, created_at) VALUES ('wait-1', 'PermissionRequest', 'awaiting_approval', unixepoch() - 3*3600)",
+	)
+	now := time.Now().Unix()
+	a, b := listOut(t, now), listOut(t, now, "--show-stale")
+	if !strings.HasPrefix(a, emoji["awaiting_approval"]+"\t") || !strings.Contains(a, "wait-1") {
+		t.Errorf("3h-old approval wait not listed with %s by default:\n%q", emoji["awaiting_approval"], a)
+	}
+	if a != b {
+		t.Errorf("--show-stale changed the listing:\n%q\nvs\n%q", a, b)
+	}
+}
+
 // A delegate whose parent is only gone still has a delegator -- resuming it
 // brings the delegation back -- so it is not marked as an orphan. A parent
 // whose work is done is, since nobody is left to close the delegate.
@@ -91,7 +109,7 @@ func TestForest_GoneParentIsNotOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true, ShowStale: true})
+	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +135,7 @@ func TestForest_GoneParentIsNotOrphan(t *testing.T) {
 // confirmation, see TestDoneConfirmScript_DefaultNo) and reloads with the same
 // flags, and the picker hands it to fzf.
 func TestFzfArgs_DoneBind(t *testing.T) {
-	f := pickerFlags{ShowStale: true}
+	f := pickerFlags{ShowWorking: true}
 	bind := doneBind("/opt/x/claude-queue", f)
 	if !strings.HasPrefix(bind, "ctrl-x:execute") || !strings.Contains(bind, "+reload(") {
 		t.Fatalf("done bind = %q, want ctrl-x:execute...+reload(...)", bind)

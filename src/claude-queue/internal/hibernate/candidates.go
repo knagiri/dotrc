@@ -102,7 +102,7 @@ type Skip struct {
 // A pin does not hold a session back. A session waiting on something external
 // is exactly the one whose process has nothing to do until that resolves.
 func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir string) ([]roster.Agent, error), lastTurnSendsMessage func(transcriptPath string) (bool, error)) ([]Candidate, []Skip, error) {
-	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true, ShowStale: true})
+	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true})
 	if err != nil {
 		return nil, nil, err
 	}
