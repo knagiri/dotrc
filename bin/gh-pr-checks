@@ -187,10 +187,9 @@ printf '%s\n%s\n' "$runs" "$statuses" | jq -n --argjson pr "$pr" --arg sha "$sha
   | ($checks | map(select(is_pending)) | length) as $pending
   # The output shape is a fixed contract: pr, sha, has_failure, pending_count,
   # summary, and checks[] with source, status, conclusion, superseded, name,
-  # workflow_id and run_number per entry. Superseded runs are therefore still
-  # listed and still counted in $total; the summary just buckets them with the
-  # successes, and the per-check `superseded` flag is what lets a reader
-  # reconcile the two.
+  # workflow_id and run_number per entry. Superseded runs are still listed and
+  # counted in $total so that a reader can reconcile them with the summary via
+  # the per-check `superseded` flag; the summary buckets them with the successes.
   | {pr: $pr,
      sha: $sha,
      checks: $checks,

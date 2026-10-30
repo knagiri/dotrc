@@ -9,11 +9,17 @@ JSON で返す）に加えて、誰がどの field を読むかを書いてい�
 - 出力部: 「pr-review-loop and pr-automerge read has_failure and pending_count, and pr-automerge
   also reads checks[]」と、利用者と読む field を列挙
 
-`pr-review-automerge` を `pr-review-loop` と `pr-automerge` に分割した際、`pr-review-loop` の
-判定役も CI 判定で `checks[]`（`source` / `conclusion`）を読むようになった（cancelled だけが
-fail に効いているときに `pending` と判定するため）。分割後のレビュー指摘対応でこのコメントは
-更新されたが、`checks[]` を読むのは `pr-automerge` だけという記述のまま残った。利用者を変えた
-側の差分にこのコメントは現れないので、直す契機が無かった。
+誤りは 2 段で起きた。
+
+1. d9b5d0b（`pr-review-automerge` 時代）で、判定役が `checks[]`（`source` / `conclusion` /
+   `superseded`）を読むようになった（cancelled だけが fail に効いているときに `pending` と判定
+   するため）。この commit が変えたのは利用者側の SKILL.md だけで、`bin/gh-pr-checks` には触れて
+   いない。コメントは差分に現れないまま古くなった。「利用する側の差分に現れない」が実際に起きた
+   のはここ。
+2. その後の分割（2ec5f7b、`pr-review-automerge` を `pr-review-loop` と `pr-automerge` に分割）と
+   レビュー対応（6244614）では、このコメント行を直接編集した。それでも `checks[]` を読むのは
+   `pr-automerge` だけという記述は残った。利用者を列挙する書き方のままでは、編集していても
+   正しい列挙を保てなかった。
 
 同じ形はほかにも見つかった。`pr-review-loop` の SKILL.md は自分の出力の行き先として
 `claude-review` がログに残すことを書き、`bin/lib/gh-mise.sh` は引数を渡す唯一の利用者を
@@ -30,12 +36,13 @@ $ git show 6244614 -- bin/gh-pr-checks | rg '^[-+]  # '
 +  # and pending_count, and pr-automerge also reads checks[] (source, conclusion,
 +  # superseded, name, workflow_id, run_number) -- so superseded runs are still listed and still
 
-$ rg -n 'source ==' dot/claude/skills/pr-review-loop/SKILL.md
+$ git show bdbcc38:dot/claude/skills/pr-review-loop/SKILL.md | rg -n 'source =='
 424:>   判定してよいのではなく、両 source 通しての AND 条件）: 実質的な failure（`source ==
 425:>   "actions"` の `conclusion` が `failure` / `timed_out` / `startup_failure`、`source ==
+427:>   無く、**かつ** `source == "actions"` の `conclusion` が `cancelled` かつ `superseded: false`
 ```
 
-（行番号は修正前の HEAD bdbcc38 時点。）
+（行番号は bdbcc38 時点。）
 
 ## 直し方
 
