@@ -14,8 +14,8 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 )
 
-// A marked row swaps its icon and nothing else; stale included, because a
-// parked session that went stale is still one the user meant to return to.
+// A marked row swaps its icon and nothing else, whatever the state: a parked
+// session is one the user meant to return to.
 func TestFormatLine_MarkedIcon(t *testing.T) {
 	for _, tc := range []struct {
 		state  string
@@ -25,9 +25,9 @@ func TestFormatLine_MarkedIcon(t *testing.T) {
 	}{
 		{"idle_done", true, false, "📌"},
 		{"idle_done", true, true, "[P]"},
-		{"stale", true, false, "📌"},
-		{"stale", true, true, "[P]"},
-		{"stale", false, false, "🧟"},
+		{"awaiting_approval", true, false, "📌"},
+		{"awaiting_approval", true, true, "[P]"},
+		{"awaiting_approval", false, false, "⏳"},
 		{"idle_done", false, true, "[.]"},
 	} {
 		row := db.Row{SessionID: "s", EffectiveState: tc.state, RawState: "idle_done", CreatedAt: nowMinus(60), Marked: tc.marked}
@@ -75,9 +75,9 @@ func TestTabBind_PointsAtSessionID(t *testing.T) {
 }
 
 func TestTabBind_QuotesAndDelimits(t *testing.T) {
-	bind := tabBind("/a b/it's(1)/claude-queue", pickerFlags{ShowStale: true})
+	bind := tabBind("/a b/it's(1)/claude-queue", pickerFlags{ShowWorking: true})
 	q := `'/a b/it'\''s(1)/claude-queue'`
-	if !strings.Contains(bind, q+" mark ") || !strings.Contains(bind, q+" 'picker' '--list' '--show-stale'") {
+	if !strings.Contains(bind, q+" mark ") || !strings.Contains(bind, q+" 'picker' '--list' '--show-working'") {
 		t.Errorf("binary path not shell-quoted in %q", bind)
 	}
 	// A ')' in the path must not end the action argument early.
@@ -87,8 +87,8 @@ func TestTabBind_QuotesAndDelimits(t *testing.T) {
 }
 
 func TestListArgs(t *testing.T) {
-	got := pickerFlags{ShowWorking: true, ShowStale: true, RepoScope: true}.listArgs()
-	want := []string{"picker", "--list", "--show-working", "--show-stale", "--repo-scope"}
+	got := pickerFlags{ShowWorking: true, RepoScope: true}.listArgs()
+	want := []string{"picker", "--list", "--show-working", "--repo-scope"}
 	if !slices.Equal(got, want) {
 		t.Errorf("listArgs = %v, want %v", got, want)
 	}
@@ -100,8 +100,8 @@ func TestListArgs(t *testing.T) {
 // The Tab reload runs inside fzf and does not ask tmux for the pane, so the
 // current-session mark survives Tab only if the pane rides along in its argv.
 func TestListArgs_CurrentPane(t *testing.T) {
-	got := pickerFlags{ShowStale: true, CurrentPane: "%7"}.listArgs()
-	want := []string{"picker", "--list", "--show-stale", "--current-pane", "%7"}
+	got := pickerFlags{ShowWorking: true, CurrentPane: "%7"}.listArgs()
+	want := []string{"picker", "--list", "--show-working", "--current-pane", "%7"}
 	if !slices.Equal(got, want) {
 		t.Errorf("listArgs = %v, want %v", got, want)
 	}
@@ -144,7 +144,7 @@ func TestListModeMatchesInteractiveInput(t *testing.T) {
 
 	// One clock for both paths, so the comparison below sees only the path.
 	now := time.Now().Unix()
-	for _, flags := range [][]string{nil, {"--show-working"}, {"--show-working", "--show-stale"}, {"--show-working", "--current-pane", "%7"}} {
+	for _, flags := range [][]string{nil, {"--show-working"}, {"--show-working", "--current-pane", "%7"}} {
 		var fzfInput string
 		var fzfArgv []string
 		run(flags, &bytes.Buffer{}, func(c *sql.DB) {}, func(in string, args []string) (string, error) {

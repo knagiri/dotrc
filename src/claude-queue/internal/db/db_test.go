@@ -204,7 +204,7 @@ func TestTerminateSession(t *testing.T) {
 	}
 
 	// The process axis only: the session stays listed, as gone.
-	rows, err := ListRows(conn, ListOpts{ShowWorking: true, ShowStale: true})
+	rows, err := ListRows(conn, ListOpts{ShowWorking: true})
 	if err != nil {
 		t.Fatalf("ListRows: %v", err)
 	}
@@ -297,15 +297,13 @@ func TestListRows_JoinsParent(t *testing.T) {
 // ListOpts.Includes is the filter the picker applies to rows it read unfiltered,
 // so it has to agree with what the flags meant when ListRows filtered in SQL.
 func TestListOptsIncludes(t *testing.T) {
-	states := []string{"awaiting_approval", "idle_done", "working", "stale", StateGone}
+	states := []string{"awaiting_approval", "idle_done", "working", StateGone}
 	cases := []struct {
 		opts ListOpts
 		want []bool
 	}{
-		{ListOpts{}, []bool{true, true, false, false, true}},
-		{ListOpts{ShowWorking: true}, []bool{true, true, true, false, true}},
-		{ListOpts{ShowStale: true}, []bool{true, true, false, true, true}},
-		{ListOpts{ShowWorking: true, ShowStale: true}, []bool{true, true, true, true, true}},
+		{ListOpts{}, []bool{true, true, false, true}},
+		{ListOpts{ShowWorking: true}, []bool{true, true, true, true}},
 	}
 	for _, tc := range cases {
 		for i, s := range states {
@@ -427,7 +425,7 @@ func TestQueueViewCarriesConfigDir(t *testing.T) {
 // markedOf returns the Marked flag ListRows reports for sid.
 func markedOf(t *testing.T, conn *sql.DB, sid string) bool {
 	t.Helper()
-	rows, err := ListRows(conn, ListOpts{ShowWorking: true, ShowStale: true})
+	rows, err := ListRows(conn, ListOpts{ShowWorking: true})
 	if err != nil {
 		t.Fatalf("ListRows: %v", err)
 	}

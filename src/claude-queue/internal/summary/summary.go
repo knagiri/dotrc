@@ -67,8 +67,6 @@ func summarize(in Input) string {
 		return summarizeDone(in.Payload)
 	case "working":
 		return "working"
-	case "stale":
-		return "stale (was " + in.RawState + ")"
 	case "gone":
 		return summarizeGone(in.PriorState)
 	}

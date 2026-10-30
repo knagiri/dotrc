@@ -74,7 +74,6 @@ const StateDone = "done"
 // ListOpts filters the queue listing.
 type ListOpts struct {
 	ShowWorking bool
-	ShowStale   bool
 }
 
 // Counts returns { effective_state: count } across the queue view.
@@ -99,7 +98,7 @@ func Counts(conn *sql.DB) (map[string]int, error) {
 }
 
 // Includes reports whether a row in effectiveState passes the filter. By
-// default working + stale are excluded; with both flags set nothing is. Gone
+// default working is excluded; with ShowWorking set nothing is. Gone
 // rows are always included: the work is open and waiting on a resume, which is
 // what the default listing is for.
 //
@@ -107,16 +106,11 @@ func Counts(conn *sql.DB) (map[string]int, error) {
 // row and applies it itself: a delegating parent is usually `working`, and the
 // picker must still find it to hang the filtered-in children off it.
 func (o ListOpts) Includes(effectiveState string) bool {
-	if o.ShowWorking && o.ShowStale {
-		return true
-	}
 	switch effectiveState {
 	case "awaiting_approval", "idle_done", StateGone:
 		return true
 	case "working":
 		return o.ShowWorking
-	case "stale":
-		return o.ShowStale
 	}
 	return false
 }

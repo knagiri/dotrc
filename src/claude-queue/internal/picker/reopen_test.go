@@ -54,12 +54,12 @@ func runAs(t *testing.T, cmd, prompt, stdin, self string) string {
 // list that is showing. Each list is the control for the other: the same bind
 // reaches the stub either way, so the call it gets is decided by the prompt.
 func TestDoneBind_ByList(t *testing.T) {
-	f := pickerFlags{ShowStale: true}
+	f := pickerFlags{ShowWorking: true}
 	for _, c := range []struct {
 		prompt, wantRun, wantReload string
 	}{
-		{promptOpen, "done sid-123\n", "picker --list --show-stale\n"},
-		{promptDone, "reopen sid-123\n", "picker --list --show-stale --done\n"},
+		{promptOpen, "done sid-123\n", "picker --list --show-working\n"},
+		{promptDone, "reopen sid-123\n", "picker --list --show-working --done\n"},
 	} {
 		self, log := stubSelf(t, 0, "")
 		bind := doneBind(self, f)

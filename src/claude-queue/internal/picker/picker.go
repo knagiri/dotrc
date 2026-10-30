@@ -39,7 +39,6 @@ var emoji = map[string]string{
 	"awaiting_approval": "⏳",
 	"idle_done":         "✅",
 	"working":           "⚙️",
-	"stale":             "🧟",
 	db.StateGone:        "💤",
 	db.StateDone:        "☑️",
 }
@@ -50,7 +49,6 @@ var ascii = map[string]string{
 	"awaiting_approval": "[!]",
 	"idle_done":         "[.]",
 	"working":           "[*]",
-	"stale":             "[X]",
 	db.StateGone:        "[~]",
 	db.StateDone:        "[D]",
 }
@@ -133,8 +131,8 @@ func FormatLine(row db.Row, title, worktree string, nowSec int64, asciiMode bool
 		icons = ascii
 	}
 	icon := icons[row.EffectiveState]
-	// The mark wins over every state, stale included: a parked session that has
-	// gone stale is still one the user said they would come back to.
+	// The mark wins over every state: a parked session is one the user said
+	// they would come back to, whatever it is doing now.
 	if row.Marked {
 		icon = icons[iconMarked]
 	}
@@ -522,7 +520,6 @@ func reachablePane(mux multiplexer.Multiplexer, agents []roster.Agent, sessionID
 // command the Tab and done binds run (see listArgs).
 type pickerFlags struct {
 	ShowWorking bool
-	ShowStale   bool
 	RepoScope   bool
 	// Done selects the done list (ctrl-r) in place of the open one. Only the
 	// reload passes it: the picker always opens on the open list.
@@ -544,7 +541,6 @@ func (f pickerFlags) listArgs() []string {
 		name string
 	}{
 		{f.ShowWorking, "--show-working"},
-		{f.ShowStale, "--show-stale"},
 		{f.RepoScope, "--repo-scope"},
 		{f.Done, "--done"},
 	} {
@@ -595,11 +591,13 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 	fs := flag.NewFlagSet("picker", flag.ExitOnError)
 	var f pickerFlags
 	fs.BoolVar(&f.ShowWorking, "show-working", false, "include working sessions")
-	fs.BoolVar(&f.ShowStale, "show-stale", false, "include stale sessions")
 	// Accepted and ignored: gone sessions -- what this used to add -- are in the
 	// default listing now. Kept so an old tmux bind that still passes it opens
 	// the picker rather than failing on an unknown flag.
 	_ = fs.Bool("show-resumable", false, "no-op: gone sessions are always listed")
+	// Accepted and ignored for the same reason: the time-threshold state it
+	// added back to the listing no longer exists.
+	_ = fs.Bool("show-stale", false, "no-op: there is no stale state")
 	fs.BoolVar(&f.RepoScope, "repo-scope", false, "only sessions whose cwd is in the same git repo as the picker's cwd")
 	fs.StringVar(&f.CurrentPane, "current-pane", "", "internal: the pane whose row is marked current, passed to the Tab bind's reload")
 	fs.BoolVar(&f.Done, "done", false, "internal: with --list, print the done list (the ctrl-r bind's reload)")
@@ -759,12 +757,12 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool, nowSec int64) (string,
 	// Every live row is read, whatever the flags say: the state filter picks
 	// the rows to show, but buildForest still needs their filtered-out
 	// ancestors to hang them from.
-	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true, ShowStale: true})
+	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return "", names, false
 	}
-	filter := db.ListOpts{ShowWorking: f.ShowWorking, ShowStale: f.ShowStale}
+	filter := db.ListOpts{ShowWorking: f.ShowWorking}
 	opts := forestOpts{
 		Keep:       func(r db.Row) bool { return filter.Includes(r.EffectiveState) },
 		ParentOpen: openSessions(conn),

@@ -99,13 +99,6 @@ func TestSummaryForWorking(t *testing.T) {
 	}
 }
 
-func TestSummaryForStale(t *testing.T) {
-	got := Summarize(Input{EffectiveState: "stale", RawState: "idle_done"})
-	if got != "stale (was idle_done)" {
-		t.Errorf("got %q, want %q", got, "stale (was idle_done)")
-	}
-}
-
 // A gone row's own state is 'ended' and its payload holds only the end
 // reason, so the prior state is the only thing that distinguishes one of these
 // rows from another.

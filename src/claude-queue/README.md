@@ -39,7 +39,7 @@ make install
 |---|---|
 | `claude-queue hook <event>` | stdin JSON を受け取り SQLite に状態書き込み（Claude Code hook 経由で呼ばれる） |
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
-| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` / `--show-stale` で一覧を広げる。キー操作は「pin とメモ」と「session の状態」の節を参照。`--show-resumable` は受け付けるが何もしない（gone は既定で並ぶ） |
+| `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` で一覧を広げる。キー操作は「pin とメモ」と「session の状態」の節を参照。`--show-resumable` / `--show-stale` は受け付けるが何もしない（gone は既定で並び、stale は廃止した） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない running の session を gone にし、done なのに running な background session を `claude stop` する（picker 起動時に自動実行される） |
 | `claude-queue watch [--idle-minutes N] [--pr-debounce-minutes M] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile、PR 監視（pin の PR に新しい活動があれば session を起こす。後述）のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も PR 監視も停止もせず、休眠の対象を出すだけ（後述）。ただし DB を開くこと自体の書き込み（`queue` view の作り直し・移行）は止めないので、実データで試すときは `dot/claude/rules/dotrc-deploy.md` §7 に従い DB のコピーを指す |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
@@ -63,7 +63,7 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 | Var | 意味 |
 |---|---|
 | `CLAUDE_QUEUE_DB` | DB パス override（既定 `~/.claude/session-queue.db`） |
-| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [X] [~]`（pin は `[P]`、メモは `[M]`）に切替 |
+| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [~]`（pin は `[P]`、メモは `[M]`）に切替 |
 | `CLAUDE_QUEUE_DEBUG=1` | エラーを `~/.claude/session-queue.log` に追記 |
 
 ### picker の行
@@ -132,9 +132,7 @@ pin は「外部待ち」の印で、人の返信待ち・保留・後回しに�
 
 いずれのキーでも popup は閉じず、`picker --list`（同じ flag で行だけを出すモード）で一覧をその場で再描画する。
 pin が変えるのはアイコンだけで、並び順・state・age・summary は変えない。別グループに
-すると並びが動いて行を見失うため。stale 判定も変えないので、印の付いた session も時間が
-経てば既定の picker から消え、`--show-stale` では 📌 のまま見える。tmux status-right の
-カウンタは pin を数えない。
+すると並びが動いて行を見失うため。tmux status-right のカウンタは pin を数えない。
 
 pin（`sessions.waiting_event_id` が非 NULL）は明示的に外すまで残り、gone の session にも付けられる。
 外部待ちの間も催促などで session に触れることがあり、そのたびに外れては pin の意味が無いため。
@@ -279,7 +277,9 @@ client は端末へ detach される。
 | `Stop` / `StopFailure` | idle_done |
 | `SessionEnd` | ended（プロセス軸が gone になる。作業軸は上の規則による） |
 
-Stale 閾値: working > 8h / awaiting_approval > 2h / idle_done > 4h 経過。
+経過時間で state を置き換えることはしない（かつての stale 判定は廃止した）。長く `idle_done` の
+session は休眠が止め、プロセスが消えた session は reconcile が gone にする。時間閾値で置き換えると、
+最も見落としたくない `awaiting_approval` が隠れるため。
 
 `gone` は view が `terminated_at` から導く擬似 state で、hook が書く state ではない。
 
@@ -356,7 +356,7 @@ session は期間に関わらず消さない。`session_links` は作成から 7
 set -g status-interval 5
 set -g status-right '#(claude-queue status) | %H:%M'
 bind-key q display-popup -E -d "#{pane_current_path}" -w 80% -h 60% "claude-queue picker --repo-scope"
-bind-key Q display-popup -E -w 80% -h 60% "claude-queue picker --show-working --show-stale"
+bind-key Q display-popup -E -w 80% -h 60% "claude-queue picker --show-working"
 ```
 
 prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`q` は `--repo-scope` 付きで、
@@ -364,8 +364,8 @@ prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`q` �
 `.worktrees/*` は `--git-common-dir` を共有するので 1 グループになる）。`-d
 "#{pane_current_path}"` を明示するのは、この絞り込みが popup 自身の cwd を起点にするため。
 repo の外で `q` を押したときは一覧を出さず `not in a git repo; use prefix Q for all sessions`
-を stderr へ出して終わる。`Q` は絞り込みを外した全部入り（別 repo の session も、working /
-stale も出す）。gone は `q` / `Q` どちらでも出る。
+を stderr へ出して終わる。`Q` は絞り込みを外した全部入り（別 repo の session も、working
+も出す）。gone は `q` / `Q` どちらでも出る。
 
 ### 飛んだ履歴の行き来（`claude-queue nav`）
 
@@ -477,4 +477,4 @@ v0.1 MVP の後続候補。優先度順に整理（implementation plan の final
 ### Test coverage
 - L3 rule で `$TMUX_PANE` が空のケース（degrade mode）の専用テスト
 - `ensureSession` defensive path (SessionStart 無しで PermissionRequest が来た時) の専用テスト
-- `db.ListRows` の `--show-working` / `--show-stale` フラグ各組み合わせのテスト
+- `db.ListRows` の `--show-working` フラグ有無のテスト

@@ -221,5 +221,5 @@ background の委譲元も、daemon は最後の client が切れて数秒で終
 - agent が CLI で自分の session id を解決する方法
 - picker のキー割り当て（メモ編集・pin・完了）
 - 休眠・自動再開・cascade の各処理を、監視コマンドと picker 起動時のどちらで回すか
-- 既存の stale 判定（🧟）を残すかどうか。休眠により長時間 idle の `running` は減るので、残るのは
-  `working` のまま動かないものが主になる
+- 既存の stale 判定（🧟）は廃止した。長時間 idle は休眠が、死んだプロセスは reconcile が扱うので
+  役割が重複しており、経過時間だけの閾値は最も見落としたくない `awaiting_approval` を隠すため
