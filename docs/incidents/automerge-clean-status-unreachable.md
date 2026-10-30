@@ -33,4 +33,4 @@ GitHub 側が強制し、ラッパーは `--admin` 等のバイパスフラグ�
 
 - `bin/gh-automerge`（header コメント）
 - `dot/claude/rules/gh-commands.md`「5. merge と review thread 操作（自律レビューループ用）」
-- `dot/claude/skills/pr-review-automerge/SKILL.md`（終端状態の判定に `merged` を含める）
+- `dot/claude/skills/pr-automerge/SKILL.md`（終端状態の判定に `merged` を含める）

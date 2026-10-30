@@ -152,9 +152,9 @@ if [ -n "$base" ]; then
     echo "git-reap-gone: from anywhere else disagrees with this script's gate." >&2
     base_wt="${wt_of[$base_local]:-}"
     if [ -n "$base_wt" ] && [ "$base_wt" != "$self_wt" ]; then
-      # base_local is already checked out in another worktree (worktree-scope.md
-      # §7's primary caller: an agent cleaning up from inside the very linked
-      # worktree it was delegated into). `git switch $base_local` here would fail
+      # base_local is already checked out in another worktree (typically: run
+      # from inside a linked worktree while the main working tree holds
+      # base_local). `git switch $base_local` here would fail
       # with "fatal: '$base_local' is already used by worktree at ...", so point
       # at that checkout instead of issuing advice the caller cannot follow.
       echo "git-reap-gone: '$base_local' is already checked out at '$base_wt' -- run it from there." >&2

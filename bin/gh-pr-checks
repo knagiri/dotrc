@@ -22,10 +22,9 @@ set -euo pipefail
 #   Actions runs, plus whatever external CI reports as a commit status, are
 #   seen.
 # - "required" is not evaluated -- reading branch protection needs yet another
-#   permission. Callers use this only to confirm that *nothing has failed*;
-#   whether the required checks are satisfied is left to auto-merge, which
-#   branch protection enforces. This matches pr-automerge's
-#   stance that pending checks are not waited on (auto-merge waits instead).
+#   permission. What this reports is whether anything has failed and how many
+#   checks are still pending; it says nothing about whether the required
+#   checks are satisfied.
 # - At most 100 Actions runs for the head SHA are read (no pagination).
 #
 # A cancelled Actions run counts as a failure: a run stopped by a human, or by a
@@ -186,11 +185,11 @@ printf '%s\n%s\n' "$runs" "$statuses" | jq -n --argjson pr "$pr" --arg sha "$sha
   | ($checks | length) as $total
   | ($checks | map(select(is_failure)) | length) as $failure
   | ($checks | map(select(is_pending)) | length) as $pending
-  # The top-level shape is fixed -- pr-review-loop and pr-automerge read has_failure
-  # and pending_count, and pr-automerge also reads checks[] (source, conclusion,
-  # superseded, name, workflow_id, run_number) -- so superseded runs are still listed and still
-  # counted in $total; the summary just buckets them with the successes, and the
-  # per-check `superseded` flag is what lets a reader reconcile the two.
+  # The output shape is a fixed contract: pr, sha, has_failure, pending_count,
+  # summary, and checks[] with source, status, conclusion, superseded, name,
+  # workflow_id and run_number per entry. Superseded runs are still listed and
+  # counted in $total so that a reader can reconcile them with the summary via
+  # the per-check `superseded` flag; the summary buckets them with the successes.
   | {pr: $pr,
      sha: $sha,
      checks: $checks,
