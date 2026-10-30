@@ -69,6 +69,33 @@ func (tmuxImpl) Switch(target string) error {
 	return exec.Command("tmux", "switch-client", "-t", target).Run()
 }
 
+// SwitchClient is Switch for a named tmux client. client "" leaves the choice
+// to tmux, as Switch does. A command run from a key binding's run-shell is a
+// new tmux client of its own, so the client that pressed the key has to be
+// named for the switch to land on it reliably.
+func SwitchClient(client, target string) error {
+	return exec.Command("tmux", switchClientArgs(client, target)...).Run()
+}
+
+func switchClientArgs(client, target string) []string {
+	if client == "" {
+		return []string{"switch-client", "-t", target}
+	}
+	return []string{"switch-client", "-c", client, "-t", target}
+}
+
+// DisplayMessage shows msg in the status line of client ("" is tmux's
+// current client). Best-effort: it is only ever a notice.
+func DisplayMessage(client, msg string) {
+	args := []string{"display-message"}
+	if client != "" {
+		args = append(args, "-c", client)
+	}
+	// tmux expands formats in the message, so a '#' in msg is doubled to keep
+	// it literal.
+	_ = exec.Command("tmux", append(args, strings.ReplaceAll(msg, "#", "##"))...).Run()
+}
+
 // OpenSession puts argv in a window of the tmux session called name, creating
 // that session when it is missing, then moves the client there. The picker
 // needs the session, not just the window: a background session belongs to a

@@ -695,7 +695,9 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		// decides from the authoritative roster instead of from a guess.
 		if err := mux.Switch(act.Pane); err != nil {
 			fmt.Fprintf(os.Stderr, "switch to %s failed: %v\n", act.Pane, err)
+			return
 		}
+		recordJump(conn, originPane, sessionID)
 	case "attach":
 		// Open the session belonging to the row's worktree, not whichever
 		// session the popup happened to be invoked from -- that is what keeps
@@ -710,7 +712,9 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		env, launch := actionLaunch(act, argv)
 		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), originPane, env, launch); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: %s\n", err, runHint(act, argv))
+			return
 		}
+		recordJump(conn, originPane, sessionID)
 	case "resume":
 		// Reopen the conversation from its transcript. `claude --resume` keeps
 		// the session id, so the ledger row survives the restart rather than
@@ -726,7 +730,9 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		env, launch := actionLaunch(act, argv)
 		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), originPane, env, launch); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && %s\n", err, act.Cwd, runHint(act, argv))
+			return
 		}
+		recordJump(conn, originPane, sessionID)
 	default:
 		fmt.Fprintln(os.Stderr, act.Reason)
 	}

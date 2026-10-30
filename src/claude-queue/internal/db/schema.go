@@ -98,6 +98,25 @@ CREATE TABLE IF NOT EXISTS session_links (
   parent_session_id TEXT NOT NULL,
   created_at        INTEGER NOT NULL DEFAULT (unixepoch())
 );
+
+-- The picker's jump history, which ` + "`claude-queue nav back|forward`" + ` walks like
+-- a browser's. One history for the whole host, not one per tmux client. Holds
+-- session ids rather than panes: a pane id is re-derived when it is walked to,
+-- for the reason the queue view withholds a gone session's pane. pos only ever
+-- grows, so the oldest entries are the lowest; see db.PushNav for the cap.
+-- No FK to sessions, so GC can drop a session the history still names; the
+-- walk skips it like any other session it cannot switch to.
+CREATE TABLE IF NOT EXISTS nav_history (
+  pos        INTEGER PRIMARY KEY,
+  session_id TEXT NOT NULL
+);
+
+-- The history entry the user is at, as a nav_history.pos. A single row (id is
+-- always 1); absent until the first jump is recorded.
+CREATE TABLE IF NOT EXISTS nav_cursor (
+  id  INTEGER PRIMARY KEY CHECK (id = 1),
+  pos INTEGER NOT NULL
+);
 `
 
 // View is the queue view, recreated at Open (DROP VIEW IF EXISTS) so a changed

@@ -50,6 +50,7 @@ make install
 | `claude-queue unpin [--session <id>]` | pin とそのコメント・PR 監視を外す |
 | `claude-queue done <session-id-or-prefix>` | session の作業を done にする（委譲先も cascade で done）。picker の `ctrl-x` と `bin/claude-stop-bg` が呼ぶ。8 桁以上の前方一致で 1 件に決まらなければ exit 1。既に done でも exit 0 |
 | `claude-queue reopen <session-id-or-prefix>` | done を取り消し、作業を open に戻す。委譲先には波及しない（done の cascade と非対称）。picker の done 一覧の `ctrl-x` が呼ぶ。id の解決は `done` と同じ。done でない・1 件に決まらなければ exit 1 |
+| `claude-queue nav {back\|forward} [--client <name>] [--pane <id>]` | picker で飛んだ履歴をブラウザの戻る / 進むのように 1 つ移動する（後述の「飛んだ履歴の行き来」）。tmux の `C-q C-h` / `C-q C-l` が呼ぶ。行き先が無ければ tmux のメッセージで知らせて exit 0 |
 | `claude-queue --version` | バージョン表示 |
 
 `memo` / `pin` / `unpin` は `--session`（8 桁以上の前方一致）を省くと `CLAUDE_CODE_SESSION_ID` を使う。Claude Code は
@@ -365,6 +366,33 @@ prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`q` �
 repo の外で `q` を押したときは一覧を出さず `not in a git repo; use prefix Q for all sessions`
 を stderr へ出して終わる。`Q` は絞り込みを外した全部入り（別 repo の session も、working /
 stale も出す）。gone は `q` / `Q` どちらでも出る。
+
+### 飛んだ履歴の行き来（`claude-queue nav`）
+
+```tmux
+bind-key C-h run-shell "claude-queue nav back --client '#{client_name}' --pane '#{pane_id}'"
+bind-key C-l run-shell "claude-queue nav forward --client '#{client_name}' --pane '#{pane_id}'"
+```
+
+`C-q C-h` で一個前、`C-q C-l` で一個後の session へ移る（`C-q h` / `l` は select-pane のまま）。
+履歴は host 全体で 1 本（tmux client ごとには分けない）で、DB の `nav_history` に session id を
+最大 50 件、古い順に捨てながら持つ。
+
+- **記録するのは picker で飛んだときだけ**（switch / attach / resume が成功したとき）。tmux の
+  手動移動は記録しない。popup を開いた pane の session が履歴の現在位置と違えば、先にそれを
+  積む（初回でも戻れるように）。続けて現在位置より先を捨て、飛び先を積む。現在位置と同じ
+  session は積まない
+- **戻る**は、今いる pane の session が現在位置の session と違う（手動で移動していた）なら現在
+  位置そのものへ、同じなら 1 つ前へ移る。**進む**は 1 つ後へ移る。移動は履歴に積まず、現在
+  位置だけを動かす
+- 移るのは今ある pane へ `switch-client` できるときだけで、attach / resume で window を開く
+  ことはしない。pane は session の記録と `claude agents` の一覧から picker と同じ規則で引き
+  直し、引けない session（終了済み・pane が無い・今いる pane そのもの）は飛ばして同じ向きに
+  次を探す
+
+`#{client_name}` / `#{pane_id}` を渡すのは、run-shell から呼ぶ `tmux` が押したキーの client とは
+別の client として動くため。client が 1 つなら省いても動くが、複数あると tmux が選ぶ client に
+移動が効きうる。
 
 `dot/tmux.conf` は `bin/deploy.sh` の symlink 経由なので pull した時点で反映されるが、
 `bin/claude-queue` は `.gitignore` 対象で `make install` でしか更新されない。flag が増えた
