@@ -22,17 +22,18 @@ set -euo pipefail
 # --disable: `gh-automerge --disable <PR#>` turns an already enabled auto-merge
 # off again, for the window in which more fix commits are pushed onto an open PR
 # (implement-and-review, "既存 PR への対応"). Without it, auto-merge enabled in an
-# earlier round fires as soon as a human approves one of those pushes, before
-# the new review round has finished. Re-enabling is the normal `gh-automerge
-# <PR#>` call that pr-automerge makes once the review converges.
-#   - state MERGED / CLOSED -> exit 3, nothing issued. Pushing more commits to
+# earlier round fires as soon as the required conditions (approval, CI, ...)
+# are met by one of those pushes, before the new review round has finished.
+# Re-enabling is the normal `gh-automerge <PR#>` call that pr-automerge makes once the review converges.
+#   - state MERGED / CLOSED -> exit 3, nothing issued (also when the re-read
+#     after --disable-auto shows it, i.e. auto-merge fired in between). Pushing more commits to
 #     that branch would land nowhere, so the caller must stop rather than push;
 #     3 keeps this apart from 1 (bad arguments).
 #   - autoMergeRequest null -> exit 0, nothing issued (idempotent). We decide
 #     this from the PR state ourselves instead of relying on how
 #     `gh pr merge --disable-auto` treats a PR with nothing to disable.
-#   - otherwise -> `gh pr merge --disable-auto <PR#>`, then read the PR again and
-#     fail (exit 1) unless autoMergeRequest is now null.
+#   - otherwise -> `gh pr merge --disable-auto <PR#>`, then read the PR again: OPEN with
+#     autoMergeRequest null -> exit 0, MERGED / CLOSED -> exit 3, else exit 1.
 # The accepted forms are exactly the two below; no other option is parsed or
 # passed through, so --admin stays unreachable in both.
 #
@@ -83,12 +84,20 @@ if [ "$disable" -eq 1 ]; then
   esac
   gh_mise pr merge --disable-auto "$pr"
   view="$(read_state)"
-  if [ "${view##* }" != "false" ]; then
-    echo "gh-automerge: auto-merge is still enabled on #$pr after --disable-auto ($view)" >&2
-    exit 1
-  fi
-  echo "gh-automerge: disabled auto-merge on #$pr" >&2
-  exit 0
+  # Auto-merge may have fired between the first read and --disable-auto, so
+  # the state matters here too, not just the flag: a bare "false" after a
+  # merge would tell the caller to push to a branch that has already landed.
+  case "$view" in
+    "OPEN false")
+      echo "gh-automerge: disabled auto-merge on #$pr" >&2
+      exit 0 ;;
+    "MERGED "*|"CLOSED "*)
+      echo "gh-automerge: #$pr became ${view%% *} while disabling; do not push to its branch" >&2
+      exit 3 ;;
+    *)
+      echo "gh-automerge: auto-merge is still enabled or the state is unexpected on #$pr after --disable-auto ($view)" >&2
+      exit 1 ;;
+  esac
 fi
 
 err="$(mktemp)"

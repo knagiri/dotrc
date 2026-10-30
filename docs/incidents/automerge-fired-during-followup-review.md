@@ -22,7 +22,8 @@ review で追加の修正が出ていれば、委譲先は merge 済みのブラ
 
 - `bin/gh-automerge` に `--disable <PR>` を足した。`gh pr view --json state,autoMergeRequest` で
   読み、merge 済み / close 済みなら exit 3、既に無効なら何もせず exit 0、有効なら
-  `gh pr merge --disable-auto <PR>` を撃ち、読み直して無効になったことを確かめる。既存の allow
+  `gh pr merge --disable-auto <PR>` を撃ち、読み直して OPEN かつ無効なら exit 0、その間に
+  merge / close されていれば exit 3、それ以外は exit 1 にする。既存の allow
   `Bash(gh-automerge *)` のまま使え、受け付ける形は `<PR>` と `--disable <PR>` の 2 つだけなので
   `--admin` 等には届かない
 - `implement-and-review` は、既存 PR への対応では着手直後（最初の push より前）に

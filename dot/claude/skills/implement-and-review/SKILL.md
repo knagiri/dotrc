@@ -186,12 +186,13 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    作ろうとしても、同じ head / base の open PR があるので GitHub が拒否する。base を変えて別 PR に
    すると、PR 監視の pin も review の指摘も元の PR に残ったままになる。
 
-   この形では、**着手直後（最初の commit / push より前）に `gh-automerge --disable <N>` を呼ぶ**。
-   前の周回の `pr-automerge` が auto-merge を有効化したままなら、修正 commit の push を見た人間が
-   approve した時点で、この周回の review が終わる前に merge が成立するため。
+   この形では、**最初の push より前に `gh-automerge --disable <N>` を呼ぶ**（commit は先に済んで
+   よい。手順 1 で実装に入る時点でこの段落を確認し、push はこれより後にする）。前の周回の
+   `pr-automerge` が auto-merge を有効化したままなら、push で required な条件（approve や CI）が
+   揃った時点で、この周回の review が終わる前に merge が成立するため。
 
    - exit 0 → 続行する（既に無効だった場合も 0）
-   - exit 3（PR が merge 済み / close 済み）→ push せずに中断し、委譲元へ報告する。新しい PR を
+   - exit 3（PR が merge 済み / close 済み。`--disable` 中に auto-merge が発火した場合も含む）→ push せずに中断し、委譲元へ報告する。新しい PR を
      立てるかは委譲元・人間が判断する
    - その他の非 0 → push せずに中断し、報告する
 

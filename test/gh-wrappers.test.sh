@@ -132,7 +132,8 @@ else echo "FAIL: gh-automerge success path rc=$rc args=$(cat "$amdir/args" 2>/de
 # with GH_PR_STATE and an autoMergeRequest that is non-null iff GH_AUTO_ON=1,
 # applying --jq like gh does. `pr merge --disable-auto` turns it off by leaving
 # a marker -- unless GH_DISABLE_STICKS=0, which models a disable that GitHub
-# did not apply. Every argv is appended to one log.
+# did not apply. GH_MERGE_ON_DISABLE=1 makes the PR read MERGED once the disable
+# happened (auto-merge fired in between). Every argv is appended to one log.
 dadir="$stubdir/da"; mkdir -p "$dadir"
 cat >"$dadir/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -144,7 +145,9 @@ fi
 if [ "$1 $2" = "pr view" ]; then
   am=null
   [ "${GH_AUTO_ON:-0}" = 1 ] && [ ! -e "$GH_STUB_DIR/off" ] && am='{"mergeMethod":"MERGE"}'
-  json="{\"state\":\"$GH_PR_STATE\",\"autoMergeRequest\":$am}"
+  st="$GH_PR_STATE"
+  [ "${GH_MERGE_ON_DISABLE:-0}" = 1 ] && [ -e "$GH_STUB_DIR/off" ] && st=MERGED
+  json="{\"state\":\"$st\",\"autoMergeRequest\":$am}"
   q=""; while [ $# -gt 0 ]; do [ "$1" = --jq ] && q="$2"; shift; done
   if [ -n "$q" ]; then printf '%s\n' "$json" | jq -r "$q"; else printf '%s\n' "$json"; fi
   exit 0
@@ -166,11 +169,16 @@ da_merged() {  # any merge other than --disable-auto (enable or direct merge)
 }
 
 da_check_merged_closed() {  # <bindir> -> 0 iff MERGED and CLOSED exit 3 without a merge call
-  local st
+  local st on
   for st in MERGED CLOSED; do
-    darun "$1" "$st" 1 1 --disable 42; [ $? -eq 3 ] || return 1
-    ! da_disabled && ! da_merged || return 1
+    for on in 0 1; do  # a merged PR usually has no auto-merge request left
+      darun "$1" "$st" "$on" 1 --disable 42; [ $? -eq 3 ] || return 1
+      ! da_disabled && ! da_merged || return 1
+    done
   done
+}
+da_check_raced() {  # merged between the first read and the re-read -> exit 3
+  GH_MERGE_ON_DISABLE=1 darun "$1" OPEN 1 1 --disable 42; [ $? -eq 3 ] && da_disabled
 }
 da_check_null() {  # already disabled -> 0, nothing issued
   darun "$1" OPEN 0 1 --disable 42; [ $? -eq 0 ] && ! da_disabled && ! da_merged
@@ -194,6 +202,8 @@ da_check_rejects() {  # unknown option / wrong arity -> rejected before any gh c
 
 da_check_merged_closed "$bindir" && echo "ok: gh-automerge --disable exits 3 on a merged / closed PR without touching it" \
   || { echo "FAIL: gh-automerge --disable merged/closed args=$(cat "$dadir/args")"; fail=1; }
+da_check_raced "$bindir" && echo "ok: gh-automerge --disable exits 3 when the PR merged while disabling" \
+  || { echo "FAIL: gh-automerge --disable raced args=$(cat "$dadir/args")"; fail=1; }
 da_check_null "$bindir" && echo "ok: gh-automerge --disable is a no-op when auto-merge is already off" \
   || { echo "FAIL: gh-automerge --disable already-off args=$(cat "$dadir/args")"; fail=1; }
 da_check_on "$bindir" && echo "ok: gh-automerge --disable issues gh pr merge --disable-auto when auto-merge is on" \
@@ -221,7 +231,9 @@ da_mutant noclosed 's/|"CLOSED "\*//' da_check_merged_closed
 da_mutant exit1 's/exit 3 ;;/exit 1 ;;/' da_check_merged_closed
 da_mutant nonoop 's/\*" false")/*" never")/; s/\*" true") ;;/*" true"|*" false") ;;/' da_check_null
 da_mutant nodisable 's/gh_mise pr merge --disable-auto "\$pr"/:/' da_check_on
-da_mutant noverify 's/if \[ "\${view##\* }" != "false" \]/if false/' da_check_stuck
+da_mutant noverify 's/    "OPEN false")/    *" false")/' da_check_raced
+da_mutant noverifyexit 's/"OPEN false")/*)/' da_check_stuck
+da_mutant falsefirst '0,/"MERGED "\*|"CLOSED "\*)/s//*" false")\n      exit 0 ;;\n    "MERGED "*|"CLOSED "*)/' da_check_merged_closed
 da_mutant anyflag 's/  --disable) disable=1/  --*) disable=1/' da_check_rejects
 da_mutant noargc 's/^\[ \$# -eq 1 \] /true /' da_check_rejects
 
