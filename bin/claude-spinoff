@@ -32,8 +32,15 @@ set -euo pipefail
 # not. The caller's client is never switched. The window is left unnamed;
 # claude-queue names it from the ai-title.
 #
-# Permission mode is `acceptEdits`, as with `claude-worktree --tmux`: a human is
-# meant to sit with this session, so prompts have someone to answer them.
+# Permission mode is `auto`, unlike `claude-worktree --tmux`. A spin-off is
+# usually still investigation or design in the main working tree, and any
+# implementation is delegated to a worktree by the session itself, so the edits
+# that would want a human's judgment rarely happen here and approval prompts are
+# mostly friction. `claude-worktree --tmux` is the path where a human works
+# through the implementation alongside the session. A human is still meant to
+# sit with this session: under `auto` the existing allow/deny rules still win,
+# and repeated classifier blocks fall back to a normal prompt, which that human
+# answers.
 #
 # Usage:
 #   claude-spinoff [--global] [--model <alias>] -- <prompt...>
@@ -123,7 +130,7 @@ fi
 
 # Prompt and model ride as separate argv elements -- tmux preserves argv -- so
 # quotes in the handoff cannot break the command.
-claude_cmd=(claude --permission-mode acceptEdits)
+claude_cmd=(claude --permission-mode auto)
 [ -z "$model" ] || claude_cmd+=(--model "$model")
 claude_cmd+=("$prompt")
 
@@ -147,6 +154,6 @@ attach="gts $session"
 [ -n "${TMUX:-}" ] || attach="tmux attach -t $session"
 
 echo "repo-dir : $main_top"
-echo "tmux     : $session ($how; detached, claude running with acceptEdits)"
+echo "tmux     : $session ($how; detached, claude running with auto)"
 [ -z "$model" ] || echo "model    : $model"
 echo "attach   : $attach"
