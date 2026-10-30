@@ -52,4 +52,4 @@ $ git show bdbcc38:dot/claude/skills/pr-review-loop/SKILL.md | rg -n 'source =='
 
 ## 反映先
 
-- `dot/claude/rules/doc-authoring.md`「参照される側には自分の責務だけを書く」
+- `dot/claude/rules/referenced-doc-scope.md`「参照される側には自分の責務だけを書く」
