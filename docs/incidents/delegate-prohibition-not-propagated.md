@@ -37,4 +37,4 @@ issue は 0 件で、実害は無かった。
 
 - `dot/claude/skills/delegate-to-worktree/SKILL.md` 不変条件・手順 2 の雛形
 - `dot/claude/skills/implement-and-review/SKILL.md` 入力・手順 2・手順 4
-- `dot/claude/skills/pr-review-automerge/SKILL.md` 手順 2.a-0.5 / a-1 / a-2・判定 / 修正 subagent prompt（`<PROHIBITIONS>`）
+- `dot/claude/skills/pr-review-loop/SKILL.md` 手順 2.a-0.5 / a-1 / a-2・判定 / 修正 subagent prompt（`<PROHIBITIONS>`）

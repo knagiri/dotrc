@@ -4,7 +4,7 @@ set -euo pipefail
 # claude-review <PR#> -- launch an independent reviewer agent for a pull request.
 #
 # Opens a NEW tmux window (a new pane) in the CURRENT session, anchored to the
-# current directory, running a fresh interactive claude (acceptEdits) that runs
+# current directory, running a fresh headless claude (claude -p, acceptEdits) that runs
 # the /pr-review-loop skill against the given PR and, once it converges, the
 # /pr-automerge skill. A new window means a new
 # $TMUX_PANE, so claude-queue tracks the reviewer as its own entry and the
