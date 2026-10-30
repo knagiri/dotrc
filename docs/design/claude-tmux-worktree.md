@@ -12,6 +12,7 @@
 | tmux セッション | `bin/ghq-tmux-session`（alias `gts` = `rc/aliases`） |
 | Claude セッション可視化 | `src/claude-queue/`（→ `bin/claude-queue`）。詳細は同梱 README |
 | worktree 分岐起動 | `bin/claude-worktree` |
+| 範囲外タスクの切り出し | `bin/claude-spinoff`（判断は `dot/claude/skills/spin-off-session/`） |
 | 委譲先の停止 | `bin/claude-stop-bg` |
 | idle な session の休眠 | `claude-queue watch`（`dot/systemd-user/claude-queue-watch.timer`） |
 | エージェント運用ルール | `dot/claude/rules/worktree-scope.md` |
@@ -40,6 +41,7 @@
 | ③ Claude 可視化 | `claude-queue` | 全 pane の Claude 状態を SQLite 化、status-right 表示 + fzf popup で pane へジャンプ | `$TMUX_PANE`（②を経ない既定経路では NULL。short session id で識別） |
 | ④ 分岐起動 | `claude-worktree` | ①の worktree 追加を常に行い、既定は⑤の起動、`--tmux` 指定時のみ②のセットアップ（③はどちらの経路でも追跡する） | worktree dir / short session id（`--tmux` 時は tmux session） |
 | ⑤ background 起動 | `claude --bg` | 人間不在の委譲先を起こす。完遂後も `idle` で残るので委譲元が閉じる | short session id（8 桁） |
+| ⑥ 切り出し起動 | `claude-spinoff` | 担当範囲外のタスクを独立 root の interactive session として main tree で起こす。①は作らず、②の `<repo>` session に window を足す（無ければ作る）。親子 link は張らない | tmux session = repo basename |
 
 **鍵となる連結（②を作る経路に限る）:** worktree は `dotrc/.worktrees/foo` に置かれ、そこから
 導かれる**正準 session 名**が `<basename(メイン toplevel)>_<name>` = `dotrc_foo` になる。dir

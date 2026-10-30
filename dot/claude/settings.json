@@ -53,6 +53,8 @@
       "Bash(claude-worktree *)",
       "Bash(claude-stop-bg)",
       "Bash(claude-stop-bg *)",
+      "Bash(claude-spinoff)",
+      "Bash(claude-spinoff *)",
       "Bash(claude-queue pin)",
       "Bash(claude-queue pin *)",
       "Bash(claude-queue memo)",
@@ -113,7 +115,8 @@
       "Skill(implement-and-review)",
       "Skill(pr-review-loop)",
       "Skill(pr-automerge)",
-      "Skill(proofread-doc)"
+      "Skill(proofread-doc)",
+      "Skill(spin-off-session)"
     ],
     "deny": [
       "Read(.env)",

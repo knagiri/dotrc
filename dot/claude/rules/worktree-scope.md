@@ -170,6 +170,22 @@ claude-worktree [--global] [--tmux] [--model <alias>] [--seed <path>]... <name> 
 
 実例: dotrc/docs/incidents/delegate-session-reuse-drifts.md
 
+#### 担当範囲外のタスクは `claude-spinoff` で切り出す
+
+`claude-worktree` が起こすのは今の session の**子**（同じ担当範囲の実装を worktree で進め、
+委譲元へ報告する）である。担当範囲外のタスクに気づいたときはこれを使わず、`claude-spinoff`
+（`bin/`）で**独立 root** の interactive session を起こす。worktree も branch も作らず main
+working tree で動き、`## 委譲元` も親子 link も付かない（委譲元の done が cascade せず、元
+session が報告待ちで生き残らない）。置き場所は tmux session `<repo basename>` の新しい window。
+実装が要る段になれば、切り出し先が §5 に従って自分で委譲する。
+
+```
+claude-spinoff [--global] [--model <alias>] -- <prompt...>
+```
+
+どちらへ出すか（issue 起票を含む）の判断と handoff の組み方は `spin-off-session` skill が持つ。
+settings.json で allow 済み（`claude-spinoff` / `claude-spinoff *`）。
+
 #### 委譲プロンプトはファイルシステム的に自己完結させる
 
 委譲プロンプトが参照するファイルは、原則すべて新 worktree の中に在る状態にしてから起動する。worktree 外の絶対パスを委譲先に読ませない。
