@@ -32,12 +32,15 @@ set -euo pipefail
 # not. The caller's client is never switched. The window is left unnamed;
 # claude-queue names it from the ai-title.
 #
-# Permission mode is `auto`, unlike `claude-worktree --tmux` (`acceptEdits`).
-# A spun-off task is usually still at the research/design stage, where frequent
-# approval prompts are friction even with a human present. A human is still
-# meant to sit with this session: under `auto` the existing allow/deny rules
-# still win, and repeated classifier blocks fall back to a normal prompt, which
-# that human answers.
+# Permission mode is `auto`, unlike `claude-worktree --tmux`. A spin-off is
+# usually still investigation or design in the main working tree, and any
+# implementation is delegated to a worktree by the session itself, so the edits
+# that would want a human's judgment rarely happen here and approval prompts are
+# mostly friction. `claude-worktree --tmux` is the path where a human works
+# through the implementation alongside the session. A human is still meant to
+# sit with this session: under `auto` the existing allow/deny rules still win,
+# and repeated classifier blocks fall back to a normal prompt, which that human
+# answers.
 #
 # Usage:
 #   claude-spinoff [--global] [--model <alias>] -- <prompt...>
