@@ -1,6 +1,6 @@
 ---
 name: harness-from-retrospective
-description: 委譲タスクを完遂した agent が自分の作業を振り返り「こうすればよかった」を恒久ハーネス（rule / CLAUDE.md / lint / test / hook / allowlist）の候補として拾い、方針として提示する。実装はせず提案まで。implement-and-review の末尾から呼ばれるほか、「この作業を振り返って提案して」等で手動起動する。
+description: 委譲されたタスクなどを完遂した直後に、自分の作業を振り返って「こうすればよかった」を恒久ハーネス（rule / CLAUDE.md / lint / test / hook / allowlist）の候補として拾い、方針として提示するときに使う。実装はせず提案まで。「この作業を振り返って提案して」「振り返ってハーネス提案して」等の依頼でも使う。
 allowed-tools: Read, Glob, Grep
 ---
 
@@ -15,8 +15,9 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 
 ## いつ呼ばれるか
 
-- `implement-and-review` の末尾（pr-review-loop / pr-automerge の後）。ただし委譲プロンプトに自己内省を
-  スキップする明示があれば呼ばれない（ハーネスタスク自身の内省による再帰ノイズを避けるため）。
+- タスクを完遂した直後（PR の review・merge まで終えた、または途中で停止した時点）。振り返りの
+  材料になる実行文脈がまだ手元に残っているうちに使う。ただしハーネスを実装するタスク自身の
+  振り返りには使わない（ハーネス作業からハーネス候補を拾う再帰でノイズが増えるため）。
 - 手動（「この作業を振り返ってハーネス提案して」等）。
 
 ## 前提

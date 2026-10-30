@@ -614,10 +614,10 @@ resolve_delegator() {
 
 resolve_delegator
 
-# Inject the name as a bare datum. What to report, and when, is doctrine and
-# lives in the implement-and-review skill -- this script only supplies the fact
-# the skill cannot derive. Appending to the prompt (rather than exporting an env
-# var) is deliberate: `claude --bg` hands the task to a daemon, and a delegate's
+# Inject the name as a bare datum. This script's contract ends at supplying
+# the one fact the delegate cannot derive (who started it); what to report,
+# and when, is not defined here. Appending to the prompt (rather than exporting
+# an env var) is deliberate: `claude --bg` hands the task to a daemon, and a delegate's
 # env is that daemon's -- i.e. the env of whichever `claude --bg` call started
 # the daemon for this config dir on demand -- not this script's. Only the cwd
 # crosses over (measured: a probe var exported here was absent in the delegate,
