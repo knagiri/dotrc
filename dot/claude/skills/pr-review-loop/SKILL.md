@@ -124,7 +124,7 @@ review と merge を別 skill に分けているのは、merge を見送る理�
       する）を埋めて渡す。判定役は最終メッセージに判定 verdict JSON だけを返す。a-1 の再 dispatch
       では a-0.5 をやり直さず、同じ `<SPECIALIST_FINDINGS>` を渡す。
 
-      **`<PROHIBITIONS>` の埋め方**: この skill の呼び出し元（`implement-and-review` 等）から
+      **`<PROHIBITIONS>` の埋め方**: 呼び出し元から
       禁止事項を渡されていれば、**原文のまま**判定役・修正役・専門レビュー agent（a-0.5）の各 prompt に
       入れる。渡されていなければ「なし」と書く。これらは fresh context で、親が書かない制約を知り得ない。
       要約すると対象や強度がずれるので原文で渡す。
