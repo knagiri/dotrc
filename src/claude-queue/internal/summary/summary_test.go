@@ -103,14 +103,14 @@ func TestSummaryForWorking(t *testing.T) {
 // reason, so the prior state is the only thing that distinguishes one of these
 // rows from another.
 func TestSummaryForGone(t *testing.T) {
-	got := Summarize(Input{EffectiveState: "gone", RawState: "ended", PriorState: "working"})
+	got := Summarize(Input{EffectiveState: "gone", PriorState: "working"})
 	if got != "gone (was working)" {
 		t.Errorf("got %q, want %q", got, "gone (was working)")
 	}
 }
 
 func TestSummaryForGone_NoPriorState(t *testing.T) {
-	got := Summarize(Input{EffectiveState: "gone", RawState: "ended"})
+	got := Summarize(Input{EffectiveState: "gone"})
 	if got != "gone" {
 		t.Errorf("got %q, want %q", got, "gone")
 	}

@@ -98,7 +98,8 @@ func Counts(conn *sql.DB) (map[string]int, error) {
 }
 
 // Includes reports whether a row in effectiveState passes the filter. By
-// default working is excluded; with ShowWorking set nothing is. Gone
+// default working is excluded; with ShowWorking set every known state
+// passes, while an unknown state never does. Gone
 // rows are always included: the work is open and waiting on a resume, which is
 // what the default listing is for.
 //

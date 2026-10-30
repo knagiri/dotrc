@@ -279,7 +279,9 @@ client は端末へ detach される。
 
 経過時間で state を置き換えることはしない（かつての stale 判定は廃止した）。長く `idle_done` の
 session は休眠が止め、プロセスが消えた session は reconcile が gone にする。時間閾値で置き換えると、
-最も見落としたくない `awaiting_approval` が隠れるため。
+最も見落としたくない `awaiting_approval` が隠れるため。生きているのに `working` のまま止まった
+session は休眠にも reconcile にも当たらず ⚙️ のまま残る（既定の `q` では working が隠れるので見えない。
+意図した割り切り）。
 
 `gone` は view が `terminated_at` から導く擬似 state で、hook が書く state ではない。
 

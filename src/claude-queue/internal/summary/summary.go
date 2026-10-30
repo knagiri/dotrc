@@ -23,7 +23,6 @@ const summaryWidth = 150
 // Input is the minimal per-row data needed to render a summary.
 type Input struct {
 	EffectiveState string
-	RawState       string
 	Payload        string // raw JSON from events.payload
 	PriorState     string // the latest non-ended state; read for gone rows
 }

@@ -139,7 +139,6 @@ func FormatLine(row db.Row, title, worktree string, nowSec int64, asciiMode bool
 
 	sum := summary.Summarize(summary.Input{
 		EffectiveState: row.EffectiveState,
-		RawState:       row.RawState,
 		Payload:        row.Payload.String,
 		PriorState:     row.PriorState.String,
 	})
