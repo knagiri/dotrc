@@ -107,6 +107,7 @@ prompt injection / 権限バイパスの経路になる。
 | PR 本文の更新 | `gh-pr-edit-body <PR> <body-file>` | `gh pr edit <PR> --body-file <body-file>` のみ。本文を置き換える（追記は `gh pr view <PR> --json body` で現本文を取って編集したファイルを渡す） | `Bash(gh-pr-edit-body *)` |
 | issue の `status/ready → status/delegated` | `gh-issue-mark-delegated <issue>` | `gh issue view <issue> --json labels` で `status/*` がちょうど `status/ready` 1 個であることを確かめてから `gh issue edit <issue> --remove-label status/ready --add-label status/delegated`。それ以外の遷移は拒否する | `Bash(gh-issue-mark-delegated *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>`、clean 拒否のときだけ `gh pr merge --merge <PR>` へ fallback | `Bash(gh-automerge *)` |
+| auto-merge の一時停止（既存 PR へ修正を積む間。`implement-and-review` 手順 4） | `gh-automerge --disable <PR>` | `gh pr view --json state,autoMergeRequest` で読み、merge 済み / close 済みなら exit 3、既に無効なら何もせず exit 0、有効なら `gh pr merge --disable-auto <PR>` を撃って無効になったことを読み直して確かめる | `Bash(gh-automerge *)`（同上） |
 
 - ラッパーはフラグ素通しをしない（**`gh-pr-create` だけは例外**で全フラグを素通しする。
   あれが包んでいるのは grant の広さではなく env で、`Bash(gh pr create *)` が既に allow 済み
@@ -138,6 +139,7 @@ prompt injection / 権限バイパスの経路になる。
   （fallback はこのケースを救わない）。
 
 実例: dotrc/docs/incidents/automerge-clean-status-unreachable.md
+実例: dotrc/docs/incidents/automerge-fired-during-followup-review.md
 
 #### grant 変更を含む PR は auto-merge させない
 

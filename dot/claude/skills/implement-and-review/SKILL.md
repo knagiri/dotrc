@@ -186,6 +186,22 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    作ろうとしても、同じ head / base の open PR があるので GitHub が拒否する。base を変えて別 PR に
    すると、PR 監視の pin も review の指摘も元の PR に残ったままになる。
 
+   この形では、**最初の push より前に `gh-automerge --disable <N>` を呼ぶ**（commit は先に済んで
+   よい。手順 1 で実装に入る時点でこの段落を確認し、push はこれより後にする）。前の周回の
+   `pr-automerge` が auto-merge を有効化したままなら、push で required な条件（approve や CI）が
+   揃った時点で、この周回の review が終わる前に merge が成立するため。
+
+   - exit 0 → 続行する（既に無効だった場合も 0）
+   - exit 3（PR が merge 済み / close 済み。`--disable` 中に auto-merge が発火した場合も含む）→ push せずに中断し、委譲元へ報告する。新しい PR を
+     立てるかは委譲元・人間が判断する
+   - その他の非 0 → push せずに中断し、報告する
+
+   **`--disable` を付け忘れると逆に auto-merge を有効化する**（`gh-automerge <N>` は有効化の形）。
+   引数を書き写すときに落とさない。再有効化は、収束後に呼ぶ `pr-automerge` がそのまま担う。merge を
+   見送る場合（grant 変更を含む PR 等）は auto-merge が無効のまま残るので、完了報告にその旨を書く。
+   手動の merge ボタンはこれでは防げない。
+   実例: dotrc/docs/incidents/automerge-fired-during-followup-review.md
+
    このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しは
    `pr-automerge` 手順 2 が `gh-automerge` の直前に行い、PR 本文との食い違いは
    `gh-pr-edit-body` で直して、直した箇所を最終サマリに載せる。戻った時点では既に
