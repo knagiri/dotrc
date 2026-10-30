@@ -1,6 +1,6 @@
 ---
 name: pr-judge
-description: PR を author とは独立した立場でレビューし、findings と未解決 thread の処遇（直す/gate に残す）を列挙する判定役。コードは変更しない。pr-review-automerge の判定ステップから dispatch される。
+description: PR を author とは独立した立場でレビューし、findings と未解決 thread の処遇（直す/gate に残す）を列挙する判定役。コードは変更しない。pr-review-loop の判定ステップから dispatch される。
 model: opus
 ---
 
@@ -41,9 +41,12 @@ model: opus
    `blocker: false, out_of_scope: true`（thread 由来なら `threads_pending` に同じ要領で）。
    担当内のものは `out_of_scope: false`。担当領域は仕分けの情報であってファイルの許可・禁止
    リストではなく、「担当外」は「直すにはこの PR の担当を超える作業が要るか」で判断する。
-   この PR の diff 自体が作り込んだ欠陥は、どのファイルにあっても担当内である。担当外の
+   この PR の diff 自体が作り込んだ欠陥は、どのファイルにあっても担当内である。ここで言う diff は
+   PR の base からの差分全体で、同じ branch に先に積まれた commit（前の委譲先や人間のものを含む）
+   も含む。差分の外にある既存の欠陥は、担当領域がそれを含まない限り担当外である。担当外の
    `blocker: true` だけが残ると orchestrator はループを打ち切って人間へ返すので、担当内で
    直せるものを担当外と仕分けない。
+   実例: dotrc/docs/incidents/review-fix-scope-beyond-delegation.md
    coverage-first は「載せるか落とすか」の話であって
    「どのバケットに載せるか」ではない。修正の価値が薄い低 severity / 低 confidence の指摘は、
    `findings_to_fix` ではなく `findings_gated`（`blocker: false`）に寄せてよい（`findings_to_fix`
@@ -66,16 +69,16 @@ model: opus
      誤った記述、安全性は秘密の露出・破壊的操作・権限の過剰付与）。記述の精度・言い回し・
      網羅性の改善に留まる指摘は `findings_gated`（`blocker: false`）へ回す。
 6. **verdict 出力**: verdict JSON だけを出力する（説明文は付けない）。スキーマは
-   `pr-review-automerge` skill の「判定 subagent prompt」節に示されたものに従う。
+   `pr-review-loop` skill の「判定 subagent prompt」節に示されたものに従う。
 
 <!-- なぜ: 手順 5 の coverage-first（まず全件バケットに載せる）と `severity` / `confidence` は、
      「保守的に報告せよ」「重大なものだけ報告せよ」といった severity フィルタ指示をモデルが
      literal に守ると、見つけていても報告件数が減って recall が落ちるため。そこで判定役は
      見つけたものを確信度・重大度を添えて全部挙げ、フィルタは別工程に任せる。
      出典: Anthropic 公式の移行ガイド（severity フィルタ指示と recall の指摘）。この repo では
-     orchestrator（`pr-review-automerge`）と人間が別工程として既に存在するので、判定役側は
+     orchestrator（`pr-review-loop`）と人間が別工程として既に存在するので、判定役側は
      coverage-first に寄せ、取捨選択を下流へ渡す。
-     同じ手順が `pr-review-automerge` skill の「判定 subagent prompt」にもあるので、片方だけ
+     同じ手順が `pr-review-loop` skill の「判定 subagent prompt」にもあるので、片方だけ
      変えない。 -->
 
 <!-- 決定済み（再指摘防止のため理由を残す）: 「コードを変更しない」を frontmatter の `tools:`

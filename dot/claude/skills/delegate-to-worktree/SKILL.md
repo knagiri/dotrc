@@ -40,8 +40,21 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
   落とすまで、session も占有した tmux session も残り続ける。
 - **委譲先（B）のモデルは `--model opus` で固定する。** 長時間の agentic 実行を担う役なので、
   呼び出し元セッションのモデルを継承させない。
+- **破壊的・不可逆・外向きの操作でスコープ外のものがあれば、プロンプトの `## 禁止事項` 節に
+  必ず書く。** 例: 本番リソースを触らない、実データ（issue・PR・外部サービスの record 等）を
+  作らない、外部へ送信しない。該当が無ければ節ごと省略してよい。単発の委譲でも書く。
+  委譲先とその subagent は fresh context なので、書かれていない制約は知り得ず、破壊的な制約は
+  書き漏れがそのまま事故になる。書いた節は `implement-and-review` が実装役・判定役・修正役・専門レビュー agent へ
+  転記する（同 skill 手順 2・手順 4）。制約として転記されるので、破壊的・不可逆・外向きの操作に
+  限り、他の用途（並列委譲の担当領域等）を混ぜない。
+  節名は `禁止事項` で固定する。強度を名前に埋め込むと、後から非目標（やらないこと）を書く節を
+  足したときに意味が被るため。
+  実例: dotrc/docs/incidents/delegate-prohibition-not-propagated.md
 - **複数を並列委譲するときは、各プロンプトに他の委譲が並行していることと、その担当領域を
-  伝える。** 触ってよいファイルを列挙し、列挙外の編集を禁じる形は採らない。委譲元は着手前に
+  伝える。** 上の `## 禁止事項` とは別の `## 並行している委譲` 節に書く。他の委譲の担当領域は
+  編集の禁止ではなく情報で、`## 禁止事項` に書くと転記先が制約として読むため（破壊的操作は上の
+  不変条件、担当領域はここ、と分担して二重管理を避ける）。
+  触ってよいファイルを列挙し、列挙外の編集を禁じる形は採らない。委譲元は着手前に
   触るファイルを予測しきれず、実装中に隣接ファイルの修正が必要になるのは常態なので、禁止リストは
   守れないか、守ると必要な修正が落ちる。どちらに転んでも制約として機能しない。代わりに次の 2 つで担う。
   - **conflict は委譲先が PR を出す前に base を取り込んで解く。** 正典は
@@ -77,16 +90,16 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    いるか確認」を label で表現したもの）。`triage → ready` の遷移は人間が行う。
 
    - `gh issue view <N> --json title,body` の body をそのまま手順 2 の `## やること（WHAT）` /
-     `## 設計（HOW）` として畳む。issue template の見出しは手順 2 の雛形と一致させてあるので
-     加工は要らない。
+     `## 設計（HOW）` として畳む。issue template の `## やること（WHAT）` / `## 設計（HOW）` は手順 2 の雛形と
+     一致させてあるので加工は要らない。issue template に `## 禁止事項` は無いので、該当する
+     破壊的操作があれば委譲元が書き足す。
    - `<name>` と `-b <branch>` は `issue-<N>-<slug>`。
    - 委譲プロンプトに「PR 本文へ `Closes #<N>` を入れること」を明記する。merge で issue が
      自動 close される。
    - harness を足す issue なら、incident doc の扱いも明記する（issue 本文の `## 由来` を写す。
      harness の範囲・置き場所・対象 repo が dotrc 以外のときの扱い・書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）。
    - 起動後、issue の label を `status/ready` → `status/delegated` へ替える
-     （`gh issue edit` は allowlist に無いので承認プロンプトを踏む。委譲を起こすのは人間が
-     同席する session なので摩擦は小さい）。
+     （手段は `dot/claude/rules/issue-workflow.md` §3）。
 
    起票側の規範は `dot/claude/rules/issue-workflow.md`。
 
@@ -111,10 +124,16 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    <確定した設計。非自明なら --seed した spec / 実装計画を相対パスで指し、
     「これに厳密に従う」と明示する。軽いタスクならここに畳む>
 
+   ## 禁止事項
+   <スコープ外の破壊的・不可逆・外向きの操作。該当が無ければ節ごと省略（不変条件参照）>
+
+   ## 並行している委譲
+   <並列委譲のときだけ。他の委譲が並行していることと、その担当領域（情報であって禁止ではない）>
+
    ## 進め方
    1. 設計は確定済み。brainstorm せず実行に入る
    2. 実装
-   3. pr-review-automerge で merge
+   3. pr-review-loop で review、merge してよければ pr-automerge で merge
    ```
 
    末尾の `## 委譲元` 節（`報告先 name: <name>`）は書かない。`claude-worktree` が委譲元 session の

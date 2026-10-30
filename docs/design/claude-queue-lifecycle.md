@@ -1,9 +1,5 @@
 # claude-queue: session のライフサイクル再設計
 
-> 実装状況: 第 1 部（状態モデルの 2 軸化・gone の一覧表示・mark の持続・`claude-stop-bg` の done 書き込み・
-> 既存台帳の移行）、メモと pin のコメント、休眠（`claude-queue watch` と systemd-user timer、`bin/claude-reap-bg`
-> の廃止）、PR 監視による自動再開は実装済み。
-
 ## 目的
 
 claude-queue の台帳は、session の「プロセスが生きているか」と「作業が終わったか」を
@@ -48,6 +44,9 @@ session は kind（`interactive` / `background`）を持ち、状態は独立し
 
 既存の hook 由来の state（`working` / `awaiting_approval` / `idle_done`）は `running` の中の細分として
 そのまま残る。メモ・pin・親子関係は `open` の間、プロセス軸がどう動いても消えない。
+
+同じ session id を複数のプロセスが握る場合のプロセス軸の持ち方は
+[claude-queue-instances.md](claude-queue-instances.md)。
 
 ### `done` への遷移
 

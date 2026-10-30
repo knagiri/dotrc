@@ -79,6 +79,7 @@
       "Bash(gh-issue-file *)",
       "Bash(gh-pr-create *)",
       "Bash(gh-pr-edit-body *)",
+      "Bash(gh-issue-mark-delegated *)",
       "Bash(node --version)",
       "Bash(yarn --version)",
       "Bash(uv run ruff format)",
@@ -112,7 +113,8 @@
       "Skill(harness-from-feedback)",
       "Skill(harness-from-retrospective)",
       "Skill(implement-and-review)",
-      "Skill(pr-review-automerge)",
+      "Skill(pr-review-loop)",
+      "Skill(pr-automerge)",
       "Skill(proofread-doc)",
       "Skill(spin-off-session)"
     ],

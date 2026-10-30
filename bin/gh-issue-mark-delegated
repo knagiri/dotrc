@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-issue-mark-delegated <issue#> -- move an issue from status/ready to
+# status/delegated (dot/claude/rules/issue-workflow.md §3).
+#
+# That one transition is all it can do, so the grant can be allowlisted as
+# `Bash(gh-issue-mark-delegated *)` without handing out label, title or body
+# edits: there is no flag passthrough and the labels are fixed. Going through
+# bin/lib/gh-mise.sh is what makes it work at all -- a bare `gh issue edit`
+# falls back to hosts.yml's token, and GitHub refuses removeLabelsFromLabelable
+# with "Resource not accessible by personal access token".
+#
+# The current status/* label is read first and the edit is refused unless it is
+# exactly one label, status/ready. `gh issue edit` itself does not look at the
+# current labels, so without that check the wrapper could mark a status/triage
+# issue delegated and skip the human gate. A triage issue (the same-turn path of
+# issue-workflow.md §6.2) is deliberately not handled here: the wrapper cannot
+# tell whether the user asked for it in the same turn, so that transition goes
+# through an approval prompt instead.
+#
+# Usage: gh-issue-mark-delegated <issue-number>
+
+usage() { echo "usage: gh-issue-mark-delegated <issue-number>" >&2; exit "${1:-1}"; }
+
+case "${1:-}" in -h|--help) usage 0 ;; esac
+[ $# -eq 1 ] || usage 1
+issue="$1"
+if [[ ! "$issue" =~ ^[0-9]+$ ]]; then
+  echo "gh-issue-mark-delegated: issue number must be numeric (got: $issue)" >&2
+  exit 1
+fi
+
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+labels="$(gh_mise issue view "$issue" --json labels --jq '.labels[].name')"
+status="$(printf '%s\n' "$labels" | grep '^status/' || true)"
+if [ "$status" != "status/ready" ]; then
+  got="${status//$'\n'/, }"
+  echo "gh-issue-mark-delegated: #$issue must carry exactly one status/* label, status/ready (got: ${got:-none})" >&2
+  exit 1
+fi
+
+gh_mise issue edit "$issue" --remove-label status/ready --add-label status/delegated

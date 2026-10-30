@@ -53,6 +53,7 @@ jobs:
             bin/gh-automerge \
             bin/gh-await-reviews \
             bin/gh-issue-file \
+            bin/gh-issue-mark-delegated \
             bin/gh-list-threads \
             bin/gh-pr-checks \
             bin/gh-pr-comments \

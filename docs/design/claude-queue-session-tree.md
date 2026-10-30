@@ -67,6 +67,7 @@ NULL は「記録が無い」だけで、親が居ないことを意味しない
 
 判定は ledger の作業軸（`done_at IS NULL`）で行い、プロセスの生死は見ない。親が gone なだけなら
 resume すれば委譲の関係ごと戻るので、孤児にしない（[claude-queue-lifecycle.md](claude-queue-lifecycle.md)）。
+gone はプロセスの軸の値で、その導出は [claude-queue-instances.md](claude-queue-instances.md)。
 読み出しに失敗したときは親を open とみなし、孤児の印を出さない側に倒す。
 
 link の循環は `claude-worktree` からは生じないが、テーブルは禁じていない。session id 順に祖先を上り、
