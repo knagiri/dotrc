@@ -452,17 +452,20 @@ prompt」「修正 subagent prompt」が持つ。判定役は**コードを触�
      orchestrator と人間が別工程として既に存在するので、判定役側は coverage-first に寄せ、
      取捨選択を下流へ渡す。 -->
 
-<!-- 決定済み（再指摘防止のため理由を残す）: 判定役の「コードを変更しない」は、dispatch する
-     subagent の tool を絞って機械的に縛ることはしない。理由:
+<!-- 決定済み（再指摘防止のため理由を残す）: 判定役の「コードを変更しない」は、tool で機械的に
+     縛らず散文の不変条件で担保する。両役とも agent 定義を持たず general-purpose で起こすので、
+     dispatch ごとに tool を絞る手段自体が無い。agent 定義の `tools:` で縛る案は、前に次の理由で
+     却下済み:
      - 判定役は `gh-pr-comments` / `gh-list-threads` / `gh pr diff` を叩くので Bash が要る。
        Bash が残る限り `git commit` / `git push` / `gh-resolve-thread` には到達できるので、
        tool の制限は Edit/Write を落とすだけの部分的な縛りにしかならない。不変条件を機械的に
        担保したと誤解させるほうが害が大きい。
-     - tool の列挙漏れは silent failure になる。判定役は Read/Grep/Glob/Bash に加え
-       手順 3 の `/code-review` skill 等も使ってよい設計なので、列挙を固定すると将来の手順追加が
-       黙って効かなくなる。
+     - `tools:` を列挙すると、列挙漏れが silent failure になる。判定役は手順 3 の `/code-review`
+       skill 等も使ってよい設計なので、列挙を固定すると将来の手順追加が黙って効かなくなる。
      - `rule-authoring.md` の「縛り切りたい必須事項は lint/test/hook へ昇格する」に沿わせるなら、
-       昇格先は PreToolUse hook（判定役からの commit/push/resolve を deny）になる。そこまで要る
+       昇格先は PreToolUse hook（判定役からの commit/push/resolve を deny）になる。ただし両役が
+       同じ general-purpose なので、hook 側で agent 種別から判定役を見分けられない。昇格するなら
+       専用 agent 定義に戻すか、prompt に入れた識別子で照合する等の手当てが要る。そこまで要る
        ほどの誤動作は未観測なので、実測が出るまでは散文の不変条件と役割分離（push / resolve
        できるのは修正役だけ）で運用する。 -->
 
