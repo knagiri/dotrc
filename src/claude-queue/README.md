@@ -379,15 +379,16 @@ bind-key C-l run-shell "claude-queue nav forward --client '#{client_name}' --pan
 最大 50 件、古い順に捨てながら持つ。
 
 - **記録するのは picker で飛んだときだけ**（switch / attach / resume が成功したとき）。tmux の
-  手動移動は記録しない。popup を開いた pane の session が履歴の現在位置と違えば、先にそれを
-  積む（初回でも戻れるように）。続けて現在位置より先を捨て、飛び先を積む。現在位置と同じ
-  session は積まない
+  手動移動は記録しない。何かを積むときは、その直前に現在位置より先を捨てる。続けて、
+  popup を開いた pane の session が履歴の現在位置と違えばそれを積み（初回でも戻れるように）、
+  飛び先を積む。現在位置と同じ session は積まない。何も積まない（現在位置の session へ飛び
+  直した）ときは、先の履歴も残す
 - **戻る**は、今いる pane の session が現在位置の session と違う（手動で移動していた）なら現在
   位置そのものへ、同じなら 1 つ前へ移る。**進む**は 1 つ後へ移る。移動は履歴に積まず、現在
   位置だけを動かす
 - 移るのは今ある pane へ `switch-client` できるときだけで、attach / resume で window を開く
   ことはしない。pane は session の記録と `claude agents` の一覧から picker と同じ規則で引き
-  直し、引けない session（終了済み・pane が無い・今いる pane そのもの）は飛ばして同じ向きに
+  直し、引けない session（台帳から消えた（GC 済み）・終了済み・pane が無い・今いる pane そのもの）は飛ばして同じ向きに
   次を探す
 
 `#{client_name}` / `#{pane_id}` を渡すのは、run-shell から呼ぶ `tmux` が押したキーの client とは

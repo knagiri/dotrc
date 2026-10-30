@@ -123,6 +123,60 @@ func TestWalkHistory(t *testing.T) {
 	}
 }
 
+// A session the ledger no longer has (GC'd) is passed over like an ended one.
+func TestWalkHistorySkipsSessionGoneFromLedger(t *testing.T) {
+	f := newNavFixture(t)
+	if _, err := f.conn.Exec("DELETE FROM sessions WHERE session_id = 'D'"); err != nil {
+		t.Fatal(err)
+	}
+	pane, at := f.walk(t, -1, "E")
+	if pane != paneOf("C") || at != "C" {
+		t.Errorf("switched to %q, cursor on %q; want %q, C", pane, at, paneOf("C"))
+	}
+}
+
+// An entry whose pane is the one the client is already in is passed over:
+// with history A B A, B ended, and the client in A, back has only the older A
+// to land on, which is where the client already is.
+func TestWalkHistorySkipsCurrentPane(t *testing.T) {
+	f := newNavFixture(t, "B")
+	for _, q := range []string{"DELETE FROM nav_history", "DELETE FROM nav_cursor"} {
+		if _, err := f.conn.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"A", "B", "A"} {
+		if err := db.PushNav(f.conn, "", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pane, at := f.walk(t, -1, "A")
+	if pane != "" || at != "A" {
+		t.Errorf("switched to %q, cursor on %q; want no switch, A", pane, at)
+	}
+}
+
+// An empty history has nowhere to walk: no move, no error, no switch.
+func TestWalkHistoryEmpty(t *testing.T) {
+	f := newNavFixture(t)
+	for _, q := range []string{"DELETE FROM nav_history", "DELETE FROM nav_cursor"} {
+		if _, err := f.conn.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, step := range []int{-1, 1} {
+		var switched []string
+		moved, err := walkHistory(f.conn, step, paneOf("A"), navDeps{
+			Mux:    f.mux,
+			List:   func(string) ([]roster.Agent, error) { return f.agents, nil },
+			Switch: func(p string) error { switched = append(switched, p); return nil },
+		})
+		if moved || err != nil || len(switched) != 0 {
+			t.Errorf("step %d: moved=%v err=%v switched=%v; want none", step, moved, err, switched)
+		}
+	}
+}
+
 // A walk moves the cursor only: the history it walks keeps every entry.
 func TestWalkHistoryRecordsNothing(t *testing.T) {
 	f := newNavFixture(t)

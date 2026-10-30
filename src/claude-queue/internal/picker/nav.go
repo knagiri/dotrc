@@ -42,9 +42,9 @@ type navDeps struct {
 //
 // Back starts from the cursor entry itself when the client is not in that
 // entry's session -- it was moved by hand since -- and from the entry before
-// it otherwise. Entries it cannot switch to (the session ended, has no pane,
-// or is the one the client is already in) are passed over in the same
-// direction. Only a switch to an existing pane counts: a walk never opens a
+// it otherwise. Entries it cannot switch to (the session is gone from the
+// ledger, e.g. GC'd; or ended, has no pane, or is the one the client is
+// already in) are passed over in the same direction. Only a switch to an existing pane counts: a walk never opens a
 // window. It moves the cursor and records nothing.
 func walkHistory(conn *sql.DB, step int, curPane string, d navDeps) (bool, error) {
 	hist, idx, err := db.NavHistory(conn)

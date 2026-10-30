@@ -87,6 +87,13 @@ func TestPushNav(t *testing.T) {
 			lastOrigin: "A", lastTarget: "D",
 			want: []string{"A", "D"}, wantAt: "D",
 		},
+		{
+			name:       "a jump back onto the cursor's session keeps the forward side",
+			pushes:     [][2]string{{"A", "B"}, {"B", "C"}},
+			back:       1,
+			lastOrigin: "B", lastTarget: "B",
+			want: []string{"A", "B", "C"}, wantAt: "B",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
