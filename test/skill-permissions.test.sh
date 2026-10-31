@@ -30,9 +30,11 @@ tmp="$(mktemp -d)"
 trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
 # Skills deliberately left out of the Skill(...) allowlist, each with a reason.
-# No skill is excluded at present. check_skill_allow also fails if an excluded
-# skill gains a Skill(...) allow, or if the name no longer exists.
-excluded_skills=""
+# check_skill_allow also fails if an excluded skill gains a Skill(...) allow, or
+# if the name no longer exists.
+# - repo-baseline: used only with a human present; keep the Skill invocation
+#   prompt as a checkpoint before it proposes GitHub-settings changes.
+excluded_skills="repo-baseline"
 
 # Prints the allowed-tools entries of a SKILL.md frontmatter, one per line.
 # Accepts the inline form (`a, b c`, optionally `[a, b]`) and the YAML block
@@ -165,18 +167,18 @@ case "$out" in *"missing allow: Skill(implement-and-review)"*) echo "ok: catches
 
 # Exclude a real skill whose Skill(...) allow is present (added if missing).
 jq '.permissions.allow |= (if index("Skill(my-commit)") then . else . + ["Skill(my-commit)"] end)' "$settings" >"$tmp/settings.json"
-out="$(excluded_skills="my-commit" check_skill_allow "$skills_dir" "$tmp/settings.json")"
+out="$(excluded_skills="$excluded_skills my-commit" check_skill_allow "$skills_dir" "$tmp/settings.json")"
 case "$out" in *"excluded but allowed: Skill(my-commit)"*) echo "ok: catches an excluded skill that gains a Skill(...) allow" ;;
   *) echo "FAIL: missed an excluded skill that gains a Skill(...) allow"; fail=1 ;; esac
 
 # An excluded skill must not be reported as missing an allow even when its
 # Skill(...) allow is absent (guards the `&& continue` exclusion branch).
 jq '.permissions.allow -= ["Skill(my-commit)"]' "$settings" >"$tmp/settings.json"
-out="$(excluded_skills="my-commit" check_skill_allow "$skills_dir" "$tmp/settings.json")"
+out="$(excluded_skills="$excluded_skills my-commit" check_skill_allow "$skills_dir" "$tmp/settings.json")"
 if [ -z "$out" ]; then echo "ok: an excluded skill is not reported as missing an allow"
 else echo "FAIL: excluded skill reported: $out"; fail=1; fi
 
-out="$(excluded_skills="no-such-skill" check_skill_allow "$skills_dir" "$settings")"
+out="$(excluded_skills="$excluded_skills no-such-skill" check_skill_allow "$skills_dir" "$settings")"
 case "$out" in *"stale exclusion: no-such-skill"*) echo "ok: catches a stale exclusion" ;;
   *) echo "FAIL: missed a stale exclusion"; fail=1 ;; esac
 
