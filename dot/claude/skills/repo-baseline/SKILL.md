@@ -26,7 +26,7 @@ doc の役割分担は `~/.claude/rules/repo-docs.md` が正典で、この skil
 
 | 項目 | baseline | 理由 |
 |---|---|---|
-| repo 作成（remote が無いときのみ） | `gh repo create`、既定は private（個人 repo） | |
+| repo 作成（remote が無いときのみ） | `gh repo create`、既定は private（個人 repo） | Free plan の private repo では ruleset・branch protection・auto-merge が使えないことがある。手順 1 で確かめる |
 | merge 方式 | merge commit のみ許可（squash / rebase は無効） | `gh-automerge` が `--merge` で merge するため |
 | auto-merge | 有効 | `pr-automerge` が auto-merge を張るため |
 | merge 後の branch 自動削除 | 有効 | `git-reap-gone` が `[gone]` を完了の合図にするため |
@@ -43,12 +43,18 @@ doc の役割分担は `~/.claude/rules/repo-docs.md` が正典で、この skil
 ```
 git rev-parse --show-toplevel
 git remote -v
-gh repo view --json owner,isInOrganization,defaultBranchRef
+gh repo view --json owner,isInOrganization,defaultBranchRef,visibility
 ```
 
-- 新規か既存か。既存でも commit が 0 件、または GitHub の remote が無ければ、新規と同じく
-  `gh repo create` から push までを提案する
+- 新規か既存か。GitHub の remote が無いと `gh repo view` が失敗する。その失敗自体を「remote 無し
+  ＝新規扱い」の合図とする。既存でも commit が 0 件、または GitHub の remote が無ければ、新規と
+  同じく `gh repo create` から push までを提案する。commit 0 件では push できないので、
+  `gh repo create` の前に初回 commit を作る
 - owner が個人 account か org か（`isInOrganization`）。org なら個人 repo 専用の値を提案しない
+- `visibility` が private で、プランが Free の可能性があるとき（個人 account の private repo 等）は、
+  ruleset・branch protection・auto-merge が使えないことがある。使えるかは手順 4 の失敗の文面で
+  判別する。使えないと分かったら、repo を public にするか、ruleset と auto-merge の項目を外すかを
+  ユーザーに選んでもらう
 
 ### 2. 現状の読み取り（読み取りだけ）
 
@@ -78,7 +84,8 @@ repo の設定:
 gh api -X PATCH repos/{owner}/{repo} -F allow_merge_commit=true -F allow_squash_merge=false -F allow_rebase_merge=false -F allow_auto_merge=true -F delete_branch_on_merge=true
 ```
 
-ruleset は JSON を `$CLAUDE_JOB_DIR` などの一時ファイルに書いて渡す。
+ruleset は JSON を一時ファイル（`$CLAUDE_JOB_DIR` は interactive session で未定義のことがあるので、
+`mktemp` で作る）に書いて渡す。`--input -` に heredoc で渡してもよい。
 
 ```
 gh api -X POST repos/{owner}/{repo}/rulesets --input <file>
@@ -111,8 +118,12 @@ gh api -X POST repos/{owner}/{repo}/rulesets --input <file>
   入れる。CI がまだ走っていない repo では、まず `required_status_checks` 抜きで ruleset を作り、
   CI の PR が走った後に rule を足す。存在しない名前を required にすると、その check は永久に
   pending のままで merge できなくなる
-- 403 等の権限不足で失敗したら、黙って失敗扱いにしない。実行するコマンドをそのまま示し、
-  ユーザーに `! <command>` で実行してもらって止まる。wrapper や allow は足さない
+- 403 等で失敗したら、黙って失敗扱いにせず、エラー文面で 2 つに分ける
+  - token の権限不足: 実行するコマンドをそのまま示し、ユーザーに `! <command>` で実行してもらって
+    止まる。wrapper や allow は足さない
+  - プランが未対応（upgrade を求める文面等。private repo の Free plan で起こりうる）: `!` で
+    実行しても解決しない。手順 1 の選択（public にする／該当項目を外す）へ戻る
+  - 手順 2 の branch protection の GET も、404 でなく 403 を返してプラン未対応を示すことがある
 
 ### 5. CI
 

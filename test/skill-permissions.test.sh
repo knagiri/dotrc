@@ -32,9 +32,8 @@ trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 # Skills deliberately left out of the Skill(...) allowlist, each with a reason.
 # check_skill_allow also fails if an excluded skill gains a Skill(...) allow, or
 # if the name no longer exists.
-# - repo-baseline: used only with a human present, and includes writes to
-#   GitHub settings. Allowing Skill(repo-baseline) would pre-approve its
-#   allowed-tools for no gain; keeping the approval prompts matches its intent.
+# - repo-baseline: used only with a human present; keep the Skill invocation
+#   prompt as a checkpoint before it proposes GitHub-settings changes.
 excluded_skills="repo-baseline"
 
 # Prints the allowed-tools entries of a SKILL.md frontmatter, one per line.

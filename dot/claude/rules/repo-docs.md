@@ -8,8 +8,6 @@ doc を書く場面は repo を問わず起こるので、`paths` を付けず�
 複数の doc に散って片方だけ更新される。典型は README に詳細な意思決定・前提・経緯が流れ込む形で、
 入口が入口として機能しなくなる。
 
-実例: dotrc/docs/incidents/main-commit-without-pr-flow.md
-
 ### README
 
 開発者向けの入口。目的、doc への index、開発準備の手順のような一般的な内容を書く。
@@ -54,3 +52,5 @@ remote・PR フロー・CI が欠けた repo で作業していると気づい�
 
 欠けたままだと、PR を前提とする `worktree-scope.md` §5 の委譲も、CI の結果を見て merge する判断も
 成り立たない。agent はそれを前提が無いとは認識せず、main への直接 commit で作業を進めてしまう。
+
+実例: dotrc/docs/incidents/main-commit-without-pr-flow.md
