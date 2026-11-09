@@ -158,14 +158,24 @@ func LatestEvent(conn *sql.DB, sessionID string) (state string, createdAt int64,
 }
 
 // LinkSession records that the session whose id starts with childShort was
-// delegated by parentSessionID. Re-linking a child replaces its parent and
-// restarts the GC clock.
-func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
+// delegated by parentSessionID, on branch of the GitHub repo (owner/repo). An
+// empty repo or branch is stored as NULL: unknown. Re-linking a child replaces
+// its parent, repo and branch and restarts the GC clock; the PR resolved for
+// it is kept only when repo and branch are both unchanged, since it was found
+// for them.
+func LinkSession(conn *sql.DB, childShort, parentSessionID, repo, branch string) error {
 	if _, err := conn.Exec(`
-		INSERT INTO session_links(child_short, parent_session_id) VALUES (?, ?)
+		INSERT INTO session_links(child_short, parent_session_id, repo, branch)
+		VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''))
 		ON CONFLICT(child_short) DO UPDATE
-		  SET parent_session_id = excluded.parent_session_id, created_at = unixepoch()
-	`, childShort, parentSessionID); err != nil {
+		  SET parent_session_id = excluded.parent_session_id,
+		      created_at = unixepoch(),
+		      pr = CASE WHEN excluded.repo IS session_links.repo
+		                 AND excluded.branch IS session_links.branch
+		            THEN session_links.pr END,
+		      repo = excluded.repo,
+		      branch = excluded.branch
+	`, childShort, parentSessionID, repo, branch); err != nil {
 		return fmt.Errorf("link session: %w", err)
 	}
 	return nil

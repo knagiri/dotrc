@@ -37,7 +37,7 @@ func TestReopenCLI_ClearsDoneWithoutCascade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := db.LinkSession(conn, "bbbbbbbb", "aaaaaaaa-1111"); err != nil {
+	if err := db.LinkSession(conn, "bbbbbbbb", "aaaaaaaa-1111", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.MarkDone(conn, "aaaaaaaa-1111", 1000); err != nil {

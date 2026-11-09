@@ -20,7 +20,7 @@ func TestDoneCLI_Idempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := db.LinkSession(conn, "bbbbbbbb", "aaaaaaaa-1111"); err != nil {
+	if err := db.LinkSession(conn, "bbbbbbbb", "aaaaaaaa-1111", "", ""); err != nil {
 		t.Fatal(err)
 	}
 

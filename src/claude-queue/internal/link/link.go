@@ -55,7 +55,7 @@ func Run(args []string) {
 		fmt.Fprintln(os.Stderr, "link:", err)
 		os.Exit(1)
 	}
-	err = db.LinkSession(conn, child, parent)
+	err = db.LinkSession(conn, child, parent, "", "")
 	conn.Close()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "link:", err)

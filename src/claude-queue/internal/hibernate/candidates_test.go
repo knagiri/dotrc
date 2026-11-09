@@ -248,7 +248,7 @@ func TestCandidates_OrphanIgnoresSendMessage(t *testing.T) {
 		{"childgon-1", "parentgn-1"}, // parent only gone
 	} {
 		session(t, conn, c.child, dirA, "idle_done", hours3)
-		if err := db.LinkSession(conn, c.child[:8], c.parent); err != nil {
+		if err := db.LinkSession(conn, c.child[:8], c.parent, "", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -369,7 +369,7 @@ func TestCandidates_RunningDelegateHoldsDelegator(t *testing.T) {
 		{"childdon-1", "parentok-1"}, // done
 	} {
 		session(t, conn, c.child, dirA, "working", 60)
-		if err := db.LinkSession(conn, c.child[:8], c.parent); err != nil {
+		if err := db.LinkSession(conn, c.child[:8], c.parent, "", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
