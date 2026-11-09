@@ -30,7 +30,7 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"pnpm prisma migrate"}}`, Valid: true},
 		CreatedAt:      nowMinus(120),
 	}
-	got := FormatLine(row, "prisma migration", "example-repo", nowUnix(), false)
+	got := FormatLine(row, "prisma migration", "example-repo", "", false, nowUnix(), false)
 	fields := strings.Split(got, "\t")
 	if len(fields) != colCount {
 		t.Fatalf("want %d tab-separated fields, got %d: %q", colCount, len(fields), got)
@@ -80,7 +80,7 @@ func TestFormatLine_AwaitingApproval(t *testing.T) {
 func TestFormatLine_ConfigDirFallsBackToDefault(t *testing.T) {
 	t.Setenv("HOME", "/home/probe")
 	row := db.Row{SessionID: "sid", EffectiveState: "working", CreatedAt: nowMinus(10)}
-	fields := strings.Split(FormatLine(row, "t", "w", nowUnix(), true), "\t")
+	fields := strings.Split(FormatLine(row, "t", "w", "", false, nowUnix(), true), "\t")
 	if got := fields[colConfigDir]; got != "/home/probe/.claude" {
 		t.Errorf("hidden config_dir = %q, want the default /home/probe/.claude", got)
 	}
@@ -100,8 +100,8 @@ func TestFormatLine_ColumnOrder(t *testing.T) {
 		EffectiveState: "working",
 		CreatedAt:      nowMinus(60),
 	}
-	fields := strings.Split(FormatLine(row, "title", "wt", nowUnix(), true), "\t")
-	want := []string{"[*]", "title", "wt", "60s", "working", "sid", "%4", "/w/a", "/t/a.jsonl", "/cfg/a", "", "", ""}
+	fields := strings.Split(FormatLine(row, "title", "wt", "#42 feat/foo", false, nowUnix(), true), "\t")
+	want := []string{"[*]", "title", "wt", "60s", "working", "sid", "%4", "/w/a", "/t/a.jsonl", "/cfg/a", "", "", "", "#42 feat/foo"}
 	if len(fields) != len(want) {
 		t.Fatalf("got %d columns, want %d", len(fields), len(want))
 	}
@@ -147,7 +147,7 @@ func TestFormatLine_ColumnWidths(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fields := strings.Split(FormatLine(row, c.title, c.worktree, nowUnix(), true), "\t")
+			fields := strings.Split(FormatLine(row, c.title, c.worktree, "", false, nowUnix(), true), "\t")
 			if w := runewidth.StringWidth(fields[colTitle]); w != titleWidth {
 				t.Errorf("title column is %d wide, want %d: %q", w, titleWidth, fields[colTitle])
 			}
@@ -177,7 +177,7 @@ func TestFormatLine_TitleCannotBreakTheRow(t *testing.T) {
 		t.Fatalf("write transcript: %v", err)
 	}
 
-	fields := strings.Split(FormatLine(row, label.DisplayTitle(path, titleWidth), "wt", nowUnix(), true), "\t")
+	fields := strings.Split(FormatLine(row, label.DisplayTitle(path, titleWidth), "wt", "", false, nowUnix(), true), "\t")
 	if len(fields) != colCount {
 		t.Fatalf("a title with a tab in it produced %d columns, want %d", len(fields), colCount)
 	}
@@ -202,7 +202,7 @@ func TestParseSelection(t *testing.T) {
 		Payload:        sql.NullString{String: `{"tool_name":"Bash","tool_input":{"command":"go test ./..."}}`, Valid: true},
 		CreatedAt:      nowMinus(30),
 	}
-	line := FormatLine(row, "ai タイトル", "dotrc_wt", nowUnix(), false)
+	line := FormatLine(row, "ai タイトル", "dotrc_wt", "", false, nowUnix(), false)
 
 	sel, ok := parseSelection(line)
 	if !ok {
@@ -246,11 +246,11 @@ func TestFzfCancelsSelect1AndExit0FromDefaults(t *testing.T) {
 // ahead of the hidden ones has to move it too. Getting this wrong does not
 // fail either -- it renders the session id and the full cwd as visible text.
 func TestFzfShowsExactlyTheVisibleColumns(t *testing.T) {
-	if got, want := visibleColumns(), "1,2,3,4,5,11"; got != want {
+	if got, want := visibleColumns(), "1,2,3,4,5,11,14"; got != want {
 		t.Errorf("visibleColumns = %q, want %q", got, want)
 	}
-	if !slices.Contains(fzfArgs(""), "--with-nth=1,2,3,4,5,11") {
-		t.Errorf("fzfArgs = %v, want it to carry --with-nth=1,2,3,4,5,11", fzfArgs(""))
+	if !slices.Contains(fzfArgs(""), "--with-nth=1,2,3,4,5,11,14") {
+		t.Errorf("fzfArgs = %v, want it to carry --with-nth=1,2,3,4,5,11,14", fzfArgs(""))
 	}
 	// The list has to stop before the first hidden column, whose contents are
 	// paths and ids no one wants in the popup.
@@ -263,7 +263,7 @@ func TestFzfShowsExactlyTheVisibleColumns(t *testing.T) {
 // which is what resumeBlocked reads as "nothing to resume".
 func TestFormatLine_NoTranscript(t *testing.T) {
 	row := db.Row{SessionID: "s3", EffectiveState: "idle_done", CreatedAt: nowMinus(10)}
-	fields := strings.Split(FormatLine(row, "", "wt", nowUnix(), false), "\t")
+	fields := strings.Split(FormatLine(row, "", "wt", "", false, nowUnix(), false), "\t")
 	if len(fields) != colCount {
 		t.Fatalf("want %d fields, got %d", colCount, len(fields))
 	}
@@ -284,7 +284,7 @@ func TestFormatLine_DeepCwdShowsWorktree(t *testing.T) {
 		EffectiveState: "idle_done",
 		CreatedAt:      nowMinus(30),
 	}
-	fields := strings.Split(FormatLine(row, "", "dotrc_queue-picker", nowUnix(), false), "\t")
+	fields := strings.Split(FormatLine(row, "", "dotrc_queue-picker", "", false, nowUnix(), false), "\t")
 	if got := strings.TrimSpace(fields[colWorktree]); got != "dotrc_queue-picker" {
 		t.Errorf("worktree = %q, want dotrc_queue-picker", got)
 	}
@@ -312,7 +312,7 @@ func TestFormatLine_Gone(t *testing.T) {
 		CreatedAt:      nowMinus(7200),
 	}
 
-	fields := strings.Split(FormatLine(row, "", "dotrc_wt", nowUnix(), false), "\t")
+	fields := strings.Split(FormatLine(row, "", "dotrc_wt", "", false, nowUnix(), false), "\t")
 	if len(fields) != colCount {
 		t.Fatalf("want %d fields, got %d", colCount, len(fields))
 	}
@@ -335,7 +335,7 @@ func TestFormatLine_Gone(t *testing.T) {
 		t.Errorf("hidden cwd/transcript = %q/%q", fields[colCwd], fields[colTranscript])
 	}
 
-	asciiIcon := strings.Split(FormatLine(row, "", "dotrc_wt", nowUnix(), true), "\t")[colIcon]
+	asciiIcon := strings.Split(FormatLine(row, "", "dotrc_wt", "", false, nowUnix(), true), "\t")[colIcon]
 	if asciiIcon == "" {
 		t.Error("ascii icon is empty: CLAUDE_QUEUE_ASCII=1 would render the column blank")
 	}
@@ -362,7 +362,7 @@ func TestGoneRowRoutesToResume(t *testing.T) {
 		PriorState:     sql.NullString{String: "working", Valid: true},
 		CreatedAt:      nowMinus(60),
 	}
-	sel, ok := parseSelection(FormatLine(row, "", "wt", nowUnix(), false))
+	sel, ok := parseSelection(FormatLine(row, "", "wt", "", false, nowUnix(), false))
 	if !ok {
 		t.Fatal("parseSelection rejected a line FormatLine rendered")
 	}
@@ -415,7 +415,7 @@ func TestGoneRowCarriesNoPaneForTheRosterFallback(t *testing.T) {
 		RawState:       "ended",
 		CreatedAt:      nowMinus(60),
 	}
-	sel, ok := parseSelection(FormatLine(row, "", "wt", nowUnix(), false))
+	sel, ok := parseSelection(FormatLine(row, "", "wt", "", false, nowUnix(), false))
 	if !ok {
 		t.Fatal("parseSelection rejected a line FormatLine rendered")
 	}

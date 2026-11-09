@@ -334,7 +334,7 @@ func TestParseSelection_PrefixedTitle(t *testing.T) {
 	}
 	for _, prefix := range []string{"│  └─ ", "✂ ", "|  `- ", "x "} {
 		title := prefixedTitle(prefix, func(cols int) string { return runewidth.Truncate("委譲先の タイトル", cols, "") })
-		line := FormatLine(row, title, "wt", nowUnix(), false)
+		line := FormatLine(row, title, "wt", "", false, nowUnix(), false)
 		fields := strings.Split(line, "\t")
 		if w := runewidth.StringWidth(fields[colTitle]); w != titleWidth {
 			t.Errorf("%q: title column is %d wide, want %d", prefix, w, titleWidth)
@@ -383,8 +383,8 @@ func TestCurrentMarkKeepsTitleWidth(t *testing.T) {
 			t.Errorf("ascii=%v: marked title is %d columns, past titleWidth=%d", ascii, w, titleWidth)
 		}
 		row := db.Row{SessionID: "s", EffectiveState: "idle_done", CreatedAt: nowMinus(60)}
-		a := strings.Split(FormatLine(row, plain, "w", nowUnix(), ascii), "\t")
-		b := strings.Split(FormatLine(row, marked, "w", nowUnix(), ascii), "\t")
+		a := strings.Split(FormatLine(row, plain, "w", "", false, nowUnix(), ascii), "\t")
+		b := strings.Split(FormatLine(row, marked, "w", "", false, nowUnix(), ascii), "\t")
 		if runewidth.StringWidth(a[colTitle]) != runewidth.StringWidth(b[colTitle]) {
 			t.Errorf("ascii=%v: title column width %d vs %d", ascii, runewidth.StringWidth(a[colTitle]), runewidth.StringWidth(b[colTitle]))
 		}
