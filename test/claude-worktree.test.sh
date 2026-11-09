@@ -1246,9 +1246,42 @@ out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   "$wt" bglink -- "$prompt"; } 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && [ "$(wc -l <"$cqlog")" -eq 1 ] \
-   && [ "$(cat "$cqlog")" = "link --parent eeeeeeee-1111-2222-3333-444444444444 --child abcd1234" ]; then
-  echo "ok: a bg launch with a delegator records the link once, with full parent and short child"
+   && [ "$(cat "$cqlog")" = "link --parent eeeeeeee-1111-2222-3333-444444444444 --child abcd1234 --branch bglink" ]; then
+  echo "ok: a bg launch with a delegator records the link once, with full parent, short child and branch (no origin -> no --repo)"
 else echo "FAIL: link call rc=$rc calls=$(cat "$cqlog") out=$out"; fail=1; fi
+
+# The link also carries the repo, as owner/repo off the worktree's origin, so
+# claude-queue watch can look the branch's PR up. Every spelling GitHub hands
+# out for the same repo must come out the same; a non-GitHub origin gets no
+# --repo at all (gh could not look it up) but keeps --branch. Its own repo, so
+# cwdrepo's origin stays unset for the cases above and below.
+# GIT_ALLOW_PROTOCOL=file makes claude-worktree's `git fetch origin` fail fast
+# (it only warns) instead of reaching out to github.com.
+linkrepo="$tmp/linkrepo"
+mkdir -p "$linkrepo"
+git -C "$linkrepo" init -q
+git -C "$linkrepo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$linkrepo" remote add origin placeholder
+i=0
+for case in \
+    "git@github.com:example-org/example-repo.git|--repo example-org/example-repo" \
+    "https://github.com/example-org/example-repo|--repo example-org/example-repo" \
+    "https://github.com/example-org/example-repo.git/|--repo example-org/example-repo" \
+    "ssh://git@github.com/example-org/example-repo.git|--repo example-org/example-repo" \
+    "git@example.com:o/r.git|" \
+    "https://gitlab.example.com/example-org/example-repo.git|"; do
+  url="${case%%|*}"; want_repo="${case#*|}"; i=$((i + 1))
+  git -C "$linkrepo" remote set-url origin "$url"
+  : >"$cqlog"
+  out="$(cd "$linkrepo" && { unset TMUX TMUX_PANE
+    export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$tmp/bg-linkrepo$i" CLAUDE_STUB_ROSTER="$namedroster" \
+           CQ_STUB_LOG="$cqlog" GIT_ALLOW_PROTOCOL=file
+    "$wt" "linkrepo$i" -b "feat/foo-$i" -- "$prompt"; } 2>&1)"; rc=$?
+  want="link --parent eeeeeeee-1111-2222-3333-444444444444 --child abcd1234${want_repo:+ $want_repo} --branch feat/foo-$i"
+  if [ "$rc" -eq 0 ] && [ "$(cat "$cqlog")" = "$want" ]; then
+    echo "ok: origin $url -> link ${want_repo:-without --repo}"
+  else echo "FAIL: origin $url rc=$rc calls=$(cat "$cqlog") want=$want out=$out"; fail=1; fi
+done
 
 # No delegator -> nothing to link. A human launching from a plain shell has no
 # parent session, and recording one would invent a tree.
