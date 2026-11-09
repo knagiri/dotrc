@@ -22,7 +22,7 @@ var version = "dev"
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: claude-queue {hook <event>|status|picker|reconcile|watch|reset} [flags]")
-	fmt.Fprintln(os.Stderr, "       claude-queue link --parent <session-id> --child <short-id>")
+	fmt.Fprintln(os.Stderr, "       claude-queue link --parent <session-id> --child <short-id> [--repo <owner/repo>] [--branch <name>]")
 	fmt.Fprintln(os.Stderr, "       claude-queue mark <session-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue done <session-id-or-prefix>")
 	fmt.Fprintln(os.Stderr, "       claude-queue reopen <session-id-or-prefix>")
