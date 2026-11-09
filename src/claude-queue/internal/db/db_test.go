@@ -715,6 +715,16 @@ func TestLinkSession_RelinkKeepsPRWhenSameBranch(t *testing.T) {
 	if repo.String != "example-org/example-repo" || branch.String != "feat/bar" {
 		t.Errorf("repo/branch = %+v %+v", repo, branch)
 	}
+	// Same branch name in a different repo is a different branch: pr resets.
+	if _, err := conn.Exec("UPDATE session_links SET pr = 42"); err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkSession(conn, "a1b2c3d4", "P1", "example-org/other-repo", "feat/bar"); err != nil {
+		t.Fatal(err)
+	}
+	if repo, _, pr := linkRef(t, conn, "a1b2c3d4"); pr.Valid || repo.String != "example-org/other-repo" {
+		t.Errorf("other-repo relink: repo = %+v pr = %+v, want other-repo and NULL", repo, pr)
+	}
 }
 
 // seedRefLink writes a link with repo/branch, a fixed created_at and an
@@ -751,6 +761,11 @@ func TestUnresolvedRefs_SinceIsOldestLinkInGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedRefLink(t, conn, "c4c4c4c4", "P1", "example-org/example-repo", "feat/bar", 1000, 7)
+	// A branch without a repo is not a candidate either (and must not reach the
+	// Scan as a NULL repo).
+	if _, err := conn.Exec("INSERT INTO session_links(child_short, parent_session_id, branch) VALUES ('c5c5c5c5', 'P1', 'feat/baz')"); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := UnresolvedRefs(conn)
 	if err != nil {

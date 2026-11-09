@@ -22,7 +22,8 @@ done になる。閉じ忘れた委譲先は最後のターンが完了報告の
 
 `session_links(child_short, parent_session_id, created_at, repo, branch, pr)` に 1 委譲 1 行で持つ。書くのは
 `claude-worktree` の bg 経路だけで、`claude --bg` が返った直後に `claude-queue link --parent <uuid>
---child <short>` を 1 回呼ぶ。親は `resolve_delegator()` が名前を取るのと同じ roster entry の
+--child <short> [--repo <owner/repo>] --branch <name>` を呼ぶ（旧版の claude-queue が `--repo` / `--branch` を拒否したら、
+`--parent` / `--child` だけでもう 1 回呼ぶ）。親は `resolve_delegator()` が名前を取るのと同じ roster entry の
 `sessionId`。link の失敗や `claude-queue` の不在は警告に留め、起動は成功のまま続ける（session は
 もう走っているので、失うのは link だけにする）。
 

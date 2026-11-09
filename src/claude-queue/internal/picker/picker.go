@@ -60,8 +60,10 @@ var ascii = map[string]string{
 //
 // The annotation column is shown too, after the summary, but sits behind the
 // hidden ones so adding it left their positions alone. It is what makes memos
-// and pin notes searchable: fzf matches the shown columns only. The raw memo
-// and pin note after it are hidden, and are what the edit keys prefill from.
+// and pin notes searchable: fzf can only search columns that are shown, and of
+// those it searches the ones --nth lists (see searchColumns); the summary is
+// shown but not searched. The raw memo and pin note after it are hidden, and
+// are what the edit keys prefill from.
 //
 // The refs column -- the PRs and branches of the row's delegation tree -- is
 // shown too, last, and sits behind everything for the same reason.
@@ -118,8 +120,9 @@ const (
 // Then the annotation column (pin note and memo), shown after the summary.
 //
 // Then the refs column: refs is the row's delegation tree's PRs and branches
-// (db.TreeRefs), dimmed when dimRefs is set -- every row of a tree carries the
-// same value, so it is dimmed on all but the root to keep the repeat quiet.
+// (db.TreeRefs), dimmed when dimRefs is set (a row that has a delegation link,
+// i.e. a delegate). Every row of a tree carries the same value; dimming keeps
+// the repeat quiet.
 //
 // Hidden columns: session_id, tmux_pane, full cwd, transcript_path, config_dir,
 // and after the annotation the raw memo and pin note.

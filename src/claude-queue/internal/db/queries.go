@@ -182,8 +182,8 @@ func LinkSession(conn *sql.DB, childShort, parentSessionID, repo, branch string)
 }
 
 // RefQuery is one (delegator, repo, branch) whose PR is still to be found:
-// claude-queue watch asks gh for the PRs of Branch in Repo, from Dir (the
-// delegator's cwd), and takes the newest made at or after Since.
+// the PRs of Branch in Repo are to be looked up from Dir (the delegator's
+// cwd), taking the newest made at or after Since.
 type RefQuery struct {
 	ParentSessionID, Repo, Branch, Dir string
 	Since                              int64

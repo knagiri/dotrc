@@ -722,6 +722,12 @@ if [ "$use_tmux" = 0 ]; then
       echo "claude-worktree: claude-queue not on PATH; delegation link not recorded" >&2
     elif link_err="$(claude-queue link "${link_args[@]}" 2>&1)"; then
       :
+    # An older claude-queue binary (bin/ is live through the symlink, the Go
+    # binary only after `make install`) rejects --repo/--branch as unknown
+    # flags. Retry with just the parent/child pair so the link itself -- tree
+    # display, done cascade, orphan detection -- survives that window.
+    elif link_err="$(claude-queue link --parent "$delegator_sid" --child "$short" 2>&1)"; then
+      echo "claude-worktree: claude-queue link recorded without repo/branch (older claude-queue?); PR lookup will not find this delegation" >&2
     else
       echo "claude-worktree: claude-queue link failed; delegation link not recorded:" >&2
       printf '%s\n' "$link_err" >&2

@@ -9,9 +9,8 @@ import (
 
 // TreeRefs maps every member of a delegation tree, by 8-char short id, to the
 // PRs and branches of the whole tree: "#<pr> <branch>" (or "<branch>" while no
-// PR is known) per link, oldest link first, joined by two spaces. The picker
-// lays it on every row of the tree, so a PR number or branch name typed into
-// it keeps the whole tree in view.
+// PR is known) per link, oldest link first, joined by two spaces. Every member
+// of a tree maps to the same string.
 //
 // A tree is everything reachable from its root, the member with no link of its
 // own -- done delegates and delegates of delegates included, since the PR may

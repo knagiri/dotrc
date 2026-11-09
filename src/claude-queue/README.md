@@ -80,7 +80,7 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 | 6〜10 | session_id / tmux_pane / cwd / transcript_path / config_dir | 非表示 |
 | 11 | 注記（`📌 <pin のコメント>` と `📝 <メモ>`） | padding なし |
 | 12〜13 | メモ / pin のコメント（編集キーの初期値） | 非表示 |
-| 14 | 委譲 tree の PR / branch（`#<pr> <branch>`、PR 未解決なら `<branch>`） | padding なし。tree の根以外では薄い色 |
+| 14 | 委譲 tree の PR / branch（`#<pr> <branch>`、PR 未解決なら `<branch>`） | padding なし。link を持つ行（委譲先）では薄い色 |
 
 3 列目は cwd の git toplevel basename そのままではなく、`--git-common-dir`（絶対）の親を
 メイン toplevel として `<main-repo-basename>_<name>` を合成する。worktree は
@@ -118,9 +118,9 @@ interactive 起動時に 1 度だけ取り、Tab の再描画（`--list`）へ�
 14 列目は tree の根（最上位の委譲元）から辿れる全 link（done の委譲先・孫以下を含む）を集めた値で、
 tree に属する全行に同じものを入れる。PR 番号や branch を打つと tree の全行が残り、委譲元へ飛べる。
 fzf は表示していない列を検索できないので委譲先の行にも出し、繰り返しが見づらくならないよう ANSI の
-dim で薄くする（`--ansi`）。同じ branch が複数の link にあれば（review 対応で起こし直した委譲先）1 つに
+dim で薄くする（`--ansi`）。同じ (repo, branch) が複数の link にあれば（review 対応で起こし直した委譲先）1 つに
 まとめ、PR 番号を持つほうを残す。`--with-nth` と併用した `--nth` の番号は `--with-nth` 後の列番号を
-指す（fzf 0.74.5 で実測）。誤ってもエラーにならず別の列が検索されるので、テストが実物の fzf で固定する。
+指す（fzf 0.74.5 で実測）。誤ってもエラーにならず別の列が検索されるので、テストが実物の fzf で固定する（fzf が PATH に無ければ skip する。CI の ubuntu-latest には fzf が無いので CI では走らない）。
 
 ### pin とメモ
 
@@ -348,13 +348,14 @@ config dir の claude daemon が居ない（background。`<config dir>/daemon.lo
 `session_links` の repo と branch があり PR 番号が未解決の link について、(repo, branch) ごとに 1 pass 1 回
 `gh pr list --repo <repo> --head <branch> --state all --json number,createdAt` を叩き、見つかった番号を書く。
 gh は PR 監視と同じ経路で、委譲元の cwd から呼ぶ（委譲先の worktree は reap 済みでありうるため）。対象は
-委譲元が open な link だけ。PR 作成から picker に番号が出るまで最大で timer の 1 tick 遅れる。
+委譲元が open な link だけ（台帳に居ない委譲元の link も対象外。INNER JOIN で落ちる）。PR 作成から picker に番号が出るまで最大で timer の 1 tick 遅れる。
 
-採るのは、同じ委譲元・repo・branch の link のうち最古の `created_at` 以降に作られた PR のうち最新。下限は
-branch 名を使い回したときに過去の PR を拾わないため。行ごとの `created_at` を使わないのは、review 対応で
+採るのは、同じ委譲元・repo・branch の link のうち最古の `created_at` 以降に作られた PR のうち最新。下限が
+防ぐのは、別の委譲元が使った過去の PR を拾うこと。同じ委譲元が merge 済みの branch 名を使い回して
+委譲すると、新しい PR が出るまで古い PR 番号が選ばれて残る（既知の制約）。行ごとの `created_at` を使わないのは、review 対応で
 起こし直した委譲先の link が既存 PR より後に作られるため。gh の失敗はその組だけ skip して次の pass に回す。
 
-PR は委譲された branch から出す前提で引く（`implement-and-review` が縛る）。別 branch から出た PR は
+PR は委譲された branch から出されたものだけを引く。別 branch から出た PR は
 見つからないだけで、別の session へ飛ぶことはない。
 
 timer の有効化:

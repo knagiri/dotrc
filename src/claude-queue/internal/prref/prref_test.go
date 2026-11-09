@@ -15,9 +15,16 @@ import (
 func rfc(sec int64) string { return time.Unix(sec, 0).UTC().Format(time.RFC3339) }
 
 func TestPickPR(t *testing.T) {
-	list := `[{"number":10,"createdAt":"` + rfc(500) + `"},{"number":30,"createdAt":"` + rfc(2500) + `"},{"number":20,"createdAt":"` + rfc(1500) + `"}]`
-	if pr, ok, err := pickPR([]byte(list), 1000); err != nil || !ok || pr != 30 {
-		t.Errorf("pickPR = %d, %v, %v; want 30", pr, ok, err)
+	// The newest PR since the bound is neither the first one at or after it
+	// (30), nor the largest number (40; 50 is before the bound), and 40 sits
+	// exactly on the bound, which counts.
+	list := `[{"number":50,"createdAt":"` + rfc(500) + `"},{"number":30,"createdAt":"` + rfc(1500) + `"},{"number":20,"createdAt":"` + rfc(2500) + `"},{"number":40,"createdAt":"` + rfc(1000) + `"}]`
+	if pr, ok, err := pickPR([]byte(list), 1000); err != nil || !ok || pr != 20 {
+		t.Errorf("pickPR = %d, %v, %v; want 20", pr, ok, err)
+	}
+	edge := `[{"number":40,"createdAt":"` + rfc(1000) + `"}]`
+	if pr, ok, err := pickPR([]byte(edge), 1000); err != nil || !ok || pr != 40 {
+		t.Errorf("pickPR at since = %d, %v, %v; want 40", pr, ok, err)
 	}
 	only := `[{"number":10,"createdAt":"` + rfc(500) + `"}]`
 	if pr, ok, err := pickPR([]byte(only), 1000); err != nil || ok {

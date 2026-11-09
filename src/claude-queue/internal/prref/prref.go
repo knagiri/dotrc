@@ -1,7 +1,7 @@
 // Package prref is the part of `claude-queue watch` that finds the PR of each
 // delegation: session_links records the repo and branch a delegate was
 // started on, and this pass asks gh for that branch's PR and writes its number
-// next to them, so the picker can find a delegation tree by PR number.
+// next to them.
 package prref
 
 import (

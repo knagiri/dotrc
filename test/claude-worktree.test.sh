@@ -432,6 +432,9 @@ export CLAUDE_QUEUE_DB="$tmp/never-the-real.db"
 cat >"$stubbin/claude-queue" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${CQ_STUB_LOG:-/dev/null}"
+if [ -n "${CQ_STUB_REJECT_EXTRA:-}" ]; then
+  case " $* " in *" --repo "*|*" --branch "*) echo "stub claude-queue: unknown flag" >&2; exit 1 ;; esac
+fi
 [ "${CQ_STUB_RC:-0}" = 0 ] || echo "stub claude-queue: failing on purpose" >&2
 exit "${CQ_STUB_RC:-0}"
 EOF
@@ -1329,6 +1332,22 @@ if [ "$rc" -eq 0 ] && [ -s "$cqlog" ] \
    && grep -q 'session  : abcd1234' <<<"$out"; then
   echo "ok: a failing claude-queue link warns and the launch still exits 0"
 else echo "FAIL: link failure rc=$rc out=$out"; fail=1; fi
+
+# An older claude-queue binary rejects --repo/--branch: the link is retried with
+# only --parent/--child so the delegation is still recorded, and a note says the
+# repo/branch were lost.
+: >"$cqlog"
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$tmp/bg-linkold" CLAUDE_STUB_ROSTER="$namedroster" \
+         CQ_STUB_LOG="$cqlog" CQ_STUB_REJECT_EXTRA=1
+  "$wt" bglinkold -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && [ "$(tail -n1 "$cqlog")" = "link --parent eeeeeeee-1111-2222-3333-444444444444 --child abcd1234" ] \
+   && [ "$(wc -l <"$cqlog")" -eq 2 ] \
+   && grep -q 'recorded without repo/branch' <<<"$out" \
+   && ! grep -q 'link failed' <<<"$out"; then
+  echo "ok: a claude-queue that rejects --repo/--branch gets a plain link retry"
+else echo "FAIL: old-binary retry rc=$rc calls=$(cat "$cqlog") out=$out"; fail=1; fi
 
 # claude-queue absent from PATH: same best-effort answer. The PATH is rebuilt
 # without any directory holding a claude-queue (the host's bin/ usually has one),

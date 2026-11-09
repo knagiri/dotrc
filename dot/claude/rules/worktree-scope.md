@@ -250,7 +250,7 @@ claude-queue watch [--idle-minutes <n>] [--dry-run]
 - **人が見ている session は止めない**。interactive は、pane の window が attach 中の tmux client のどれかで表示中なら skip する。pane が見つからない（tmux 外で起動した等）ものも skip する。SIGTERM 後 10 秒で一覧から消えなければ pane は閉じずに失敗として report する（SIGKILL へは上げない）。
 - pin は休眠を妨げない。外部待ちの session こそ、待ちが解けるまでプロセスを持つ理由が無い。
 - 同じ timer の pass は、委譲先の branch から PR 番号を引いて記録もする（picker で PR 番号・branch 名から委譲 tree を引くため）。休眠とは独立で、gh が失敗してもその組を次の pass に回すだけ。
-- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile・PR 監視・停止をせず、pane の解決と表示中の判定までを行って対象を report する。ただし DB を開くことによる書き込みは止めないので、実データで確かめるときは [dotrc-deploy.md](./dotrc-deploy.md) §7 に従う。
+- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile・PR 監視・PR 番号の解決・停止をせず、pane の解決と表示中の判定までを行って対象を report する。ただし DB を開くことによる書き込みは止めないので、実データで確かめるときは [dotrc-deploy.md](./dotrc-deploy.md) §7 に従う。
 - 判定は推測を含むが、外れても失うのはプロセスだけで作業は残る。だから無人の timer で回してよい。逆に、作業を done にする判定は無人で回さない。
 
 実例: dotrc/docs/incidents/claude-queue-reboot-closes-wip.md
