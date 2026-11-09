@@ -146,7 +146,7 @@ func TestFzfArgs_DoneBind(t *testing.T) {
 	}
 	n, _ := strconv.Atoi(m[1])
 	row := db.Row{SessionID: "sid-123", EffectiveState: "idle_done", CreatedAt: nowMinus(60)}
-	fields := strings.Split(FormatLine(row, "t", "w", nowUnix(), false), "\t")
+	fields := strings.Split(FormatLine(row, "t", "w", "", false, nowUnix(), false), "\t")
 	if n < 1 || n > len(fields) || fields[n-1] != "sid-123" {
 		t.Errorf("{%d} does not address the session id in %q", n, fields)
 	}

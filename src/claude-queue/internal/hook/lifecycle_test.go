@@ -159,7 +159,7 @@ func TestDispatch_DoneCascadesToDelegates(t *testing.T) {
 	dispatchAll(t, d, start(parent, "startup"))
 	d.Pane = ""
 	dispatchAll(t, d, start(child, "startup"))
-	if err := db.LinkSession(d.DB, "bbbbbbbb", parent); err != nil {
+	if err := db.LinkSession(d.DB, "bbbbbbbb", parent, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	dispatchAll(t, d, end(parent, "prompt_input_exit"))

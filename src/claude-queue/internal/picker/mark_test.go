@@ -33,8 +33,8 @@ func TestFormatLine_MarkedIcon(t *testing.T) {
 		row := db.Row{SessionID: "s", EffectiveState: tc.state, RawState: "idle_done", CreatedAt: nowMinus(60), Marked: tc.marked}
 		unmarked := row
 		unmarked.Marked = false
-		got := strings.Split(FormatLine(row, "t", "w", nowUnix(), tc.ascii), "\t")
-		base := strings.Split(FormatLine(unmarked, "t", "w", nowUnix(), tc.ascii), "\t")
+		got := strings.Split(FormatLine(row, "t", "w", "", false, nowUnix(), tc.ascii), "\t")
+		base := strings.Split(FormatLine(unmarked, "t", "w", "", false, nowUnix(), tc.ascii), "\t")
 		if got[colIcon] != tc.want {
 			t.Errorf("%s marked=%v ascii=%v: icon = %q, want %q", tc.state, tc.marked, tc.ascii, got[colIcon], tc.want)
 		}
@@ -62,7 +62,7 @@ func TestTabBind_PointsAtSessionID(t *testing.T) {
 	}
 	n, _ := strconv.Atoi(m[1])
 	row := db.Row{SessionID: "sid-123", EffectiveState: "idle_done", CreatedAt: nowMinus(60)}
-	fields := strings.Split(FormatLine(row, "t", "w", nowUnix(), false), "\t")
+	fields := strings.Split(FormatLine(row, "t", "w", "", false, nowUnix(), false), "\t")
 	if n < 1 || n > len(fields) || fields[n-1] != "sid-123" {
 		t.Errorf("{%d} does not address the session id in %q", n, fields)
 	}

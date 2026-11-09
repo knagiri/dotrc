@@ -49,7 +49,7 @@ func TestFormatLine_AnnotationColumn(t *testing.T) {
 				Memo:           ns(c.memo),
 				PinNote:        ns(c.note),
 			}
-			line := FormatLine(row, "title", "wt", nowUnix(), c.ascii)
+			line := FormatLine(row, "title", "wt", "", false, nowUnix(), c.ascii)
 			fields := strings.Split(line, "\t")
 			if len(fields) != colCount {
 				t.Fatalf("got %d columns, want %d", len(fields), colCount)
@@ -77,7 +77,7 @@ func TestFzfArgs_Binds(t *testing.T) {
 		SessionID: "sid-123", EffectiveState: "idle_done", CreatedAt: nowMinus(60), Marked: true,
 		Memo: sql.NullString{String: "the memo", Valid: true}, PinNote: sql.NullString{String: "the note", Valid: true},
 	}
-	fields := strings.Split(FormatLine(row, "t", "w", nowUnix(), false), "\t")
+	fields := strings.Split(FormatLine(row, "t", "w", "", false, nowUnix(), false), "\t")
 	field := func(n string) string {
 		i, _ := strconv.Atoi(n)
 		if i < 1 || i > len(fields) {

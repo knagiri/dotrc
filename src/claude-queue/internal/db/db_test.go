@@ -238,14 +238,14 @@ func TestLinkSession_Upsert(t *testing.T) {
 	}
 	defer conn.Close()
 
-	if err := LinkSession(conn, "abcd1234", "parent-one"); err != nil {
+	if err := LinkSession(conn, "abcd1234", "parent-one", "", ""); err != nil {
 		t.Fatalf("LinkSession: %v", err)
 	}
 	// Age the first link so the upsert has a created_at to restart.
 	if _, err := conn.Exec("UPDATE session_links SET created_at = unixepoch() - 1000"); err != nil {
 		t.Fatalf("age link: %v", err)
 	}
-	if err := LinkSession(conn, "abcd1234", "parent-two"); err != nil {
+	if err := LinkSession(conn, "abcd1234", "parent-two", "", ""); err != nil {
 		t.Fatalf("LinkSession relink: %v", err)
 	}
 	if got := linkParent(t, conn, "abcd1234"); got != "parent-two" {
@@ -274,7 +274,7 @@ func TestListRows_JoinsParent(t *testing.T) {
 	insertSession(t, conn, "ffff0000-1111-2222-3333-444444444444", "%2")
 	insertEvent(t, conn, "abcd1234-1111-2222-3333-444444444444", "Stop", "idle_done", 5)
 	insertEvent(t, conn, "ffff0000-1111-2222-3333-444444444444", "Stop", "idle_done", 5)
-	if err := LinkSession(conn, "abcd1234", "parent-uuid"); err != nil {
+	if err := LinkSession(conn, "abcd1234", "parent-uuid", "", ""); err != nil {
 		t.Fatalf("LinkSession: %v", err)
 	}
 
@@ -529,7 +529,7 @@ func TestListRows_GoneKeepsMarkAndParent(t *testing.T) {
 	insertSession(t, conn, child, "")
 	insertEvent(t, conn, parent, "UserPromptSubmit", "working", 100)
 	insertEvent(t, conn, child, "Stop", "idle_done", 100)
-	if err := LinkSession(conn, "bbbbbbbb", parent); err != nil {
+	if err := LinkSession(conn, "bbbbbbbb", parent, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if on, err := ToggleMark(conn, child); err != nil || !on {
@@ -636,5 +636,174 @@ func TestToggleMark_DoneOrUnknownIsNoop(t *testing.T) {
 	}
 	if mark.Valid {
 		t.Errorf("done session got waiting_event_id = %d", mark.Int64)
+	}
+}
+
+// linkRef reads a link's repo / branch / pr columns.
+func linkRef(t *testing.T, conn *sql.DB, child string) (repo, branch sql.NullString, pr sql.NullInt64) {
+	t.Helper()
+	if err := conn.QueryRow(
+		"SELECT repo, branch, pr FROM session_links WHERE child_short = ?", child,
+	).Scan(&repo, &branch, &pr); err != nil {
+		t.Fatalf("read link %s: %v", child, err)
+	}
+	return repo, branch, pr
+}
+
+func TestLinkSession_RecordsRepoBranch(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "l.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	if err := LinkSession(conn, "a1b2c3d4", "P1", "example-org/example-repo", "feat/foo"); err != nil {
+		t.Fatalf("LinkSession: %v", err)
+	}
+	repo, branch, pr := linkRef(t, conn, "a1b2c3d4")
+	if repo.String != "example-org/example-repo" || branch.String != "feat/foo" {
+		t.Errorf("repo/branch = %+v %+v", repo, branch)
+	}
+	if pr.Valid {
+		t.Errorf("pr = %+v, want NULL", pr)
+	}
+}
+
+// An empty repo / branch is what claude-worktree passes when it could not tell
+// them; it has to read as "unknown" (NULL), not as a branch named "".
+func TestLinkSession_EmptyIsNull(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "l.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	if err := LinkSession(conn, "a1b2c3d4", "P1", "", ""); err != nil {
+		t.Fatalf("LinkSession: %v", err)
+	}
+	repo, branch, _ := linkRef(t, conn, "a1b2c3d4")
+	if repo.Valid || branch.Valid {
+		t.Errorf("repo/branch = %+v %+v, want NULL", repo, branch)
+	}
+}
+
+// A re-link onto the same repo / branch keeps the PR already resolved for it; a
+// re-link onto another branch drops it, since that PR belongs to the old one.
+func TestLinkSession_RelinkKeepsPRWhenSameBranch(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "l.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+	if err := LinkSession(conn, "a1b2c3d4", "P1", "example-org/example-repo", "feat/foo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec("UPDATE session_links SET pr = 42"); err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkSession(conn, "a1b2c3d4", "P1", "example-org/example-repo", "feat/foo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pr := linkRef(t, conn, "a1b2c3d4"); pr.Int64 != 42 {
+		t.Errorf("same-branch relink: pr = %+v, want 42", pr)
+	}
+	if err := LinkSession(conn, "a1b2c3d4", "P1", "example-org/example-repo", "feat/bar"); err != nil {
+		t.Fatal(err)
+	}
+	repo, branch, pr := linkRef(t, conn, "a1b2c3d4")
+	if pr.Valid {
+		t.Errorf("other-branch relink: pr = %+v, want NULL", pr)
+	}
+	if repo.String != "example-org/example-repo" || branch.String != "feat/bar" {
+		t.Errorf("repo/branch = %+v %+v", repo, branch)
+	}
+	// Same branch name in a different repo is a different branch: pr resets.
+	if _, err := conn.Exec("UPDATE session_links SET pr = 42"); err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkSession(conn, "a1b2c3d4", "P1", "example-org/other-repo", "feat/bar"); err != nil {
+		t.Fatal(err)
+	}
+	if repo, _, pr := linkRef(t, conn, "a1b2c3d4"); pr.Valid || repo.String != "example-org/other-repo" {
+		t.Errorf("other-repo relink: repo = %+v pr = %+v, want other-repo and NULL", repo, pr)
+	}
+}
+
+// seedRefLink writes a link with repo/branch, a fixed created_at and an
+// optional pr (0 = NULL).
+func seedRefLink(t *testing.T, conn *sql.DB, child, parent, repo, branch string, createdAt int64, pr int) {
+	t.Helper()
+	var p any
+	if pr != 0 {
+		p = pr
+	}
+	if _, err := conn.Exec(
+		"INSERT INTO session_links(child_short, parent_session_id, repo, branch, created_at, pr) VALUES (?, ?, ?, ?, ?, ?)",
+		child, parent, repo, branch, createdAt, p,
+	); err != nil {
+		t.Fatalf("seed link %s: %v", child, err)
+	}
+}
+
+// The lower bound of a group is its OLDEST link, resolved or not: a delegate
+// re-delegated for review is linked after the PR it continues already exists.
+func TestUnresolvedRefs_SinceIsOldestLinkInGroup(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd) VALUES ('P1', '/work/p1')"); err != nil {
+		t.Fatal(err)
+	}
+	seedRefLink(t, conn, "c1c1c1c1", "P1", "example-org/example-repo", "feat/foo", 1000, 42)
+	seedRefLink(t, conn, "c2c2c2c2", "P1", "example-org/example-repo", "feat/foo", 3000, 0)
+	// Not candidates: no branch, and a group that is fully resolved.
+	if _, err := conn.Exec("INSERT INTO session_links(child_short, parent_session_id) VALUES ('c3c3c3c3', 'P1')"); err != nil {
+		t.Fatal(err)
+	}
+	seedRefLink(t, conn, "c4c4c4c4", "P1", "example-org/example-repo", "feat/bar", 1000, 7)
+	// A branch without a repo is not a candidate either (and must not reach the
+	// Scan as a NULL repo).
+	if _, err := conn.Exec("INSERT INTO session_links(child_short, parent_session_id, branch) VALUES ('c5c5c5c5', 'P1', 'feat/baz')"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := UnresolvedRefs(conn)
+	if err != nil {
+		t.Fatalf("UnresolvedRefs: %v", err)
+	}
+	want := []RefQuery{{ParentSessionID: "P1", Repo: "example-org/example-repo", Branch: "feat/foo", Dir: "/work/p1", Since: 1000}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+
+	if _, err := conn.Exec("UPDATE sessions SET done_at = 1 WHERE session_id = 'P1'"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := UnresolvedRefs(conn); err != nil || len(got) != 0 {
+		t.Fatalf("done delegator: got %+v (err %v), want none", got, err)
+	}
+}
+
+// SetLinkPR fills only the group's unresolved rows.
+func TestSetLinkPR_FillsOnlyNullRowsOfGroup(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	seedRefLink(t, conn, "c1c1c1c1", "P1", "example-org/example-repo", "feat/foo", 1000, 41)
+	seedRefLink(t, conn, "c2c2c2c2", "P1", "example-org/example-repo", "feat/foo", 3000, 0)
+	seedRefLink(t, conn, "c3c3c3c3", "P1", "example-org/example-repo", "feat/bar", 3000, 0)
+	if err := SetLinkPR(conn, "P1", "example-org/example-repo", "feat/foo", 42); err != nil {
+		t.Fatalf("SetLinkPR: %v", err)
+	}
+	for child, want := range map[string]sql.NullInt64{
+		"c1c1c1c1": {Int64: 41, Valid: true},
+		"c2c2c2c2": {Int64: 42, Valid: true},
+		"c3c3c3c3": {},
+	} {
+		if _, _, pr := linkRef(t, conn, child); pr != want {
+			t.Errorf("%s: pr = %+v, want %+v", child, pr, want)
+		}
 	}
 }

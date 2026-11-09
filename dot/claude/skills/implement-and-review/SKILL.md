@@ -172,6 +172,12 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    そこでこの skill の指示だけを見て `my-create-pr` を撃つと PR が二重に立つ。PR を出す前に
    実行先 repo の規約を確認する。
 
+   **PR は委譲された branch から出す。** 別 branch が要ると分かったら、その branch を作る前に
+   委譲元へ報告して止まる（手順 6 の「不足」と同じ扱い）。claude-queue は委譲時に記録した
+   branch でその PR の番号を引き、picker で PR 番号から委譲元へ飛べるようにしているので、
+   別 branch から出た PR は picker で見つからなくなる（`src/claude-queue/README.md` の
+   「PR 番号の解決」）。
+
    PR を出したら `pr-review-loop` を呼び、author とは独立した立場でレビューして収束させる。
    委譲プロンプトに `## 禁止事項` 節があれば、同 skill の `<PROHIBITIONS>` に原文のまま渡す
    （差し込み先と規定は同 skill。理由は手順 2）。収束したら、merge を見送る理由が無ければ

@@ -96,7 +96,14 @@ CREATE INDEX IF NOT EXISTS idx_events_session_latest
 CREATE TABLE IF NOT EXISTS session_links (
   child_short       TEXT PRIMARY KEY,
   parent_session_id TEXT NOT NULL,
-  created_at        INTEGER NOT NULL DEFAULT (unixepoch())
+  created_at        INTEGER NOT NULL DEFAULT (unixepoch()),
+  -- What the delegate works on: repo is the GitHub owner/repo of the
+  -- worktree's origin, branch the branch it was delegated on, both NULL when
+  -- the delegator could not tell them. pr is the PR number found for that repo
+  -- and branch, NULL until one is found. Added by migrate() too.
+  repo              TEXT,
+  branch            TEXT,
+  pr                INTEGER
 );
 
 -- The picker's jump history, which ` + "`claude-queue nav back|forward`" + ` walks like

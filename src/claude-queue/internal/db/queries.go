@@ -158,15 +158,76 @@ func LatestEvent(conn *sql.DB, sessionID string) (state string, createdAt int64,
 }
 
 // LinkSession records that the session whose id starts with childShort was
-// delegated by parentSessionID. Re-linking a child replaces its parent and
-// restarts the GC clock.
-func LinkSession(conn *sql.DB, childShort, parentSessionID string) error {
+// delegated by parentSessionID, on branch of the GitHub repo (owner/repo). An
+// empty repo or branch is stored as NULL: unknown. Re-linking a child replaces
+// its parent, repo and branch and restarts the GC clock; the PR resolved for
+// it is kept only when repo and branch are both unchanged, since it was found
+// for them.
+func LinkSession(conn *sql.DB, childShort, parentSessionID, repo, branch string) error {
 	if _, err := conn.Exec(`
-		INSERT INTO session_links(child_short, parent_session_id) VALUES (?, ?)
+		INSERT INTO session_links(child_short, parent_session_id, repo, branch)
+		VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''))
 		ON CONFLICT(child_short) DO UPDATE
-		  SET parent_session_id = excluded.parent_session_id, created_at = unixepoch()
-	`, childShort, parentSessionID); err != nil {
+		  SET parent_session_id = excluded.parent_session_id,
+		      created_at = unixepoch(),
+		      pr = CASE WHEN excluded.repo IS session_links.repo
+		                 AND excluded.branch IS session_links.branch
+		            THEN session_links.pr END,
+		      repo = excluded.repo,
+		      branch = excluded.branch
+	`, childShort, parentSessionID, repo, branch); err != nil {
 		return fmt.Errorf("link session: %w", err)
+	}
+	return nil
+}
+
+// RefQuery is one (delegator, repo, branch) whose PR is still to be found:
+// the PRs of Branch in Repo are to be looked up from Dir (the delegator's
+// cwd), taking the newest made at or after Since.
+type RefQuery struct {
+	ParentSessionID, Repo, Branch, Dir string
+	Since                              int64
+}
+
+// UnresolvedRefs returns every (delegator, repo, branch) that has at least one
+// link with repo and branch known and no PR yet, for open delegators only.
+//
+// Since is the oldest created_at among ALL the group's links, resolved or not:
+// a delegate re-delegated to answer a review is linked after the PR it carries
+// on was made, and bounding by its own link would never match that PR. The
+// bound still excludes PRs made before the delegation, from an earlier use of
+// the same branch name.
+func UnresolvedRefs(conn *sql.DB) ([]RefQuery, error) {
+	rows, err := conn.Query(`
+		SELECT l.parent_session_id, l.repo, l.branch, COALESCE(s.cwd, ''), MIN(l.created_at)
+		FROM session_links l
+		JOIN sessions s ON s.session_id = l.parent_session_id
+		WHERE l.repo IS NOT NULL AND l.branch IS NOT NULL AND s.done_at IS NULL
+		GROUP BY l.parent_session_id, l.repo, l.branch
+		HAVING SUM(l.pr IS NULL) > 0
+		ORDER BY l.parent_session_id, l.repo, l.branch`)
+	if err != nil {
+		return nil, fmt.Errorf("unresolved refs: %w", err)
+	}
+	defer rows.Close()
+	var out []RefQuery
+	for rows.Next() {
+		var q RefQuery
+		if err := rows.Scan(&q.ParentSessionID, &q.Repo, &q.Branch, &q.Dir, &q.Since); err != nil {
+			return nil, fmt.Errorf("unresolved refs: %w", err)
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// SetLinkPR records pr on the group's links that have none yet.
+func SetLinkPR(conn *sql.DB, parentSessionID, repo, branch string, pr int) error {
+	if _, err := conn.Exec(`
+		UPDATE session_links SET pr = ?
+		WHERE parent_session_id = ? AND repo = ? AND branch = ? AND pr IS NULL
+	`, pr, parentSessionID, repo, branch); err != nil {
+		return fmt.Errorf("set link pr: %w", err)
 	}
 	return nil
 }

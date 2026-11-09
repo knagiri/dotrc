@@ -256,3 +256,35 @@ func TestMigrate_Idempotent(t *testing.T) {
 		t.Fatal("fixture sanity: reboot should be open after the first Open")
 	}
 }
+
+// A ledger written before session_links carried repo / branch / pr gains the
+// three columns on Open, and a second Open does not fail on them.
+func TestMigrate_AddsLinkRefColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE session_links (
+		child_short TEXT PRIMARY KEY,
+		parent_session_id TEXT NOT NULL,
+		created_at INTEGER NOT NULL DEFAULT (unixepoch()));
+		INSERT INTO session_links(child_short, parent_session_id) VALUES ('abcd1234', 'P1');`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	for i := 0; i < 2; i++ {
+		conn, err := Open(path)
+		if err != nil {
+			t.Fatalf("Open #%d: %v", i+1, err)
+		}
+		for _, col := range []string{"repo", "branch", "pr"} {
+			has, err := hasColumn(conn, "session_links", col)
+			if err != nil || !has {
+				t.Errorf("Open #%d: session_links.%s present = %v (err %v)", i+1, col, has, err)
+			}
+		}
+		conn.Close()
+	}
+}

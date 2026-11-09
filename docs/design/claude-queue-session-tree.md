@@ -20,11 +20,17 @@ done になる。閉じ忘れた委譲先は最後のターンが完了報告の
 
 ## 記録
 
-`session_links(child_short, parent_session_id, created_at)` に 1 委譲 1 行で持つ。書くのは
+`session_links(child_short, parent_session_id, created_at, repo, branch, pr)` に 1 委譲 1 行で持つ。書くのは
 `claude-worktree` の bg 経路だけで、`claude --bg` が返った直後に `claude-queue link --parent <uuid>
---child <short>` を 1 回呼ぶ。親は `resolve_delegator()` が名前を取るのと同じ roster entry の
+--child <short> [--repo <owner/repo>] --branch <name>` を呼ぶ（旧版の claude-queue が `--repo` / `--branch` を拒否したら、
+`--parent` / `--child` だけでもう 1 回呼ぶ）。親は `resolve_delegator()` が名前を取るのと同じ roster entry の
 `sessionId`。link の失敗や `claude-queue` の不在は警告に留め、起動は成功のまま続ける（session は
 もう走っているので、失うのは link だけにする）。
+
+link には委譲先の `repo`（worktree の origin が GitHub なら `owner/repo`）と `branch` も載せ、
+`claude-queue watch` が後から `pr`（その branch の PR 番号）を埋める。picker で PR 番号・branch 名から
+tree を引くためで、`claude-worktree` 自身は gh を呼ばない（token の無い起動経路でも link を書けるよう、
+解決は watch が tick ごとに再試行する）。re-link は repo と branch が両方変わらないときだけ `pr` を保つ。
 
 子を full UUID ではなく 8 桁の short id で持つのは、`claude-worktree` がそれしか得られないため
 である。`--bg` は `--session-id` を無視し、banner に出るのは short id だけで、roster から full id を
@@ -53,6 +59,10 @@ GC は `created_at` が GC 期限より古く、かつ親子のどちらも作�
 
 罫線は `tree` と同じ形で、title 列の先頭に付ける。列を増やさないので非表示列の位置は変わらず、
 title は prefix の幅を引いた残りで切り詰める。
+
+tree の PR / branch は根から辿れる全 link（done・孫以下を含む）を集め、tree の全行の末尾列に同じ値で
+出す（列の中身は `src/claude-queue/README.md` の「picker の行」）。探す目的はほぼ常に委譲元へ飛ぶことで、
+PR を作った委譲先は done になって一覧に居ないことが多いため、値を委譲先の行だけに置くと当たらない。
 
 ### 親が一覧に居ない root
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -59,8 +60,13 @@ var ascii = map[string]string{
 //
 // The annotation column is shown too, after the summary, but sits behind the
 // hidden ones so adding it left their positions alone. It is what makes memos
-// and pin notes searchable: fzf matches the shown columns only. The raw memo
-// and pin note after it are hidden, and are what the edit keys prefill from.
+// and pin notes searchable: fzf can only search columns that are shown, and of
+// those it searches the ones --nth lists (see searchColumns); the summary is
+// shown but not searched. The raw memo and pin note after it are hidden, and
+// are what the edit keys prefill from.
+//
+// The refs column -- the PRs and branches of the row's delegation tree -- is
+// shown too, last, and sits behind everything for the same reason.
 //
 // FormatLine writes these positions and parseSelection reads them back off the
 // line fzf returns, so the two have to agree: the hidden columns are addressed
@@ -80,6 +86,7 @@ const (
 	colAnnotation
 	colMemo
 	colPinNote
+	colRefs
 	colCount
 )
 
@@ -112,6 +119,11 @@ const (
 //
 // Then the annotation column (pin note and memo), shown after the summary.
 //
+// Then the refs column: refs is the row's delegation tree's PRs and branches
+// (db.TreeRefs), dimmed when dimRefs is set (a row that has a delegation link,
+// i.e. a delegate). Every row of a tree carries the same value; dimming keeps
+// the repeat quiet.
+//
 // Hidden columns: session_id, tmux_pane, full cwd, transcript_path, config_dir,
 // and after the annotation the raw memo and pin note.
 // The full cwd is carried separately from the worktree name because a background
@@ -125,7 +137,7 @@ const (
 // title and worktree are passed in rather than derived here: one needs the
 // transcript off disk and the other needs git (see worktreeName), and keeping
 // FormatLine pure is what lets the column contract be asserted without either.
-func FormatLine(row db.Row, title, worktree string, nowSec int64, asciiMode bool) string {
+func FormatLine(row db.Row, title, worktree, refs string, dimRefs bool, nowSec int64, asciiMode bool) string {
 	icons := emoji
 	if asciiMode {
 		icons = ascii
@@ -167,6 +179,10 @@ func FormatLine(row db.Row, title, worktree string, nowSec int64, asciiMode bool
 	fields[colMemo] = row.Memo.String
 	if row.Marked {
 		fields[colPinNote] = row.PinNote.String
+	}
+	fields[colRefs] = refs
+	if dimRefs && refs != "" {
+		fields[colRefs] = "\x1b[2m" + refs + "\x1b[0m"
 	}
 	return strings.Join(fields, "\t")
 }
@@ -769,6 +785,7 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool, nowSec int64) (string,
 		InScope:    inScope,
 	}
 
+	refs := treeRefs(conn)
 	var buf bytes.Buffer
 	for _, l := range buildForest(rows, opts) {
 		// The title is read here rather than inside FormatLine for the same
@@ -782,7 +799,8 @@ func listing(conn *sql.DB, f pickerFlags, asciiMode bool, nowSec int64) (string,
 		title := prefixedTitle(prefix, func(cols int) string {
 			return label.DisplayTitle(rowTranscript(l.Row), cols)
 		})
-		buf.WriteString(FormatLine(l.Row, title, names.name(rowCwd(l.Row)), nowSec, asciiMode))
+		buf.WriteString(FormatLine(l.Row, title, names.name(rowCwd(l.Row)),
+			refs[shortSessionID(l.Row.SessionID)], l.Row.ParentSessionID.Valid, nowSec, asciiMode))
 		buf.WriteByte('\n')
 	}
 	return buf.String(), names, true
@@ -799,6 +817,7 @@ func doneListing(conn *sql.DB, inScope func(db.Row) bool, names worktreeCache, a
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return "", names, false
 	}
+	refs := treeRefs(conn)
 	var buf bytes.Buffer
 	for _, r := range rows {
 		if inScope != nil && !inScope(r) {
@@ -807,10 +826,29 @@ func doneListing(conn *sql.DB, inScope func(db.Row) bool, names worktreeCache, a
 		title := prefixedTitle("", func(cols int) string {
 			return label.DisplayTitle(rowTranscript(r), cols)
 		})
-		buf.WriteString(FormatLine(r, title, names.name(rowCwd(r)), nowSec, asciiMode))
+		buf.WriteString(FormatLine(r, title, names.name(rowCwd(r)), refs[shortSessionID(r.SessionID)], false, nowSec, asciiMode))
 		buf.WriteByte('\n')
 	}
 	return buf.String(), names, true
+}
+
+// treeRefs is db.TreeRefs for a listing. A failure costs the refs column, not
+// the listing: it is reported on stderr and every row gets an empty one.
+func treeRefs(conn *sql.DB) map[string]string {
+	refs, err := db.TreeRefs(conn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return map[string]string{}
+	}
+	return refs
+}
+
+// shortSessionID is the 8-char prefix TreeRefs is keyed by.
+func shortSessionID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // repoScope is --repo-scope (prefix q) as a row filter: keep only rows in the
@@ -980,6 +1018,8 @@ func fzfArgs(binds ...string) []string {
 		"--no-exit-0",
 		"--delimiter=\t",
 		"--with-nth=" + visibleColumns(),
+		"--nth=" + searchColumns(),
+		"--ansi",
 		"--no-sort",
 		"--reverse",
 		"--height=100%",
@@ -1170,7 +1210,23 @@ func visibleColumns() string {
 	for i := colIcon; i <= colSummary; i++ {
 		parts = append(parts, strconv.Itoa(i+1))
 	}
-	parts = append(parts, strconv.Itoa(colAnnotation+1))
+	parts = append(parts, strconv.Itoa(colAnnotation+1), strconv.Itoa(colRefs+1))
+	return strings.Join(parts, ",")
+}
+
+// searchColumns renders the --nth fzf matches the query against: title,
+// worktree, annotation and refs -- not the icon, the age or the summary, which
+// is a status line that matched far more than it was ever searched for.
+//
+// With --with-nth, fzf 0.74 numbers --nth over the columns --with-nth leaves,
+// not the original line, so these are positions in visibleColumns. Getting
+// them wrong does not fail: another column is silently searched instead.
+func searchColumns() string {
+	vis := strings.Split(visibleColumns(), ",")
+	var parts []string
+	for _, col := range []int{colTitle, colWorktree, colAnnotation, colRefs} {
+		parts = append(parts, strconv.Itoa(slices.Index(vis, strconv.Itoa(col+1))+1))
+	}
 	return strings.Join(parts, ",")
 }
 

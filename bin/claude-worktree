@@ -182,6 +182,28 @@ if [[ ! "$name" =~ ^[A-Za-z0-9_-]+$ ]]; then
 fi
 branch="${branch:-$name}"
 
+# origin_owner_repo <worktree-path>: the GitHub owner/repo of the worktree's
+# origin, on stdout. ssh (git@github.com:o/r), ssh:// and https:// spellings,
+# with or without .git, all come out the same. Prints nothing (and still exits
+# 0) when there is no origin or it is not on github.com.
+origin_owner_repo() {
+  local url path
+  url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 0
+  case "$url" in
+    git@github.com:*) path="${url#git@github.com:}" ;;
+    ssh://git@github.com/*) path="${url#ssh://git@github.com/}" ;;
+    https://github.com/* | http://github.com/*) path="${url#*://github.com/}" ;;
+    https://*@github.com/*) path="${url#*@github.com/}" ;;
+    *) return 0 ;;
+  esac
+  path="${path%/}"
+  path="${path%.git}"
+  if [[ "$path" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    printf '%s\n' "$path"
+  fi
+  return 0
+}
+
 # By default anchor to cwd's repo; with --global anchor to the repo this script
 # itself lives in (resolving any PATH symlink), so global harnesses land in the
 # dotfiles repo even when cwd is an unrelated project.
@@ -686,11 +708,26 @@ if [ "$use_tmux" = 0 ]; then
   # --session-id, and the roster may not list the new session yet. Best-effort
   # like the delegator lookup itself: the session is already running, so a
   # missing or failing claude-queue costs the link, never the launch.
+  #
+  # The link also carries the branch and, when origin is on GitHub, its
+  # owner/repo: claude-queue watch looks the branch's PR up from them, so a PR
+  # number typed into the picker finds the delegation. No gh call here -- the
+  # lookup needs a token this launch may not have, and watch retries it.
   if [ -n "$short" ] && [ -n "$delegator_sid" ]; then
+    link_args=(--parent "$delegator_sid" --child "$short")
+    owner_repo="$(origin_owner_repo "$wt_path")"
+    [ -z "$owner_repo" ] || link_args+=(--repo "$owner_repo")
+    link_args+=(--branch "$branch")
     if ! command -v claude-queue >/dev/null 2>&1; then
       echo "claude-worktree: claude-queue not on PATH; delegation link not recorded" >&2
-    elif link_err="$(claude-queue link --parent "$delegator_sid" --child "$short" 2>&1)"; then
+    elif link_err="$(claude-queue link "${link_args[@]}" 2>&1)"; then
       :
+    # An older claude-queue binary (bin/ is live through the symlink, the Go
+    # binary only after `make install`) rejects --repo/--branch as unknown
+    # flags. Retry with just the parent/child pair so the link itself -- tree
+    # display, done cascade, orphan detection -- survives that window.
+    elif link_err="$(claude-queue link --parent "$delegator_sid" --child "$short" 2>&1)"; then
+      echo "claude-worktree: claude-queue link recorded without repo/branch (older claude-queue?); PR lookup will not find this delegation" >&2
     else
       echo "claude-worktree: claude-queue link failed; delegation link not recorded:" >&2
       printf '%s\n' "$link_err" >&2

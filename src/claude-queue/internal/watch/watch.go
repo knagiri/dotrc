@@ -3,7 +3,8 @@
 // does its pass and exits.
 //
 // A pass reconciles the ledger against the live rosters, wakes the sessions
-// whose pinned PR has news (see package prwatch), then hibernates the sessions
+// whose pinned PR has news (see package prwatch), records the PR numbers of
+// delegated branches (see package prref), then hibernates the sessions
 // that have sat idle past the threshold (see package hibernate). Hibernation
 // goes last so that a session woken in this pass is not stopped by it.
 package watch
@@ -18,6 +19,7 @@ import (
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hibernate"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/prref"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/prwatch"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/reconcile"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
@@ -31,7 +33,8 @@ type Options struct {
 	PRDebounce time.Duration
 	// DryRun reports what would be hibernated without the pass's own effects:
 	// no reconcile (it writes the ledger and stops done background sessions),
-	// no PR watch (it resumes sessions and moves their cursors), no stop. It
+	// no PR watch (it resumes sessions and moves their cursors), no PR number
+	// lookup (it writes them into the ledger), no stop. It
 	// does not keep the database untouched: opening it (db.Open) still
 	// recreates the queue view and applies pending migrations.
 	DryRun bool
@@ -48,7 +51,9 @@ type Deps struct {
 	Check func(hibernate.Candidate) error
 	// PRWatch is prwatch.Pass: it returns the sessions it resumed.
 	PRWatch func(conn *sql.DB, now time.Time, debounce time.Duration, out io.Writer) map[string]bool
-	Now     func() time.Time
+	// PRRefs is prref.Pass: it records the PR numbers of delegated branches.
+	PRRefs func(conn *sql.DB, out io.Writer)
+	Now    func() time.Time
 }
 
 // RealDeps wires Deps to the real reconcile, rosters, transcripts and stops.
@@ -64,7 +69,8 @@ func RealDeps(conn *sql.DB) Deps {
 			pd := prwatch.RealDeps(hd, func() (map[string]int, error) { return db.RunningDelegateCounts(conn) })
 			return prwatch.Pass(conn, now, debounce, pd, out)
 		},
-		Now: time.Now,
+		PRRefs: func(c *sql.DB, out io.Writer) { prref.Pass(c, prwatch.GhRunner, out) },
+		Now:    time.Now,
 	}
 }
 
@@ -94,6 +100,12 @@ func Pass(conn *sql.DB, opts Options, deps Deps, out io.Writer) {
 		fmt.Fprintln(out, "pr-watch: skipped (dry run)")
 	} else {
 		resumed = deps.PRWatch(conn, deps.Now(), opts.PRDebounce, out)
+	}
+
+	if opts.DryRun {
+		fmt.Fprintln(out, "pr-refs: skipped (dry run)")
+	} else {
+		deps.PRRefs(conn, out)
 	}
 
 	now := deps.Now()
@@ -150,7 +162,7 @@ func Run(args []string) {
 		"hibernate sessions idle at least this many minutes since their idle_done event")
 	debounceMinutes := fs.Int("pr-debounce-minutes", int(prwatch.DefaultDebounce/time.Minute),
 		"deliver new PR activity once it has been pending at least this many minutes")
-	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; skip reconcile, PR watch and stop (opening the DB may still write)")
+	dryRun := fs.Bool("dry-run", false, "report what would be hibernated; skip reconcile, PR watch, PR number lookup and stop (opening the DB may still write)")
 	_ = fs.Parse(args)
 	if *idleMinutes < 0 || *debounceMinutes < 0 {
 		fmt.Fprintln(os.Stderr, "watch: --idle-minutes and --pr-debounce-minutes must not be negative")

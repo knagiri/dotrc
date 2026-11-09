@@ -42,8 +42,8 @@ func TestMarkDone_CascadesToDescendants(t *testing.T) {
 	for _, id := range []string{idParent, idChild, idGrand, idOther} {
 		insertSession(t, conn, id, "")
 	}
-	_ = LinkSession(conn, "bbbbbbbb", idParent)
-	_ = LinkSession(conn, "cccccccc", idChild)
+	_ = LinkSession(conn, "bbbbbbbb", idParent, "", "")
+	_ = LinkSession(conn, "cccccccc", idChild, "", "")
 
 	n, err := MarkDone(conn, idParent, 1000)
 	if err != nil {
@@ -68,8 +68,8 @@ func TestMarkDone_CycleTerminates(t *testing.T) {
 	conn := openTest(t)
 	insertSession(t, conn, idParent, "")
 	insertSession(t, conn, idChild, "")
-	_ = LinkSession(conn, "bbbbbbbb", idParent)
-	_ = LinkSession(conn, "aaaaaaaa", idChild)
+	_ = LinkSession(conn, "bbbbbbbb", idParent, "", "")
+	_ = LinkSession(conn, "aaaaaaaa", idChild, "", "")
 
 	n, err := MarkDone(conn, idParent, 1000)
 	if err != nil {
@@ -86,7 +86,7 @@ func TestMarkDone_KeepsEarlierDoneAt(t *testing.T) {
 	conn := openTest(t)
 	insertSession(t, conn, idParent, "")
 	insertSession(t, conn, idChild, "")
-	_ = LinkSession(conn, "bbbbbbbb", idParent)
+	_ = LinkSession(conn, "bbbbbbbb", idParent, "", "")
 	if _, err := conn.Exec("UPDATE sessions SET done_at = 500 WHERE session_id = ?", idParent); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestGC_KeepsLinkWhileEitherSideOpen(t *testing.T) {
 		"66666666": pDone, // fresh, child has no row yet
 	}
 	for c, p := range links {
-		if err := LinkSession(conn, c, p); err != nil {
+		if err := LinkSession(conn, c, p, "", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
