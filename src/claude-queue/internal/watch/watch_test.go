@@ -43,6 +43,7 @@ func ledger(t *testing.T) *sql.DB {
 type calls struct {
 	sweeps     int
 	prWatches  int
+	prRefs     int
 	resumed    map[string]bool
 	hibernated []string
 	checked    []string
@@ -73,7 +74,8 @@ func (c *calls) deps(hibernateErr error) Deps {
 			c.prWatches++
 			return c.resumed
 		},
-		Now: func() time.Time { return now },
+		PRRefs: func(*sql.DB, io.Writer) { c.prRefs++ },
+		Now:    func() time.Time { return now },
 	}
 }
 
@@ -83,8 +85,8 @@ func TestWatch_StubsCatchEveryEffect(t *testing.T) {
 	c := &calls{}
 	var out bytes.Buffer
 	Pass(ledger(t), Options{Idle: 2 * time.Hour}, c.deps(nil), &out)
-	if c.sweeps != 1 || c.prWatches != 1 || len(c.hibernated) != 1 || c.hibernated[0] != "idleidle-1" {
-		t.Fatalf("sweeps = %d, PR watches = %d, hibernated = %v; output:\n%s", c.sweeps, c.prWatches, c.hibernated, &out)
+	if c.sweeps != 1 || c.prWatches != 1 || c.prRefs != 1 || len(c.hibernated) != 1 || c.hibernated[0] != "idleidle-1" {
+		t.Fatalf("sweeps = %d, PR watches = %d, PR refs = %d, hibernated = %v; output:\n%s", c.sweeps, c.prWatches, c.prRefs, c.hibernated, &out)
 	}
 	for _, want := range []string{"reconcile: closed 1", "hibernated idleidle (background, idle 3h)", "skipped busybusy: roster status is \"busy\""} {
 		if !strings.Contains(out.String(), want) {
@@ -97,8 +99,11 @@ func TestWatch_DryRunStopsNothing(t *testing.T) {
 	c := &calls{}
 	var out bytes.Buffer
 	Pass(ledger(t), Options{Idle: 2 * time.Hour, DryRun: true}, c.deps(nil), &out)
-	if c.sweeps != 0 || c.prWatches != 0 || len(c.hibernated) != 0 {
-		t.Fatalf("dry run: sweeps = %d, PR watches = %d, hibernated = %v", c.sweeps, c.prWatches, c.hibernated)
+	if c.sweeps != 0 || c.prWatches != 0 || c.prRefs != 0 || len(c.hibernated) != 0 {
+		t.Fatalf("dry run: sweeps = %d, PR watches = %d, PR refs = %d, hibernated = %v", c.sweeps, c.prWatches, c.prRefs, c.hibernated)
+	}
+	if !strings.Contains(out.String(), "pr-refs: skipped (dry run)") {
+		t.Errorf("dry run did not report the skipped PR refs pass:\n%s", &out)
 	}
 	if !strings.Contains(out.String(), "would hibernate idleidle") || len(c.checked) != 1 {
 		t.Fatalf("dry run did not check and report the candidate (checked %v):\n%s", c.checked, &out)

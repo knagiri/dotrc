@@ -181,6 +181,57 @@ func LinkSession(conn *sql.DB, childShort, parentSessionID, repo, branch string)
 	return nil
 }
 
+// RefQuery is one (delegator, repo, branch) whose PR is still to be found:
+// claude-queue watch asks gh for the PRs of Branch in Repo, from Dir (the
+// delegator's cwd), and takes the newest made at or after Since.
+type RefQuery struct {
+	ParentSessionID, Repo, Branch, Dir string
+	Since                              int64
+}
+
+// UnresolvedRefs returns every (delegator, repo, branch) that has at least one
+// link with repo and branch known and no PR yet, for open delegators only.
+//
+// Since is the oldest created_at among ALL the group's links, resolved or not:
+// a delegate re-delegated to answer a review is linked after the PR it carries
+// on was made, and bounding by its own link would never match that PR. The
+// bound still excludes PRs made before the delegation, from an earlier use of
+// the same branch name.
+func UnresolvedRefs(conn *sql.DB) ([]RefQuery, error) {
+	rows, err := conn.Query(`
+		SELECT l.parent_session_id, l.repo, l.branch, COALESCE(s.cwd, ''), MIN(l.created_at)
+		FROM session_links l
+		JOIN sessions s ON s.session_id = l.parent_session_id
+		WHERE l.repo IS NOT NULL AND l.branch IS NOT NULL AND s.done_at IS NULL
+		GROUP BY l.parent_session_id, l.repo, l.branch
+		HAVING SUM(l.pr IS NULL) > 0
+		ORDER BY l.parent_session_id, l.repo, l.branch`)
+	if err != nil {
+		return nil, fmt.Errorf("unresolved refs: %w", err)
+	}
+	defer rows.Close()
+	var out []RefQuery
+	for rows.Next() {
+		var q RefQuery
+		if err := rows.Scan(&q.ParentSessionID, &q.Repo, &q.Branch, &q.Dir, &q.Since); err != nil {
+			return nil, fmt.Errorf("unresolved refs: %w", err)
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// SetLinkPR records pr on the group's links that have none yet.
+func SetLinkPR(conn *sql.DB, parentSessionID, repo, branch string, pr int) error {
+	if _, err := conn.Exec(`
+		UPDATE session_links SET pr = ?
+		WHERE parent_session_id = ? AND repo = ? AND branch = ? AND pr IS NULL
+	`, pr, parentSessionID, repo, branch); err != nil {
+		return fmt.Errorf("set link pr: %w", err)
+	}
+	return nil
+}
+
 // ToggleMark flips the manual "waiting" mark on an open session and reports
 // whether it is now marked.
 //

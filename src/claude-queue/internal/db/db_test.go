@@ -716,3 +716,79 @@ func TestLinkSession_RelinkKeepsPRWhenSameBranch(t *testing.T) {
 		t.Errorf("repo/branch = %+v %+v", repo, branch)
 	}
 }
+
+// seedRefLink writes a link with repo/branch, a fixed created_at and an
+// optional pr (0 = NULL).
+func seedRefLink(t *testing.T, conn *sql.DB, child, parent, repo, branch string, createdAt int64, pr int) {
+	t.Helper()
+	var p any
+	if pr != 0 {
+		p = pr
+	}
+	if _, err := conn.Exec(
+		"INSERT INTO session_links(child_short, parent_session_id, repo, branch, created_at, pr) VALUES (?, ?, ?, ?, ?, ?)",
+		child, parent, repo, branch, createdAt, p,
+	); err != nil {
+		t.Fatalf("seed link %s: %v", child, err)
+	}
+}
+
+// The lower bound of a group is its OLDEST link, resolved or not: a delegate
+// re-delegated for review is linked after the PR it continues already exists.
+func TestUnresolvedRefs_SinceIsOldestLinkInGroup(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd) VALUES ('P1', '/work/p1')"); err != nil {
+		t.Fatal(err)
+	}
+	seedRefLink(t, conn, "c1c1c1c1", "P1", "example-org/example-repo", "feat/foo", 1000, 42)
+	seedRefLink(t, conn, "c2c2c2c2", "P1", "example-org/example-repo", "feat/foo", 3000, 0)
+	// Not candidates: no branch, and a group that is fully resolved.
+	if _, err := conn.Exec("INSERT INTO session_links(child_short, parent_session_id) VALUES ('c3c3c3c3', 'P1')"); err != nil {
+		t.Fatal(err)
+	}
+	seedRefLink(t, conn, "c4c4c4c4", "P1", "example-org/example-repo", "feat/bar", 1000, 7)
+
+	got, err := UnresolvedRefs(conn)
+	if err != nil {
+		t.Fatalf("UnresolvedRefs: %v", err)
+	}
+	want := []RefQuery{{ParentSessionID: "P1", Repo: "example-org/example-repo", Branch: "feat/foo", Dir: "/work/p1", Since: 1000}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+
+	if _, err := conn.Exec("UPDATE sessions SET done_at = 1 WHERE session_id = 'P1'"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := UnresolvedRefs(conn); err != nil || len(got) != 0 {
+		t.Fatalf("done delegator: got %+v (err %v), want none", got, err)
+	}
+}
+
+// SetLinkPR fills only the group's unresolved rows.
+func TestSetLinkPR_FillsOnlyNullRowsOfGroup(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	seedRefLink(t, conn, "c1c1c1c1", "P1", "example-org/example-repo", "feat/foo", 1000, 41)
+	seedRefLink(t, conn, "c2c2c2c2", "P1", "example-org/example-repo", "feat/foo", 3000, 0)
+	seedRefLink(t, conn, "c3c3c3c3", "P1", "example-org/example-repo", "feat/bar", 3000, 0)
+	if err := SetLinkPR(conn, "P1", "example-org/example-repo", "feat/foo", 42); err != nil {
+		t.Fatalf("SetLinkPR: %v", err)
+	}
+	for child, want := range map[string]sql.NullInt64{
+		"c1c1c1c1": {Int64: 41, Valid: true},
+		"c2c2c2c2": {Int64: 42, Valid: true},
+		"c3c3c3c3": {},
+	} {
+		if _, _, pr := linkRef(t, conn, child); pr != want {
+			t.Errorf("%s: pr = %+v, want %+v", child, pr, want)
+		}
+	}
+}
