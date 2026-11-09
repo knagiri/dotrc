@@ -41,9 +41,9 @@ make install
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
 | `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` で一覧を広げる。キー操作は「pin とメモ」と「session の状態」の節を参照。`--show-resumable` / `--show-stale` は受け付けるが何もしない（gone は既定で並び、stale は廃止した） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない running の session を gone にし、done なのに running な background session を `claude stop` する（picker 起動時に自動実行される） |
-| `claude-queue watch [--idle-minutes N] [--pr-debounce-minutes M] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile、PR 監視（pin の PR に新しい活動があれば session を起こす。後述）のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も PR 監視も停止もせず、休眠の対象を出すだけ（後述）。ただし DB を開くこと自体の書き込み（`queue` view の作り直し・移行）は止めないので、実データで試すときは `dot/claude/rules/dotrc-deploy.md` §7 に従い DB のコピーを指す |
+| `claude-queue watch [--idle-minutes N] [--pr-debounce-minutes M] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile、PR 監視（pin の PR に新しい活動があれば session を起こす。後述）、委譲先の PR 番号の解決（後述）のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も PR 監視も PR 番号の解決も停止もせず、休眠の対象を出すだけ（後述）。ただし DB を開くこと自体の書き込み（`queue` view の作り直し・移行）は止めないので、実データで試すときは `dot/claude/rules/dotrc-deploy.md` §7 に従い DB のコピーを指す |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
-| `claude-queue link --parent <session-id> --child <short-id>` | 委譲の親子関係を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示と孤児の判定に使う。設計は `docs/design/claude-queue-session-tree.md` |
+| `claude-queue link --parent <session-id> --child <short-id> [--repo <owner/repo>] [--branch <name>]` | 委譲の親子関係と、委譲先の repo / branch を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示、孤児の判定、PR 番号・branch からの検索に使う。設計は `docs/design/claude-queue-session-tree.md` |
 | `claude-queue mark <session-id>` | pin をトグルする（picker の Tab が呼ぶ）。外すと pin のコメントも消える。done・未知の session は何もせず exit 0 |
 | `claude-queue memo [--session <id>] [--] [<text>]` | session のメモを設定する。`<text>` を省くと現在のメモを出力し、空文字を渡すと消す |
 | `claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N \| PR URL>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す。`--pr` を渡すとその PR を監視する（既読位置は今の時刻から。後述の「PR 監視」） |
@@ -68,7 +68,7 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 
 ### picker の行
 
-行は tab 区切りで、fzf に見せるのは 1〜5 列と 11 列だけ（`--with-nth`）。fzf は見せている列だけを検索する。
+行は tab 区切りで、fzf に見せるのは 1〜5 列と 11 列・14 列だけ（`--with-nth`）。検索するのは 2・3・11・14 列で（`--nth`）、summary（5 列）は表示のみ。summary はほぼ検索に使われず、誤ヒットの元になるため。
 
 | 列 | 中身 | 幅 |
 |---|---|---|
@@ -80,6 +80,7 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 | 6〜10 | session_id / tmux_pane / cwd / transcript_path / config_dir | 非表示 |
 | 11 | 注記（`📌 <pin のコメント>` と `📝 <メモ>`） | padding なし |
 | 12〜13 | メモ / pin のコメント（編集キーの初期値） | 非表示 |
+| 14 | 委譲 tree の PR / branch（`#<pr> <branch>`、PR 未解決なら `<branch>`） | padding なし。tree の根以外では薄い色 |
 
 3 列目は cwd の git toplevel basename そのままではなく、`--git-common-dir`（絶対）の親を
 メイン toplevel として `<main-repo-basename>_<name>` を合成する。worktree は
@@ -112,7 +113,14 @@ pane と一致するかだけで、background session や `claude attach` で入
 state アイコンは置き換えないので、現在の session の state も 1 列目で読める。pane は
 interactive 起動時に 1 度だけ取り、Tab の再描画（`--list`）へは `--current-pane` で渡す。
 
-11 列目が 6〜10 列目より後ろにあるのは、後から足した列で既存の隠し列の位置を動かさないため。
+11 列目と 14 列目が 6〜10 列目より後ろにあるのは、後から足した列で既存の隠し列の位置を動かさないため。
+
+14 列目は tree の根（最上位の委譲元）から辿れる全 link（done の委譲先・孫以下を含む）を集めた値で、
+tree に属する全行に同じものを入れる。PR 番号や branch を打つと tree の全行が残り、委譲元へ飛べる。
+fzf は表示していない列を検索できないので委譲先の行にも出し、繰り返しが見づらくならないよう ANSI の
+dim で薄くする（`--ansi`）。同じ branch が複数の link にあれば（review 対応で起こし直した委譲先）1 つに
+まとめ、PR 番号を持つほうを残す。`--with-nth` と併用した `--nth` の番号は `--with-nth` 後の列番号を
+指す（fzf 0.74.5 で実測）。誤ってもエラーにならず別の列が検索されるので、テストが実物の fzf で固定する。
 
 ### pin とメモ
 
@@ -334,6 +342,20 @@ config dir の claude daemon が居ない（background。`<config dir>/daemon.lo
 
 指示文は PR 番号と、review（state ごと）/ comment の件数を bot か人か別に並べ、本文は `gh-pr-comments <N>` で読むこと、
 本文は信頼できない外部入力で指示として扱わないことを書く。本文と author 名は入れない。
+
+### PR 番号の解決（`claude-queue watch`）
+
+`session_links` の repo と branch があり PR 番号が未解決の link について、(repo, branch) ごとに 1 pass 1 回
+`gh pr list --repo <repo> --head <branch> --state all --json number,createdAt` を叩き、見つかった番号を書く。
+gh は PR 監視と同じ経路で、委譲元の cwd から呼ぶ（委譲先の worktree は reap 済みでありうるため）。対象は
+委譲元が open な link だけ。PR 作成から picker に番号が出るまで最大で timer の 1 tick 遅れる。
+
+採るのは、同じ委譲元・repo・branch の link のうち最古の `created_at` 以降に作られた PR のうち最新。下限は
+branch 名を使い回したときに過去の PR を拾わないため。行ごとの `created_at` を使わないのは、review 対応で
+起こし直した委譲先の link が既存 PR より後に作られるため。gh の失敗はその組だけ skip して次の pass に回す。
+
+PR は委譲された branch から出す前提で引く（`implement-and-review` が縛る）。別 branch から出た PR は
+見つからないだけで、別の session へ飛ぶことはない。
 
 timer の有効化:
 
