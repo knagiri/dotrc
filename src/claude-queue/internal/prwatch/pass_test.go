@@ -333,8 +333,10 @@ func TestMessage_Activity(t *testing.T) {
 		{Kind: KindReview, ReviewState: "CHANGES_REQUESTED"},
 		{Kind: KindReview, Bot: true, ReviewState: "COMMENTED"},
 	})
+	if first, _, _ := strings.Cut(m, "\n"); first != "[claude-queue 自動通知] PR "+pr+" に新しい活動があります。" {
+		t.Errorf("first line = %q", first)
+	}
 	for _, want := range []string{
-		"PR " + pr + " に新しい活動があります",
 		"- review changes_requested（人）: 2 件",
 		"- comment（bot）: 1 件",
 		"- review commented（bot）: 1 件",
@@ -365,11 +367,17 @@ func TestMessage_CarriesNoBodyOrLogin(t *testing.T) {
 }
 
 func TestMessage_MergedAndClosed(t *testing.T) {
-	if m := Message(pr, Activity{State: StateMerged}, nil); !strings.Contains(m, "merge されました") {
-		t.Errorf("merged: %s", m)
+	// Both say it is an automatic notice and that a session already on top of
+	// the PR should go on with what it was doing: the wake-up lands in the
+	// middle of whatever the session was last talking about.
+	const carryOn = "既に把握・対応済みならこの通知には反応せず、直前の作業を続けてください。"
+	merged := "[claude-queue 自動通知] PR " + pr + " が merge されました。" + carryOn + "未対応なら次の作業を整理してください。"
+	if m := Message(pr, Activity{State: StateMerged}, nil); m != merged {
+		t.Errorf("merged:\n got %s\nwant %s", m, merged)
 	}
-	if m := Message(pr, Activity{State: StateClosed}, nil); !strings.Contains(m, "merge されずに close") {
-		t.Errorf("closed: %s", m)
+	closed := "[claude-queue 自動通知] PR " + pr + " が merge されずに close されました。" + carryOn + "未対応なら状況を確認してください。"
+	if m := Message(pr, Activity{State: StateClosed}, nil); m != closed {
+		t.Errorf("closed:\n got %s\nwant %s", m, closed)
 	}
 }
 
