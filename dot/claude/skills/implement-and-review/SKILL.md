@@ -190,7 +190,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    `pr-review-loop` → `pr-automerge` を同じ形で呼ぶ。委譲元は review で修正が要ると、同じ worktree・branch に新しい
    委譲先を起こしてこの形で渡す（`dot/claude/rules/worktree-scope.md` §6）。ここで PR を新しく
    作ろうとしても、同じ head / base の open PR があるので GitHub が拒否する。base を変えて別 PR に
-   すると、PR 監視の pin も review の指摘も元の PR に残ったままになる。
+   すると、PR 監視も review の指摘も元の PR に残ったままになる。
 
    この形では、**最初の push より前に `gh-automerge --disable <N>` を呼ぶ**（commit は先に済んで
    よい。手順 1 で実装に入る時点でこの段落を確認し、push はこれより後にする）。前の周回の

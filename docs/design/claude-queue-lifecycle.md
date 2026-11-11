@@ -20,7 +20,8 @@ pin も運ばない。閉じてから 7 日で GC が session の記録ごと消
 - 再起動後も、open な session・pin・メモ・親子関係が一覧にそのまま残り、選べば resume できる
 - 作業の完了は利用者（または委譲元）が明示的に決める。自動判定しない
 - どの session にも短いメモを残せ、picker で曖昧検索できる
-- pin は外部待ちのコメントを持ち、PR に関する待ちは状態変化を検知して委譲元を自動で起こす
+- pin は進められない待ちの印で、コメントを持ち、明示的に付け外しする
+- PR の監視は pin と独立し、PR の状態変化を検知して監視している session を自動で起こす
 - しばらく動いていない session はプロセスを止めてメモリを返す。作業は open のまま
 
 ## 非目標・アンチゴール
@@ -111,36 +112,43 @@ hook が再び届いた時点で記録される。
 **メモ**: どの session にも 1 本の短い自由文を付けられる。picker の一覧に表示し、fzf の曖昧検索の
 対象に含める。picker 上で編集でき、CLI からも設定できる（agent が自分の session に付けられるように）。
 
-**pin**: 「外部待ち」の印。コメント（自由文）と、任意で PR の監視条件を持つ。現在の待ちマークは
-次の hook event で自動的に外れるが、新しい pin は明示的に外すか、PR 監視が委譲元を起こすまで残る。
-外部待ちの間も、催促などで利用者や agent が session に触れることがあるため。pin は表示上の印であり、
-一覧の並び順は変えない。
+**pin**: 「何かを待っていて session を進められない」という印。コメント（自由文）を持ち、明示的に付け外し
+する。hook event でも PR の状態変化でも外れない。待ちの間も、催促などで利用者や agent が session に触れる
+ことがあるため。pin は表示上の印であり、一覧の並び順は変えない。
 
 pin は picker から利用者が付けるほか、CLI で agent が自分の session に付けられる。
 
 ## PR 監視と自動再開
 
 窓口は委譲元（interactive）に集約する。委譲先は実装 → agent / bot の review → 修正を終えて委譲元へ
-完了を報告し、報告を受けた委譲元は委譲先を閉じて（done）、「PR の人による review 待ち」の pin を自分に
-付ける。人の review・修正指示の受け口も委譲元なので、起こす相手は常に pin を付けた session になる。
+完了を報告し、報告を受けた委譲元は委譲先を閉じて（done）、その PR を自分の session で監視する。人の
+review・修正指示の受け口も委譲元なので、起こす相手は常に監視を付けた session になる。
+
+監視は pin とは独立している。PR 待ちの間も session は別の作業を続けてよいので、監視は pin を立てず、pin の
+着脱も監視に影響しない。session と PR の組ごとに持ち、1 つの session が複数の PR を監視できる。picker の一覧には、
+監視中の PR を pin のコメントとは別の icon で並べる。監視の有無で並び順は変えない。
 
 review で修正が要るとき、委譲元は閉じた委譲先を再開せず、同じ worktree・同じ branch に新しい委譲先を
 起こして「既存 PR の指摘への対応」だけを渡す。前の session を使い続けると、文脈が膨らんで元の目的から
 乖離するため。
 
-`systemd-user` の timer が数分おきに監視コマンドを 1 回起動し（常駐はしない）、PR 監視条件付きの
-pin について GitHub の PR を確認する。pin は既読位置（cursor）を持ち、それより新しい活動があれば
+`systemd-user` の timer が数分おきに監視コマンドを 1 回起動し（常駐はしない）、open な session の
+監視について GitHub の PR を確認する。監視は既読位置（cursor）を持ち、それより新しい活動があれば
 その session を起こして指示を渡す。cursor を進めるのは、起こした session がその指示を受け取ったと
 台帳で確かめてからである（後述）。bot の review も人の review も同じく起こす対象で、
-pin は merge / close まで残る。PR が閉じるまで「活動 → 委譲元が対応 → 休眠 → 次の活動」のループを
+監視は merge / close まで残る。PR が閉じるまで「活動 → 委譲元が対応 → 休眠 → 次の活動」のループを
 回すためである。bot の review はコメントが連続して付くので、最後の活動から 1 tick 経ってから
 まとめて 1 回配送する。
 
 | PR の変化 | 委譲元への指示 |
 |---|---|
 | review / comment（author を問わない。bot を含む） | 内容を `gh-pr-comments` で読み、修正の要否を判断する |
-| merge | 次の作業を整理する（pin を外す） |
-| merge なしの close | 状況を確認する（pin を外す） |
+| merge | 既に把握・対応済みなら反応せず直前の作業を続け、未対応なら次の作業を整理する（監視を外す） |
+| merge なしの close | 既に把握・対応済みなら反応せず直前の作業を続け、未対応なら状況を確認する（監視を外す） |
+
+指示文はどれも自動通知と分かる文面にする。merge / close で session を起こす動作は、その session が既に把握して
+いるかを問わない。外から確実に判定できないうえ、起こされて picker の上に出ること自体が、多数の session の
+merge 状況を追う手がかりになるため。既に把握している session の会話を阻害しないよう、判断は文面で session に委ねる。
 
 author で絞らないのは、委譲先が利用者の token で PR を作るので PR author が利用者自身になり、絞ると
 利用者自身の review コメントで起きなくなるためである。agent は PR にコメントを投稿しない運用なので、
@@ -174,12 +182,16 @@ author で絞らないのは、委譲先が利用者の token で PR を作る�
 `awaiting_approval` / `idle_done` として一覧に上がる。自動再開専用の通知は作らない。
 
 起動コマンドが成功しても、window の中の `claude --resume` が失敗していれば指示は届いていない。そこで配送時は
-cursor を進めず、配送した時刻と、成功したら cursor をどこまで進めるかを pin に記録する。次の pass で、その session の
-配送時刻以降の `UserPromptSubmit` が台帳にあれば成功とみなして cursor を進め（merge / close なら pin を外し）、
+cursor を進めず、配送した時刻と、成功したら cursor をどこまで進めるかを監視に記録する。次の pass で、その session の
+配送時刻以降の `UserPromptSubmit` が台帳にあれば成功とみなして cursor を進め（merge / close なら監視を外し）、
 記録を消す。2 tick 経っても無ければ失敗とみなして記録だけを消し、cursor は進んでいないので次の pass で再配送する。
-resume が恒常的に失敗すると約 9 分ごとに window が増え続けるので、失敗が 3 回続いたら配送を止め、pin のコメントの
-先頭に印を付けて picker で目に入るようにする。止めた配送より新しい活動か merge / close が来るか、pin が付け直されたら再開する。ただし merge / close の配送そのもので止まった pin は、PR が closed のままなら reopen か付け直しまで止まったままである。付け直しは `claude-queue pin` / ctrl-t で、Tab で外すと PR 監視ごと外れる。再開や配送成功のあとも、note を書き換えない限り、コメント先頭の印は残る。
+resume が恒常的に失敗すると約 9 分ごとに window が増え続けるので、失敗が 3 回続いたら配送を止め、監視のコメントの
+先頭に印を付けて picker で目に入るようにする。止めた配送より新しい活動か merge / close が来るか、監視が付け直されたら再開する。ただし merge / close の配送そのもので止まった監視は、PR が closed のままなら reopen か付け直しまで止まったままである。付け直しは `claude-queue follow` で、pin の着脱は停止に影響しない。再開や配送成功のあとも、note を書き換えない限り、コメント先頭の印は残る。
 照合は時刻だけで本文は見ないので、人が手で resume して打った prompt でも成功とみなして cursor が進む。これは既知の限界とする。
+
+1 つの session への配送は直列にする。同時に 2 回は resume できないうえ、確認は配送時刻以降の `UserPromptSubmit` で
+行うので、配送が重なると 1 つの prompt で両方が確認済みになるため。同じ pass で既に resume した session と、確認待ちの
+配送を持つ session への新たな配送は次の pass に回す。
 
 GitHub への問い合わせは既存の `gh-*` wrapper と同じ token 経路を使う（`bin/lib/gh-mise.sh`）。
 
@@ -213,6 +225,8 @@ background の委譲元も、daemon は最後の client が切れて数秒で終
   `/clear` とみなして `done`、それ以外は上の規則に従う
 - それ以外 → `done`
 - `waiting_event_id` を持つ session → pin（コメントは空）に変換する
+- PR 監視を pin の属性として持つ session → 監視の状態と pin のコメントを `pr_watches` へ移し、pin を外す。手動の
+  pin と自動で付いた pin は区別できないので一律に外す
 
 ## 実装者に任せること
 
