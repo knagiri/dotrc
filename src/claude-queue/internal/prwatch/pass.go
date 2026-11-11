@@ -49,9 +49,9 @@ var HaltNote = fmt.Sprintf("[自動再開に %d 回失敗]", MaxFailures)
 func Message(pr string, a Activity, events []Event) string {
 	switch a.State {
 	case StateMerged:
-		return fmt.Sprintf("PR %s が merge されました。次の作業を整理してください。", pr)
+		return fmt.Sprintf("[claude-queue 自動通知] PR %s が merge されました。既に把握・対応済みならこの通知には反応せず、直前の作業を続けてください。未対応なら次の作業を整理してください。", pr)
 	case StateClosed:
-		return fmt.Sprintf("PR %s が merge されずに close されました。状況を確認してください。", pr)
+		return fmt.Sprintf("[claude-queue 自動通知] PR %s が merge されずに close されました。既に把握・対応済みならこの通知には反応せず、直前の作業を続けてください。未対応なら状況を確認してください。", pr)
 	}
 	type key struct {
 		kind, state string
@@ -68,7 +68,7 @@ func Message(pr string, a Activity, events []Event) string {
 	}
 	_, num, _ := strings.Cut(pr, "#")
 	var b strings.Builder
-	fmt.Fprintf(&b, "PR %s に新しい活動があります。\n", pr)
+	fmt.Fprintf(&b, "[claude-queue 自動通知] PR %s に新しい活動があります。\n", pr)
 	for _, k := range order {
 		who := "人"
 		if k.bot {
