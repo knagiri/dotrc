@@ -176,7 +176,7 @@ func DoneButRunning(conn *sql.DB) ([]LiveSession, error) {
 	return out, rows.Err()
 }
 
-// GC deletes the sessions (and their events) whose work has been done for
+// GC deletes the sessions (and their events and PR watches) whose work has been done for
 // longer than maxAgeSec, and the delegation links older than that with no open
 // session at either end. Until then a done session can be reopened (Reopen);
 // after, it is gone for good.
@@ -200,6 +200,15 @@ func GC(conn *sql.DB, maxAgeSec int64) error {
 		)
 	`, maxAgeSec); err != nil {
 		return fmt.Errorf("gc events: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM pr_watches
+		WHERE session_id IN (
+			SELECT session_id FROM sessions
+			WHERE done_at IS NOT NULL AND done_at < unixepoch() - ?
+		)
+	`, maxAgeSec); err != nil {
+		return fmt.Errorf("gc pr_watches: %w", err)
 	}
 	if _, err := tx.Exec(`
 		DELETE FROM sessions

@@ -72,7 +72,7 @@ func TestPoll_ParsesReviewsAndComments(t *testing.T) {
 	}
 }
 
-// The repo comes from the pin, never from the cwd.
+// The repo comes from the watch, never from the cwd.
 func TestPoll_PassesRepo(t *testing.T) {
 	var argv []string
 	var dir string

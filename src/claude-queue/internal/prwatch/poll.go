@@ -1,9 +1,9 @@
 // Package prwatch is the PR half of `claude-queue watch`: for every open
-// session whose pin watches a PR, it reads the PR's reviews, comments and
+// session that watches a PR, it reads the PR's reviews, comments and
 // state with gh, and wakes the session with a message when there is something
 // new -- a review or a comment, or the PR being merged or closed.
 //
-// The session woken is always the one that pinned itself (in practice the
+// The session woken is always the one that set the watch (in practice the
 // delegator, which is where a person's review lands too); see
 // docs/design/claude-queue-lifecycle.md.
 package prwatch
@@ -73,7 +73,7 @@ const query = `query($owner: String!, $repo: String!, $number: Int!) {
 // from dir.
 //
 // The repo is always named in the query, so the answer never depends on which
-// repo dir is in: the pinned session's cwd may belong to another repo, or be
+// repo dir is in: the watching session's cwd may belong to another repo, or be
 // gone. It is a GraphQL query rather than `gh pr view --json` because only
 // GraphQL says whether an author is a bot, and it names exactly the fields
 // needed -- the default view also asks for statusCheckRollup, which a
@@ -173,7 +173,7 @@ func NewSince(a Activity, cursor time.Time) []Event {
 // token mise.gh.local.toml supplies and any other repo falls back to
 // hosts.yml. Without mise on PATH it runs gh directly, in the same dir.
 //
-// dir is the pinned session's cwd. One that no longer exists (a reaped
+// dir is the watching session's cwd. One that no longer exists (a reaped
 // worktree) is replaced by $HOME: --repo already says which PR, and a missing
 // dir would only make the call fail.
 func GhRunner(argv []string, dir string) ([]byte, error) {

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 )
 
 func doneAt(t *testing.T, conn *sql.DB, sid string) sql.NullInt64 {
@@ -145,6 +146,41 @@ func TestGC_DeletesOldDone(t *testing.T) {
 	}
 	if sessionCount(t, conn, "recent") != 1 {
 		t.Error("recently done session was deleted")
+	}
+}
+
+// A collected session's PR watches go with it; an open one's stay. The sessions
+// row has a foreign key from pr_watches, so a watch left behind fails the GC.
+func TestGC_DeletesPRWatches(t *testing.T) {
+	conn := openTest(t)
+	for _, id := range []string{"old", "open"} {
+		insertSession(t, conn, id, "")
+		insertEvent(t, conn, id, "Stop", "idle_done", 10)
+		if err := SetPRWatch(conn, id, "example-org/example-repo#1", nil, time.Unix(100, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec("UPDATE sessions SET done_at = unixepoch() - 1000 WHERE session_id = 'old'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := GC(conn, 100); err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+	var ids []string
+	rows, err := conn.Query("SELECT session_id FROM pr_watches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) != 1 || ids[0] != "open" {
+		t.Errorf("watches after GC = %v, want only open", ids)
 	}
 }
 

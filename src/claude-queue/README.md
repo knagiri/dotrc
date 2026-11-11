@@ -41,19 +41,21 @@ make install
 | `claude-queue status` | tmux status-right 用のカウンタ文字列を stdout に出力 |
 | `claude-queue picker` | fzf を popup で起動し、選択 session へ到達する（到達手段の決定は後述）。`--show-working` で一覧を広げる。キー操作は「pin とメモ」と「session の状態」の節を参照。`--show-resumable` / `--show-stale` は受け付けるが何もしない（gone は既定で並び、stale は廃止した） |
 | `claude-queue reconcile` | `claude agents --json` に載っていない running の session を gone にし、done なのに running な background session を `claude stop` する（picker 起動時に自動実行される） |
-| `claude-queue watch [--idle-minutes N] [--pr-debounce-minutes M] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile、PR 監視（pin の PR に新しい活動があれば session を起こす。後述）、委譲先の PR 番号の解決（後述）のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も PR 監視も PR 番号の解決も停止もせず、休眠の対象を出すだけ（後述）。ただし DB を開くこと自体の書き込み（`queue` view の作り直し・移行）は止めないので、実データで試すときは `dot/claude/rules/dotrc-deploy.md` §7 に従い DB のコピーを指す |
+| `claude-queue watch [--idle-minutes N] [--pr-debounce-minutes M] [--dry-run]` | 無人の定期処理を 1 回行う。reconcile、PR 監視（監視中の PR に新しい活動があれば session を起こす。後述）、委譲先の PR 番号の解決（後述）のあと、`idle_done` から N 分（既定 120）以上動いていない session のプロセスを止める（休眠。作業は open のまま gone になる）。`dot/systemd-user/claude-queue-watch.timer` が 3 分おきに起動する。止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は reconcile も PR 監視も PR 番号の解決も停止もせず、休眠の対象を出すだけ（後述）。ただし DB を開くこと自体の書き込み（`queue` view の作り直し・移行）は止めないので、実データで試すときは `dot/claude/rules/dotrc-deploy.md` §7 に従い DB のコピーを指す |
 | `claude-queue reset [--force]` | DB (`~/.claude/session-queue.db`) を削除、対話 y/N |
 | `claude-queue link --parent <session-id> --child <short-id> [--repo <owner/repo>] [--branch <name>]` | 委譲の親子関係と、委譲先の repo / branch を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示、孤児の判定、PR 番号・branch からの検索に使う。設計は `docs/design/claude-queue-session-tree.md` |
 | `claude-queue mark <session-id>` | pin をトグルする（picker の Tab が呼ぶ）。外すと pin のコメントも消える。done・未知の session は何もせず exit 0 |
 | `claude-queue memo [--session <id>] [--] [<text>]` | session のメモを設定する。`<text>` を省くと現在のメモを出力し、空文字を渡すと消す |
-| `claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N \| PR URL>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す。`--pr` を渡すとその PR を監視する（既読位置は今の時刻から。後述の「PR 監視」） |
-| `claude-queue unpin [--session <id>]` | pin とそのコメント・PR 監視を外す |
+| `claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N \| PR URL>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す。`--pr` を渡すと `follow` も行い、`--note` は pin のコメントと監視のコメントの両方に入る |
+| `claude-queue unpin [--session <id>]` | pin とそのコメントを外す。PR 監視には触らない |
+| `claude-queue follow [--session <id>] [--note <text>] --pr <owner/repo#N \| PR URL>` | その PR を監視する（後述の「PR 監視」）。pin は立てない。既読位置は今の時刻から。同じ PR へ再度実行すると既読位置を今の時刻にし、配送の記録と停止を消す。`--note` を渡すと監視のコメントを置き換え、省くと残す |
+| `claude-queue unfollow [--session <id>] [--pr <PR>]` | その PR の監視を外す。`--pr` を省くとその session の監視をすべて外す。pin には触らない |
 | `claude-queue done <session-id-or-prefix>` | session の作業を done にする（委譲先も cascade で done）。picker の `ctrl-x` と `bin/claude-stop-bg` が呼ぶ。8 桁以上の前方一致で 1 件に決まらなければ exit 1。既に done でも exit 0 |
 | `claude-queue reopen <session-id-or-prefix>` | done を取り消し、作業を open に戻す。委譲先には波及しない（done の cascade と非対称）。picker の done 一覧の `ctrl-x` が呼ぶ。id の解決は `done` と同じ。done でない・1 件に決まらなければ exit 1 |
 | `claude-queue nav {back\|forward} [--client <name>] [--pane <id>]` | picker で飛んだ履歴をブラウザの戻る / 進むのように 1 つ移動する（後述の「飛んだ履歴の行き来」）。tmux の `C-q C-h` / `C-q C-l` が呼ぶ。行き先が無ければ tmux のメッセージで知らせて exit 0 |
 | `claude-queue --version` | バージョン表示 |
 
-`memo` / `pin` / `unpin` は `--session`（8 桁以上の前方一致）を省くと `CLAUDE_CODE_SESSION_ID` を使う。Claude Code は
+`memo` / `pin` / `unpin` / `follow` / `unfollow` は `--session`（8 桁以上の前方一致）を省くと `CLAUDE_CODE_SESSION_ID` を使う。Claude Code は
 hook と Bash tool の環境にその session の id を入れるので、agent は id を知らずに自分の session へ書ける
 （例: `claude-queue pin --note "<待っているもの>"`）。どちらも無いとき、id が 1 件に決まらないとき、done の
 session に書こうとしたときは exit 1 で、理由を stderr に出す。
@@ -315,20 +317,21 @@ session は休眠にも reconcile にも当たらず ⚙️ のまま残る（�
 
 ### PR 監視（`claude-queue watch`）
 
-`claude-queue pin --pr <PR>` で PR を監視している open な session について、`gh api graphql` で PR の state と、直近 100 件ずつの
+`claude-queue follow --pr <PR>` で PR を監視している open な session について（pin の有無は問わない。監視中も session は別の作業を続けてよい）、`gh api graphql` で PR の state と、直近 100 件ずつの
 review / comment の種別・時刻・author が bot か（`__typename`）を読む。本文と login は読まない。gh は `bin/lib/gh-mise.sh` と同じく `MISE_ENV=gh mise exec -C <session の cwd> --` 経由で呼ぶ
-（cwd が消えていれば `$HOME`）。gh が失敗した pin は skip して理由を出し、他の pin は続ける。
+（cwd が消えていれば `$HOME`）。gh が失敗した監視は skip して理由を出し、他の監視は続ける。1 つの session が複数の PR を監視できる（`pr_watches` に session と PR の組で持つ）。
 
-- 既読位置（`pin_cursor`）より新しい review / comment は、author を問わず数える。最初に見た pass では記録だけして、
+- 既読位置（`cursor`）より新しい review / comment は、author を問わず数える。最初に見た pass では記録だけして、
   `--pr-debounce-minutes`（既定 2。timer の 1 tick から揺らぎの余裕を引いた値）以上経った pass でまとめて配送する。bot の review の
   連続コメントを 1 回で渡すため
 - merge / close は待たずに配送する
-- 配送しても既読位置は進めず、配送時刻と進め先（`pin_delivered_at` / `pin_delivered_upto`）を記録する。次の pass で
-  その session の配送時刻以降の `UserPromptSubmit` が台帳にあれば、既読位置を進めて（merge / close なら pin を外して）記録を消す。
+- 配送しても既読位置は進めず、配送時刻と進め先（`delivered_at` / `delivered_upto`）を記録する。次の pass で
+  その session の配送時刻以降の `UserPromptSubmit` が台帳にあれば、既読位置を進めて（merge / close なら監視を外して）記録を消す。
   6 分（timer の 2 tick）経っても無ければ window の中の resume が失敗したとみなして記録を消し、次の pass で再配送する。
   起動自体の失敗・skip は何も記録せず、次の pass で再試行する
-- 確認できない配送が 3 回続いたら、その pin への配送を止め、pin のコメントの先頭に `[自動再開に 3 回失敗]` を付ける。
-  PR の監視は続け、止めた配送より新しい活動か merge / close が来たら配送を再開する。merge / close の配送そのもので止まった pin は、PR が closed のままなら reopen か pin の付け直しまで止まったままになる。付け直しは `claude-queue pin` か ctrl-t で、Tab で外すと PR の監視ごと外れる。再開や配送成功のあとも、note を書き換えない限り、コメント先頭の印は残る
+- 確認できない配送が 3 回続いたら、その監視への配送を止め、監視のコメントの先頭に `[自動再開に 3 回失敗]` を付ける。
+  PR の監視は続け、止めた配送より新しい活動か merge / close が来たら配送を再開する。merge / close の配送そのもので止まった監視は、PR が closed のままなら reopen か `claude-queue follow` の付け直しまで止まったままになる。pin の着脱は停止に影響しない。再開や配送成功のあとも、note を書き換えない限り、コメント先頭の印は残る
+- 1 つの session への配送は直列にする。同じ pass で既に resume した session と、配送の確認待ちの監視を持つ session への新たな配送は次の pass に回す。同時に 2 回は resume できないうえ、確認は配送時刻以降の `UserPromptSubmit` で行うので、配送が重なると 1 つの prompt で両方が確認済みになるため
 
 配送は指示文を最初の入力にした resume で行う。interactive は picker の resume と同じ tmux session・window 名で
 （その session が無ければ最後に attach された既存の session に。service から session を作ると `update-environment` で
@@ -370,10 +373,13 @@ systemctl --user enable --now claude-queue-watch.timer
 
 `SessionEnd` hook 末尾で、`done_at` が 7 日以上前の sessions とその events を削除。gone の
 session は期間に関わらず消さない。`session_links` は作成から 7 日以上経ち、親子のどちらも open で
-ないものを削除。
+ないものを削除。消した session の PR 監視（`pr_watches`）も一緒に削除する。
 
-既存 DB は初回の Open で一度だけ移行する（`PRAGMA user_version` で判定）。直近 7 日以内に
+既存 DB の open / done の仕分けは初回の Open で一度だけ行う（`PRAGMA user_version` で判定。`migrateLifecycle`）。直近 7 日以内に
 `prompt_input_exit` / `clear` 以外で閉じた session は open（gone）に、それ以外は done になる。
+
+PR 監視付きの pin（旧版は pin の列に監視を持っていた）は、Open のたびに残りを拾って `pr_watches` へ写す。
+この移行は `user_version` に依らず、写した session の pin とそのコメントは外れる（コメントは監視のコメントになる）。done の session の分も写す。
 
 ## tmux 設定（`dot/tmux.conf`）
 

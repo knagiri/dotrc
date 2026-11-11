@@ -169,24 +169,184 @@ func TestPinCLI_PR(t *testing.T) {
 		t.Fatalf("pin --pr: %v", err)
 	}
 	pinned, note := pinOf(t, conn)
-	var pr, cursor sql.NullString
-	if err := conn.QueryRow("SELECT pin_pr, pin_cursor FROM sessions WHERE session_id = ?", sid).Scan(&pr, &cursor); err != nil {
-		t.Fatal(err)
-	}
-	if !pinned || note.String != "human review" || pr.String != "example-org/example-repo#4" || cursor.String != "2026-10-26T09:00:00Z" {
-		t.Errorf("after pin --pr: pinned=%v note=%v pr=%v cursor=%v", pinned, note, pr, cursor)
+	w := watchOf(t, conn, "example-org/example-repo#4")
+	if !pinned || note.String != "human review" || w.cursor.String != "2026-10-26T09:00:00Z" || w.note.String != "human review" {
+		t.Errorf("after pin --pr: pinned=%v note=%v watch=%+v", pinned, note, w)
 	}
 
-	// A plain pin afterwards keeps the watch: it only touches the note.
+	// A plain pin afterwards keeps the watch.
 	if err := run(conn, "pin", []string{"--note", "still waiting"}, e, clock, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.QueryRow("SELECT pin_pr FROM sessions WHERE session_id = ?", sid).Scan(&pr); err != nil || pr.String != "example-org/example-repo#4" {
-		t.Errorf("plain pin dropped the PR watch: %v, %v", pr, err)
+	if got := watchOf(t, conn, "example-org/example-repo#4"); got != w {
+		t.Errorf("plain pin changed the watch: %+v, was %+v", got, w)
 	}
 
 	var errOut bytes.Buffer
 	if err := run(conn, "pin", []string{"--pr", "not-a-pr"}, e, clock, &out, &errOut); !errors.Is(err, errUsage) {
 		t.Errorf("pin --pr not-a-pr = %v, want errUsage", err)
+	}
+}
+
+type watch struct {
+	cursor, note, halted sql.NullString
+	failures             sql.NullInt64
+}
+
+// watchOf reads the session's watch of pr and fails when there is none.
+func watchOf(t *testing.T, conn *sql.DB, pr string) watch {
+	t.Helper()
+	var w watch
+	if err := conn.QueryRow("SELECT cursor, note, halted_upto, failures FROM pr_watches WHERE session_id = ? AND pr = ?", sid, pr).
+		Scan(&w.cursor, &w.note, &w.halted, &w.failures); err != nil {
+		t.Fatalf("watch of %s: %v", pr, err)
+	}
+	return w
+}
+
+func watchCount(t *testing.T, conn *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := conn.QueryRow("SELECT COUNT(*) FROM pr_watches").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// follow sets a watch and does not pin; --session falls back to the env, and a
+// URL is stored as owner/repo#N.
+func TestFollowCLI(t *testing.T) {
+	conn := setup(t)
+	e := env(map[string]string{sessionEnv: sid})
+	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return at }
+	var out bytes.Buffer
+	if err := run(conn, "follow", []string{"--note", "human review", "--pr", "https://github.com/example-org/example-repo/pull/4"}, e, clock, &out, &out); err != nil {
+		t.Fatalf("follow: %v", err)
+	}
+	if pinned, note := pinOf(t, conn); pinned || note.Valid {
+		t.Errorf("follow touched the pin: pinned=%v note=%v", pinned, note)
+	}
+	w := watchOf(t, conn, "example-org/example-repo#4")
+	if w.cursor.String != "2026-10-26T09:00:00Z" || w.note.String != "human review" {
+		t.Errorf("watch = %+v", w)
+	}
+
+	// Following the same PR again starts it over, a stop included; without
+	// --note the note stays.
+	if _, err := conn.Exec("UPDATE pr_watches SET failures = 3, halted_upto = 'x'"); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(time.Hour)
+	if err := run(conn, "follow", []string{"--pr", "example-org/example-repo#4"}, e, clock, &out, &out); err != nil {
+		t.Fatalf("follow again: %v", err)
+	}
+	w = watchOf(t, conn, "example-org/example-repo#4")
+	if w.cursor.String != "2026-10-26T10:00:00Z" || w.note.String != "human review" || w.failures.Valid || w.halted.Valid {
+		t.Errorf("after following again: %+v", w)
+	}
+
+	// A second PR does not replace the first.
+	if err := run(conn, "follow", []string{"--session", "aaaaaaaa", "--pr", "example-org/example-repo#5"}, env(nil), clock, &out, &out); err != nil {
+		t.Fatalf("follow a second PR: %v", err)
+	}
+	if n := watchCount(t, conn); n != 2 {
+		t.Errorf("watches = %d, want 2", n)
+	}
+}
+
+func TestFollowCLI_BadUsage(t *testing.T) {
+	conn := setup(t)
+	e := env(map[string]string{sessionEnv: sid})
+	var out bytes.Buffer
+	for _, args := range [][]string{nil, {"--note", "x"}, {"--pr", "not-a-pr"}, {"--pr", "a/b#1", "stray"}} {
+		if err := run(conn, "follow", args, e, time.Now, &out, &out); !errors.Is(err, errUsage) {
+			t.Errorf("follow %q = %v, want errUsage", args, err)
+		}
+	}
+	if err := run(conn, "follow", []string{"--pr", "a/b#1"}, env(nil), time.Now, &out, &out); !errors.Is(err, errUsage) {
+		t.Errorf("follow without a session = %v, want errUsage", err)
+	}
+	if n := watchCount(t, conn); n != 0 {
+		t.Errorf("a bad follow left %d watches", n)
+	}
+}
+
+func TestFollowCLI_DoneSessionFails(t *testing.T) {
+	conn := setup(t)
+	if _, err := conn.Exec("UPDATE sessions SET done_at = 1"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run(conn, "follow", []string{"--pr", "a/b#1"}, env(map[string]string{sessionEnv: sid}), time.Now, &out, &out); !errors.Is(err, db.ErrDone) {
+		t.Errorf("follow on done = %v, want ErrDone", err)
+	}
+}
+
+// unfollow --pr removes that watch, unfollow alone every watch of the session;
+// neither touches the pin, and finding nothing is said but is not a failure.
+func TestUnfollowCLI(t *testing.T) {
+	conn := setup(t)
+	e := env(map[string]string{sessionEnv: sid})
+	var out, errOut bytes.Buffer
+	for _, pr := range []string{"a/b#1", "a/b#2", "a/b#3"} {
+		if err := run(conn, "follow", []string{"--pr", pr}, e, time.Now, &out, &out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := run(conn, "pin", []string{"--note", "n"}, e, time.Now, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(conn, "unfollow", []string{"--pr", "https://github.com/a/b/pull/1"}, e, time.Now, &out, &errOut); err != nil {
+		t.Fatalf("unfollow --pr: %v", err)
+	}
+	if n := watchCount(t, conn); n != 2 || errOut.Len() != 0 {
+		t.Errorf("after unfollow --pr: %d watches, stderr %q", n, errOut.String())
+	}
+	if err := run(conn, "unfollow", []string{"--pr", "a/b#1"}, e, time.Now, &out, &errOut); err != nil {
+		t.Fatalf("unfollow of a PR not followed: %v", err)
+	}
+	if n := watchCount(t, conn); n != 2 || errOut.String() != "unfollow: nothing to remove\n" {
+		t.Errorf("unfollow of a PR not followed: %d watches, stderr %q", n, errOut.String())
+	}
+	errOut.Reset()
+	if err := run(conn, "unfollow", nil, e, time.Now, &out, &errOut); err != nil {
+		t.Fatalf("unfollow: %v", err)
+	}
+	if n := watchCount(t, conn); n != 0 || errOut.Len() != 0 {
+		t.Errorf("after unfollow: %d watches, stderr %q", n, errOut.String())
+	}
+	if pinned, note := pinOf(t, conn); !pinned || note.String != "n" {
+		t.Errorf("unfollow touched the pin: pinned=%v note=%v", pinned, note)
+	}
+	if err := run(conn, "unfollow", []string{"stray"}, e, time.Now, &out, &out); !errors.Is(err, errUsage) {
+		t.Errorf("unfollow stray = %v, want errUsage", err)
+	}
+}
+
+// A done session keeps its watches (Reopen brings them back), so unfollow is
+// refused for it like every other write, with or without --pr.
+func TestUnfollowCLI_DoneSessionFails(t *testing.T) {
+	for name, args := range map[string][]string{
+		"with --pr":    {"--pr", "example-org/example-repo#1"},
+		"without --pr": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn := setup(t)
+			e := env(map[string]string{sessionEnv: sid})
+			var out bytes.Buffer
+			if err := run(conn, "follow", []string{"--pr", "example-org/example-repo#1"}, e, time.Now, &out, &out); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Exec("UPDATE sessions SET done_at = 1"); err != nil {
+				t.Fatal(err)
+			}
+			if err := run(conn, "unfollow", args, e, time.Now, &out, &out); !errors.Is(err, db.ErrDone) {
+				t.Errorf("unfollow on done = %v, want ErrDone", err)
+			}
+			if n := watchCount(t, conn); n != 1 {
+				t.Errorf("unfollow on done left %d watches, want 1", n)
+			}
+		})
 	}
 }
