@@ -106,16 +106,16 @@ func (w *world) deps() Deps {
 	}
 }
 
-// pin is a gone interactive session pinned on pr, with a real cwd and
+// pin is a watch on pr by a gone interactive session, with a real cwd and
 // transcript so the resume preconditions hold.
-func pin(t *testing.T) db.PRPin {
+func pin(t *testing.T) db.PRWatch {
 	t.Helper()
 	dir := t.TempDir()
 	tr := filepath.Join(dir, "t.jsonl")
 	if err := os.WriteFile(tr, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return db.PRPin{SessionID: sid, PR: pr, Cwd: dir, TranscriptPath: tr, ConfigDir: cfg, Kind: db.KindInteractive, Gone: true}
+	return db.PRWatch{SessionID: sid, PR: pr, Cwd: dir, TranscriptPath: tr, ConfigDir: cfg, Kind: db.KindInteractive, Gone: true}
 }
 
 // Every effect of a delivery -- stopping a running session and launching the
@@ -381,7 +381,7 @@ func TestMessage_MergedAndClosed(t *testing.T) {
 	}
 }
 
-// ledger holds one gone interactive session pinned on pr with its cursor at
+// ledger holds one gone interactive session watching pr with its cursor at
 // 10:00.
 func ledger(t *testing.T, id string) *sql.DB {
 	t.Helper()
@@ -398,18 +398,23 @@ func ledger(t *testing.T, id string) *sql.DB {
 	if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state) VALUES (?, 'Stop', 'idle_done')", id); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetPinPR(conn, id, pr, at("10:00")); err != nil {
+	if err := db.SetPRWatch(conn, id, pr, nil, at("10:00")); err != nil {
 		t.Fatal(err)
 	}
 	return conn
 }
 
-func pinState(t *testing.T, conn *sql.DB, id string) (pinned bool, cursor sql.NullString, seen sql.NullInt64) {
+// watchState reads the session's watch of pr; watching is false when it has none.
+func watchState(t *testing.T, conn *sql.DB, id string) (watching bool, cursor sql.NullString, seen sql.NullInt64) {
 	t.Helper()
-	if err := conn.QueryRow("SELECT waiting_event_id IS NOT NULL, pin_cursor, pin_seen_at FROM sessions WHERE session_id = ?", id).Scan(&pinned, &cursor, &seen); err != nil {
+	err := conn.QueryRow("SELECT cursor, seen_at FROM pr_watches WHERE session_id = ? AND pr = ?", id, pr).Scan(&cursor, &seen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, cursor, seen
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
-	return
+	return true, cursor, seen
 }
 
 var news = Activity{State: StateOpen, Events: []Event{
@@ -429,8 +434,8 @@ func TestPass_DebounceOneTick(t *testing.T) {
 	if got := Pass(conn, now, DefaultDebounce, w.deps(), &out); len(got) != 0 || len(w.ran) != 0 {
 		t.Fatalf("first pass delivered: resumed %v, ran %q\n%s", got, w.ran, &out)
 	}
-	if _, _, seen := pinState(t, conn, sid); seen.Int64 != now.Unix() {
-		t.Fatalf("pin_seen_at = %v", seen)
+	if _, _, seen := watchState(t, conn, sid); seen.Int64 != now.Unix() {
+		t.Fatalf("seen_at = %v", seen)
 	}
 	delivered := now.Add(3 * time.Minute)
 	got := Pass(conn, delivered, DefaultDebounce, w.deps(), &out)
@@ -441,14 +446,14 @@ func TestPass_DebounceOneTick(t *testing.T) {
 	if !strings.Contains(cmd, "comment（人）: 1 件") || !strings.Contains(cmd, "review commented（bot）: 1 件") || strings.Contains(cmd, "approved") {
 		t.Errorf("delivered message = %q", cmd)
 	}
-	if _, cursor, _ := pinState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" {
+	if _, cursor, _ := watchState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" {
 		t.Errorf("cursor moved on the launch alone: %v", cursor)
 	}
 	prompt(t, conn, sid, delivered.Unix()+5)
 	Pass(conn, delivered.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
-	pinned, cursor, seen := pinState(t, conn, sid)
-	if !pinned || cursor.String != "2026-10-26T10:40:00Z" || seen.Valid {
-		t.Errorf("after the prompt: pinned=%v cursor=%v seen=%v\n%s", pinned, cursor, seen, &out)
+	watching, cursor, seen := watchState(t, conn, sid)
+	if !watching || cursor.String != "2026-10-26T10:40:00Z" || seen.Valid {
+		t.Errorf("after the prompt: watching=%v cursor=%v seen=%v\n%s", watching, cursor, seen, &out)
 	}
 	if at, _ := deliveredState(t, conn, sid); at.Valid {
 		t.Errorf("delivery record left after confirmation: %v", at)
@@ -477,7 +482,7 @@ func TestPass_UnconfirmedDeliveryRedelivered(t *testing.T) {
 	}
 	for _, tick := range []time.Duration{3 * time.Minute, 6 * time.Minute} {
 		Pass(conn, now.Add(tick), DefaultDebounce, w.deps(), &out)
-		if _, cursor, _ := pinState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" {
+		if _, cursor, _ := watchState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" {
 			t.Fatalf("+%v: cursor moved without a prompt: %v", tick, cursor)
 		}
 		if len(w.ran) != 1 {
@@ -505,7 +510,7 @@ func prompt(t *testing.T, conn *sql.DB, id string, at int64) {
 
 func deliveredState(t *testing.T, conn *sql.DB, id string) (at sql.NullInt64, upTo sql.NullString) {
 	t.Helper()
-	if err := conn.QueryRow("SELECT pin_delivered_at, pin_delivered_upto FROM sessions WHERE session_id = ?", id).Scan(&at, &upTo); err != nil {
+	if err := conn.QueryRow("SELECT delivered_at, delivered_upto FROM pr_watches WHERE session_id = ? AND pr = ?", id, pr).Scan(&at, &upTo); err != nil {
 		t.Fatal(err)
 	}
 	return
@@ -524,8 +529,8 @@ func TestPass_FailedLaunchRetried(t *testing.T) {
 	if got := Pass(conn, now, DefaultDebounce, w.deps(), &out); len(got) != 0 {
 		t.Fatalf("a failed delivery reported as resumed: %v", got)
 	}
-	if _, cursor, seen := pinState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" || !seen.Valid {
-		t.Fatalf("failed delivery moved the pin: cursor=%v seen=%v", cursor, seen)
+	if _, cursor, seen := watchState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" || !seen.Valid {
+		t.Fatalf("failed delivery moved the watch: cursor=%v seen=%v", cursor, seen)
 	}
 	if !strings.Contains(out.String(), "pr-watch: failed pinnedaa") {
 		t.Errorf("failure not reported:\n%s", &out)
@@ -538,8 +543,12 @@ func TestPass_FailedLaunchRetried(t *testing.T) {
 	}
 }
 
-func TestPass_MergedUnpins(t *testing.T) {
+func TestPass_MergedRemovesWatch(t *testing.T) {
 	conn := ledger(t, sid)
+	// A pin on the session is its own business: the merge does not take it off.
+	if err := db.SetPin(conn, sid, nil); err != nil {
+		t.Fatal(err)
+	}
 	w := &world{activity: Activity{State: StateMerged, Events: news.Events}}
 	var out bytes.Buffer
 	if got := Pass(conn, now, DefaultDebounce, w.deps(), &out); !got[sid] {
@@ -548,24 +557,28 @@ func TestPass_MergedUnpins(t *testing.T) {
 	if cmd := w.ran[0][len(w.ran[0])-1]; !strings.Contains(cmd, "merge されました") {
 		t.Errorf("message = %q", cmd)
 	}
-	if pinned, _, _ := pinState(t, conn, sid); !pinned {
-		t.Fatal("unpinned on the launch alone")
+	if watching, _, _ := watchState(t, conn, sid); !watching {
+		t.Fatal("watch removed on the launch alone")
 	}
 	prompt(t, conn, sid, now.Unix())
 	Pass(conn, now.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
-	if pinned, _, _ := pinState(t, conn, sid); pinned {
-		t.Errorf("still pinned after the merge was taken in:\n%s", &out)
+	if watching, _, _ := watchState(t, conn, sid); watching {
+		t.Errorf("still watching after the merge was taken in:\n%s", &out)
 	}
-	pins, err := db.PRPins(conn)
-	if err != nil || len(pins) != 0 {
-		t.Errorf("PRPins after merge = %v, %v", pins, err)
+	ws, err := db.PRWatches(conn)
+	if err != nil || len(ws) != 0 {
+		t.Errorf("PRWatches after merge = %v, %v", ws, err)
+	}
+	var pinned bool
+	if err := conn.QueryRow("SELECT waiting_event_id IS NOT NULL FROM sessions WHERE session_id = ?", sid).Scan(&pinned); err != nil || !pinned {
+		t.Errorf("the merge took the pin off: pinned=%v, %v", pinned, err)
 	}
 	if len(w.ran) != 1 {
 		t.Errorf("delivered again: %q", w.ran)
 	}
 }
 
-// A merge whose resume left no prompt keeps the pin and is delivered again.
+// A merge whose resume left no prompt keeps the watch and is delivered again.
 func TestPass_MergedUnconfirmedRedelivered(t *testing.T) {
 	conn := ledger(t, sid)
 	w := &world{activity: Activity{State: StateMerged}}
@@ -573,8 +586,8 @@ func TestPass_MergedUnconfirmedRedelivered(t *testing.T) {
 	for _, tick := range []time.Duration{0, 3 * time.Minute, 6 * time.Minute, 9 * time.Minute} {
 		Pass(conn, now.Add(tick), DefaultDebounce, w.deps(), &out)
 	}
-	if pinned, _, _ := pinState(t, conn, sid); !pinned {
-		t.Errorf("unpinned without a prompt:\n%s", &out)
+	if watching, _, _ := watchState(t, conn, sid); !watching {
+		t.Errorf("watch removed without a prompt:\n%s", &out)
 	}
 	if len(w.ran) != 2 {
 		t.Errorf("want the delivery and one redelivery, ran %d times:\n%s", len(w.ran), &out)
@@ -594,22 +607,28 @@ func TestPass_DoneSessionIgnored(t *testing.T) {
 	}
 }
 
-// One pin's gh failure is reported and the
-// other pins are still watched.
-func TestPass_GhErrorSkipsPin(t *testing.T) {
-	conn := ledger(t, sid)
-	other := "otherbbb-3333"
+// addWatcher puts another gone session on the ledger, watching watched.
+func addWatcher(t *testing.T, conn *sql.DB, id, watched string) {
+	t.Helper()
 	p := pin(t)
 	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, config_dir, kind, terminated_at) VALUES (?, ?, ?, ?, 'interactive', 1)",
-		other, p.Cwd, p.TranscriptPath, cfg); err != nil {
+		id, p.Cwd, p.TranscriptPath, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state) VALUES (?, 'Stop', 'idle_done')", other); err != nil {
+	if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state) VALUES (?, 'Stop', 'idle_done')", id); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetPinPR(conn, other, "example-org/example-repo#13", at("10:00")); err != nil {
+	if err := db.SetPRWatch(conn, id, watched, nil, at("10:00")); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// One watch's gh failure is reported and the
+// other watches are still checked.
+func TestPass_GhErrorSkipsWatch(t *testing.T) {
+	conn := ledger(t, sid)
+	other := "otherbbb-3333"
+	addWatcher(t, conn, other, "example-org/example-repo#13")
 	w := &world{}
 	d := w.deps()
 	d.Poll = func(p, _ string) (Activity, error) {
@@ -695,7 +714,7 @@ func TestDeliver_TmuxServerGoneAfterStop(t *testing.T) {
 
 func failState(t *testing.T, conn *sql.DB, id string) (failures sql.NullInt64, halted, note sql.NullString) {
 	t.Helper()
-	if err := conn.QueryRow("SELECT pin_failures, pin_halted_upto, pin_note FROM sessions WHERE session_id = ?", id).Scan(&failures, &halted, &note); err != nil {
+	if err := conn.QueryRow("SELECT failures, halted_upto, note FROM pr_watches WHERE session_id = ? AND pr = ?", id, pr).Scan(&failures, &halted, &note); err != nil {
 		t.Fatal(err)
 	}
 	return
@@ -728,7 +747,7 @@ func unconfirmed(t *testing.T, conn *sql.DB, w *world, clock *time.Time, out *by
 	*clock = clock.Add(3 * time.Minute)
 }
 
-// halted is a ledger whose pin has had MaxFailures unconfirmed deliveries of
+// halted is a ledger whose watch has had MaxFailures unconfirmed deliveries of
 // news in a row.
 func halted(t *testing.T, w *world, clock *time.Time, out *bytes.Buffer) *sql.DB {
 	t.Helper()
@@ -777,7 +796,7 @@ func TestPass_RetryCap(t *testing.T) {
 		}
 	})
 
-	t.Run("stopped pin is polled but not delivered to", func(t *testing.T) {
+	t.Run("stopped watch is polled but not delivered to", func(t *testing.T) {
 		w := &world{activity: news}
 		var clock time.Time
 		var out bytes.Buffer
@@ -792,7 +811,7 @@ func TestPass_RetryCap(t *testing.T) {
 			t.Errorf("delivered after the stop: ran %d times\n%s", len(w.ran), &out)
 		}
 		if len(w.polled) != polled+4 {
-			t.Errorf("the stopped pin is not polled: %d polls", len(w.polled)-polled)
+			t.Errorf("the stopped watch is not polled: %d polls", len(w.polled)-polled)
 		}
 		if !strings.Contains(out.String(), "delivery stopped after 3 unconfirmed resumes") {
 			t.Errorf("the stop is not reported on later passes:\n%s", &out)
@@ -878,8 +897,8 @@ func TestPass_RetryCap(t *testing.T) {
 		if failures, up, _ := failState(t, conn, sid); failures.Valid || up.Valid {
 			t.Fatalf("stop not lifted by the reopen: failures=%v halted=%v\n%s", failures, up, &out)
 		}
-		if _, _, seen := pinState(t, conn, sid); seen.Valid {
-			t.Errorf("pin_seen_at survived the resume: %v", seen)
+		if _, _, seen := watchState(t, conn, sid); seen.Valid {
+			t.Errorf("seen_at survived the resume: %v", seen)
 		}
 		w.activity.Events = append(w.activity.Events, Event{Kind: KindComment, At: at("11:30")})
 		clock = clock.Add(3 * time.Minute)
@@ -921,7 +940,7 @@ func TestPass_RetryCap(t *testing.T) {
 		var out bytes.Buffer
 		conn := ledger(t, sid)
 		note := "Copilot の review 待ち"
-		if err := db.SetPin(conn, sid, &note); err != nil {
+		if err := db.SetPRWatch(conn, sid, pr, &note, at("10:00")); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
@@ -946,9 +965,33 @@ func TestPass_RetryCap(t *testing.T) {
 		}
 	})
 
-	// Putting the pin on again (claude-queue pin, the picker's ctrl-t) lifts
-	// the stop at once, with no new activity.
-	t.Run("re-pin resets the count", func(t *testing.T) {
+	// Setting the watch again (claude-queue follow) lifts the stop at once and
+	// starts over from now: what was already on the PR is not news.
+	t.Run("re-follow resets the count", func(t *testing.T) {
+		w := &world{activity: news}
+		var clock time.Time
+		var out bytes.Buffer
+		conn := halted(t, w, &clock, &out)
+		note := "見直した"
+		if err := db.SetPRWatch(conn, sid, pr, &note, clock); err != nil {
+			t.Fatal(err)
+		}
+		if failures, up, _ := failState(t, conn, sid); failures.Valid || up.Valid {
+			t.Fatalf("re-follow kept the stop: failures=%v halted=%v", failures, up)
+		}
+		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures {
+			t.Fatalf("delivered what was already on the PR: ran %d times\n%s", len(w.ran), &out)
+		}
+		w.activity = Activity{State: StateMerged}
+		Pass(conn, clock.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != MaxFailures+1 {
+			t.Errorf("not delivered after the re-follow: ran %d times\n%s", len(w.ran), &out)
+		}
+	})
+
+	// Taking the pin on or off is unrelated to the watch: the stop stays.
+	t.Run("pin does not lift the stop", func(t *testing.T) {
 		w := &world{activity: news}
 		var clock time.Time
 		var out bytes.Buffer
@@ -957,12 +1000,152 @@ func TestPass_RetryCap(t *testing.T) {
 		if err := db.SetPin(conn, sid, &note); err != nil {
 			t.Fatal(err)
 		}
-		if failures, up, _ := failState(t, conn, sid); failures.Valid || up.Valid {
-			t.Fatalf("re-pin kept the stop: failures=%v halted=%v", failures, up)
+		if err := db.ClearPin(conn, sid); err != nil {
+			t.Fatal(err)
+		}
+		if failures, up, _ := failState(t, conn, sid); failures.Int64 != MaxFailures || !up.Valid {
+			t.Fatalf("the pin touched the stop: failures=%v halted=%v", failures, up)
 		}
 		Pass(conn, clock, DefaultDebounce, w.deps(), &out)
-		if len(w.ran) != MaxFailures+1 {
-			t.Errorf("not delivered after the re-pin: ran %d times\n%s", len(w.ran), &out)
+		if len(w.ran) != MaxFailures {
+			t.Errorf("delivered after a pin: ran %d times\n%s", len(w.ran), &out)
+		}
+	})
+}
+
+// secondPR is the other PR of the session in the TestPass_OneDeliveryPerSession
+// cases. It sorts after pr.
+const secondPR = "example-org/example-repo#13"
+
+// serialLedger is a session watching both pr and secondPR.
+func serialLedger(t *testing.T) *sql.DB {
+	t.Helper()
+	conn := ledger(t, sid)
+	if err := db.SetPRWatch(conn, sid, secondPR, nil, at("10:00")); err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+// deliveredPRs names, in order, the PRs of the watches with a delivery awaiting
+// confirmation.
+func deliveredPRs(t *testing.T, conn *sql.DB) []string {
+	t.Helper()
+	ws, err := db.PRWatches(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, w := range ws {
+		if w.DeliveredAt != 0 {
+			got = append(got, w.PR)
+		}
+	}
+	return got
+}
+
+// A session can be resumed once at a time, and a delivery is confirmed by any
+// prompt since it, so its deliveries go one at a time.
+func TestPass_OneDeliveryPerSession(t *testing.T) {
+	merged := Activity{State: StateMerged}
+
+	t.Run("one per pass, the next after the first is settled", func(t *testing.T) {
+		conn := serialLedger(t)
+		w := &world{activity: merged}
+		var out bytes.Buffer
+		if got := Pass(conn, now, DefaultDebounce, w.deps(), &out); !got[sid] || len(w.ran) != 1 {
+			t.Fatalf("first pass: resumed %v, ran %q\n%s", got, w.ran, &out)
+		}
+		if got := deliveredPRs(t, conn); !slices.Equal(got, []string{pr}) {
+			t.Fatalf("delivered = %v\n%s", got, &out)
+		}
+		// Still unconfirmed: the second waits.
+		Pass(conn, now.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != 1 {
+			t.Fatalf("delivered while one was in flight: ran %q\n%s", w.ran, &out)
+		}
+		// Confirmed by this pass: the second still waits for the next one.
+		prompt(t, conn, sid, now.Unix()+5)
+		Pass(conn, now.Add(6*time.Minute), DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != 1 {
+			t.Fatalf("delivered in the pass that confirmed the first: ran %q\n%s", w.ran, &out)
+		}
+		if watching, _, _ := watchState(t, conn, sid); watching {
+			t.Fatalf("first watch not settled by the prompt:\n%s", &out)
+		}
+		delivered := now.Add(9 * time.Minute)
+		Pass(conn, delivered, DefaultDebounce, w.deps(), &out)
+		if got := deliveredPRs(t, conn); len(w.ran) != 2 || !slices.Equal(got, []string{secondPR}) {
+			t.Fatalf("second not delivered: ran %q, delivered %v\n%s", w.ran, got, &out)
+		}
+		// The prompt that confirmed the first says nothing about the second.
+		Pass(conn, delivered.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
+		if got := deliveredPRs(t, conn); !slices.Equal(got, []string{secondPR}) {
+			t.Fatalf("the first's prompt settled the second: %v\n%s", got, &out)
+		}
+		prompt(t, conn, sid, delivered.Unix()+5)
+		Pass(conn, delivered.Add(6*time.Minute), DefaultDebounce, w.deps(), &out)
+		if ws, err := db.PRWatches(conn); err != nil || len(ws) != 0 {
+			t.Errorf("watches left: %v, %v\n%s", ws, err, &out)
+		}
+	})
+
+	// The in-flight one may be either side of the due one in the pass's order.
+	for name, flying := range map[string]string{"in-flight watch sorted first": pr, "in-flight watch sorted last": secondPR} {
+		t.Run(name, func(t *testing.T) {
+			conn := serialLedger(t)
+			if err := db.SetPRDelivered(conn, sid, flying, now.Unix()-60, time.Time{}); err != nil {
+				t.Fatal(err)
+			}
+			w := &world{activity: merged}
+			var out bytes.Buffer
+			if got := Pass(conn, now, DefaultDebounce, w.deps(), &out); len(got) != 0 || len(w.ran) != 0 {
+				t.Errorf("delivered beside the one in flight: resumed %v, ran %q\n%s", got, w.ran, &out)
+			}
+			if !strings.Contains(out.String(), "delivering on a later pass") {
+				t.Errorf("the deferral is not reported:\n%s", &out)
+			}
+		})
+	}
+
+	// A launch that failed resumed nothing, so the session's next watch may try.
+	t.Run("a failed launch does not hold the next watch back", func(t *testing.T) {
+		conn := serialLedger(t)
+		w := &world{activity: merged, runErr: errors.New("tmux: no server")}
+		var out bytes.Buffer
+		Pass(conn, now, DefaultDebounce, w.deps(), &out)
+		if len(w.ran) != 2 {
+			t.Errorf("want both tried, ran %q\n%s", w.ran, &out)
+		}
+	})
+
+	// The debounce goes on running while a delivery is held back.
+	t.Run("a held-back watch still records new activity", func(t *testing.T) {
+		conn := ledger(t, sid)
+		if err := db.SetPRWatch(conn, sid, secondPR, nil, at("10:00")); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetPRDelivered(conn, sid, secondPR, now.Unix()-60, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+		w := &world{activity: news}
+		var out bytes.Buffer
+		Pass(conn, now, DefaultDebounce, w.deps(), &out)
+		if _, _, seen := watchState(t, conn, sid); seen.Int64 != now.Unix() {
+			t.Errorf("seen_at = %v\n%s", seen, &out)
+		}
+	})
+
+	// Holding back is per session: another session's delivery goes ahead.
+	t.Run("other sessions are not held back", func(t *testing.T) {
+		conn := serialLedger(t)
+		other := "otherbbb-3333"
+		addWatcher(t, conn, other, pr)
+		w := &world{activity: merged}
+		var out bytes.Buffer
+		got := Pass(conn, now, DefaultDebounce, w.deps(), &out)
+		if !got[sid] || !got[other] || len(w.ran) != 2 {
+			t.Errorf("resumed %v, ran %q\n%s", got, w.ran, &out)
 		}
 	})
 }

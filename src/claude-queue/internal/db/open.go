@@ -14,9 +14,9 @@ import (
 //
 // The order is load-bearing: Tables first so a fresh database has them,
 // migrate() second so an existing one gains the columns CREATE TABLE IF NOT
-// EXISTS cannot add, migrateLifecycle() third because it fills those columns,
-// and View last because it selects a column that only exists after the
-// migration.
+// EXISTS cannot add, migrateLifecycle() and migratePRWatches() next because
+// they read those columns, and View last because it selects a column that
+// only exists after the migration.
 func Open(path string) (*sql.DB, error) {
 	conn, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -37,6 +37,7 @@ func Open(path string) (*sql.DB, error) {
 		{"apply tables", func(c *sql.DB) error { _, err := c.Exec(Tables); return err }},
 		{"migrate", migrate},
 		{"migrate lifecycle", func(c *sql.DB) error { return migrateLifecycle(c, time.Now().Unix()) }},
+		{"migrate PR watches", migratePRWatches},
 		{"apply view", func(c *sql.DB) error { _, err := c.Exec(View); return err }},
 	} {
 		if err := step.run(conn); err != nil {
@@ -99,6 +100,46 @@ func hasColumn(conn *sql.DB, table, column string) (bool, error) {
 		return false, fmt.Errorf("inspect %s.%s: %w", table, column, err)
 	}
 	return n > 0, nil
+}
+
+// migratePRWatches moves each PR watch from the pin_* columns, where it used
+// to be an attribute of the pin, into pr_watches, and takes that session's pin
+// off. A pin put on by hand and one that came with `pin --pr` cannot be told
+// apart, so every pin with a watch comes off; the pin_note goes with it, as
+// the watch's note.
+//
+// It is not gated on user_version: once a row's pin_pr is NULL it has nothing
+// left to move, so running again is a no-op, and a binary from before the move
+// that writes a pin_pr later has it picked up by the next Open. The check
+// outside the transaction lets every Open with nothing to move return without
+// taking the write lock, for the reason migrateLifecycle's first read does.
+func migratePRWatches(conn *sql.DB) error {
+	var pending bool
+	if err := conn.QueryRow("SELECT EXISTS (SELECT 1 FROM sessions WHERE pin_pr IS NOT NULL)").Scan(&pending); err != nil {
+		return fmt.Errorf("look for PR pins: %w", err)
+	}
+	if !pending {
+		return nil
+	}
+	tx, err := conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO pr_watches(session_id, pr, cursor, seen_at, delivered_at, delivered_upto, failures, halted_upto, note)
+		SELECT session_id, pin_pr, pin_cursor, pin_seen_at, pin_delivered_at, pin_delivered_upto, pin_failures, pin_halted_upto, pin_note
+		FROM sessions WHERE pin_pr IS NOT NULL`); err != nil {
+		return fmt.Errorf("copy PR pins: %w", err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET waiting_event_id = NULL, pin_note = NULL, pin_pr = NULL, pin_cursor = NULL, pin_seen_at = NULL,
+		    pin_delivered_at = NULL, pin_delivered_upto = NULL, pin_failures = NULL, pin_halted_upto = NULL
+		WHERE pin_pr IS NOT NULL`); err != nil {
+		return fmt.Errorf("clear PR pins: %w", err)
+	}
+	return tx.Commit()
 }
 
 // lifecycleVersion is the PRAGMA user_version migrateLifecycle leaves behind.

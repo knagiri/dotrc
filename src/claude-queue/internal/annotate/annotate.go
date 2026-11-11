@@ -1,7 +1,9 @@
-// Package annotate implements `claude-queue memo`, `pin` and `unpin`, which
-// write a session's free-text memo and its pin (waiting on something outside
-// it, with an optional note and an optional PR for the watch pass to follow). The picker binds them to keys; an agent calls
-// them on its own session, which is why the session id defaults to
+// Package annotate implements `claude-queue memo`, `pin`, `unpin`, `follow` and
+// `unfollow`, which write a session's free-text memo, its pin (waiting on
+// something outside it, with an optional note) and the PRs it watches (woken on
+// their new reviews and comments and on a merge or close, while the session
+// goes on working). The picker binds some of them to keys; an agent calls them
+// on its own session, which is why the session id defaults to
 // CLAUDE_CODE_SESSION_ID -- the id Claude Code puts in the environment of every
 // hook and Bash tool call.
 package annotate
@@ -22,17 +24,20 @@ import (
 const sessionEnv = "CLAUDE_CODE_SESSION_ID"
 
 var usages = map[string]string{
-	"memo":  "usage: claude-queue memo [--session <id>] [--] [<text>]",
-	"pin":   "usage: claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N | PR URL>]",
-	"unpin": "usage: claude-queue unpin [--session <id>]",
+	"memo":     "usage: claude-queue memo [--session <id>] [--] [<text>]",
+	"pin":      "usage: claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N | PR URL>]",
+	"unpin":    "usage: claude-queue unpin [--session <id>]",
+	"follow":   "usage: claude-queue follow [--session <id>] [--note <text>] --pr <owner/repo#N | PR URL>",
+	"unfollow": "usage: claude-queue unfollow [--session <id>] [--pr <owner/repo#N | PR URL>]",
 }
 
 // errUsage is a malformed command line; Run prints the usage for it.
 var errUsage = errors.New("bad usage")
 
-// Run is the CLI entrypoint for cmd (memo, pin or unpin). It exits 1 on a bad
-// command line, no session id, an id that does not resolve to exactly one
-// session, a done session or a failed write, with the reason on stderr.
+// Run is the CLI entrypoint for cmd (memo, pin, unpin, follow or unfollow). It
+// exits 1 on a bad command line, no session id, an id that does not resolve to
+// exactly one session, a done session or a failed write, with the reason on
+// stderr.
 func Run(cmd string, args []string) {
 	conn, err := db.Open(db.DefaultPath())
 	if err != nil {
@@ -62,9 +67,11 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, no
 	session := fs.String("session", "", "session id or 8+ char prefix (default $"+sessionEnv+")")
 	var note *string
 	var pr string
-	if cmd == "pin" {
+	if cmd == "pin" || cmd == "follow" {
 		fs.Func("note", "what the session is waiting on", func(v string) error { note = &v; return nil })
-		fs.Func("pr", "a PR to watch: wake the session on its new reviews and comments, and when it is merged or closed", func(v string) error {
+	}
+	if cmd == "pin" || cmd == "follow" || cmd == "unfollow" {
+		fs.Func("pr", "the PR: follow wakes the session on its new reviews and comments, and when it is merged or closed", func(v string) error {
 			ref, err := db.ParsePRRef(v)
 			pr = ref
 			return err
@@ -75,6 +82,10 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, no
 	}
 	rest := fs.Args()
 	if (cmd == "memo" && len(rest) > 1) || (cmd != "memo" && len(rest) > 0) {
+		return errUsage
+	}
+	if cmd == "follow" && pr == "" {
+		fmt.Fprintf(errOut, "%s: --pr is required\n", cmd)
 		return errUsage
 	}
 
@@ -109,10 +120,34 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, no
 			return err
 		}
 		if pr != "" {
-			return db.SetPinPR(conn, id, pr, now())
+			return db.SetPRWatch(conn, id, pr, note, now())
 		}
 		return nil
+	case "follow":
+		return db.SetPRWatch(conn, id, pr, note, now())
+	case "unfollow":
+		return unfollow(conn, id, pr, errOut)
 	default:
 		return db.ClearPin(conn, id)
 	}
+}
+
+// unfollow removes the watch on pr, or every watch of the session when pr is
+// empty. Finding nothing to remove is not a failure -- the end state is the one
+// asked for -- but it is said, because a mistyped PR looks the same.
+func unfollow(conn *sql.DB, id, pr string, errOut io.Writer) error {
+	var n int64
+	var err error
+	if pr == "" {
+		n, err = db.ClearPRWatches(conn, id)
+	} else {
+		n, err = db.ClearPRWatch(conn, id, pr)
+	}
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		fmt.Fprintln(errOut, "unfollow: nothing to remove")
+	}
+	return nil
 }

@@ -244,9 +244,8 @@ func SetLinkPR(conn *sql.DB, parentSessionID, repo, branch string, pr int) error
 // beyond "is it set"; it is kept rather than turned into a flag so a database
 // written by the earlier, lapsing mark migrates without a schema change.
 //
-// Toggling the mark off drops the pin's note and its PR watch with it (see
-// SetPin, SetPinPR). Toggling off also drops any stop on the PR's delivery
-// along with the watch.
+// Toggling the mark off drops the pin's note with it (see SetPin). The
+// session's PR watches are not touched.
 //
 // A done or unknown session is left alone and reports false.
 func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
@@ -257,13 +256,7 @@ func ToggleMark(conn *sql.DB, sessionID string) (bool, error) {
 		      WHEN waiting_event_id IS NOT NULL THEN NULL
 		      ELSE COALESCE((SELECT MAX(id) FROM events WHERE session_id = ?1), 0)
 		    END,
-		    pin_note = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_note END,
-		    pin_pr = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_pr END,
-		    pin_cursor = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_cursor END,
-		    pin_seen_at = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_seen_at END,
-		    pin_delivered_at = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_delivered_at END,
-		    pin_delivered_upto = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_delivered_upto END,
-		    pin_failures = NULL, pin_halted_upto = NULL
+		    pin_note = CASE WHEN waiting_event_id IS NOT NULL THEN NULL ELSE pin_note END
 		WHERE session_id = ?1 AND done_at IS NULL
 		RETURNING waiting_event_id IS NOT NULL
 	`, sessionID).Scan(&marked)

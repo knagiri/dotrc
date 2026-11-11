@@ -3,7 +3,7 @@
 // does its pass and exits.
 //
 // A pass reconciles the ledger against the live rosters, wakes the sessions
-// whose pinned PR has news (see package prwatch), records the PR numbers of
+// whose watched PR has news (see package prwatch), records the PR numbers of
 // delegated branches (see package prref), then hibernates the sessions
 // that have sat idle past the threshold (see package hibernate). Hibernation
 // goes last so that a session woken in this pass is not stopped by it.

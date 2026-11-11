@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -190,102 +191,204 @@ func TestParsePRRef(t *testing.T) {
 	}
 }
 
-func prPinOf(t *testing.T, conn *sql.DB, sid string) (pr, cursor sql.NullString, seen sql.NullInt64) {
+const watchedPR = "example-org/example-repo#3"
+
+// noteOfWatch reads the note on the session's watch of watchedPR.
+func noteOfWatch(t *testing.T, conn *sql.DB, sid string) sql.NullString {
 	t.Helper()
-	if err := conn.QueryRow(
-		"SELECT pin_pr, pin_cursor, pin_seen_at FROM sessions WHERE session_id = ?", sid,
-	).Scan(&pr, &cursor, &seen); err != nil {
-		t.Fatalf("read %s: %v", sid, err)
+	var note sql.NullString
+	if err := conn.QueryRow("SELECT note FROM pr_watches WHERE session_id = ? AND pr = ?", sid, watchedPR).Scan(&note); err != nil {
+		t.Fatalf("read note of %s: %v", sid, err)
 	}
-	return pr, cursor, seen
+	return note
 }
 
-// Activity from before the pin was put on is not news to the session that
-// pinned itself: the cursor starts at the pin.
-func TestSetPinPR_SetsCursorToNow(t *testing.T) {
+// Activity from before the watch was set is not news to the session that set
+// it: the cursor starts there. A watch does not pin the session.
+func TestSetPRWatch_SetsCursorToNow(t *testing.T) {
 	conn := openAnnotate(t)
 	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
-	if _, err := conn.Exec("UPDATE sessions SET pin_seen_at = 5, pin_delivered_at = 7, pin_delivered_upto = 'x' WHERE session_id = 'a'"); err != nil {
-		t.Fatal(err)
+	if err := SetPRWatch(conn, "a", watchedPR, nil, at); err != nil {
+		t.Fatalf("SetPRWatch: %v", err)
 	}
-	if err := SetPinPR(conn, "a", "example-org/example-repo#3", at); err != nil {
-		t.Fatalf("SetPinPR: %v", err)
+	if _, _, pinned := annotationsOf(t, conn, "a"); pinned {
+		t.Error("SetPRWatch pinned the session")
 	}
-	pr, cursor, seen := prPinOf(t, conn, "a")
-	if pr.String != "example-org/example-repo#3" || cursor.String != "2026-10-26T09:00:00Z" || seen.Valid {
-		t.Errorf("pin = %v, %v, %v", pr, cursor, seen)
+	ws, err := PRWatches(conn)
+	if err != nil || len(ws) != 1 {
+		t.Fatalf("PRWatches = %v, %v", ws, err)
 	}
-	if _, _, pinned := annotationsOf(t, conn, "a"); !pinned {
-		t.Error("SetPinPR did not pin the session")
-	}
-	pins, err := PRPins(conn)
-	if err != nil || len(pins) != 1 {
-		t.Fatalf("PRPins = %v, %v", pins, err)
-	}
-	if p := pins[0]; p.SessionID != "a" || p.PR != "example-org/example-repo#3" || !p.Cursor.Equal(at) || p.SeenAt != 0 || p.DeliveredAt != 0 || !p.DeliveredUpTo.IsZero() {
-		t.Errorf("PRPins[0] = %+v", p)
+	if p := ws[0]; p.SessionID != "a" || p.PR != watchedPR || !p.Cursor.Equal(at) || p.SeenAt != 0 || p.DeliveredAt != 0 || !p.DeliveredUpTo.IsZero() {
+		t.Errorf("PRWatches[0] = %+v", p)
 	}
 }
 
-func TestClearPin_ClearsPR(t *testing.T) {
-	for name, unpin := range map[string]func(*sql.DB) error{
+// Setting a watch again on the same PR starts it over: the cursor moves to now,
+// and the delivery record and any stop go. A nil note keeps the note.
+func TestSetPRWatch_AgainResets(t *testing.T) {
+	conn := openAnnotate(t)
+	note := "human review"
+	if err := SetPRWatch(conn, "a", watchedPR, &note, time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`UPDATE pr_watches SET seen_at = 5, delivered_at = 7, delivered_upto = '2026-10-26T09:00:00Z',
+		failures = 3, halted_upto = '2026-10-26T09:00:00Z'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPRWatch(conn, "a", watchedPR, nil, time.Unix(200, 0)); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := PRWatches(conn)
+	if err != nil || len(ws) != 1 {
+		t.Fatalf("PRWatches = %v, %v", ws, err)
+	}
+	if p := ws[0]; !p.Cursor.Equal(time.Unix(200, 0)) || p.SeenAt != 0 || p.DeliveredAt != 0 || !p.DeliveredUpTo.IsZero() || p.Failures != 0 || !p.HaltedUpTo.IsZero() {
+		t.Errorf("after setting it again: %+v", p)
+	}
+	if got := noteOfWatch(t, conn, "a"); got.String != note {
+		t.Errorf("nil note did not keep the note: %v", got)
+	}
+	empty := ""
+	if err := SetPRWatch(conn, "a", watchedPR, &empty, time.Unix(300, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if got := noteOfWatch(t, conn, "a"); got.Valid {
+		t.Errorf("empty note did not clear the note: %v", got)
+	}
+}
+
+func TestSetPRWatch_DoneOrUnknownFails(t *testing.T) {
+	conn := openAnnotate(t)
+	if _, err := MarkDone(conn, "a", 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPRWatch(conn, "a", watchedPR, nil, time.Unix(100, 0)); !errors.Is(err, ErrDone) {
+		t.Errorf("done session: err = %v, want ErrDone", err)
+	}
+	if err := SetPRWatch(conn, "nope", watchedPR, nil, time.Unix(100, 0)); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("unknown session: err = %v, want sql.ErrNoRows", err)
+	}
+}
+
+// Taking a pin on or off leaves the watch alone, its delivery record and its
+// stop included.
+func TestPinWrites_LeaveWatch(t *testing.T) {
+	note := "n"
+	for name, write := range map[string]func(*sql.DB) error{
+		"SetPin":     func(c *sql.DB) error { return SetPin(c, "a", &note) },
 		"ClearPin":   func(c *sql.DB) error { return ClearPin(c, "a") },
 		"ToggleMark": func(c *sql.DB) error { _, err := ToggleMark(c, "a"); return err },
-		"ClearPRPin": func(c *sql.DB) error { return ClearPRPin(c, "a", "example-org/example-repo#3") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			conn := openAnnotate(t)
-			if err := SetPinPR(conn, "a", "example-org/example-repo#3", time.Unix(100, 0)); err != nil {
+			if err := SetPRWatch(conn, "a", watchedPR, nil, time.Unix(100, 0)); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := conn.Exec("UPDATE sessions SET pin_seen_at = 5, pin_delivered_at = 7, pin_delivered_upto = 'x' WHERE session_id = 'a'"); err != nil {
+			halted := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+			if _, err := conn.Exec("UPDATE pr_watches SET seen_at = 5, delivered_at = 7, failures = 3, halted_upto = ?", halted.Format(time.RFC3339)); err != nil {
 				t.Fatal(err)
 			}
-			if err := unpin(conn); err != nil {
+			if err := write(conn); err != nil {
 				t.Fatal(err)
 			}
-			if pr, cursor, seen := prPinOf(t, conn, "a"); pr.Valid || cursor.Valid || seen.Valid {
-				t.Errorf("after %s: %v, %v, %v", name, pr, cursor, seen)
+			ws, err := PRWatches(conn)
+			if err != nil || len(ws) != 1 {
+				t.Fatalf("after %s: PRWatches = %v, %v", name, ws, err)
 			}
-			var at sql.NullInt64
-			var upTo sql.NullString
-			if err := conn.QueryRow("SELECT pin_delivered_at, pin_delivered_upto FROM sessions WHERE session_id = 'a'").Scan(&at, &upTo); err != nil {
-				t.Fatal(err)
-			}
-			if at.Valid || upTo.Valid {
-				t.Errorf("after %s: delivery record %v, %v", name, at, upTo)
-			}
-			if _, _, pinned := annotationsOf(t, conn, "a"); pinned {
-				t.Errorf("after %s: still pinned", name)
+			if p := ws[0]; p.SeenAt != 5 || p.DeliveredAt != 7 || p.Failures != 3 || !p.HaltedUpTo.Equal(halted) {
+				t.Errorf("after %s: %+v", name, p)
 			}
 		})
 	}
 }
 
-func TestPRPins_SkipsDoneAndPlainPins(t *testing.T) {
+// Clearing a watch takes off that one watch and nothing else: not another of
+// the session's watches, not another session's, not the pin.
+func TestClearPRWatch(t *testing.T) {
 	conn := openAnnotate(t)
-	for _, id := range []string{"plain", "done"} {
+	insertSession(t, conn, "b", "")
+	insertEvent(t, conn, "b", "Stop", "idle_done", 10)
+	const other = "example-org/example-repo#4"
+	for _, w := range [][2]string{{"a", watchedPR}, {"a", other}, {"b", watchedPR}} {
+		if err := SetPRWatch(conn, w[0], w[1], nil, time.Unix(100, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SetPin(conn, "a", nil); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := ClearPRWatch(conn, "a", watchedPR); n != 1 || err != nil {
+		t.Fatalf("ClearPRWatch = %d, %v", n, err)
+	}
+	ws, err := PRWatches(conn)
+	if err != nil || len(ws) != 2 || ws[0].SessionID != "a" || ws[0].PR != other || ws[1].SessionID != "b" {
+		t.Fatalf("after ClearPRWatch: %+v, %v", ws, err)
+	}
+	if _, _, pinned := annotationsOf(t, conn, "a"); !pinned {
+		t.Error("ClearPRWatch took the pin off")
+	}
+	if n, err := ClearPRWatch(conn, "a", watchedPR); n != 0 || err != nil {
+		t.Errorf("second ClearPRWatch = %d, %v", n, err)
+	}
+	if err := SetPRWatch(conn, "a", watchedPR, nil, time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := ClearPRWatches(conn, "a"); n != 2 || err != nil {
+		t.Fatalf("ClearPRWatches = %d, %v", n, err)
+	}
+	ws, err = PRWatches(conn)
+	if err != nil || len(ws) != 1 || ws[0].SessionID != "b" {
+		t.Errorf("after ClearPRWatches: %+v, %v", ws, err)
+	}
+	if _, _, pinned := annotationsOf(t, conn, "a"); !pinned {
+		t.Error("ClearPRWatches took the pin off")
+	}
+}
+
+// Every watch of an open session is listed, whether the session is pinned or
+// not and running or gone; a plain pin is not a watch, and a done session is
+// not watched.
+func TestPRWatches_Selection(t *testing.T) {
+	conn := openAnnotate(t)
+	for _, id := range []string{"plain", "done", "gone", "pinned"} {
 		insertSession(t, conn, id, "")
 		insertEvent(t, conn, id, "Stop", "idle_done", 10)
 	}
 	if err := SetPin(conn, "plain", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetPinPR(conn, "done", "example-org/example-repo#1", time.Unix(100, 0)); err != nil {
+	if err := SetPin(conn, "pinned", nil); err != nil {
 		t.Fatal(err)
+	}
+	for _, w := range [][2]string{
+		{"done", "example-org/example-repo#1"},
+		{"a", "example-org/example-repo#2"},
+		{"a", "example-org/example-repo#3"},
+		{"gone", "example-org/example-repo#4"},
+		{"pinned", "example-org/example-repo#5"},
+	} {
+		if err := SetPRWatch(conn, w[0], w[1], nil, time.Unix(100, 0)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := MarkDone(conn, "done", 200); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetPinPR(conn, "a", "example-org/example-repo#2", time.Unix(100, 0)); err != nil {
-		t.Fatal(err)
-	}
-	pins, err := PRPins(conn)
+	terminate(t, conn, "gone", 100)
+	ws, err := PRWatches(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pins) != 1 || pins[0].SessionID != "a" {
-		t.Errorf("PRPins = %+v, want only a", pins)
+	var got []string
+	for _, w := range ws {
+		got = append(got, w.SessionID+" "+w.PR)
+	}
+	want := []string{"a example-org/example-repo#2", "a example-org/example-repo#3", "gone example-org/example-repo#4", "pinned example-org/example-repo#5"}
+	if !slices.Equal(got, want) {
+		t.Errorf("PRWatches = %q, want %q", got, want)
+	}
+	if !ws[2].Gone || ws[0].Gone {
+		t.Errorf("Gone: %+v", ws)
 	}
 }
 
@@ -293,37 +396,41 @@ func TestPRPins_SkipsDoneAndPlainPins(t *testing.T) {
 // and drops the record. A merge or close records no cursor to move to.
 func TestSetPRDelivered(t *testing.T) {
 	conn := openAnnotate(t)
-	pr := "example-org/example-repo#3"
-	if err := SetPinPR(conn, "a", pr, time.Unix(100, 0)); err != nil {
+	pr := watchedPR
+	if err := SetPRWatch(conn, "a", pr, nil, time.Unix(100, 0)); err != nil {
 		t.Fatal(err)
 	}
 	upTo := time.Date(2026, 10, 26, 10, 40, 0, 0, time.UTC)
 	if err := SetPRDelivered(conn, "a", pr, 500, upTo); err != nil {
 		t.Fatal(err)
 	}
-	pins, err := PRPins(conn)
-	if err != nil || len(pins) != 1 {
-		t.Fatalf("PRPins = %v, %v", pins, err)
+	ws, err := PRWatches(conn)
+	if err != nil || len(ws) != 1 {
+		t.Fatalf("PRWatches = %v, %v", ws, err)
 	}
-	if p := pins[0]; p.DeliveredAt != 500 || !p.DeliveredUpTo.Equal(upTo) || !p.Cursor.Equal(time.Unix(100, 0)) {
+	if p := ws[0]; p.DeliveredAt != 500 || !p.DeliveredUpTo.Equal(upTo) || !p.Cursor.Equal(time.Unix(100, 0)) {
 		t.Errorf("after SetPRDelivered: %+v", p)
 	}
-	// Another PR's write does not touch this pin.
+	// Another PR's write does not touch this watch.
 	if err := SetPRDelivered(conn, "a", "example-org/example-repo#4", 0, time.Time{}); err != nil {
 		t.Fatal(err)
+	}
+	ws, _ = PRWatches(conn)
+	if p := ws[0]; p.DeliveredAt != 500 {
+		t.Errorf("another PR's write changed the watch: %+v", p)
 	}
 	if err := AdvancePRCursor(conn, "a", pr, upTo); err != nil {
 		t.Fatal(err)
 	}
-	pins, _ = PRPins(conn)
-	if p := pins[0]; p.DeliveredAt != 0 || !p.DeliveredUpTo.IsZero() || !p.Cursor.Equal(upTo) {
+	ws, _ = PRWatches(conn)
+	if p := ws[0]; p.DeliveredAt != 0 || !p.DeliveredUpTo.IsZero() || !p.Cursor.Equal(upTo) {
 		t.Errorf("after AdvancePRCursor: %+v", p)
 	}
 	if err := SetPRDelivered(conn, "a", pr, 600, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	pins, _ = PRPins(conn)
-	if p := pins[0]; p.DeliveredAt != 600 || !p.DeliveredUpTo.IsZero() {
+	ws, _ = PRWatches(conn)
+	if p := ws[0]; p.DeliveredAt != 600 || !p.DeliveredUpTo.IsZero() {
 		t.Errorf("merge delivery: %+v", p)
 	}
 }
@@ -351,16 +458,14 @@ func TestPromptSince(t *testing.T) {
 }
 
 // FailPRDelivery counts failures and stops at max, reading back through
-// PRPins. Three things around it are checked: putting the pin on again (pin
-// --pr; pin --note is TestPass_RetryCap's) lifts the stop, toggling it off with
-// Tab drops the stop along with the watch, and a write for another PR changes
-// nothing.
+// PRWatches. It marks the watch's note, not the pin's, setting the watch again
+// lifts the stop, and a write for another PR changes nothing.
 func TestFailPRDelivery(t *testing.T) {
-	const pr, note = "example-org/example-repo#3", "[stopped]"
+	const pr, note = watchedPR, "[stopped]"
 	upTo := time.Date(2026, 10, 26, 10, 40, 0, 0, time.UTC)
 	stop := func(t *testing.T, conn *sql.DB) {
 		t.Helper()
-		if err := SetPinPR(conn, "a", pr, time.Unix(100, 0)); err != nil {
+		if err := SetPRWatch(conn, "a", pr, nil, time.Unix(100, 0)); err != nil {
 			t.Fatal(err)
 		}
 		for i := 1; i <= 3; i++ {
@@ -377,33 +482,29 @@ func TestFailPRDelivery(t *testing.T) {
 	if n, err := FailPRDelivery(conn, "a", "example-org/example-repo#4", 3, upTo, note); n != 0 || err != nil {
 		t.Errorf("another PR: n=%d err=%v", n, err)
 	}
-	pins, err := PRPins(conn)
-	if err != nil || len(pins) != 1 {
-		t.Fatalf("PRPins = %v, %v", pins, err)
+	ws, err := PRWatches(conn)
+	if err != nil || len(ws) != 1 {
+		t.Fatalf("PRWatches = %v, %v", ws, err)
 	}
-	if p := pins[0]; p.Failures != 3 || !p.HaltedUpTo.Equal(upTo) || p.DeliveredAt != 0 {
+	if p := ws[0]; p.Failures != 3 || !p.HaltedUpTo.Equal(upTo) || p.DeliveredAt != 0 {
 		t.Errorf("after the third failure: %+v", p)
 	}
-	if _, got, _ := annotationsOf(t, conn, "a"); got.String != note {
+	if got := noteOfWatch(t, conn, "a"); got.String != note {
 		t.Errorf("note = %v", got)
 	}
+	if _, got, _ := annotationsOf(t, conn, "a"); got.Valid {
+		t.Errorf("the stop marked the pin's note: %v", got)
+	}
 
-	for name, repin := range map[string]func(*sql.DB) error{
-		"pin --pr": func(c *sql.DB) error { return SetPinPR(c, "a", pr, time.Unix(200, 0)) },
-		"tab":      func(c *sql.DB) error { _, err := ToggleMark(c, "a"); return err },
-	} {
-		conn := openAnnotate(t)
-		stop(t, conn)
-		if err := repin(conn); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		var failures sql.NullInt64
-		var halted sql.NullString
-		if err := conn.QueryRow("SELECT pin_failures, pin_halted_upto FROM sessions WHERE session_id = 'a'").Scan(&failures, &halted); err != nil {
-			t.Fatal(err)
-		}
-		if failures.Valid || halted.Valid {
-			t.Errorf("%s kept the stop: failures=%v halted=%v", name, failures, halted)
-		}
+	if err := SetPRWatch(conn, "a", pr, nil, time.Unix(200, 0)); err != nil {
+		t.Fatal(err)
+	}
+	var failures sql.NullInt64
+	var halted sql.NullString
+	if err := conn.QueryRow("SELECT failures, halted_upto FROM pr_watches WHERE session_id = 'a'").Scan(&failures, &halted); err != nil {
+		t.Fatal(err)
+	}
+	if failures.Valid || halted.Valid {
+		t.Errorf("setting the watch again kept the stop: failures=%v halted=%v", failures, halted)
 	}
 }

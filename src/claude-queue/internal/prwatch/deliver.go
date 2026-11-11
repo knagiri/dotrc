@@ -80,7 +80,7 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 	}
 }
 
-// Deliver hands msg to the pinned session p by resuming it with msg as its
+// Deliver hands msg to the session of watch p by resuming it with msg as its
 // first input: `claude --resume <id> <msg>` in a new tmux window for an
 // interactive session, `claude --bg --resume <id> <msg>` for a background one.
 // The window goes into the repo's own tmux session (the picker's
@@ -121,7 +121,7 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 // For a running session the check is made before it is stopped, and again right
 // before the resume: stopping it may have been what let the daemon (background)
 // or the tmux server (interactive, if its pane was the last window) exit.
-func Deliver(p db.PRPin, msg string, deps Deps) error {
+func Deliver(p db.PRWatch, msg string, deps Deps) error {
 	delegates, err := deps.RunningDelegates()
 	if err != nil {
 		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot read its delegates: %v", err)}
@@ -184,7 +184,7 @@ func Deliver(p db.PRPin, msg string, deps Deps) error {
 
 // hostUp returns a SkipError unless what the launch goes into -- the tmux
 // server, or the config dir's claude daemon -- is already running.
-func hostUp(p db.PRPin, background bool, deps Deps) error {
+func hostUp(p db.PRWatch, background bool, deps Deps) error {
 	if !background {
 		if !deps.TmuxServerRunning() {
 			return &hibernate.SkipError{Reason: "no tmux server is running (starting one here would give it the service's environment)"}
@@ -204,7 +204,7 @@ func hostUp(p db.PRPin, background bool, deps Deps) error {
 // candidate is the hibernate.Candidate that stops the running session p: its
 // process from the `claude agents` listing, and its latest idle_done event,
 // which hibernation re-checks before it stops anything.
-func candidate(p db.PRPin, hd hibernate.Deps) (hibernate.Candidate, error) {
+func candidate(p db.PRWatch, hd hibernate.Deps) (hibernate.Candidate, error) {
 	agents, err := hd.List(p.ConfigDir)
 	if err != nil {
 		return hibernate.Candidate{}, &hibernate.SkipError{Reason: fmt.Sprintf("cannot read the listing of %s: %v", p.ConfigDir, err)}

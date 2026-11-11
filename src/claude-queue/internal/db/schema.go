@@ -47,23 +47,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- the picker lays them into a tab-separated line. Added by migrate() too.
   memo             TEXT,
   pin_note         TEXT,
-  -- The PR a pin watches, as owner/repo#N (see ParsePRRef), NULL for a pin
-  -- that watches nothing. pin_cursor is the RFC3339 time of the newest PR
-  -- activity already handed to the session; pin_seen_at is the unix time of
-  -- the watch pass that first saw newer activity not yet handed over (NULL
-  -- when there is none), which is what the one-tick debounce measures from.
-  -- pin_delivered_at is the unix time of the pass that resumed the session
-  -- with that activity, NULL when no delivery awaits confirmation, and
-  -- pin_delivered_upto the RFC3339 time pin_cursor moves to once the
-  -- session's UserPromptSubmit confirms it (NULL for a merge / close, whose
-  -- confirmation takes the pin off instead). pin_failures counts the
-  -- deliveries in a row that no UserPromptSubmit confirmed (NULL is none);
-  -- once it reaches the cap, delivery stops, and pin_halted_upto is the
-  -- pin_delivered_upto of the last failed one (NULL for a merge / close), the
-  -- activity that has to be outdone for delivery to resume. All seven are
-  -- cleared with the pin, and the last two also when it is put on again, when
-  -- delivery resumes or is confirmed, and when the mark is toggled.
-  -- Added by migrate() too.
+  -- Retired: where the PR watch lived before pr_watches. Nothing reads or
+  -- writes these seven any more except migratePRWatches, which moves what an
+  -- older binary left here into pr_watches. Not dropped, so that a binary from
+  -- before the move still opens the ledger. Added by migrate() too.
   pin_pr             TEXT,
   pin_cursor         TEXT,
   pin_seen_at        INTEGER,
@@ -87,6 +74,36 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_session_latest
   ON events(session_id, id DESC);
+
+-- The PRs a session watches: new reviews and comments, and a merge or close,
+-- wake the session. Independent of the pin: a watching session is not waiting
+-- on anything and may go on working. pr is owner/repo#N (see ParsePRRef).
+-- cursor is the RFC3339 time of the newest PR activity already handed to the
+-- session; seen_at is the unix time of the watch pass that first saw newer
+-- activity not yet handed over (NULL when there is none), which is what the
+-- one-tick debounce measures from. delivered_at is the unix time of the pass
+-- that resumed the session with that activity, NULL when no delivery awaits
+-- confirmation, and delivered_upto the RFC3339 time cursor moves to once the
+-- session's UserPromptSubmit confirms it (NULL for a merge / close, whose
+-- confirmation removes the row instead). failures counts the deliveries in a
+-- row that no UserPromptSubmit confirmed (NULL is none); once it reaches the
+-- cap, delivery stops, and halted_upto is the delivered_upto of the last
+-- failed one (NULL for a merge / close), the activity that has to be outdone
+-- for delivery to resume. Both are cleared when delivery resumes or is
+-- confirmed, and when the watch is set again. note says what the watch is for,
+-- flattened to one line like memo; a stop puts its mark in front of it.
+CREATE TABLE IF NOT EXISTS pr_watches (
+  session_id     TEXT NOT NULL REFERENCES sessions(session_id),
+  pr             TEXT NOT NULL,
+  cursor         TEXT,
+  seen_at        INTEGER,
+  delivered_at   INTEGER,
+  delivered_upto TEXT,
+  failures       INTEGER,
+  halted_upto    TEXT,
+  note           TEXT,
+  PRIMARY KEY (session_id, pr)
+);
 
 -- Delegation parent/child links, written by bin/claude-worktree through
 -- ` + "`claude-queue link`" + `. The child is keyed by its 8-char short id because that
