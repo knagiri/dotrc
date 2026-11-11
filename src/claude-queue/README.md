@@ -46,7 +46,7 @@ make install
 | `claude-queue link --parent <session-id> --child <short-id> [--repo <owner/repo>] [--branch <name>]` | 委譲の親子関係と、委譲先の repo / branch を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示、孤児の判定、PR 番号・branch からの検索に使う。設計は `docs/design/claude-queue-session-tree.md` |
 | `claude-queue mark <session-id>` | pin をトグルする（picker の Tab が呼ぶ）。外すと pin のコメントも消える。done・未知の session は何もせず exit 0 |
 | `claude-queue memo [--session <id>] [--] [<text>]` | session のメモを設定する。`<text>` を省くと現在のメモを出力し、空文字を渡すと消す |
-| `claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N \| PR URL>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す。`--pr` を渡すと `follow` も行い、`--note` は pin のコメントと監視のコメントの両方に入る |
+| `claude-queue pin [--session <id>] [--note <text>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す |
 | `claude-queue unpin [--session <id>]` | pin とそのコメントを外す。PR 監視には触らない |
 | `claude-queue follow [--session <id>] [--note <text>] --pr <owner/repo#N \| PR URL>` | その PR を監視する（後述の「PR 監視」）。pin は立てない。既読位置は今の時刻から。同じ PR へ再度実行すると既読位置を今の時刻にし、配送の記録と停止を消す。`--note` を渡すと監視のコメントを置き換え、省くと残す |
 | `claude-queue unfollow [--session <id>] [--pr <PR>]` | その PR の監視を外す。`--pr` を省くとその session の監視をすべて外す。pin には触らない |

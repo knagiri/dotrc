@@ -159,32 +159,41 @@ func TestMemoCLI_DashLeadingText(t *testing.T) {
 	}
 }
 
-func TestPinCLI_PR(t *testing.T) {
+// pin has no --pr: watching a PR is follow's, and leaves the pin alone.
+func TestPinCLI_NoPRFlag(t *testing.T) {
 	conn := setup(t)
 	e := env(map[string]string{sessionEnv: sid})
-	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
-	clock := func() time.Time { return at }
 	var out bytes.Buffer
-	if err := run(conn, "pin", []string{"--note", "human review", "--pr", "https://github.com/example-org/example-repo/pull/4"}, e, clock, &out, &out); err != nil {
-		t.Fatalf("pin --pr: %v", err)
+	if err := run(conn, "pin", []string{"--note", "n", "--pr", "example-org/example-repo#4"}, e, time.Now, &out, &out); !errors.Is(err, errUsage) {
+		t.Fatalf("pin --pr = %v, want errUsage", err)
 	}
-	pinned, note := pinOf(t, conn)
-	w := watchOf(t, conn, "example-org/example-repo#4")
-	if !pinned || note.String != "human review" || w.cursor.String != "2026-10-26T09:00:00Z" || w.note.String != "human review" {
-		t.Errorf("after pin --pr: pinned=%v note=%v watch=%+v", pinned, note, w)
+	if pinned, _ := pinOf(t, conn); pinned {
+		t.Error("a rejected pin --pr pinned the session")
 	}
+	if n := watchCount(t, conn); n != 0 {
+		t.Errorf("a rejected pin --pr left %d watches", n)
+	}
+}
 
-	// A plain pin afterwards keeps the watch.
-	if err := run(conn, "pin", []string{"--note", "still waiting"}, e, clock, &out, &out); err != nil {
+// A pin put on or taken off leaves a watch as it was.
+func TestPinCLI_LeavesWatch(t *testing.T) {
+	conn := setup(t)
+	e := env(map[string]string{sessionEnv: sid})
+	var out bytes.Buffer
+	if err := run(conn, "follow", []string{"--note", "human review", "--pr", "example-org/example-repo#4"}, e, time.Now, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if got := watchOf(t, conn, "example-org/example-repo#4"); got != w {
-		t.Errorf("plain pin changed the watch: %+v, was %+v", got, w)
-	}
-
-	var errOut bytes.Buffer
-	if err := run(conn, "pin", []string{"--pr", "not-a-pr"}, e, clock, &out, &errOut); !errors.Is(err, errUsage) {
-		t.Errorf("pin --pr not-a-pr = %v, want errUsage", err)
+	w := watchOf(t, conn, "example-org/example-repo#4")
+	for _, c := range []struct {
+		cmd  string
+		args []string
+	}{{"pin", []string{"--note", "still waiting"}}, {"unpin", nil}} {
+		if err := run(conn, c.cmd, c.args, e, time.Now, &out, &out); err != nil {
+			t.Fatal(err)
+		}
+		if got := watchOf(t, conn, "example-org/example-repo#4"); got != w {
+			t.Errorf("%s changed the watch: %+v, was %+v", c.cmd, got, w)
+		}
 	}
 }
 
