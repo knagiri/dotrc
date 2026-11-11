@@ -508,3 +508,62 @@ func TestFailPRDelivery(t *testing.T) {
 		t.Errorf("setting the watch again kept the stop: failures=%v halted=%v", failures, halted)
 	}
 }
+
+// Each watch writer touches the one watch it is given: not the session's other
+// PR, and not another session's watch on the same PR. Without the
+// session_id / pr conditions a write would land on all of them.
+func TestPRWatchWriters_ScopedToOneWatch(t *testing.T) {
+	const (
+		pr3 = "example-org/example-repo#3"
+		pr4 = "example-org/example-repo#4"
+	)
+	halted := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	writers := map[string]func(*sql.DB) error{
+		"SetPRSeen":        func(c *sql.DB) error { return SetPRSeen(c, "a", pr3, 99) },
+		"AdvancePRCursor":  func(c *sql.DB) error { return AdvancePRCursor(c, "a", pr3, halted) },
+		"SetPRDelivered":   func(c *sql.DB) error { return SetPRDelivered(c, "a", pr3, 99, halted) },
+		"FailPRDelivery":   func(c *sql.DB) error { _, err := FailPRDelivery(c, "a", pr3, 5, halted, "x"); return err },
+		"ResumePRDelivery": func(c *sql.DB) error { return ResumePRDelivery(c, "a", pr3) },
+	}
+	type state struct{ cursor, seen, delivered, failures, halted, note sql.NullString }
+	read := func(t *testing.T, conn *sql.DB, sid, pr string) state {
+		t.Helper()
+		var s state
+		if err := conn.QueryRow(`SELECT cursor, seen_at, delivered_at, failures, halted_upto, note
+			FROM pr_watches WHERE session_id = ? AND pr = ?`, sid, pr).
+			Scan(&s.cursor, &s.seen, &s.delivered, &s.failures, &s.halted, &s.note); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for name, write := range writers {
+		t.Run(name, func(t *testing.T) {
+			conn := openAnnotate(t)
+			insertSession(t, conn, "b", "")
+			insertEvent(t, conn, "b", "Stop", "idle_done", 10)
+			for _, w := range [][2]string{{"a", pr3}, {"a", pr4}, {"b", pr3}} {
+				if err := SetPRWatch(conn, w[0], w[1], nil, time.Unix(100, 0)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Non-default values everywhere, so a write that wrongly lands shows.
+			if _, err := conn.Exec(`UPDATE pr_watches SET seen_at = 5, delivered_at = 7, failures = 3, halted_upto = ?`,
+				halted.Add(time.Hour).Format(time.RFC3339)); err != nil {
+				t.Fatal(err)
+			}
+			beforeA4, beforeB3, beforeA3 := read(t, conn, "a", pr4), read(t, conn, "b", pr3), read(t, conn, "a", pr3)
+			if err := write(conn); err != nil {
+				t.Fatal(err)
+			}
+			if got := read(t, conn, "a", pr3); got == beforeA3 {
+				t.Errorf("%s did not change its own watch", name)
+			}
+			if got := read(t, conn, "a", pr4); got != beforeA4 {
+				t.Errorf("%s changed the session's other PR: %+v -> %+v", name, beforeA4, got)
+			}
+			if got := read(t, conn, "b", pr3); got != beforeB3 {
+				t.Errorf("%s changed another session's watch: %+v -> %+v", name, beforeB3, got)
+			}
+		})
+	}
+}

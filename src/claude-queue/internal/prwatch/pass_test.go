@@ -1090,6 +1090,23 @@ func TestPass_OneDeliveryPerSession(t *testing.T) {
 		}
 	})
 
+	// The same holds for new reviews and comments on an open PR once their
+	// debounce has elapsed, not only for a merge or close.
+	t.Run("open PRs with elapsed debounce deliver one per pass", func(t *testing.T) {
+		conn := serialLedger(t)
+		for _, p := range []string{pr, secondPR} {
+			if err := db.SetPRSeen(conn, sid, p, now.Unix()-600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w := &world{activity: news}
+		var out bytes.Buffer
+		Pass(conn, now, DefaultDebounce, w.deps(), &out)
+		if got := deliveredPRs(t, conn); len(w.ran) != 1 || !slices.Equal(got, []string{pr}) {
+			t.Errorf("want one delivery, to %s: ran %q, delivered %v\n%s", pr, w.ran, got, &out)
+		}
+	})
+
 	// The in-flight one may be either side of the due one in the pass's order.
 	for name, flying := range map[string]string{"in-flight watch sorted first": pr, "in-flight watch sorted last": secondPR} {
 		t.Run(name, func(t *testing.T) {

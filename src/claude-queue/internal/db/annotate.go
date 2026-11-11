@@ -90,6 +90,24 @@ func annotate(conn *sql.DB, what, sessionID, query string, args ...any) error {
 	return fmt.Errorf("%s: %s: nothing updated", what, sessionID)
 }
 
+// RequireOpen returns ErrDone for a done session and sql.ErrNoRows for an
+// unknown one, and nil for an open one. It is for writers that do not go
+// through annotate (a DELETE has no open-session condition to count).
+func RequireOpen(conn *sql.DB, what, sessionID string) error {
+	var done bool
+	err := conn.QueryRow("SELECT done_at IS NOT NULL FROM sessions WHERE session_id = ?", sessionID).Scan(&done)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%s: no session %s: %w", what, sessionID, err)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if done {
+		return fmt.Errorf("%s: %s: %w", what, sessionID, ErrDone)
+	}
+	return nil
+}
+
 // Memo returns the memo on sessionID, empty when it has none. Unlike the
 // writers it reads a done session too.
 func Memo(conn *sql.DB, sessionID string) (string, error) {

@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   pin_note         TEXT,
   -- Retired: where the PR watch lived before pr_watches. Nothing reads or
   -- writes these seven any more except migratePRWatches, which moves what an
-  -- older binary left here into pr_watches. Not dropped, so that a binary from
-  -- before the move still opens the ledger. Added by migrate() too.
+  -- older binary left here into pr_watches. Not dropped because that read
+  -- needs the columns to exist. Added by migrate() too.
   pin_pr             TEXT,
   pin_cursor         TEXT,
   pin_seen_at        INTEGER,

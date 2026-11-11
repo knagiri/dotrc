@@ -149,8 +149,6 @@ func TestGC_DeletesOldDone(t *testing.T) {
 	}
 }
 
-// A link is kept while either end is open, and dropped once both are done (or
-// gone from the ledger) and it is old.
 // A collected session's PR watches go with it; an open one's stay. The sessions
 // row has a foreign key from pr_watches, so a watch left behind fails the GC.
 func TestGC_DeletesPRWatches(t *testing.T) {
@@ -186,6 +184,8 @@ func TestGC_DeletesPRWatches(t *testing.T) {
 	}
 }
 
+// A link is kept while either end is open, and dropped once both are done (or
+// gone from the ledger) and it is old.
 func TestGC_KeepsLinkWhileEitherSideOpen(t *testing.T) {
 	conn := openTest(t)
 	const (

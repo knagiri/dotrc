@@ -323,3 +323,30 @@ func TestUnfollowCLI(t *testing.T) {
 		t.Errorf("unfollow stray = %v, want errUsage", err)
 	}
 }
+
+// A done session keeps its watches (Reopen brings them back), so unfollow is
+// refused for it like every other write, with or without --pr.
+func TestUnfollowCLI_DoneSessionFails(t *testing.T) {
+	for name, args := range map[string][]string{
+		"with --pr":    {"--pr", "example-org/example-repo#1"},
+		"without --pr": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn := setup(t)
+			e := env(map[string]string{sessionEnv: sid})
+			var out bytes.Buffer
+			if err := run(conn, "follow", []string{"--pr", "example-org/example-repo#1"}, e, time.Now, &out, &out); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Exec("UPDATE sessions SET done_at = 1"); err != nil {
+				t.Fatal(err)
+			}
+			if err := run(conn, "unfollow", args, e, time.Now, &out, &out); !errors.Is(err, db.ErrDone) {
+				t.Errorf("unfollow on done = %v, want ErrDone", err)
+			}
+			if n := watchCount(t, conn); n != 1 {
+				t.Errorf("unfollow on done left %d watches, want 1", n)
+			}
+		})
+	}
+}

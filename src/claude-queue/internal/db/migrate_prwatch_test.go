@@ -102,6 +102,25 @@ func TestMigratePRWatches_MovesStateAndUnpins(t *testing.T) {
 	}
 }
 
+// A done session can be reopened, so its watch moves too.
+func TestMigratePRWatches_MovesDoneSessionToo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	conn := reopen(t, path)
+	insertSession(t, conn, "finished", "")
+	insertEvent(t, conn, "finished", "Stop", "idle_done", 10)
+	writeLegacyPin(t, conn, "finished", legacyPR)
+	if _, err := conn.Exec("UPDATE sessions SET done_at = 50 WHERE session_id = 'finished'"); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	conn = reopen(t, path)
+	if got := readWatch(t, conn, "finished", legacyPR); got.failures.Int64 != 2 {
+		t.Errorf("watch of a done session = %+v", got)
+	}
+	assertUnpinned(t, conn, "finished")
+}
+
 // Opening again changes nothing: not a watch that has since moved on, and not a
 // pin put on after the move.
 func TestMigratePRWatches_Idempotent(t *testing.T) {

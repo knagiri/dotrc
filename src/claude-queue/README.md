@@ -46,7 +46,7 @@ make install
 | `claude-queue link --parent <session-id> --child <short-id> [--repo <owner/repo>] [--branch <name>]` | 委譲の親子関係と、委譲先の repo / branch を記録する（`bin/claude-worktree` の bg 経路が呼ぶ）。picker の木表示、孤児の判定、PR 番号・branch からの検索に使う。設計は `docs/design/claude-queue-session-tree.md` |
 | `claude-queue mark <session-id>` | pin をトグルする（picker の Tab が呼ぶ）。外すと pin のコメントも消える。done・未知の session は何もせず exit 0 |
 | `claude-queue memo [--session <id>] [--] [<text>]` | session のメモを設定する。`<text>` を省くと現在のメモを出力し、空文字を渡すと消す |
-| `claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N \| PR URL>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す。`--pr` を渡すと `follow` も行う |
+| `claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N \| PR URL>]` | pin を立てる。`--note` を渡すとコメントを置き換え（空文字で消す）、省くと既存のコメントを残す。`--pr` を渡すと `follow` も行い、`--note` は pin のコメントと監視のコメントの両方に入る |
 | `claude-queue unpin [--session <id>]` | pin とそのコメントを外す。PR 監視には触らない |
 | `claude-queue follow [--session <id>] [--note <text>] --pr <owner/repo#N \| PR URL>` | その PR を監視する（後述の「PR 監視」）。pin は立てない。既読位置は今の時刻から。同じ PR へ再度実行すると既読位置を今の時刻にし、配送の記録と停止を消す。`--note` を渡すと監視のコメントを置き換え、省くと残す |
 | `claude-queue unfollow [--session <id>] [--pr <PR>]` | その PR の監視を外す。`--pr` を省くとその session の監視をすべて外す。pin には触らない |
@@ -55,7 +55,7 @@ make install
 | `claude-queue nav {back\|forward} [--client <name>] [--pane <id>]` | picker で飛んだ履歴をブラウザの戻る / 進むのように 1 つ移動する（後述の「飛んだ履歴の行き来」）。tmux の `C-q C-h` / `C-q C-l` が呼ぶ。行き先が無ければ tmux のメッセージで知らせて exit 0 |
 | `claude-queue --version` | バージョン表示 |
 
-`memo` / `pin` / `unpin` は `--session`（8 桁以上の前方一致）を省くと `CLAUDE_CODE_SESSION_ID` を使う。Claude Code は
+`memo` / `pin` / `unpin` / `follow` / `unfollow` は `--session`（8 桁以上の前方一致）を省くと `CLAUDE_CODE_SESSION_ID` を使う。Claude Code は
 hook と Bash tool の環境にその session の id を入れるので、agent は id を知らずに自分の session へ書ける
 （例: `claude-queue pin --note "<待っているもの>"`）。どちらも無いとき、id が 1 件に決まらないとき、done の
 session に書こうとしたときは exit 1 で、理由を stderr に出す。
@@ -373,10 +373,13 @@ systemctl --user enable --now claude-queue-watch.timer
 
 `SessionEnd` hook 末尾で、`done_at` が 7 日以上前の sessions とその events を削除。gone の
 session は期間に関わらず消さない。`session_links` は作成から 7 日以上経ち、親子のどちらも open で
-ないものを削除。
+ないものを削除。消した session の PR 監視（`pr_watches`）も一緒に削除する。
 
-既存 DB は初回の Open で一度だけ移行する（`PRAGMA user_version` で判定）。直近 7 日以内に
+既存 DB の open / done の仕分けは初回の Open で一度だけ行う（`PRAGMA user_version` で判定。`migrateLifecycle`）。直近 7 日以内に
 `prompt_input_exit` / `clear` 以外で閉じた session は open（gone）に、それ以外は done になる。
+
+PR 監視付きの pin（旧版は pin の列に監視を持っていた）は、Open のたびに残りを拾って `pr_watches` へ写す。
+この移行は `user_version` に依らず、写した session の pin とそのコメントは外れる（コメントは監視のコメントになる）。done の session の分も写す。
 
 ## tmux 設定（`dot/tmux.conf`）
 

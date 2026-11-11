@@ -68,7 +68,7 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, no
 	var note *string
 	var pr string
 	if cmd == "pin" || cmd == "follow" {
-		fs.Func("note", "what the session is waiting on", func(v string) error { note = &v; return nil })
+		fs.Func("note", "what the session is waiting on (pin) or for (follow)", func(v string) error { note = &v; return nil })
 	}
 	if cmd == "pin" || cmd == "follow" || cmd == "unfollow" {
 		fs.Func("pr", "the PR: follow wakes the session on its new reviews and comments, and when it is merged or closed", func(v string) error {
@@ -136,6 +136,11 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, no
 // empty. Finding nothing to remove is not a failure -- the end state is the one
 // asked for -- but it is said, because a mistyped PR looks the same.
 func unfollow(conn *sql.DB, id, pr string, errOut io.Writer) error {
+	// A done session keeps its watches: Reopen brings the work back, and the
+	// watches with it.
+	if err := db.RequireOpen(conn, "unfollow", id); err != nil {
+		return err
+	}
 	var n int64
 	var err error
 	if pr == "" {

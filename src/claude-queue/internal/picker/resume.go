@@ -1,7 +1,7 @@
 package picker
 
 // The picker's resume-window conventions, for the other path that resumes a
-// session into a fresh tmux window: the watch pass waking a pinned session
+// session into a fresh tmux window: the watch pass waking a session for its PR watch
 // (package prwatch). Both have to open the window in the same place, under the
 // same name and with the same config dir, or a pick after a wake-up would open
 // a second window for the same session.
