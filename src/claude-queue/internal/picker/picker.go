@@ -34,9 +34,15 @@ const iconMarked = "marked"
 // it is not a state.
 const iconMemo = "memo"
 
+// iconWatch keys the prefix of a watched PR in the annotation column. Like
+// iconMarked it is not a state, and unlike the mark it does not replace the
+// row's icon: a session watching a PR is not waiting on anything.
+const iconWatch = "watch"
+
 var emoji = map[string]string{
 	iconMarked:          "📌",
 	iconMemo:            "📝",
+	iconWatch:           "👀",
 	"awaiting_approval": "⏳",
 	"idle_done":         "✅",
 	"working":           "⚙️",
@@ -47,6 +53,7 @@ var emoji = map[string]string{
 var ascii = map[string]string{
 	iconMarked:          "[P]",
 	iconMemo:            "[M]",
+	iconWatch:           "[W]",
 	"awaiting_approval": "[!]",
 	"idle_done":         "[.]",
 	"working":           "[*]",
@@ -59,8 +66,8 @@ var ascii = map[string]string{
 // hidden because the pick needs them and the eye does not.
 //
 // The annotation column is shown too, after the summary, but sits behind the
-// hidden ones so adding it left their positions alone. It is what makes memos
-// and pin notes searchable: fzf can only search columns that are shown, and of
+// hidden ones so adding it left their positions alone. It is what makes memos,
+// pin notes and watched PRs searchable: fzf can only search columns that are shown, and of
 // those it searches the ones --nth lists (see searchColumns); the summary is
 // shown but not searched. The raw memo and pin note after it are hidden, and
 // are what the edit keys prefill from.
@@ -117,7 +124,8 @@ const (
 // layout lost: several sessions in one repo share a worktree name and all read
 // "working", and the title is the only column that tells them apart.
 //
-// Then the annotation column (pin note and memo), shown after the summary.
+// Then the annotation column (pin note, watched PRs and memo), shown after the
+// summary.
 //
 // Then the refs column: refs is the row's delegation tree's PRs and branches
 // (db.TreeRefs), dimmed when dimRefs is set (a row that has a delegation link,
@@ -187,13 +195,22 @@ func FormatLine(row db.Row, title, worktree, refs string, dimRefs bool, nowSec i
 	return strings.Join(fields, "\t")
 }
 
-// annotation renders the pin note (on a pinned row that has one) and the memo,
-// each behind its icon. Both are flattened to one line when they are written
-// (db.SetMemo), so neither can carry a tab into the line.
+// annotation renders the pin note (on a pinned row that has one), each watched
+// PR with its note (which carries the mark of a delivery that has stopped at
+// some point; resuming does not clear it, so it is no sign of a current stop), and the
+// memo, each behind its icon. The notes are flattened to one line when they are
+// written (db.SetMemo, db.SetPRWatch), so none can carry a tab into the line.
 func annotation(row db.Row, icons map[string]string) string {
 	var parts []string
 	if row.Marked && row.PinNote.String != "" {
 		parts = append(parts, icons[iconMarked]+" "+row.PinNote.String)
+	}
+	for _, w := range row.Watches {
+		part := icons[iconWatch] + " " + w.PR
+		if w.Note != "" {
+			part += " " + w.Note
+		}
+		parts = append(parts, part)
 	}
 	if row.Memo.String != "" {
 		parts = append(parts, icons[iconMemo]+" "+row.Memo.String)

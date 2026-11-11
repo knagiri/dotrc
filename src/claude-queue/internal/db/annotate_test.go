@@ -392,6 +392,53 @@ func TestPRWatches_Selection(t *testing.T) {
 	}
 }
 
+// A listed row carries its own session's watches, ordered by PR, and watching a
+// PR does not move it: the older session stays below the newer one.
+func TestListRows_CarriesWatches(t *testing.T) {
+	conn := openAnnotate(t) // "a", last active 10 seconds ago
+	insertSession(t, conn, "older", "")
+	insertEvent(t, conn, "older", "Stop", "idle_done", 500)
+	note := "human review"
+	for _, w := range []struct {
+		sid, pr string
+		note    *string
+	}{
+		{"older", "example-org/example-repo#2", nil},
+		{"older", "example-org/example-repo#1", &note},
+	} {
+		if err := SetPRWatch(conn, w.sid, w.pr, w.note, time.Unix(100, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := ListRows(conn, ListOpts{})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("ListRows = %+v, %v", rows, err)
+	}
+	if rows[0].SessionID != "a" || rows[1].SessionID != "older" {
+		t.Errorf("order = %s, %s; want a, older", rows[0].SessionID, rows[1].SessionID)
+	}
+	if len(rows[0].Watches) != 0 {
+		t.Errorf("a carries another session's watches: %+v", rows[0].Watches)
+	}
+	want := []RowWatch{{"example-org/example-repo#1", note}, {"example-org/example-repo#2", ""}}
+	if !slices.Equal(rows[1].Watches, want) {
+		t.Errorf("older.Watches = %+v, want %+v", rows[1].Watches, want)
+	}
+}
+
+// The watch's note lands in a tab-separated picker line, so like a memo it is
+// flattened on write.
+func TestSetPRWatch_FlattensNote(t *testing.T) {
+	conn := openAnnotate(t)
+	note := "line one\tline\ntwo"
+	if err := SetPRWatch(conn, "a", watchedPR, &note, time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if got := noteOfWatch(t, conn, "a"); got.String != "line one line two" {
+		t.Errorf("note = %q", got.String)
+	}
+}
+
 // A delivery is recorded without moving the cursor; AdvancePRCursor moves it
 // and drops the record. A merge or close records no cursor to move to.
 func TestSetPRDelivered(t *testing.T) {
@@ -565,5 +612,37 @@ func TestPRWatchWriters_ScopedToOneWatch(t *testing.T) {
 				t.Errorf("%s changed another session's watch: %+v -> %+v", name, beforeB3, got)
 			}
 		})
+	}
+}
+
+// A watch whose delivery has stopped stays in the listing, with the mark of the
+// stop in front of its note.
+func TestListRows_CarriesHaltedWatches(t *testing.T) {
+	conn := openAnnotate(t)
+	note := "human review"
+	for _, w := range []struct {
+		pr   string
+		note *string
+	}{
+		{"example-org/example-repo#1", nil},
+		{"example-org/example-repo#2", &note},
+	} {
+		if err := SetPRWatch(conn, "a", w.pr, w.note, time.Unix(100, 0)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := FailPRDelivery(conn, "a", w.pr, 1, time.Unix(200, 0), "[mark]"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := ListRows(conn, ListOpts{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListRows = %+v, %v", rows, err)
+	}
+	want := []RowWatch{
+		{"example-org/example-repo#1", "[mark]"},
+		{"example-org/example-repo#2", "[mark] human review"},
+	}
+	if !slices.Equal(rows[0].Watches, want) {
+		t.Errorf("Watches = %+v, want %+v", rows[0].Watches, want)
 	}
 }
