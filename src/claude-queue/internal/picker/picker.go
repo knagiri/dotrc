@@ -196,9 +196,10 @@ func FormatLine(row db.Row, title, worktree, refs string, dimRefs bool, nowSec i
 }
 
 // annotation renders the pin note (on a pinned row that has one), each watched
-// PR with its note (which carries the mark of a stopped delivery), and the
+// PR with its note (which carries the mark of a delivery that has stopped at
+// some point; resuming does not clear it, so it is no sign of a current stop), and the
 // memo, each behind its icon. The notes are flattened to one line when they are
-// written (db.SetMemo), so none can carry a tab into the line.
+// written (db.SetMemo, db.SetPRWatch), so none can carry a tab into the line.
 func annotation(row db.Row, icons map[string]string) string {
 	var parts []string
 	if row.Marked && row.PinNote.String != "" {

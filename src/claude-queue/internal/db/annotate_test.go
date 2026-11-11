@@ -614,3 +614,35 @@ func TestPRWatchWriters_ScopedToOneWatch(t *testing.T) {
 		})
 	}
 }
+
+// A watch whose delivery has stopped stays in the listing, with the mark of the
+// stop in front of its note.
+func TestListRows_CarriesHaltedWatches(t *testing.T) {
+	conn := openAnnotate(t)
+	note := "human review"
+	for _, w := range []struct {
+		pr   string
+		note *string
+	}{
+		{"example-org/example-repo#1", nil},
+		{"example-org/example-repo#2", &note},
+	} {
+		if err := SetPRWatch(conn, "a", w.pr, w.note, time.Unix(100, 0)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := FailPRDelivery(conn, "a", w.pr, 1, time.Unix(200, 0), "[mark]"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := ListRows(conn, ListOpts{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListRows = %+v, %v", rows, err)
+	}
+	want := []RowWatch{
+		{"example-org/example-repo#1", "[mark]"},
+		{"example-org/example-repo#2", "[mark] human review"},
+	}
+	if !slices.Equal(rows[0].Watches, want) {
+		t.Errorf("Watches = %+v, want %+v", rows[0].Watches, want)
+	}
+}

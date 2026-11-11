@@ -65,7 +65,7 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 | Var | 意味 |
 |---|---|
 | `CLAUDE_QUEUE_DB` | DB パス override（既定 `~/.claude/session-queue.db`） |
-| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [~]`（pin は `[P]`、メモは `[M]`）に切替 |
+| `CLAUDE_QUEUE_ASCII=1` | アイコンを ASCII フォールバック `[!] [.] [*] [~]`（pin は `[P]`、監視は `[W]`、メモは `[M]`）に切替 |
 | `CLAUDE_QUEUE_DEBUG=1` | エラーを `~/.claude/session-queue.log` に追記 |
 
 ### picker の行
@@ -80,7 +80,7 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 | 4 | age | 可変（短い） |
 | 5 | summary（何で止まっているか） | padding なし。payload 由来は 150 桁で truncate |
 | 6〜10 | session_id / tmux_pane / cwd / transcript_path / config_dir | 非表示 |
-| 11 | 注記（`📌 <pin のコメント>`、監視中の PR ごとの `👀 <PR> <監視のコメント>`、`📝 <メモ>`）。監視の有無で並び順は変わらない。配送が止まった監視はコメントの先頭に印が付く | padding なし |
+| 11 | 注記（`📌 <pin のコメント>`、監視中の PR ごとの `👀 <PR> <監視のコメント>`、`📝 <メモ>`）。監視の有無で並び順は変わらない。配送が止まったことのある監視はコメントの先頭に印が付く（再開後も残る。後述の「PR 監視」） | padding なし |
 | 12〜13 | メモ / pin のコメント（編集キーの初期値） | 非表示 |
 | 14 | 委譲 tree の PR / branch（`#<pr> <branch>`、PR 未解決なら `<branch>`） | padding なし。link を持つ行（委譲先）では薄い色 |
 
@@ -105,7 +105,7 @@ summary が 150 桁使ってもなお収まる。
 ai-title は window 名と同じ transcript から取るが、**別関数**（`label.DisplayTitle`）で作る。
 window 名側の 16 桁切りと `-<id8>` 付与、`.` `:` `~` `#` の置換は tmux の `-t` target 構文と
 FORMATS 展開のための処理で、読むだけの行には要らない。ただし `\t` `\n` `\r` だけは title 側でも
-summary 側でも必ず潰す（メモと pin のコメントは保存時に潰す） — 混ざると 6 列目以降がずれ、picker が別 session の id / pane / cwd /
+summary 側でも必ず潰す（メモと pin と監視のコメントは保存時に潰す） — 混ざると 6 列目以降がずれ、picker が別 session の id / pane / cwd /
 transcript を掴む。tab を含む Bash コマンド（`awk -F'<tab>'`）は承認待ちで普通に出るので、
 これは机上の話ではない。
 
