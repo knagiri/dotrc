@@ -1,5 +1,5 @@
 # One pass of claude-queue's unattended upkeep: reconcile the ledger, wake the
-# sessions whose pinned PR has news, then hibernate sessions idle past the
+# sessions whose watched PR has news, then hibernate sessions idle past the
 # threshold (stop the process, keep the work open). Paired with
 # claude-queue-watch.timer.
 #

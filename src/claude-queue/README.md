@@ -126,7 +126,7 @@ dim で薄くする（`--ansi`）。同じ (repo, branch) が複数の link に�
 
 ### pin とメモ
 
-pin は「外部待ち」の印で、人の返信待ち・保留・後回しにした session に付ける。メモはどの session にも
+pin は「何かを待っていて session を進められない」印で、明示的に付け外しする。PR の review や merge を待ちながら作業を続けられる session には付けず、PR の監視は `follow` で行う。メモはどの session にも
 付けられる 1 行の自由文。どちらも 11 列目に出るので、fzf の曖昧検索で引ける。
 
 | キー | 操作 |

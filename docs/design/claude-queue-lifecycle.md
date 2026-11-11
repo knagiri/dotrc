@@ -167,7 +167,7 @@ author で絞らないのは、委譲先が利用者の token で PR を作る�
 | `gone`（background） | `claude --bg --resume <id> "<指示文>"`。同じ id・同じ会話のまま background で再開する |
 | `running` で `idle_done` | 休眠と同じ手順で止め、`gone` と同じく resume する。window が表示中なら止めず次の tick に回す |
 | `running` で `working` / `awaiting_approval` | 割り込まず次の tick に回す |
-| （状態を問わず）`running` かつ `open` な子を持つ | 子が PR を扱っている最中なので、次の tick に回す |
+| （状態を問わず）`running` かつ `open` な子を持つ | 止めると委譲先の報告の受け手が居なくなるため、次の tick に回す |
 
 `running` な session へ外からメッセージを渡す CLI は claude に無い。interactive の pane へ `tmux send-keys`
 で打ち込む手は使わない。入力欄が空かを確実に判定できないためで、pane には利用者が打っていない次の入力
@@ -225,8 +225,11 @@ background の委譲元も、daemon は最後の client が切れて数秒で終
   `/clear` とみなして `done`、それ以外は上の規則に従う
 - それ以外 → `done`
 - `waiting_event_id` を持つ session → pin（コメントは空）に変換する
-- PR 監視を pin の属性として持つ session → 監視の状態と pin のコメントを `pr_watches` へ移し、pin を外す。手動の
-  pin と自動で付いた pin は区別できないので一律に外す
+
+PR 監視を pin の属性として持つ旧形式の session（`pin_pr` を持つもの。running・done を含み、閉じた session
+に限らない）は、監視の状態と pin のコメントを `pr_watches` へ移し、pin を外す。この移行は `user_version`
+に依らず毎 Open で走り、残りがあれば拾う。手で付けた pin と `pin --pr` で監視と一緒に付いた pin は区別
+できないので一律に外す。
 
 ## 実装者に任せること
 

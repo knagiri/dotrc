@@ -180,15 +180,18 @@ func TestPinCLI_LeavesWatch(t *testing.T) {
 	conn := setup(t)
 	e := env(map[string]string{sessionEnv: sid})
 	var out bytes.Buffer
-	if err := run(conn, "follow", []string{"--note", "human review", "--pr", "example-org/example-repo#4"}, e, time.Now, &out, &out); err != nil {
+	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	if err := run(conn, "follow", []string{"--note", "human review", "--pr", "example-org/example-repo#4"}, e, func() time.Time { return at }, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	w := watchOf(t, conn, "example-org/example-repo#4")
+	// pin / unpin run an hour later, so a cursor rewrite to "now" would show.
+	later := func() time.Time { return at.Add(time.Hour) }
 	for _, c := range []struct {
 		cmd  string
 		args []string
 	}{{"pin", []string{"--note", "still waiting"}}, {"unpin", nil}} {
-		if err := run(conn, c.cmd, c.args, e, time.Now, &out, &out); err != nil {
+		if err := run(conn, c.cmd, c.args, e, later, &out, &out); err != nil {
 			t.Fatal(err)
 		}
 		if got := watchOf(t, conn, "example-org/example-repo#4"); got != w {
