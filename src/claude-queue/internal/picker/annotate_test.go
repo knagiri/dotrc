@@ -22,10 +22,19 @@ func TestFormatLine_AnnotationColumn(t *testing.T) {
 		name             string
 		marked           bool
 		memo, note       string
+		watches          []db.RowWatch
 		ascii            bool
 		want             string
 		wantMemo, wantPN string
 	}{
+		{name: "watch", watches: []db.RowWatch{{PR: "example-org/example-repo#1"}}, want: "👀 example-org/example-repo#1"},
+		{name: "watch ascii", ascii: true, watches: []db.RowWatch{{PR: "example-org/example-repo#1"}}, want: "[W] example-org/example-repo#1"},
+		{name: "watch note", watches: []db.RowWatch{{PR: "example-org/example-repo#1", Note: "[自動再開に 3 回失敗] review"}}, want: "👀 example-org/example-repo#1 [自動再開に 3 回失敗] review"},
+		{name: "watches side by side", watches: []db.RowWatch{{PR: "example-org/example-repo#1", Note: "a"}, {PR: "example-org/example-repo#2"}}, want: "👀 example-org/example-repo#1 a 👀 example-org/example-repo#2"},
+		// A watch shows whether or not the session is pinned, between the two
+		// other annotations, and adds nothing to the raw note and memo columns
+		// the edit keys prefill from.
+		{name: "all", marked: true, memo: "m", note: "n", watches: []db.RowWatch{{PR: "example-org/example-repo#1", Note: "w"}}, want: "📌 n 👀 example-org/example-repo#1 w 📝 m", wantMemo: "m", wantPN: "n"},
 		{name: "memo", memo: "fix ci", want: "📝 fix ci", wantMemo: "fix ci"},
 		{name: "note", marked: true, note: "review", want: "📌 review", wantPN: "review"},
 		{name: "both", marked: true, memo: "fix ci", note: "review", want: "📌 review 📝 fix ci", wantMemo: "fix ci", wantPN: "review"},
@@ -48,6 +57,7 @@ func TestFormatLine_AnnotationColumn(t *testing.T) {
 				Marked:         c.marked,
 				Memo:           ns(c.memo),
 				PinNote:        ns(c.note),
+				Watches:        c.watches,
 			}
 			line := FormatLine(row, "title", "wt", "", false, nowUnix(), c.ascii)
 			fields := strings.Split(line, "\t")
@@ -66,6 +76,26 @@ func TestFormatLine_AnnotationColumn(t *testing.T) {
 				t.Errorf("parseSelection = %+v, %v; want %+v", sel, ok, want)
 			}
 		})
+	}
+}
+
+// Watching a PR leaves the row's icon as its state has it: a watching session
+// is not waiting on anything, which is what the pin's icon says.
+func TestFormatLine_WatchKeepsIcon(t *testing.T) {
+	row := db.Row{SessionID: "sid", EffectiveState: "idle_done", CreatedAt: nowMinus(60), Watches: []db.RowWatch{{PR: "example-org/example-repo#1"}}}
+	if got := strings.Split(FormatLine(row, "t", "w", "", false, nowUnix(), false), "\t")[colIcon]; got != emoji["idle_done"] {
+		t.Errorf("icon = %q, want %q", got, emoji["idle_done"])
+	}
+}
+
+// [W] must not read as any other icon of the column-wide ASCII set.
+func TestIconWatch_Distinct(t *testing.T) {
+	for _, icons := range []map[string]string{emoji, ascii} {
+		for k, v := range icons {
+			if k != iconWatch && v == icons[iconWatch] {
+				t.Errorf("watch icon %q collides with %s", v, k)
+			}
+		}
 	}
 }
 

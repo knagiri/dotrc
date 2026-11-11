@@ -53,6 +53,17 @@ type Row struct {
 	// PinNote is only ever set while Marked is.
 	Memo    sql.NullString
 	PinNote sql.NullString
+
+	// Watches are the PRs the session watches (see SetPRWatch), ordered by PR.
+	// Filled in by ListRows only.
+	Watches []RowWatch
+}
+
+// RowWatch is one PR a listed session watches: the PR as owner/repo#N, and the
+// watch's note, empty when it has none.
+type RowWatch struct {
+	PR   string
+	Note string
 }
 
 // Session kinds, as sessions.kind records them.
@@ -117,7 +128,9 @@ func (o ListOpts) Includes(effectiveState string) bool {
 }
 
 // ListRows returns rows sorted by activity_at DESC (newest activity first),
-// then session id, filtered by opts.Includes, each carrying its recorded delegation parent (if any).
+// then session id, filtered by opts.Includes, each carrying its recorded
+// delegation parent (if any) and the PRs it watches. Watching a PR does not
+// move a row.
 func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	rows, err := conn.Query(`
 		SELECT q.session_id, q.tmux_pane, q.cwd, q.transcript_path, q.config_dir,
@@ -134,13 +147,37 @@ func ListRows(conn *sql.DB, opts ListOpts) ([]Row, error) {
 	if err != nil {
 		return nil, err
 	}
+	watches, err := rowWatches(conn)
+	if err != nil {
+		return nil, err
+	}
 	var out []Row
 	for _, r := range all {
 		if opts.Includes(r.EffectiveState) {
+			r.Watches = watches[r.SessionID]
 			out = append(out, r)
 		}
 	}
 	return out, nil
+}
+
+// rowWatches maps each session to the PRs it watches, ordered by PR.
+func rowWatches(conn *sql.DB) (map[string][]RowWatch, error) {
+	rows, err := conn.Query("SELECT session_id, pr, COALESCE(note, '') FROM pr_watches ORDER BY session_id, pr")
+	if err != nil {
+		return nil, fmt.Errorf("row watches: %w", err)
+	}
+	defer rows.Close()
+	out := map[string][]RowWatch{}
+	for rows.Next() {
+		var id string
+		var w RowWatch
+		if err := rows.Scan(&id, &w.PR, &w.Note); err != nil {
+			return nil, fmt.Errorf("row watches: %w", err)
+		}
+		out[id] = append(out[id], w)
+	}
+	return out, rows.Err()
 }
 
 // LatestEvent returns the state and unix time of a session's latest ledger

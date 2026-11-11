@@ -80,7 +80,7 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 | 4 | age | 可変（短い） |
 | 5 | summary（何で止まっているか） | padding なし。payload 由来は 150 桁で truncate |
 | 6〜10 | session_id / tmux_pane / cwd / transcript_path / config_dir | 非表示 |
-| 11 | 注記（`📌 <pin のコメント>` と `📝 <メモ>`） | padding なし |
+| 11 | 注記（`📌 <pin のコメント>`、監視中の PR ごとの `👀 <PR> <監視のコメント>`、`📝 <メモ>`）。監視の有無で並び順は変わらない。配送が止まった監視はコメントの先頭に印が付く | padding なし |
 | 12〜13 | メモ / pin のコメント（編集キーの初期値） | 非表示 |
 | 14 | 委譲 tree の PR / branch（`#<pr> <branch>`、PR 未解決なら `<branch>`） | padding なし。link を持つ行（委譲先）では薄い色 |
 

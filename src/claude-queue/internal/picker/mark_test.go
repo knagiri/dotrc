@@ -140,6 +140,9 @@ func TestListModeMatchesInteractiveInput(t *testing.T) {
 	if _, err := db.ToggleMark(conn, "a"); err != nil {
 		t.Fatalf("ToggleMark: %v", err)
 	}
+	if err := db.SetPRWatch(conn, "a", "example-org/example-repo#1", nil, time.Unix(100, 0)); err != nil {
+		t.Fatalf("SetPRWatch: %v", err)
+	}
 	conn.Close()
 
 	// One clock for both paths, so the comparison below sees only the path.
@@ -161,6 +164,9 @@ func TestListModeMatchesInteractiveInput(t *testing.T) {
 		}
 		if !strings.Contains(fzfInput, "📌") {
 			t.Errorf("flags %v: marked session not shown marked in %q", flags, fzfInput)
+		}
+		if !strings.Contains(fzfInput, "👀 example-org/example-repo#1") {
+			t.Errorf("flags %v: watched PR not shown in %q", flags, fzfInput)
 		}
 		wantCurrent := slices.Contains(flags, "%7")
 		if strings.Contains(fzfInput, unicodeCurrent) != wantCurrent {
