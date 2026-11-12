@@ -30,7 +30,9 @@ set -euo pipefail
 # checkout -- the name gts and claude-queue's picker give that checkout -- as a
 # new detached window if the session exists, or as a new detached session if
 # not. The caller's client is never switched. The window is left unnamed;
-# claude-queue names it from the ai-title.
+# claude-queue names it from the ai-title. Since that session is shared, the
+# output names the created window and pane (`window` line), and the `attach`
+# line targets that pane, so it lands on the spun-off claude directly.
 #
 # Permission mode is `auto`, unlike `claude-worktree --tmux`. A spin-off is
 # usually still investigation or design in the main working tree, and any
@@ -134,26 +136,43 @@ claude_cmd=(claude --permission-mode auto)
 [ -z "$model" ] || claude_cmd+=(--model "$model")
 claude_cmd+=("$prompt")
 
+# -P -F prints the created window's coordinates, so the caller can be pointed at
+# that window rather than at a shared session holding many. Tab-separated: the
+# session name is a repo basename and may contain spaces.
+fmt=$'#{session_name}:#{window_index}\t#{window_id}\t#{pane_id}'
 if "${strip_env[@]}" tmux has-session -t "=$session" 2>/dev/null; then
   how="new-window"
   # Trailing ':' makes the target a session, so the window gets the next free
   # index rather than colliding with an existing one.
-  if ! "${strip_env[@]}" tmux new-window -d -t "=$session:" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}"; then
+  if ! created="$("${strip_env[@]}" tmux new-window -d -P -F "$fmt" -t "=$session:" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}")"; then
     echo "claude-spinoff: tmux new-window in session '$session' failed" >&2
     exit 1
   fi
 else
   how="new-session"
-  if ! "${strip_env[@]}" tmux new-session -d -s "$session" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}"; then
+  if ! created="$("${strip_env[@]}" tmux new-session -d -P -F "$fmt" -s "$session" -c "$main_top" "${launch_env[@]}" "${claude_cmd[@]}")"; then
     echo "claude-spinoff: tmux new-session '$session' failed" >&2
     exit 1
   fi
 fi
+IFS=$'\t' read -r win_target win_id pane_id <<<"$created" || true
 
-attach="gts $session"
-[ -n "${TMUX:-}" ] || attach="tmux attach -t $session"
-
+# A pane id target takes a client to that session, window AND pane, both for
+# switch-client (documented in tmux(1)) and for attach-session (measured on
+# tmux 3.x). gts takes only a session name, so it cannot land on the window.
 echo "repo-dir : $main_top"
 echo "tmux     : $session ($how; detached, claude running with auto)"
 [ -z "$model" ] || echo "model    : $model"
-echo "attach   : $attach"
+if [[ "$pane_id" == %* && "$win_id" == @* && -n "$win_target" ]]; then
+  echo "window   : $win_target ($win_id, $pane_id)"
+  attach_target="$pane_id"
+else
+  # The launch itself succeeded; only the report is degraded.
+  echo "claude-spinoff: could not read the new window from tmux (got: '$created'); pointing at the session" >&2
+  attach_target="=$session"
+fi
+if [ -n "${TMUX:-}" ]; then
+  echo "attach   : tmux switch-client -t $attach_target"
+else
+  echo "attach   : tmux attach -t $attach_target"
+fi
