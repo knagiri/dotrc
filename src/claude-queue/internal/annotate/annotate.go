@@ -25,7 +25,7 @@ const sessionEnv = "CLAUDE_CODE_SESSION_ID"
 
 var usages = map[string]string{
 	"memo":     "usage: claude-queue memo [--session <id>] [--] [<text>]",
-	"pin":      "usage: claude-queue pin [--session <id>] [--note <text>] [--pr <owner/repo#N | PR URL>]",
+	"pin":      "usage: claude-queue pin [--session <id>] [--note <text>]",
 	"unpin":    "usage: claude-queue unpin [--session <id>]",
 	"follow":   "usage: claude-queue follow [--session <id>] [--note <text>] --pr <owner/repo#N | PR URL>",
 	"unfollow": "usage: claude-queue unfollow [--session <id>] [--pr <owner/repo#N | PR URL>]",
@@ -70,7 +70,7 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, no
 	if cmd == "pin" || cmd == "follow" {
 		fs.Func("note", "what the session is waiting on (pin) or for (follow)", func(v string) error { note = &v; return nil })
 	}
-	if cmd == "pin" || cmd == "follow" || cmd == "unfollow" {
+	if cmd == "follow" || cmd == "unfollow" {
 		fs.Func("pr", "the PR: follow wakes the session on its new reviews and comments, and when it is merged or closed", func(v string) error {
 			ref, err := db.ParsePRRef(v)
 			pr = ref
@@ -116,13 +116,7 @@ func run(conn *sql.DB, cmd string, args []string, getenv func(string) string, no
 		}
 		return db.SetMemo(conn, id, rest[0])
 	case "pin":
-		if err := db.SetPin(conn, id, note); err != nil {
-			return err
-		}
-		if pr != "" {
-			return db.SetPRWatch(conn, id, pr, note, now())
-		}
-		return nil
+		return db.SetPin(conn, id, note)
 	case "follow":
 		return db.SetPRWatch(conn, id, pr, note, now())
 	case "unfollow":

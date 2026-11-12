@@ -158,9 +158,9 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
      委譲元が done になるまで休眠もしない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による
      cascade だけ。
    - **PR が人の review・merge 待ち**: 閉じたあと、自分の session に
-     `claude-queue pin --pr <PR> --note "<何を待つか>"` を付ける。PR に新しい review / comment が
+     `claude-queue follow --pr <owner/repo#N> --note "<何を待つか>"` を付ける。PR に新しい review / comment が
      付くか merge / close されると、claude-queue の PR 監視がこの session を起こして指示を渡す
-     （`dot/claude/rules/worktree-scope.md` §6）。
+     （`dot/claude/rules/worktree-scope.md` §6）。監視中も別の作業を続けてよい。
    - **PR 監視に起こされ、修正が要ると判断したら**: 前の委譲先は再開しない。同じ `<name>` と
      `-b <branch>` で手順 4 の `claude-worktree` を呼び、委譲プロンプトの WHAT に「既存 PR #N の
      指摘への対応。新しい PR は作らない」と明記する。理由は `worktree-scope.md` §6。有効化済みの

@@ -95,8 +95,8 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 // typed, which capture-pane cannot tell from half-typed text. So a running
 // session is first stopped the way hibernation stops it, and then resumed like
 // a gone one. The stop is not attempted, and the delivery is skipped, when
-//   - the session has delegates still running with open work: one of them is
-//     handling the PR right now, and its report needs its delegator alive;
+//   - the session has delegates still running with open work: stopping the
+//     delegator would leave their reports without a recipient;
 //   - the session is not idle at an idle_done event (it is in a turn, or
 //     waiting for an approval);
 //   - its window is on screen in an attached client: the person is there, and
