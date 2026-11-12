@@ -144,8 +144,10 @@ CREATE TABLE IF NOT EXISTS nav_cursor (
 );
 `
 
-// View is the queue view, recreated at Open (DROP VIEW IF EXISTS) so a changed
-// definition takes effect on an existing database.
+// View is the CREATE statement of the queue view. Open compares it with the
+// definition stored in sqlite_master and recreates the view only when the two
+// differ, so a changed definition takes effect on an existing database while
+// an unchanged one is left alone (see applyView).
 //
 // It lists every open session (done_at IS NULL), running or gone. A gone
 // session -- terminated_at set -- surfaces as the pseudo state 'gone' whatever
@@ -167,8 +169,7 @@ CREATE TABLE IF NOT EXISTS nav_cursor (
 // would switch to a stranger's pane instead of resuming. Where the session is
 // in fact reachable the roster names its process and the picker re-derives the
 // pane from its ancestry, so nothing is lost.
-const View = `DROP VIEW IF EXISTS queue;
-CREATE VIEW queue AS
+const View = `CREATE VIEW queue AS
 SELECT
   s.session_id,
   CASE WHEN s.terminated_at IS NULL THEN s.tmux_pane END AS tmux_pane,
@@ -197,13 +198,14 @@ LEFT JOIN events p ON p.id = (
   SELECT MAX(id) FROM events
   WHERE session_id = e.session_id AND state != 'ended'
 )
-WHERE s.done_at IS NULL;
-`
+WHERE s.done_at IS NULL`
 
-// Pragmas are applied at Open, in order.
+// Pragmas are set on every connection the pool opens, through the DSN (see
+// dsn). busy_timeout comes first so that the ones after it -- journal_mode
+// takes a lock -- wait for a concurrent Open instead of failing with BUSY.
 var Pragmas = []string{
-	"PRAGMA journal_mode=WAL",
-	"PRAGMA synchronous=NORMAL",
-	"PRAGMA busy_timeout=5000",
-	"PRAGMA foreign_keys=ON",
+	"busy_timeout(5000)",
+	"journal_mode(WAL)",
+	"synchronous(NORMAL)",
+	"foreign_keys(1)",
 }
