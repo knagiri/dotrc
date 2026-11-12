@@ -24,11 +24,13 @@ ls: cannot access '...': No such file or directory                           # e
 ```
 
 subagent の `CLAUDE_JOB_DIR` は親 session と同じ値で、`tmp/` は既に存在していた。
+background session でのみ確認した。interactive では `CLAUDE_JOB_DIR` は未定義。
 
 ## 直し方
 
 subagent の prompt に「一時ファイルは `/tmp` ではなく `$CLAUDE_JOB_DIR/tmp` の下に作る」を入れる。
-既存の `/tmp` の残骸は扱わない。
+`$CLAUDE_JOB_DIR` が未定義だと `$CLAUDE_JOB_DIR/tmp` は空展開で `/tmp` になるので、その場合は
+`mktemp -d` で作ったディレクトリを使う指示も添える。既存の `/tmp` の残骸は扱わない。
 
 ## 反映先
 
