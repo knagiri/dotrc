@@ -30,7 +30,9 @@ background session でのみ確認した。interactive では `CLAUDE_JOB_DIR` �
 
 subagent の prompt に「一時ファイルは `/tmp` ではなく `$CLAUDE_JOB_DIR/tmp` の下に作る」を入れる。
 `$CLAUDE_JOB_DIR` が未定義だと `$CLAUDE_JOB_DIR/tmp` は空展開で `/tmp` になるので、その場合は
-`mktemp -d` で作ったディレクトリを使う指示も添える。既存の `/tmp` の残骸は扱わない。
+`mktemp -d` で専用のディレクトリを作って使う指示も添える（`TMPDIR` 未設定なら `mktemp -d` も
+`/tmp` 配下に作るので、`/tmp` を避ける手段ではなく、並行する job と名前が衝突しない専用領域を
+得る手段である）。既存の `/tmp` の残骸は扱わない。
 
 ## 反映先
 
