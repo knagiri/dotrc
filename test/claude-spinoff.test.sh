@@ -106,11 +106,11 @@ if [ "$rc" -eq 0 ] && [ "$(sed -n 1p "$TMUX_STUB_LOG")" = new-session ] \
   echo "ok: main tree + no session -> new-session -d -s <repo> running in main toplevel"
 else echo "FAIL: main tree new-session rc=$rc out=$out"; sed 's/^/  tmux| /' "$TMUX_STUB_LOG" 2>/dev/null; fail=1; fi
 
-# The prompt arrives as ONE argv element, unchanged, with acceptEdits.
+# The prompt arrives as ONE argv element, unchanged, with auto.
 if [ "$(tail -n1 "$CLAUDE_STUB_ARGV")" = "$prompt" ] \
-   && [ "$(head -n2 "$CLAUDE_STUB_ARGV" | paste -sd' ')" = "--permission-mode acceptEdits" ] \
+   && [ "$(head -n2 "$CLAUDE_STUB_ARGV" | paste -sd' ')" = "--permission-mode auto" ] \
    && [ "$(wc -l <"$CLAUDE_STUB_ARGV")" -eq 3 ]; then
-  echo "ok: prompt is passed verbatim as one argv element, acceptEdits, no --model"
+  echo "ok: prompt is passed verbatim as one argv element, auto, no --model"
 else echo "FAIL: claude argv"; sed 's/^/  argv| /' "$CLAUDE_STUB_ARGV"; fail=1; fi
 
 # --- linked worktree, session exists -> new-window, still main toplevel --------
@@ -149,7 +149,7 @@ else echo "FAIL: env leaked: $(grep -E '^(CLAUDE_|CLAUDECODE)' "$CLAUDE_STUB_ENV
 if [ "$rc" -eq 0 ] && [ -s "$TMUX_STUB_ENV" ] && ! grep -qE '^(CLAUDE_CODE_SESSION_ID|CLAUDE_CODE_CHILD_SESSION|CLAUDECODE|CLAUDE_CONFIG_DIR)=' "$TMUX_STUB_ENV"; then
   echo "ok: caller's session markers and CLAUDE_CONFIG_DIR do not reach tmux (server global env)"
 else echo "FAIL: env leaked into tmux: $(grep -E '^(CLAUDE_|CLAUDECODE)' "$TMUX_STUB_ENV" 2>/dev/null | paste -sd' ')"; fail=1; fi
-if grep -qxF "exec -C $cwdrepo -- claude --permission-mode acceptEdits $prompt" "$MISE_STUB_LOG"; then
+if grep -qxF "exec -C $cwdrepo -- claude --permission-mode auto $prompt" "$MISE_STUB_LOG"; then
   echo "ok: claude is launched through mise exec -C <main toplevel>"
 else echo "FAIL: mise exec"; sed 's/^/  mise| /' "$MISE_STUB_LOG" 2>/dev/null; fail=1; fi
 
