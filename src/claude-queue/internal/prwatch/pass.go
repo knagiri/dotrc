@@ -103,8 +103,12 @@ func Message(pr string, a Activity, events []Event) string {
 // message arriving (its text is not matched), and only then does the cursor move to the newest delivered event
 // (or, for a merge or close, the watch be removed). With none after ConfirmWindow
 // the record is dropped and, the cursor not having moved, the next pass
-// delivers again with everything that piled up meanwhile. A skipped or failed
-// launch records nothing and is retried by the next pass the same way.
+// delivers again with everything that piled up meanwhile. The record is
+// written before the launch, and no launch happens if it cannot be written. A
+// skipped or failed launch drops the record again, leaving the watch as it
+// was, and is retried by the next pass the same way; if the record cannot be
+// dropped, it is settled like any unconfirmed delivery and counts towards
+// MaxFailures.
 //
 // MaxFailures unconfirmed deliveries in a row stop delivery to the watch (see
 // db.FailPRDelivery); a confirmed one resets the count. A stopped watch is still
@@ -189,22 +193,35 @@ func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io
 			continue
 		}
 
-		switch err := Deliver(p, Message(p.PR, a, events), deps); {
-		case hibernate.IsSkip(err):
-			fmt.Fprintf(out, "pr-watch: skipped %s (%s): %v\n", id, p.PR, err)
-			continue
-		case err != nil:
-			fmt.Fprintf(out, "pr-watch: failed %s (%s): %v\n", id, p.PR, err)
-			continue
-		}
-		resumed[p.SessionID] = true
 		var upTo time.Time
 		what := strings.ToLower(a.State)
 		if !closed {
 			upTo = events[len(events)-1].At
 			what = fmt.Sprintf("%d new event(s)", len(events))
 		}
-		report(out, db.SetPRDelivered(conn, p.SessionID, p.PR, now.Unix(), upTo))
+		// Record the delivery before launching it. A launch the ledger does
+		// not know of is delivered again by the next pass, and failures are
+		// only counted by confirm, so a record that failed after the launch
+		// would resume the session every pass with no bound.
+		if err := db.SetPRDelivered(conn, p.SessionID, p.PR, now.Unix(), upTo); err != nil {
+			fmt.Fprintf(out, "pr-watch: failed %s (%s): %v\n", id, p.PR, err)
+			continue
+		}
+		if err := Deliver(p, Message(p.PR, a, events), deps); err != nil {
+			// Nothing was launched: drop the record, so the next pass retries
+			// the same activity as if it had never been tried. If dropping it
+			// fails too, the record stands as an unconfirmed delivery, and
+			// confirm counts it as one failure once ConfirmWindow has passed,
+			// so MaxFailures still bounds the retries.
+			report(out, db.SetPRDelivered(conn, p.SessionID, p.PR, 0, time.Time{}))
+			if hibernate.IsSkip(err) {
+				fmt.Fprintf(out, "pr-watch: skipped %s (%s): %v\n", id, p.PR, err)
+			} else {
+				fmt.Fprintf(out, "pr-watch: failed %s (%s): %v\n", id, p.PR, err)
+			}
+			continue
+		}
+		resumed[p.SessionID] = true
 		fmt.Fprintf(out, "pr-watch: woke %s (%s: %s), awaiting its prompt\n", id, p.PR, what)
 	}
 	return resumed

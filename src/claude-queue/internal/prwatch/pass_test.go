@@ -532,6 +532,9 @@ func TestPass_FailedLaunchRetried(t *testing.T) {
 	if _, cursor, seen := watchState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" || !seen.Valid {
 		t.Fatalf("failed delivery moved the watch: cursor=%v seen=%v", cursor, seen)
 	}
+	if at, upTo := deliveredState(t, conn, sid); at.Valid || upTo.Valid {
+		t.Fatalf("failed delivery left a record: at=%v upTo=%v", at, upTo)
+	}
 	if !strings.Contains(out.String(), "pr-watch: failed pinnedaa") {
 		t.Errorf("failure not reported:\n%s", &out)
 	}
@@ -540,6 +543,69 @@ func TestPass_FailedLaunchRetried(t *testing.T) {
 	Pass(conn, now.Add(6*time.Minute), DefaultDebounce, w.deps(), &out)
 	if len(w.ran) != 2 {
 		t.Errorf("want the failed attempt and one retry, ran %d times:\n%s", len(w.ran), &out)
+	}
+}
+
+// trigger makes the ledger refuse some writes to the watch, as a full disk or a
+// locked database would.
+func trigger(t *testing.T, conn *sql.DB, name, when string) {
+	t.Helper()
+	if _, err := conn.Exec("CREATE TRIGGER " + name + " BEFORE UPDATE OF delivered_at ON pr_watches WHEN " + when +
+		" BEGIN SELECT RAISE(ABORT, 'injected'); END"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A delivery whose record cannot be written is not launched: a launch the
+// ledger does not know of would be launched again by every pass, with nothing
+// to count the attempts.
+func TestPass_UnrecordedDeliveryNotLaunched(t *testing.T) {
+	conn := ledger(t, sid)
+	if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
+		t.Fatal(err)
+	}
+	trigger(t, conn, "fail_delivered", "NEW.delivered_at IS NOT NULL")
+	w := &world{activity: news}
+	var out bytes.Buffer
+	for i := range 10 {
+		if got := Pass(conn, now.Add(time.Duration(i)*3*time.Minute), DefaultDebounce, w.deps(), &out); len(got) != 0 {
+			t.Fatalf("pass %d reported a resume: %v\n%s", i, got, &out)
+		}
+	}
+	if len(w.ran) != 0 {
+		t.Errorf("launched %d times without a record:\n%s", len(w.ran), &out)
+	}
+	if strings.Contains(out.String(), "woke") || !strings.Contains(out.String(), "pr-watch: failed pinnedaa") {
+		t.Errorf("failure not reported as such:\n%s", &out)
+	}
+	if _, cursor, seen := watchState(t, conn, sid); cursor.String != "2026-10-26T10:00:00Z" || !seen.Valid {
+		t.Errorf("watch moved: cursor=%v seen=%v", cursor, seen)
+	}
+}
+
+// A failed launch whose record cannot be dropped again is settled like an
+// unconfirmed delivery, so MaxFailures bounds the launches.
+func TestPass_UndroppedRecordCountsAsFailure(t *testing.T) {
+	conn := ledger(t, sid)
+	if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
+		t.Fatal(err)
+	}
+	// Refuse only the drop after a failed launch: FailPRDelivery clears the
+	// record too, but counts a failure along with it.
+	trigger(t, conn, "fail_drop", "NEW.delivered_at IS NULL AND OLD.delivered_at IS NOT NULL AND NEW.failures IS OLD.failures")
+	w := &world{activity: news, runErr: errors.New("tmux: no server")}
+	var out bytes.Buffer
+	for i := range 30 {
+		Pass(conn, now.Add(time.Duration(i)*3*time.Minute), DefaultDebounce, w.deps(), &out)
+	}
+	if len(w.ran) != MaxFailures {
+		t.Errorf("want launches capped at %d, ran %d times:\n%s", MaxFailures, len(w.ran), &out)
+	}
+	if !strings.Contains(out.String(), "delivery stopped") {
+		t.Errorf("stop not reported:\n%s", &out)
+	}
+	if !strings.Contains(out.String(), "injected") {
+		t.Errorf("the drop was never refused, so this tested nothing:\n%s", &out)
 	}
 }
 

@@ -328,7 +328,8 @@ review / comment の種別・時刻・author が bot か（`__typename`）を読
 - 配送しても既読位置は進めず、配送時刻と進め先（`delivered_at` / `delivered_upto`）を記録する。次の pass で
   その session の配送時刻以降の `UserPromptSubmit` が台帳にあれば、既読位置を進めて（merge / close なら監視を外して）記録を消す。
   6 分（timer の 2 tick）経っても無ければ window の中の resume が失敗したとみなして記録を消し、次の pass で再配送する。
-  起動自体の失敗・skip は何も記録せず、次の pass で再試行する
+  記録は起動の前に書き、書けなければ起動しない（記録の無い起動は次の pass がまた起動し、確認待ちの失敗としても数えられないため）。
+  起動自体の失敗・skip は記録を消し、次の pass で再試行する。消すのにも失敗した記録は、確認できない配送として扱う
 - 確認できない配送が 3 回続いたら、その監視への配送を止め、監視のコメントの先頭に `[自動再開に 3 回失敗]` を付ける。
   PR の監視は続け、止めた配送より新しい活動か merge / close が来たら配送を再開する。merge / close の配送そのもので止まった監視は、PR が closed のままなら reopen か `claude-queue follow` の付け直しまで止まったままになる。pin の着脱は停止に影響しない。再開や配送成功のあとも、note を書き換えない限り、コメント先頭の印は残る
 - 1 つの session への配送は直列にする。同じ pass で既に resume した session と、配送の確認待ちの監視を持つ session への新たな配送は次の pass に回す。同時に 2 回は resume できないうえ、確認は配送時刻以降の `UserPromptSubmit` で行うので、配送が重なると 1 つの prompt で両方が確認済みになるため
