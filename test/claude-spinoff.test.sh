@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Functional tests for claude-spinoff. tmux, claude, mise and claude-queue are
-# stubbed on PATH and never forward to the real commands. The tmux stub records
+# stubbed on PATH and never forward to the real commands, except for the
+# real-server cases near the end, which run the real tmux on a private socket
+# (-S) via a wrapper and never touch the default server. The tmux stub records
 # its argv and then RUNS the pane command it was handed (in the -c dir), which
 # reaches only the mise and claude stubs -- so the cases assert what the spun-off
 # claude actually got (cwd, argv, env), not just how the tmux line was spelled.
