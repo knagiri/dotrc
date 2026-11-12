@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestOpenAppliesSchemaAndPragmas(t *testing.T) {
@@ -60,11 +62,37 @@ func insertSession(t *testing.T, conn *sql.DB, id, pane string) {
 	}
 }
 
+// testNow returns the reference time that the timestamp helpers below count
+// back from. It is taken from the Go clock once per connection and reused, so
+// every row a test writes through these helpers shares one "now": the
+// difference between two rows is exactly the difference between their agoSec
+// arguments. Evaluating unixepoch() per statement instead lets the second
+// cross into the next value between two statements and skew that difference
+// by one.
+func testNow(conn *sql.DB) int64 {
+	testNowMu.Lock()
+	defer testNowMu.Unlock()
+	now, ok := testNowByConn[conn]
+	if !ok {
+		now = time.Now().Unix()
+		testNowByConn[conn] = now
+	}
+	return now
+}
+
+var (
+	testNowMu     sync.Mutex
+	testNowByConn = map[*sql.DB]int64{}
+)
+
+// ago returns the timestamp agoSec seconds before conn's reference time.
+func ago(conn *sql.DB, agoSec int64) int64 { return testNow(conn) - agoSec }
+
 func insertEvent(t *testing.T, conn *sql.DB, sid, evType, state string, agoSec int64) {
 	t.Helper()
 	_, err := conn.Exec(
-		"INSERT INTO events(session_id, event_type, state, created_at) VALUES (?, ?, ?, unixepoch() - ?)",
-		sid, evType, state, agoSec,
+		"INSERT INTO events(session_id, event_type, state, created_at) VALUES (?, ?, ?, ?)",
+		sid, evType, state, ago(conn, agoSec),
 	)
 	if err != nil {
 		t.Fatalf("insert event: %v", err)
@@ -74,8 +102,8 @@ func insertEvent(t *testing.T, conn *sql.DB, sid, evType, state string, agoSec i
 func insertEventPayload(t *testing.T, conn *sql.DB, sid, evType, state, payload string, agoSec int64) {
 	t.Helper()
 	_, err := conn.Exec(
-		"INSERT INTO events(session_id, event_type, state, payload, created_at) VALUES (?, ?, ?, ?, unixepoch() - ?)",
-		sid, evType, state, payload, agoSec,
+		"INSERT INTO events(session_id, event_type, state, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+		sid, evType, state, payload, ago(conn, agoSec),
 	)
 	if err != nil {
 		t.Fatalf("insert event: %v", err)
@@ -85,7 +113,7 @@ func insertEventPayload(t *testing.T, conn *sql.DB, sid, evType, state, payload 
 func terminate(t *testing.T, conn *sql.DB, sid string, agoSec int64) {
 	t.Helper()
 	_, err := conn.Exec(
-		"UPDATE sessions SET terminated_at = unixepoch() - ? WHERE session_id = ?", agoSec, sid,
+		"UPDATE sessions SET terminated_at = ? WHERE session_id = ?", ago(conn, agoSec), sid,
 	)
 	if err != nil {
 		t.Fatalf("terminate %s: %v", sid, err)
