@@ -15,7 +15,7 @@ src="$here/../bin/claude-spinoff"
 fail=0
 
 tmp="$(mktemp -d)"
-trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
+trap 'sandbox_cleanup; [ -z "${sock:-}" ] || "$real_tmux" -S "$sock" kill-server 2>/dev/null; rm -rf "$tmp"' EXIT
 
 commit() { git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init; }
 
@@ -41,7 +41,8 @@ stubbin="$tmp/stubbin"
 mkdir -p "$stubbin"
 # tmux: has-session answers from $TMUX_STUB_HAS (1 = session exists);
 # new-session/new-window log argv (one element per line) to $TMUX_STUB_LOG, fail
-# when $TMUX_STUB_FAIL=1, else run the trailing command in the -c dir.
+# when $TMUX_STUB_FAIL=1, else print $TMUX_STUB_PRINT if -P was given and run the
+# trailing command in the -c dir.
 cat >"$stubbin/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
@@ -50,10 +51,11 @@ case "$1" in
     printf '%s\n' "$@" >"$TMUX_STUB_LOG"
     env >"$TMUX_STUB_ENV"
     [ "${TMUX_STUB_FAIL:-0}" = 1 ] && exit 1
-    shift; dir=.
+    shift; dir=.; print=0
     while [ $# -gt 0 ]; do
-      case "$1" in -d) shift ;; -s|-t) shift 2 ;; -c) dir="$2"; shift 2 ;; *) break ;; esac
+      case "$1" in -d) shift ;; -P) print=1; shift ;; -s|-t|-F) shift 2 ;; -c) dir="$2"; shift 2 ;; *) break ;; esac
     done
+    [ "$print" = 0 ] || printf '%b\n' "${TMUX_STUB_PRINT-cwdrepo:3\t@7\t%9}"
     cd "$dir" && exec "$@" ;;
   *) exit 0 ;;
 esac
@@ -85,6 +87,9 @@ printf '%s\n' "$*" >>"$CQ_STUB_LOG"
 EOF
 chmod +x "$stubbin"/*
 
+# The real tmux, for the isolated-socket cases near the end; resolved before the
+# stubs shadow it.
+real_tmux="$(command -v tmux || true)"
 export PATH="$stubbin:$PATH"
 export TMUX_STUB_LOG="$tmp/tmux.log" TMUX_STUB_ENV="$tmp/tmux.env" CLAUDE_STUB_ARGV="$tmp/claude.argv" \
   CLAUDE_STUB_CWD="$tmp/claude.cwd" CLAUDE_STUB_ENV="$tmp/claude.env" \
@@ -185,12 +190,63 @@ if [ "$rc" -eq 0 ] && [ "$(cat "$CLAUDE_STUB_CWD")" = "$(real "$scriptrepo")" ] 
   echo "ok: --global anchors to the script's own repo, not cwd"
 else echo "FAIL: --global rc=$rc out=$out"; fail=1; fi
 
-# --- attach hint --------------------------------------------------------------
+# --- window line and attach hint (stubbed tmux) -------------------------------
 out="$(cd "$cwdrepo" && "$so" -- p 2>/dev/null)"
 out_in="$(cd "$cwdrepo" && TMUX=fake "$so" -- p 2>/dev/null)"
-if grep -qxF 'attach   : tmux attach -t cwdrepo' <<<"$out" && grep -qxF 'attach   : gts cwdrepo' <<<"$out_in"; then
-  echo "ok: attach hint is gts inside tmux, tmux attach outside"
-else echo "FAIL: attach hint: [$out] [$out_in]"; fail=1; fi
+if grep -qxF 'window   : cwdrepo:3 (@7, %9)' <<<"$out" \
+   && grep -qxF 'attach   : tmux attach -t %9' <<<"$out" \
+   && grep -qxF 'attach   : tmux switch-client -t %9' <<<"$out_in"; then
+  echo "ok: window line from tmux -P; attach targets the pane (switch-client inside tmux, attach outside)"
+else echo "FAIL: window/attach: [$out] [$out_in]"; fail=1; fi
+
+# tmux printing nothing usable still succeeds (the launch did), falls back to
+# the session, and says so on stderr.
+both="$(cd "$cwdrepo" && TMUX_STUB_PRINT='' "$so" -- p 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q '^window' <<<"$both" \
+   && grep -qxF 'attach   : tmux attach -t =cwdrepo' <<<"$both" \
+   && grep -q 'could not read the new window' <<<"$both"; then
+  echo "ok: unreadable -P output falls back to the session with a warning"
+else echo "FAIL: -P fallback rc=$rc [$both]"; fail=1; fi
+
+# --- window line against a real tmux server (isolated socket) -----------------
+# The stub only proves the line is formatted from whatever tmux prints. Here a
+# real tmux runs on a private socket (`tmux` on PATH is a wrapper adding -S, so
+# the default server is never touched), and the claude stub records $TMUX_PANE
+# -- set by tmux in the pane -- so the reported pane is checked against the
+# pane claude actually runs in.
+if [ -z "$real_tmux" ]; then
+  echo "FAIL: real tmux not found; the real-server cases cannot run"; fail=1
+else
+  sock="$tmp/tmux.sock"
+  realbin="$tmp/realbin"
+  mkdir -p "$realbin"
+  printf '#!/usr/bin/env bash\nexec %q -S %q -f /dev/null "$@"\n' "$real_tmux" "$sock" >"$realbin/tmux"
+  # Records the pane, then stays alive so the window still exists to inspect.
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$TMUX_PANE" >>"$CLAUDE_STUB_PANES"' 'exec sleep 300' >"$realbin/claude"
+  chmod +x "$realbin/tmux" "$realbin/claude"
+  export CLAUDE_STUB_PANES="$tmp/claude.panes"
+  check_real() { # <expected how>
+    local out line target wid pid
+    rm -f "$CLAUDE_STUB_PANES"
+    out="$(cd "$cwdrepo" && PATH="$realbin:$PATH" "$so" -- p 2>&1)" || { echo "FAIL: real tmux $1: rc!=0 [$out]"; fail=1; return; }
+    line="$(sed -n 's/^window   : //p' <<<"$out")"
+    target="${line%% *}"; wid="${line#*(}"; wid="${wid%%,*}"; pid="${line##*, }"; pid="${pid%)}"
+    for _ in $(seq 50); do [ -s "$CLAUDE_STUB_PANES" ] && break; sleep 0.1; done
+    if grep -qF "($1;" <<<"$out" && [ -n "$line" ] \
+       && [ "$("$realbin/tmux" display-message -p -t "$pid" '#{session_name}:#{window_index} #{window_id}')" = "$target $wid" ] \
+       && [ "$(cat "$CLAUDE_STUB_PANES" 2>/dev/null)" = "$pid" ] \
+       && grep -qxF "attach   : tmux attach -t $pid" <<<"$out"; then
+      echo "ok: real tmux $1: window line names the window/pane claude runs in"
+    else
+      echo "FAIL: real tmux $1: [$out] claude pane=[$(cat "$CLAUDE_STUB_PANES" 2>/dev/null)]"; fail=1
+      "$realbin/tmux" list-panes -a -F '  #{session_name}:#{window_index} #{window_id} #{pane_id}' 2>/dev/null
+    fi
+  }
+  check_real new-session
+  # A second window in the now-existing session: reporting the session's first
+  # window or pane would fail here.
+  check_real new-window
+fi
 
 # --- tmux failures ------------------------------------------------------------
 reset_logs

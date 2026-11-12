@@ -72,8 +72,10 @@ allowed-tools: Bash(claude-spinoff *), Read, Glob, Grep
 
    dotrc のグローバル harness（rules / skills / bin）に関する切り出しを、他 repo の session から
    出すときは `--global` を付ける。
-4. 起動後、出力の `attach` 行（`gts <session>` か `tmux attach -t <session>`）をユーザーに
-   伝える。
+4. 起動後、出力の `window` 行（作った window と pane）と `attach` 行（tmux 内なら
+   `tmux switch-client -t <pane_id>`、外なら `tmux attach -t <pane_id>`。その window まで直接
+   飛ぶ）をユーザーに伝える。共有 session には window が複数あるので、session 名だけでは
+   切り出し先が分からない。
 5. **元 session の後始末**:
    - 元のタスクが終わっていれば、ユーザーの確認を取ったうえで
      `claude-queue done "$CLAUDE_CODE_SESSION_ID"` で done にし、window を閉じてよい旨を伝える。
