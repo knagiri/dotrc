@@ -12,6 +12,9 @@
 | `cat` / `head` / `tail` | Read ツール | 専用ツールで行番号付き表示・範囲指定が可能 |
 | `sed` / `awk` | Edit ツール | 専用ツールで差分が明確になりレビューしやすい |
 | `python -c '...'` 等でのパース | `jq`（JSON）、`yq`（YAML） | 言語ランタイム不要で、パイプも避けられる |
+| heredoc（`cat > file <<EOF`）/ `echo >` / `printf >` によるファイル書き込み | Write ツール（既存ファイルの部分変更は Edit） | 内容がシェルを通らないので、区切り語や `$` を含む内容でも化けない。シェル経由だと、書く内容が入れ子の heredoc を含めば内側の区切り語の行で外側が閉じ、残りの行がエラー無しにコマンドとして走る（空の変数が展開された引数で） |
+
+実例: dotrc/docs/incidents/nested-heredoc-ran-as-commands.md
 
 ### `auto` 等で入る Bash 優先の指示より、この表を優先する
 
