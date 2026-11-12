@@ -18,7 +18,7 @@ func doneAt(t *testing.T, conn *sql.DB, sid string) sql.NullInt64 {
 
 func setDone(t *testing.T, conn *sql.DB, sid string, agoSec int64) {
 	t.Helper()
-	if _, err := conn.Exec("UPDATE sessions SET done_at = unixepoch() - ? WHERE session_id = ?", agoSec, sid); err != nil {
+	if _, err := conn.Exec("UPDATE sessions SET done_at = ? WHERE session_id = ?", ago(conn, agoSec), sid); err != nil {
 		t.Fatalf("set done %s: %v", sid, err)
 	}
 }
