@@ -58,8 +58,18 @@ bot が起こした thread に限って reply するラッパー `bin/gh-reply-t
 `gh-commands.md` §3 に、`pr-review-loop` の処置記録に限ってこの経路で bot の thread へ reply して
 よい例外を足し、allowlist に `Bash(gh-reply-thread *)` を加えた。
 
+そのうえで `pr-review-loop` に処置を義務づけた。判定役は bot の指摘すべてに `fix` / `decline` /
+`defer` / `stale` / `human` / `not_a_finding` のいずれかを割り当て、修正役が `decline` / `defer` /
+`stale` を実行する（thread なら reply して resolve、thread にならない指摘は PR 本文の
+「レビュー指摘への対応」節に追記、`defer` は issue か TODO コメントを記録先にする）。処置を
+実行した回は前進として扱い、実行すべき処置が残っている間は収束させない。thread の起点が bot か
+どうかを判定役が見分けられるよう、`gh-list-threads` の出力に author の `__typename` を足した。
+
 ## 反映先
 
 - `bin/gh-reply-thread`（新設）と `test/gh-wrappers.test.sh`
 - `dot/claude/rules/gh-commands.md` §3（例外 — `pr-review-loop` の処置記録）・§4・§5 の表
 - `dot/claude/settings.json` の allow
+- `dot/claude/skills/pr-review-loop/SKILL.md`（冒頭・不変条件・手順 2.a-2 / 2.a-3 / 2.c・3.b・4、判定 subagent
+  prompt の手順 2 / 4 / 5 / 5.5 と verdict、修正 subagent prompt の手順 5 と verdict、verdict スキーマ）
+- `bin/gh-list-threads`（author の `__typename`）
