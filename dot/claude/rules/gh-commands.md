@@ -47,8 +47,18 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 
 | コメント送信元 | reply 投稿 | 補足 |
 |---|---|---|
-| Bot（`@claude`, `@Copilot`, `@coderabbitai` 等） | **不要**。明示指示があっても reply の必要性をまず確認する | bot 同士の応酬を防ぐため、指摘内容の取り込み（コード修正）だけで済ませることが多い |
+| Bot（`@claude`, `@Copilot`, `@coderabbitai` 等） | **不要**。明示指示があっても reply の必要性をまず確認する。例外は下記の処置記録 | bot 同士の応酬を防ぐため、指摘内容の取り込み（コード修正）だけで済ませることが多い |
 | チームメンバー（人間） | 必要だが、**agent が直接投稿してはいけない** | 必ずユーザーの手で文面を組み直して投稿する |
+
+**例外 — `pr-review-loop` の処置記録**: `pr-review-loop` が bot の指摘に「直さない」処置
+（却下・後回し・解消済み）を付けたときは、その理由を `gh-reply-thread`（§5）経由で bot の
+thread に reply してよい。直さない指摘を未解決のまま理由も残さず放置すると、PR を見ても
+各指摘が対応済みか対応不要かが分からず、人間が全件を読み直すことになるため。reply 経路を
+このラッパーに限るのは、起点コメントの author が `Bot` でない thread をラッパーが拒否する
+ので、人間の thread へ reply する経路が構造的に塞がるため。人間の thread への reply 禁止
+（上表）と、`gh pr comment` 等による新規コメントの投稿禁止は変わらない。
+
+実例: dotrc/docs/incidents/bot-review-findings-left-unhandled.md
 
 #### チームメンバー宛の reply 草案を求められた場合
 
@@ -67,7 +77,8 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 #### やってはいけないこと
 
 - ユーザー確認なしに `gh pr comment` 等で reply コメントを投稿する
-- bot コメントに対して bot 風の反論や同意 reply を agent 名義で投げる
+- bot コメントに対して bot 風の反論や同意 reply を agent 名義で投げる（上記の処置記録は、処置と
+  その理由を記録するものなのでこれに当たらない）
 - ドラフト提示を「投稿しました」と誤認させる表現にする
 
 #### スコープ外（このルールでは扱わない）
@@ -82,6 +93,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 - **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`, `gh-pr-create *`）
   - `gh-pr-create *` は §5 のラッパー用。素の `gh pr create *` も残す（ラッパーが env を載せるだけで権限は同じなので、どちらが通っても grant の広さは変わらない）
   - PR 本文の更新は §5 の `gh-pr-edit-body *` だけを allow する。素の `gh pr edit *` は title / base / reviewer / label まで書き換えられるので allow しない
+  - review thread への reply は §5 の `gh-reply-thread *` だけを allow する（§3 の例外の経路）。thread への reply は raw な `gh api graphql` でしか撃てず、それを allow すると任意の query・mutation が通るため
   - issue の `ready → delegated` の付け替えは §5 の `gh-issue-mark-delegated *` だけを allow する。素の `gh issue edit *` は任意の label・title・本文を書き換えられるので allow しない
   - CI 状態の確認は `gh pr checks *` を allow しない。pattern 自体は正しくマッチするが、fine-grained PAT では実行すれば必ず失敗する（§1 / §5 の理由）ので、allow しておいても許可する意味が無い（`claude-settings.md` が定義する「pattern がマッチしない dead rule」とは別物）。代わりに §5 の `gh-pr-checks *` を allow する
   - コメント取得の `gh pr view <N> --comments` も `gh pr view *` の pattern にはマッチするが、fine-grained PAT では失敗しうる（§1）。ただし `gh pr view *` は他の read 用途で必要なので allow は維持し、コメント取得には §5 の `gh-pr-comments *` を使う
@@ -102,6 +114,7 @@ prompt injection / 権限バイパスの経路になる。
 | review body / standalone コメントの取得 | `gh-pr-comments <PR>` | read-only `gh pr view --json reviews,comments` | `Bash(gh-pr-comments *)` |
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query。envelope を剥がした thread の配列を返す | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
+| bot が起こした thread への reply（§3 の例外） | `gh-reply-thread <id> <body-file>` | thread の起点コメントの author を read-only query で引き、`__typename` が `Bot` のときだけ `addPullRequestReviewThreadReply` mutation を撃つ。それ以外は exit 2 で拒否する。resolve はしない | `Bash(gh-reply-thread *)` |
 | CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
 | PR 作成 | `gh-pr-create [flags]` | `gh pr create`（フラグは素通し） | `Bash(gh-pr-create *)` |
 | PR 本文の更新 | `gh-pr-edit-body <PR> <body-file>` | `gh pr edit <PR> --body-file <body-file>` のみ。本文を置き換える（追記は `gh pr view <PR> --json body` で現本文を取って編集したファイルを渡す） | `Bash(gh-pr-edit-body *)` |
