@@ -7,9 +7,12 @@ set -euo pipefail
 # Looks the thread up first and replies only when the author of its first
 # comment is a GraphQL `Bot` (CodeRabbit, Copilot and other GitHub App
 # reviewers). Any other author -- `User`, `Mannequin`, a deleted account
-# (null), or a node id that is not a review thread -- is refused before the
-# mutation is sent, so a reply to a person cannot be issued through this
-# wrapper at all. The reply is the addPullRequestReviewThreadReply mutation and
+# (null) -- is refused before the mutation is sent, so a reply to a thread a
+# person started cannot be issued through this wrapper. Only the FIRST comment
+# is inspected: a person who replies inside a thread a bot started is not
+# detected, and the reply still goes through. Not replying into such a
+# discussion is the caller's responsibility. A node id that is not a review
+# thread is rejected with exit 1. The reply is the addPullRequestReviewThreadReply mutation and
 # nothing else: the thread is NOT resolved (that is gh-resolve-thread), and no
 # flags are passed through, so the grant can be allowlisted narrowly as
 # `Bash(gh-reply-thread *)` instead of the broad `gh api graphql *`.
@@ -20,7 +23,9 @@ set -euo pipefail
 # Exit codes:
 #   0  replied
 #   1  bad arguments (usage, malformed id, missing or empty body file)
-#   2  refused: the thread's first comment is not by a Bot (reason on stderr)
+#   1  also: the node id resolved to something that is not a review thread
+#   2  refused: a review thread whose first comment is not by a Bot (reason on
+#      stderr)
 #   other  a failed gh call (auth, network, unknown node id, ...) propagates
 #          its exit code unchanged. gh mostly exits 1, so 1 alone does not mean
 #          bad arguments: read stderr.
@@ -53,13 +58,21 @@ fi
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
 gh_mise_use "$(gh_mise_repo_root)"
 
-# `// "none"` turns every non-thread shape (null node, other node type, no
-# comments, deleted author) into a value that is not "Bot".
-author="$(gh_mise api graphql \
-  -f query='query($threadId:ID!){ node(id:$threadId){
+# The node type is fetched too so an id that is not a review thread (a wrong
+# id pasted in) is told apart from a thread a person started. `// "none"`
+# turns a deleted author into a value that is not "Bot".
+info="$(gh_mise api graphql \
+  -f query='query($threadId:ID!){ node(id:$threadId){ __typename
     ... on PullRequestReviewThread { comments(first:1){ nodes{ author{ __typename login } } } } } }' \
   -f threadId="$tid" \
-  --jq '(.data.node.comments.nodes[0].author // {}) | (.__typename // "none") + " " + (.login // "-")')"
+  --jq '(.data.node.__typename // "none") + " " + ((.data.node.comments.nodes[0].author // {}) | (.__typename // "none") + " " + (.login // "-"))')"
+
+nodetype="${info%% *}"
+author="${info#* }"
+if [ "$nodetype" != "PullRequestReviewThread" ]; then
+  echo "gh-reply-thread: not a review thread: $tid (node type $nodetype)" >&2
+  exit 1
+fi
 
 if [ "${author%% *}" != "Bot" ]; then
   echo "gh-reply-thread: refused: first comment of $tid is by '${author#* }' (type ${author%% *}), not a Bot" >&2

@@ -255,7 +255,7 @@ PATH="$stubdir:$PATH" "$bindir/gh-resolve-thread" 'bad;id' >/dev/null 2>&1; [ $?
 # --- gh-reply-thread ---------------------------------------------------------
 # The wrapper posts on a real PR, so its stub never runs the real gh: it appends
 # every argv to one log and answers only the author lookup, from GH_THREAD_NODE
-# (the JSON of `.data.node`), applying --jq through system jq the way gh does --
+# (the JSON of `.data.node`), applying --jq through system jq in place of gh's built-in jq --
 # the Bot test under scrutiny is computed by that --jq. The Bot case is the
 # control that the mutation is caught by this stub on the wrapper's real path
 # (gh_mise -> mise stub -> gh stub).
@@ -282,7 +282,7 @@ rt_run() {  # rt_run <bindir> <thread node JSON> [args...]; returns the wrapper'
     "$1/gh-reply-thread" "${@:3}" >/dev/null 2>&1
 }
 rt_node() {  # rt_node <__typename> <login>: a thread whose first comment has that author
-  printf '{"comments":{"nodes":[{"author":{"__typename":"%s","login":"%s"}}]}}' "$1" "$2"
+  printf '{"__typename":"PullRequestReviewThread","comments":{"nodes":[{"author":{"__typename":"%s","login":"%s"}}]}}' "$1" "$2"
 }
 rt_mutated() { grep -q 'addPullRequestReviewThreadReply' "$rtdir/args"; }
 
@@ -294,13 +294,39 @@ if [ "$rc" -eq 0 ] && rt_mutated \
   echo "ok: gh-reply-thread replies to a Bot-started thread with the file's body, without resolving it"
 else echo "FAIL: gh-reply-thread Bot rc=$rc args=$(cat "$rtdir/args" 2>/dev/null)"; fail=1; fi
 
-# Refusals: a person, a deleted account (null author), a node that is not a
-# review thread (no comments) and an unknown id (null node) all exit 2 with the
-# lookup made and no mutation sent.
+# The body and thread id go in as raw string fields: the line after each `-f`
+# is the field (`-F` would type-convert the body or read `@file`).
+rt_rawfields() {  # rt_rawfields <bindir> -> 0 iff both mutation fields follow a -f
+  rt_run "$1" "$(rt_node Bot coderabbitai)" PRRT_kwABC "$rtdir/body.md" || return 1
+  local f
+  for f in 'threadId=PRRT_kwABC' 'body=Declined: the suggested guard duplicates the check in line 12.'; do
+    grep -x -A1 -F '[-f]' "$rtdir/args" | grep -qxF "[$f]" || return 1
+  done
+}
+rt_rawfields "$bindir" \
+  && echo "ok: gh-reply-thread passes threadId and body as raw -f fields" \
+  || { echo "FAIL: gh-reply-thread did not pass threadId/body via -f args=$(cat "$rtdir/args" 2>/dev/null)"; fail=1; }
+
+# Both gh calls (lookup and mutation) go through mise with MISE_ENV=gh; a
+# mutation fired with a bare gh would fall to hosts.yml's token.
+rt_viamise() {  # rt_viamise <bindir> -> 0 iff exactly two mise calls, both MISE_ENV=gh
+  : >"$rtdir/mise-args"
+  env MISE_ARGS_FILE="$rtdir/mise-args" GH_ARGS_FILE="$rtdir/args" \
+    GH_THREAD_NODE="$(rt_node Bot coderabbitai)" PATH="$rtdir:$PATH" \
+    "$1/gh-reply-thread" PRRT_kwABC "$rtdir/body.md" >/dev/null 2>&1 || return 1
+  [ "$(grep -cxF '[mise:MISE_ENV=gh]' "$rtdir/mise-args")" -eq 2 ]
+}
+rt_viamise "$bindir" \
+  && echo "ok: gh-reply-thread sends both the lookup and the mutation through MISE_ENV=gh mise exec" \
+  || { echo "FAIL: gh-reply-thread mise calls=$(cat "$rtdir/mise-args" 2>/dev/null)"; fail=1; }
+
+# Refusals: a person, a deleted account (null author) and a thread without
+# comments all exit 2 with the lookup made and no mutation sent.
 rt_refuses() {  # rt_refuses <bindir> -> 0 iff every non-Bot thread is refused before the mutation
   local bad=0 node
   for node in "$(rt_node User someone)" "$(rt_node Mannequin old)" \
-      '{"comments":{"nodes":[{"author":null}]}}' '{}' 'null'; do
+      '{"__typename":"PullRequestReviewThread","comments":{"nodes":[{"author":null}]}}' \
+      '{"__typename":"PullRequestReviewThread","comments":{"nodes":[]}}'; do
     rt_run "$1" "$node" PRRT_kwABC "$rtdir/body.md"
     [ $? -eq 2 ] || bad=1
     rt_mutated && bad=1
@@ -311,6 +337,22 @@ rt_refuses() {  # rt_refuses <bindir> -> 0 iff every non-Bot thread is refused b
 rt_refuses "$bindir" \
   && echo "ok: gh-reply-thread refuses (exit 2) a thread not started by a Bot, before any mutation" \
   || { echo "FAIL: gh-reply-thread replied to a non-Bot thread args=$(cat "$rtdir/args" 2>/dev/null)"; fail=1; }
+
+# A node id that is not a review thread (another node type, or the null node gh
+# would normally already have rejected itself) exits 1, not 2, and sends no mutation.
+rt_notthread() {  # rt_notthread <bindir> -> 0 iff each non-thread node exits 1 before the mutation
+  local bad=0 node
+  for node in '{"__typename":"PullRequest"}' '{}' 'null'; do
+    rt_run "$1" "$node" PRRT_kwABC "$rtdir/body.md"
+    [ $? -eq 1 ] || bad=1
+    rt_mutated && bad=1
+    grep -q '__typename' "$rtdir/args" || bad=1
+  done
+  return "$bad"
+}
+rt_notthread "$bindir" \
+  && echo "ok: gh-reply-thread exits 1 for an id that is not a review thread, before any mutation" \
+  || { echo "FAIL: gh-reply-thread mishandled a non-thread node args=$(cat "$rtdir/args" 2>/dev/null)"; fail=1; }
 
 # Bad arguments: each fails AND leaves gh uncalled.
 rt_rejects() {  # rt_rejects <bindir> -> 0 iff every bad call fails without reaching gh
@@ -340,12 +382,24 @@ rt_mutant() {  # rt_mutant <name> <sed expression>; the mutant bindir is $stubdi
   fi
 }
 rt_mutant nobotcheck 's|if \[ "\${author%% \*}" != "Bot" \]; then|if false; then|'
-rt_mutant nonull 's|(.__typename // "none")|(.__typename // "Bot")|'
+rt_mutant nonull 's|(.__typename // "none") + " " + (.login|(.__typename // "Bot") + " " + (.login|'
 for m in nobotcheck nonull; do
   if ! rt_refuses "$stubdir/rtmutant-$m"; then
     echo "ok: mutant '$m' lets a non-Bot thread get a reply (the refusal case is discriminating)"
   else echo "FAIL: gh-reply-thread mutant '$m' still refused every non-Bot thread"; fail=1; fi
 done
+rt_mutant nonodetype 's|if \[ "\$nodetype" != "PullRequestReviewThread" \]; then|if false; then|'
+rt_mutant rawF 's|-f threadId="\$tid" -f body="\$body"|-f threadId="$tid" -F body="$body"|'
+rt_mutant barewrite '/^gh_mise api graphql \\$/s|gh_mise|gh|'
+if ! rt_notthread "$stubdir/rtmutant-nonodetype"; then
+  echo "ok: mutant 'nonodetype' lets a non-thread node through (the exit-1 case is discriminating)"
+else echo "FAIL: gh-reply-thread mutant 'nonodetype' still exited 1 for non-thread nodes"; fail=1; fi
+if ! rt_rawfields "$stubdir/rtmutant-rawF"; then
+  echo "ok: mutant 'rawF' breaks the raw-field check (-F is caught)"
+else echo "FAIL: gh-reply-thread mutant 'rawF' still passed the raw-field check"; fail=1; fi
+if ! rt_viamise "$stubdir/rtmutant-barewrite"; then
+  echo "ok: mutant 'barewrite' breaks the mise check (a bare gh mutation is caught)"
+else echo "FAIL: gh-reply-thread mutant 'barewrite' still passed the mise check"; fail=1; fi
 rt_mutant noargc 's|^\[ \$# -eq 2 \] |true |'
 rt_mutant noid 's|\[\[ ! "\$tid" =~ ^\[-A-Za-z0-9_=\]+\$ \]\]|false|'
 # The `-f` check has no mutant of its own: it is a double guard. Without it,

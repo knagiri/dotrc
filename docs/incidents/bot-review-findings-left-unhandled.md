@@ -30,10 +30,11 @@
   `blocker: true` 合計 7
 - `blocker: false` の bot 指摘 176 件を `reason_gated` / `summary` のキーワードで粗く分類すると、
   指摘ではない（skip 通知・walkthrough 等）57、既に解消済み・古い HEAD 宛て 19、担当外・後回し 33、
-  却下・軽微・その他 48、既裁定の再掲 19
+  却下・軽微・その他 48、既裁定の再掲 19。分類の内訳は委譲元の報告値をそのまま写したもので、
+  176 と 147+97 の関係（重複除去の有無等）は集計側の記録に無い
 
-bot の指摘のうち直したのは延べ 20 件で、`blocker: false` のまま何も残さなかったものがその
-10 倍近くあった。
+bot の指摘のうち直したのは延べ 20 件で、`blocker: false` のまま何も残さなかった指摘は、
+いずれの母数で数えても直した件数を大きく上回った。
 
 reply を bot の thread に限るため、bot の reviewer が GraphQL 上どう見えるかを公開 repo の PR で
 read-only の query により確かめた。
@@ -53,7 +54,7 @@ $ gh api graphql -f query='{ c:search(query:"is:pr is:public reviewed-by:coderab
 
 bot が起こした thread に限って reply するラッパー `bin/gh-reply-thread` を足した。thread の
 起点コメントの author を引き、`__typename` が `Bot` のときだけ `addPullRequestReviewThreadReply`
-を撃つ。それ以外は exit 2 で拒否するので、人間の thread への reply はこのラッパーでは撃てない。
+を撃つ。それ以外は mutation 前に拒否するので、人間が起こした thread への reply はこのラッパーでは撃てない（起点コメントしか見ないため、bot 起点の thread に人間が返信している場合は止まらず、そこへ reply しないのは利用側の責務）。
 `gh-commands.md` §3 に、`pr-review-loop` の処置記録に限ってこの経路で bot の thread へ reply して
 よい例外を足し、allowlist に `Bash(gh-reply-thread *)` を加えた。
 
