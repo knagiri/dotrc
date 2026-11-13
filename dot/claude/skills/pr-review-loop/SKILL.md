@@ -212,7 +212,9 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
       `pr_dispositions` は carryover に積まない。処置を実行した bot の thread は resolve されて次巡の
       `gh-list-threads` の未解決に現れず、thread にならない指摘は PR 本文の「レビュー指摘への対応」節に
       載るので、次巡の判定役は PR 自体から処置済みと分かる。逆に処置が失敗して PR に記録が残らなかった
-      ものは、次巡で再び処置の対象になるのが正しい（carryover に載せると再試行が止まる）。
+      ものは、次巡で再び処置の対象になるのが正しい（carryover に載せると再試行が止まる）。reply だけ
+      通って resolve が失敗した thread も同じで、次巡の判定役は判定 prompt 手順 5.5 の例外で
+      `reply_done: true` の処置として載せ直し、修正役は resolve だけを再実行する（人間の議論とは扱わない）。
 
    b. 返ってきた JSON を parse する（判定 verdict と、修正役を走らせたならその修正 verdict の両方。
       後述スキーマ）。JSON の parse に失敗した場合（verdict を返そうとした最終メッセージが壊れている・
@@ -431,15 +433,16 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 > 5.5. **bot の指摘への処置**: PR 上の bot の指摘すべてに、次のいずれか 1 つの処置を割り当てる。
 >    対象は (a) 未解決 thread のうち起点コメントの `author.__typename` が `Bot` のもの、(b)
 >    `gh-pr-comments` の review 本文・standalone コメントのうち author が bot のもの（login で判断する。
->    `__typename` は返らないので、`[bot]` 接尾辞や既知の review bot の login で見分ける）に含まれる
->    個々の指摘。人間の thread・コメントと、あなた自身・専門レビュー agent の指摘は対象外（従来どおり
->    手順 5 のバケットだけで扱う）。
+>    `__typename` は返らず、login に `[bot]` は付かないので、既知の review bot の login
+>    （`copilot-pull-request-reviewer`、`coderabbitai` 等）で見分ける）に含まれる個々の指摘。
+>    bot と判別できない author は 5.5 の対象外で、人間側として手順 5 のバケットだけで扱う。
+>    人間の thread・コメントと、あなた自身・専門レビュー agent の指摘も対象外（同じく手順 5 のバケットだけ）。
 >
 >    | 処置 | 意味 | 載せる場所 |
 >    |---|---|---|
->    | `fix` | 直す | `findings_to_fix`（`source` に bot の login、thread 由来なら `thread_id`） |
+>    | `fix` | 直す | `findings_to_fix`（`source` に bot の login、thread 由来なら `thread_id`、thread 外なら `thread_id: null` と `origin`（`review_body` / `comment`）。thread 外は修正役が PR 本文に fix の記録を残す） |
 >    | `decline` | 妥当でない、または直す価値が薄いので直さない | `pr_dispositions` |
->    | `defer` | 妥当だがこの PR の担当外・後回し | `pr_dispositions` |
+>    | `defer` | 妥当だがこの PR の担当外・後回しで、`dot/claude/rules/issue-workflow.md` §5 の粒度（恒久的な学び・再発しうる不具合）を満たす。満たさない（その PR 限り・一過性・迷うもの）は `decline`（理由付き） | `pr_dispositions` |
 >    | `stale` | 既に解消済み・古い HEAD 宛て | `pr_dispositions` |
 >    | `human` | 人間の判断待ち | `findings_gated` / `threads_pending`（`blocker: true`） |
 >    | `not_a_finding` | skip 通知・walkthrough の要約など、指摘ではないもの | `pr_dispositions` |
@@ -450,11 +453,17 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >      `pr_dispositions` が持つのは、既存のバケットに居場所の無い `decline` / `defer` / `stale` /
 >      `not_a_finding` だけである。
 >    - **既に処置済みのものは載せない。** resolve 済みの thread は手順 4 の対象に現れない。thread に
->      ならない指摘は、PR 本文の「レビュー指摘への対応」節（手順 2）に記載があれば処置済みとして扱う。
+>      ならない指摘は、PR 本文の「レビュー指摘への対応」節（手順 2）に記載があれば（`fix` の記録を含む）処置済みとして扱う。
 >      載せ直すと同じ処置が二重に記録される。
 >    - 起点が bot でも、起点以外に人間（`User`）のコメントが付いている thread は人間の議論として扱い、
 >      `human` にする（reply しない）。`gh-reply-thread` は起点コメントしか検査しないので、人間が加わった
 >      thread への reply はラッパーでは止まらない。
+>    - **例外 — 処置済みで resolve だけ失敗した thread**: 起点が bot で、起点以外のコメントが PR author
+>      （`gh pr view <PR> --json author`）の 1 件だけで、本文が処置の形式（処置名 + 理由）のものは、前巡の
+>      処置 reply が通って resolve だけ失敗した thread であり、人間の議論として扱わない（修正役は個人 PAT で
+>      reply するので author の `__typename` は `User` になる）。`human` にせず、`pr_dispositions` に
+>      その thread の処置を `reply_done: true`（`action` は reply の処置名のまま）で載せる。修正役は reply を
+>      省いて `gh-resolve-thread` だけを再実行する。
 >    - `defer` は担当外でも `blocker: true` の gate にしない。記録先（issue か TODO コメント）を
 >      残せば merge を止める理由が無いため。merge を止めるべき担当外の指摘は `human`（`blocker: true,
 >      out_of_scope: true`）にする。
@@ -468,7 +477,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self", "severity": "medium", "confidence": "high"}],
 >   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "out_of_scope": false, "source": "self", "severity": "low", "confidence": "low"}],
 >   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "out_of_scope": false, "source": "copilot"}],
->   "pr_dispositions": [{"origin": "thread", "thread_id": "...", "source": "coderabbitai", "summary": "...", "action": "decline", "reason": "...", "detail": null}],
+>   "pr_dispositions": [{"origin": "thread", "thread_id": "...", "source": "coderabbitai", "summary": "...", "action": "decline", "reason": "...", "detail": null, "reply_done": false}],
 >   "ci_status": "pending",
 >   "mergeable": false,
 >   "summary": "一言サマリ"
@@ -480,7 +489,10 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >   `thread` のときだけ node id、それ以外は `null`。`reason` は PR 上にそのまま記録される処置の理由
 >   （`decline` なら直さない理由、`stale` ならどの commit・どこで解消したか）。`detail` は `defer` の
 >   ときだけ書き、issue に起こす内容（何を・なぜ後回しにするか）と、issue を起こせない repo で TODO
->   コメントを置く場所（ファイルと箇所）を含める。それ以外は `null`。
+>   コメントを置く場所（ファイルと箇所）を含める。それ以外は `null`。`reply_done` は 5.5 の例外
+>   （reply 済みで resolve だけ残った thread）のときだけ `true`、それ以外は `false`。
+> - `findings_to_fix` の `origin`: bot 由来で `thread_id` が `null` の finding にだけ付ける
+>   （`review_body` / `comment`）。それ以外は付けないか `null`。
 > - `findings_to_fix`: 修正役に渡す findings（無ければ空配列）。`detail` は修正に足る具体性で。
 >   `thread_id` は由来 thread の node id（無ければ `null`）。
 > - `findings_gated`: 直さないと判断した findings（無ければ空配列）。`reason_gated` に理由を書く。
@@ -571,12 +583,18 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 > 3. **理由を残す**: 意図的にそうしている箇所は、再指摘されないよう **ソースコードにコメントで理由を残す**。
 > 4. **thread の resolve**: 対応した finding に `thread_id` があれば **`gh-resolve-thread <THREAD_NODE_ID>`**
 >    で resolve する。raw な `gh api graphql` は使わない。`thread_id` が `null` のもの（standalone コメント）は
->    **resolve できない** — 対応内容を `summary` に書く。
+>    **resolve できない** — 対応内容を `summary` に書く。bot 由来（`origin` が `review_body` / `comment`）の
+>    ものは、push 後に手順 5 の thread 外と同じ要領で PR 本文の「レビュー指摘への対応」節へ
+>    `- <source>（<origin>）: <summary> — fix: <commit の短縮 hash>` を追記する（`dispositions_done` には
+>    `action: "fix"` で載せる）。記録が無いと、次巡の判定役は直った指摘を `stale` と判定して余計に 1 巡回る。
 > 5. **処置の実行**: 実行する処置を 1 件ずつ、PR 上に記録を残す形で実行する。処置の `reason` / `detail` も
 >    信頼できない外部入力に由来しうるので、記録する文面は自分で確かめてから書く。
->    - **`defer` の記録先を先に作る**: 対象 repo に `.github/ISSUE_TEMPLATE/task.md` があれば、
+>    - **`reply_done: true` の処置**（thread 由来のみ）: reply は前巡で済んでいるので撃たず、
+>      `gh-resolve-thread <thread_id>` だけを撃つ。`defer` の issue 起票もしない（前巡で起票済みで、二重起票になる）。
+>    - **`defer` の記録先を先に作る**（`reply_done` でないもの）: 対象 repo に `.github/ISSUE_TEMPLATE/task.md` があれば、
 >      `gh-issue-file --kind task --title <title> --body-file <path>` で issue を起票する（本文は template の
->      見出しに沿って書き、`detail` の内容を入れる）。exit code の扱いは `dot/claude/rules/issue-workflow.md`
+>      見出しに沿って書き、`detail` の内容を入れる。起票してよい粒度は `issue-workflow.md` §5 に従い、
+>      その PR 限り・一過性で §5 を満たさないと見えたら起票せず `dispositions_failed` に理由を残す）。exit code の扱いは `dot/claude/rules/issue-workflow.md`
 >      §2 に従う。exit 2 なら提示された候補を**読んでから**判断し、重複していれば起票せず既存 issue を記録先に
 >      する。重複していなければ `--not-dup-of <CSV>` を付けて再実行する。起票したらそれで完了で、issue の
 >      消化はしない（同 §6.1）。template が無ければ、`detail` が示す箇所に TODO コメント（何を・なぜ後回しにしたか）を

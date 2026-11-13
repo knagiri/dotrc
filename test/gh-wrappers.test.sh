@@ -424,7 +424,7 @@ else echo "FAIL: gh-list-threads rc=$rc args=$(cat "$stubdir/args" 2>/dev/null)"
 # The author's __typename is part of the output contract: it is how a reader
 # tells a thread a bot started (author type Bot) from one a person started,
 # which the login alone does not show (a bot's GraphQL login has no [bot]).
-if grep -q 'author{login __typename}' "$stubdir/args"; then
+if grep -Eq 'author\{[^}]*__typename' "$stubdir/args"; then
   echo "ok: gh-list-threads asks for each comment author's __typename"
 else echo "FAIL: gh-list-threads query lacks author __typename args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
 
@@ -446,7 +446,8 @@ done
 case "$1" in
   repo) out='{"owner":{"login":"o"},"name":"r"}' ;;
   api)  out='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
-          {"id":"PRRT_1","isResolved":false,"isOutdated":false,"comments":{"nodes":[]}},
+          {"id":"PRRT_1","isResolved":false,"isOutdated":false,"comments":{"nodes":[
+            {"author":{"login":"copilot-pull-request-reviewer","__typename":"Bot"},"body":"x","path":"a","line":1}]}},
           {"id":"PRRT_2","isResolved":true,"isOutdated":false,"comments":{"nodes":[]}},
           {"id":"PRRT_3","isResolved":false,"isOutdated":true,"comments":{"nodes":[]}}]}}}}}' ;;
 esac
@@ -460,6 +461,25 @@ if [ "$rc" -eq 0 ] && [ "$unresolved" = 2 ] \
   && printf '%s' "$out" | jq -e 'type == "array" and length == 3' >/dev/null; then
   echo "ok: gh-list-threads prints the thread array, so the unresolved count is real"
 else echo "FAIL: gh-list-threads shape rc=$rc unresolved=$unresolved out=$out"; fail=1; fi
+
+# The output (not just the query string) must carry the comment author's __typename.
+if printf '%s' "$out" | jq -e '.[0].comments.nodes[0].author.__typename == "Bot"' >/dev/null 2>&1; then
+  echo "ok: gh-list-threads output keeps each comment author's __typename"
+else echo "FAIL: gh-list-threads output lacks author __typename out=$out"; fail=1; fi
+# Mutant: a --jq that strips author down to {login} breaks that contract; the
+# assertion above must catch it (the query-string grep alone would not).
+ltmut="$stubdir/ltmutant"; rm -rf "$ltmut"; mkdir -p "$ltmut"; cp -a "$bindir/." "$ltmut/"
+sed "s#--jq '.data.repository.pullRequest.reviewThreads.nodes'#--jq '.data.repository.pullRequest.reviewThreads.nodes | map(.comments.nodes |= map(.author |= {login}))'#" \
+  "$bindir/gh-list-threads" >"$ltmut/gh-list-threads"
+chmod +x "$ltmut/gh-list-threads"
+if cmp -s "$bindir/gh-list-threads" "$ltmut/gh-list-threads"; then
+  echo "FAIL: gh-list-threads mutant 'dropauthortype' is identical; the check is a no-op"; fail=1
+else
+  mout="$(PATH="$ltdir:$PATH" "$ltmut/gh-list-threads" 7 2>/dev/null)"
+  if ! printf '%s' "$mout" | jq -e '.[0].comments.nodes[0].author.__typename == "Bot"' >/dev/null 2>&1; then
+    echo "ok: mutant 'dropauthortype' loses __typename (the output assertion is discriminating)"
+  else echo "FAIL: gh-list-threads mutant 'dropauthortype' still passed the __typename assertion"; fail=1; fi
+fi
 
 # gh-list-threads: missing / non-numeric arg fail.
 PATH="$stubdir:$PATH" "$bindir/gh-list-threads" >/dev/null 2>&1; [ $? -ne 0 ] \
