@@ -185,11 +185,11 @@ func AdvancePRCursor(conn *sql.DB, sessionID, pr string, cursor time.Time) error
 	return nil
 }
 
-// SetPRDelivered records (at > 0) that the session was resumed at unix time at
-// with the PR's activity up to upTo (zero for a merge or close), or clears
-// that record (at == 0). The cursor is not moved here: a resume that was
-// launched may still fail inside its window, so the cursor waits for the
-// session's own UserPromptSubmit (PromptSince).
+// SetPRDelivered records (at > 0) that a resume of the session is attempted at
+// unix time at with the PR's activity up to upTo (zero for a merge or close), or
+// clears that record (at == 0). The cursor is not moved here: a resume may still
+// fail inside its window, so the cursor waits for the session's own
+// UserPromptSubmit (PromptSince).
 func SetPRDelivered(conn *sql.DB, sessionID, pr string, at int64, upTo time.Time) error {
 	var up sql.NullString
 	if at > 0 && !upTo.IsZero() {
