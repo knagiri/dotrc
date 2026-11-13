@@ -201,7 +201,8 @@ LEFT JOIN events p ON p.id = (
 WHERE s.done_at IS NULL`
 
 // Pragmas are set on every connection the pool opens, through the DSN (see
-// dsn). busy_timeout comes first so that the ones after it -- journal_mode
+// dsn). The order here does not matter: modernc.org/sqlite applies busy_timeout
+// first and the rest in lexicographic order, so the later ones -- journal_mode
 // takes a lock -- wait for a concurrent Open instead of failing with BUSY.
 var Pragmas = []string{
 	"busy_timeout(5000)",

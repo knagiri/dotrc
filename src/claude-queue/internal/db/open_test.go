@@ -50,9 +50,18 @@ func TestOpenConcurrent(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		init bool
+		// stale, if set, runs on the initialized database to make it look like
+		// one written by an older binary.
+		stale []string
 	}{
-		{"fresh database", false},
-		{"initialized database", true},
+		{"fresh database", false, nil},
+		{"initialized database", true, nil},
+		// A column added since the database was written: every Open sees it
+		// missing at once, and only one may add it.
+		{"old schema database", true, []string{
+			"DROP VIEW queue",
+			"ALTER TABLE session_links DROP COLUMN pr",
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "test.db")
@@ -60,6 +69,11 @@ func TestOpenConcurrent(t *testing.T) {
 				conn, err := Open(path)
 				if err != nil {
 					t.Fatalf("Open: %v", err)
+				}
+				for _, q := range tc.stale {
+					if _, err := conn.Exec(q); err != nil {
+						t.Fatalf("%s: %v", q, err)
+					}
 				}
 				conn.Close()
 			}
@@ -157,5 +171,28 @@ func TestOpenPathWithURIReservedChars(t *testing.T) {
 	conn.Close()
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("database not created at %q: %v", path, err)
+	}
+}
+
+// TestOpenLeavesCurrentViewAlone checks that an Open of a database whose view
+// already matches does not rewrite the schema: schema_version moves on any
+// DROP/CREATE, so a rebuild on every Open would show up here.
+func TestOpenLeavesCurrentViewAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	version := func() int {
+		conn, err := Open(path)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer conn.Close()
+		var v int
+		if err := conn.QueryRow("PRAGMA schema_version").Scan(&v); err != nil {
+			t.Fatalf("schema_version: %v", err)
+		}
+		return v
+	}
+	first := version()
+	if second := version(); second != first {
+		t.Errorf("schema_version %d -> %d across a reopen; the view was rebuilt", first, second)
 	}
 }

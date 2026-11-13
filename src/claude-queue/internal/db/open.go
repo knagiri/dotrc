@@ -139,8 +139,23 @@ func applyView(conn *sql.DB) error {
 // EXISTS for it, so each one is asked for first -- Open runs on every hook
 // invocation, and a migration that fails on the second run would take the whole
 // ledger down with it.
+//
+// The asking and the adding are a check-then-act, so two Opens that both find a
+// column missing would both ALTER and the later one fail with "duplicate column
+// name". It is guarded the way applyView is: the unlocked scan lets an
+// up-to-date database return without the write lock, and only when something is
+// missing does BEGIN IMMEDIATE serialize the Opens and every column get asked
+// for again inside it.
 func migrate(conn *sql.DB) error {
-	for _, m := range []struct{ table, column, ddl string }{
+	ctx := context.Background()
+	c, err := conn.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	type column struct{ table, name, ddl string }
+	cols := []column{
 		{"sessions", "config_dir", "ALTER TABLE sessions ADD COLUMN config_dir TEXT"},
 		{"sessions", "waiting_event_id", "ALTER TABLE sessions ADD COLUMN waiting_event_id INTEGER"},
 		{"sessions", "done_at", "ALTER TABLE sessions ADD COLUMN done_at INTEGER"},
@@ -157,27 +172,64 @@ func migrate(conn *sql.DB) error {
 		{"session_links", "repo", "ALTER TABLE session_links ADD COLUMN repo TEXT"},
 		{"session_links", "branch", "ALTER TABLE session_links ADD COLUMN branch TEXT"},
 		{"session_links", "pr", "ALTER TABLE session_links ADD COLUMN pr INTEGER"},
-	} {
-		has, err := hasColumn(conn, m.table, m.column)
-		if err != nil {
-			return err
+	}
+
+	missing := func() ([]column, error) {
+		var out []column
+		for _, m := range cols {
+			has, err := hasColumn(ctx, c, m.table, m.name)
+			if err != nil {
+				return nil, err
+			}
+			if !has {
+				out = append(out, m)
+			}
 		}
-		if has {
-			continue
+		return out, nil
+	}
+
+	if todo, err := missing(); err != nil || len(todo) == 0 {
+		return err
+	}
+
+	if _, err := c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = c.ExecContext(ctx, "ROLLBACK")
 		}
-		if _, err := conn.Exec(m.ddl); err != nil {
-			return fmt.Errorf("add %s.%s: %w", m.table, m.column, err)
+	}()
+
+	// Re-ask under the write lock: another Open may have added them since.
+	todo, err := missing()
+	if err != nil {
+		return err
+	}
+	for _, m := range todo {
+		if _, err := c.ExecContext(ctx, m.ddl); err != nil {
+			return fmt.Errorf("add %s.%s: %w", m.table, m.name, err)
 		}
 	}
+	if _, err := c.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
 	return nil
+}
+
+// rowQuerier is what hasColumn needs, satisfied by *sql.Conn as well as *sql.DB.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // hasColumn reports whether table already has column, via pragma_table_info --
 // the table-valued form, so the answer comes back as a row that can be counted
 // rather than a result set to scan.
-func hasColumn(conn *sql.DB, table, column string) (bool, error) {
+func hasColumn(ctx context.Context, q rowQuerier, table, column string) (bool, error) {
 	var n int
-	if err := conn.QueryRow(
+	if err := q.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?", table, column,
 	).Scan(&n); err != nil {
 		return false, fmt.Errorf("inspect %s.%s: %w", table, column, err)

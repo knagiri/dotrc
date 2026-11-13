@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -280,7 +281,7 @@ func TestMigrate_AddsLinkRefColumns(t *testing.T) {
 			t.Fatalf("Open #%d: %v", i+1, err)
 		}
 		for _, col := range []string{"repo", "branch", "pr"} {
-			has, err := hasColumn(conn, "session_links", col)
+			has, err := hasColumn(context.Background(), conn, "session_links", col)
 			if err != nil || !has {
 				t.Errorf("Open #%d: session_links.%s present = %v (err %v)", i+1, col, has, err)
 			}
