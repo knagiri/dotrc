@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
+	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -12,22 +15,25 @@ import (
 // Open opens the SQLite database at path, applies PRAGMAs, schema and
 // migrations. The returned *sql.DB is safe for concurrent use.
 //
-// The order is load-bearing: Tables first so a fresh database has them,
-// migrate() second so an existing one gains the columns CREATE TABLE IF NOT
-// EXISTS cannot add, migrateLifecycle() and migratePRWatches() next because
-// they read those columns, and View last because it selects a column that
-// only exists after the migration.
+// Open runs concurrently with itself as a matter of course -- every hook event
+// is its own process -- so each step must hold up against another process
+// doing the same thing at the same moment. The PRAGMAs ride on the DSN, which
+// sets them on every connection the pool opens (an Exec would reach only one)
+// and sets busy_timeout before anything that can take a lock.
+//
+// The order of the remaining steps is load-bearing: Tables first so a fresh
+// database has them, migrate() second so an existing one gains the columns
+// CREATE TABLE IF NOT EXISTS cannot add, migrateLifecycle() and
+// migratePRWatches() next because they read those columns, and the view last
+// because it selects a column that only exists after the migration.
 func Open(path string) (*sql.DB, error) {
-	conn, err := sql.Open("sqlite", path)
+	name, err := dsn(path)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := sql.Open("sqlite", name)
 	if err != nil {
 		return nil, fmt.Errorf("sql.Open: %w", err)
-	}
-
-	for _, p := range Pragmas {
-		if _, err := conn.Exec(p); err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("pragma %q: %w", p, err)
-		}
 	}
 
 	for _, step := range []struct {
@@ -38,7 +44,7 @@ func Open(path string) (*sql.DB, error) {
 		{"migrate", migrate},
 		{"migrate lifecycle", func(c *sql.DB) error { return migrateLifecycle(c, time.Now().Unix()) }},
 		{"migrate PR watches", migratePRWatches},
-		{"apply view", func(c *sql.DB) error { _, err := c.Exec(View); return err }},
+		{"apply view", applyView},
 	} {
 		if err := step.run(conn); err != nil {
 			conn.Close()
@@ -49,6 +55,83 @@ func Open(path string) (*sql.DB, error) {
 	return conn, nil
 }
 
+// dsn builds the modernc.org/sqlite DSN for path: a file: URI carrying each of
+// Pragmas as a _pragma parameter. path is made absolute and escaped, so a path
+// holding ?, # or % names the file it says rather than starting the query.
+func dsn(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
+	}
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	params := make([]string, len(Pragmas))
+	for i, p := range Pragmas {
+		params[i] = "_pragma=" + url.QueryEscape(p)
+	}
+	u.RawQuery = strings.Join(params, "&")
+	return u.String(), nil
+}
+
+// applyView makes the queue view match View.
+//
+// The common case -- the stored definition already is View -- is answered by
+// a read and takes no lock. Otherwise the view is dropped and recreated in one
+// BEGIN IMMEDIATE transaction, which re-reads the definition first: two Opens
+// that both saw a stale view must not both recreate it, because outside a
+// transaction one's CREATE lands between the other's DROP and CREATE and fails
+// with "already exists".
+func applyView(conn *sql.DB) error {
+	ctx := context.Background()
+	c, err := conn.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	current := func() (bool, error) {
+		var stored sql.NullString
+		err := c.QueryRowContext(ctx,
+			"SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'queue'",
+		).Scan(&stored)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("read view: %w", err)
+		}
+		return stored.String == View, nil
+	}
+
+	if ok, err := current(); err != nil || ok {
+		return err
+	}
+
+	if _, err := c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = c.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	if ok, err := current(); err != nil || ok {
+		return err
+	}
+	if _, err := c.ExecContext(ctx, "DROP VIEW IF EXISTS queue"); err != nil {
+		return fmt.Errorf("drop view: %w", err)
+	}
+	if _, err := c.ExecContext(ctx, View); err != nil {
+		return fmt.Errorf("create view: %w", err)
+	}
+	if _, err := c.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // migrate brings an existing database up to the current Tables definition.
 //
 // Only added columns so far, which SQLite can do in place. ALTER TABLE ... ADD
@@ -56,8 +139,23 @@ func Open(path string) (*sql.DB, error) {
 // EXISTS for it, so each one is asked for first -- Open runs on every hook
 // invocation, and a migration that fails on the second run would take the whole
 // ledger down with it.
+//
+// The asking and the adding are a check-then-act, so two Opens that both find a
+// column missing would both ALTER and the later one fail with "duplicate column
+// name". It is guarded the way applyView is: the unlocked scan lets an
+// up-to-date database return without the write lock, and only when something is
+// missing does BEGIN IMMEDIATE serialize the Opens and every column get asked
+// for again inside it.
 func migrate(conn *sql.DB) error {
-	for _, m := range []struct{ table, column, ddl string }{
+	ctx := context.Background()
+	c, err := conn.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	type column struct{ table, name, ddl string }
+	cols := []column{
 		{"sessions", "config_dir", "ALTER TABLE sessions ADD COLUMN config_dir TEXT"},
 		{"sessions", "waiting_event_id", "ALTER TABLE sessions ADD COLUMN waiting_event_id INTEGER"},
 		{"sessions", "done_at", "ALTER TABLE sessions ADD COLUMN done_at INTEGER"},
@@ -74,27 +172,64 @@ func migrate(conn *sql.DB) error {
 		{"session_links", "repo", "ALTER TABLE session_links ADD COLUMN repo TEXT"},
 		{"session_links", "branch", "ALTER TABLE session_links ADD COLUMN branch TEXT"},
 		{"session_links", "pr", "ALTER TABLE session_links ADD COLUMN pr INTEGER"},
-	} {
-		has, err := hasColumn(conn, m.table, m.column)
-		if err != nil {
-			return err
+	}
+
+	missing := func() ([]column, error) {
+		var out []column
+		for _, m := range cols {
+			has, err := hasColumn(ctx, c, m.table, m.name)
+			if err != nil {
+				return nil, err
+			}
+			if !has {
+				out = append(out, m)
+			}
 		}
-		if has {
-			continue
+		return out, nil
+	}
+
+	if todo, err := missing(); err != nil || len(todo) == 0 {
+		return err
+	}
+
+	if _, err := c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = c.ExecContext(ctx, "ROLLBACK")
 		}
-		if _, err := conn.Exec(m.ddl); err != nil {
-			return fmt.Errorf("add %s.%s: %w", m.table, m.column, err)
+	}()
+
+	// Re-ask under the write lock: another Open may have added them since.
+	todo, err := missing()
+	if err != nil {
+		return err
+	}
+	for _, m := range todo {
+		if _, err := c.ExecContext(ctx, m.ddl); err != nil {
+			return fmt.Errorf("add %s.%s: %w", m.table, m.name, err)
 		}
 	}
+	if _, err := c.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
 	return nil
+}
+
+// rowQuerier is what hasColumn needs, satisfied by *sql.Conn as well as *sql.DB.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // hasColumn reports whether table already has column, via pragma_table_info --
 // the table-valued form, so the answer comes back as a row that can be counted
 // rather than a result set to scan.
-func hasColumn(conn *sql.DB, table, column string) (bool, error) {
+func hasColumn(ctx context.Context, q rowQuerier, table, column string) (bool, error) {
 	var n int
-	if err := conn.QueryRow(
+	if err := q.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?", table, column,
 	).Scan(&n); err != nil {
 		return false, fmt.Errorf("inspect %s.%s: %w", table, column, err)
