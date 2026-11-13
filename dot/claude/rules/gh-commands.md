@@ -47,8 +47,20 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 
 | コメント送信元 | reply 投稿 | 補足 |
 |---|---|---|
-| Bot（`@claude`, `@Copilot`, `@coderabbitai` 等） | **不要**。明示指示があっても reply の必要性をまず確認する | bot 同士の応酬を防ぐため、指摘内容の取り込み（コード修正）だけで済ませることが多い |
+| Bot（`@claude`, `@Copilot`, `@coderabbitai` 等） | **不要**。明示指示があっても reply の必要性をまず確認する。例外は下記の処置記録 | bot 同士の応酬を防ぐため、指摘内容の取り込み（コード修正）だけで済ませることが多い |
 | チームメンバー（人間） | 必要だが、**agent が直接投稿してはいけない** | 必ずユーザーの手で文面を組み直して投稿する |
+
+**例外 — `pr-review-loop` の処置記録**: `pr-review-loop` が bot の指摘に「直さない」処置
+（却下・後回し・解消済み）を付けたときは、その理由を `gh-reply-thread`（§5）経由で bot の
+thread に reply してよい。直さない指摘を未解決のまま理由も残さず放置すると、PR を見ても
+各指摘が対応済みか対応不要かが分からず、人間が全件を読み直すことになるため。reply 経路を
+このラッパーに限るのは、起点コメントの author が `Bot` でない thread をラッパーが拒否する
+ので、人間が起こした thread へ reply する経路が構造的に塞がるため。ただし見るのは起点コメント
+だけなので、bot 起点の thread に人間が返信して議論している場合はラッパーでは止まらない。その
+thread へは reply しない（利用側の責務）。人間の thread への reply 禁止
+（上表）と、`gh pr comment` 等による新規コメントの投稿禁止は変わらない。
+
+実例: dotrc/docs/incidents/bot-review-findings-left-unhandled.md
 
 #### チームメンバー宛の reply 草案を求められた場合
 
@@ -67,7 +79,8 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 #### やってはいけないこと
 
 - ユーザー確認なしに `gh pr comment` 等で reply コメントを投稿する
-- bot コメントに対して bot 風の反論や同意 reply を agent 名義で投げる
+- bot コメントに対して bot 風の反論や同意 reply を agent 名義で投げる（上記の処置記録は、処置と
+  その理由を記録するものなのでこれに当たらない）
 - ドラフト提示を「投稿しました」と誤認させる表現にする
 
 #### スコープ外（このルールでは扱わない）
@@ -82,6 +95,7 @@ PR review・コメント確認を依頼されたとき、**reply コメントの
 - **allow:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`, `gh repo view *`）と PR 作成（`gh pr create *`, `gh-pr-create *`）
   - `gh-pr-create *` は §5 のラッパー用。素の `gh pr create *` も残す（ラッパーが env を載せるだけで権限は同じなので、どちらが通っても grant の広さは変わらない）
   - PR 本文の更新は §5 の `gh-pr-edit-body *` だけを allow する。素の `gh pr edit *` は title / base / reviewer / label まで書き換えられるので allow しない
+  - review thread への reply は §5 の `gh-reply-thread *` だけを allow する（§3 の例外の経路）。thread への reply は raw な `gh api` でしか撃てず（GraphQL mutation でも REST の `pulls/<N>/comments/<id>/replies` でも）、それを allow すると任意の endpoint・query・mutation が通るため
   - issue の `ready → delegated` の付け替えは §5 の `gh-issue-mark-delegated *` だけを allow する。素の `gh issue edit *` は任意の label・title・本文を書き換えられるので allow しない
   - CI 状態の確認は `gh pr checks *` を allow しない。pattern 自体は正しくマッチするが、fine-grained PAT では実行すれば必ず失敗する（§1 / §5 の理由）ので、allow しておいても許可する意味が無い（`claude-settings.md` が定義する「pattern がマッチしない dead rule」とは別物）。代わりに §5 の `gh-pr-checks *` を allow する
   - コメント取得の `gh pr view <N> --comments` も `gh pr view *` の pattern にはマッチするが、fine-grained PAT では失敗しうる（§1）。ただし `gh pr view *` は他の read 用途で必要なので allow は維持し、コメント取得には §5 の `gh-pr-comments *` を使う
@@ -102,6 +116,7 @@ prompt injection / 権限バイパスの経路になる。
 | review body / standalone コメントの取得 | `gh-pr-comments <PR>` | read-only `gh pr view --json reviews,comments` | `Bash(gh-pr-comments *)` |
 | 未解決 thread の取得 | `gh-list-threads <PR>` | read-only reviewThreads query。envelope を剥がした thread の配列を返す | `Bash(gh-list-threads *)` |
 | thread の resolve | `gh-resolve-thread <id>` | `resolveReviewThread` mutation のみ | `Bash(gh-resolve-thread *)` |
+| bot が起こした thread への reply（§3 の例外） | `gh-reply-thread <id> <body-file>` | thread の起点コメントの author を read-only query で引き、`__typename` が `Bot` のときだけ `addPullRequestReviewThreadReply` mutation を撃つ。Bot 以外は mutation 前に拒否する（thread でない id は exit 1、起点が Bot でない thread は exit 2）。resolve はしない | `Bash(gh-reply-thread *)` |
 | CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
 | PR 作成 | `gh-pr-create [flags]` | `gh pr create`（フラグは素通し） | `Bash(gh-pr-create *)` |
 | PR 本文の更新 | `gh-pr-edit-body <PR> <body-file>` | `gh pr edit <PR> --body-file <body-file>` のみ。本文を置き換える（追記は `gh pr view <PR> --json body` で現本文を取って編集したファイルを渡す） | `Bash(gh-pr-edit-body *)` |
@@ -126,7 +141,8 @@ prompt injection / 権限バイパスの経路になる。
   代替する。したがって third-party GitHub App が作る check run は拾えず、required かどうかも
   判定しない（branch protection の参照には別権限が要る）。required の充足判定は auto-merge に委ねる。
 - raw `gh api graphql *` / `gh pr merge *` は **allow しない**（§4 のとおり）。thread resolve は
-  reply コメント投稿とは別物（§3 の reply 禁止は維持）。人間の議論待ち thread は resolve せず
+  reply コメント投稿とは別物（§3 の reply 禁止は維持。例外は §3 の bot thread への処置記録で、
+  `gh-reply-thread` 経由に限る）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。
 - ラッパーは **repo 単位**で、特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）。`--auto` は branch protection / required checks を尊重するため未通過 PR を強制 merge はできないが、「PR 限定ではない」点は把握しておく。fallback の直接 merge（`gh pr merge --merge`）も同じで、ゲートを掛けるのは GitHub 側の branch protection であり、ラッパーは `--admin` 等のバイパスフラグを一切付けない。したがって fallback 経路に落ちても required checks / required approvals は変わらず強制される。
 - `gh-automerge` の fallback は **clean 拒否 1 種類にだけ**効く。`gh pr merge --auto` の失敗の

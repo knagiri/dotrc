@@ -59,6 +59,7 @@ jobs:
             bin/gh-pr-comments \
             bin/gh-pr-create \
             bin/gh-pr-edit-body \
+            bin/gh-reply-thread \
             bin/gh-resolve-thread \
             bin/git-reap-gone \
             bin/git-set-commit-sign \
