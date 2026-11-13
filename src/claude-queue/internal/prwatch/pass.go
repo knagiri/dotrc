@@ -98,17 +98,20 @@ func Message(pr string, a Activity, events []Event) string {
 //     longer there (a deleted comment).
 //
 // A delivery is not taken as done when it is launched. The pass records when
-// it launched it and how far it reached, and a later pass confirms it from
+// it attempts the launch and how far it reaches, and a later pass confirms it from
 // the ledger: a UserPromptSubmit of the session since then is taken as the
 // message arriving (its text is not matched), and only then does the cursor move to the newest delivered event
 // (or, for a merge or close, the watch be removed). With none after ConfirmWindow
 // the record is dropped and, the cursor not having moved, the next pass
 // delivers again with everything that piled up meanwhile. The record is
 // written before the launch, and no launch happens if it cannot be written. A
-// skipped or failed launch drops the record again, leaving the watch as it
-// was, and is retried by the next pass the same way; if the record cannot be
-// dropped, it is settled like any unconfirmed delivery and counts towards
-// MaxFailures.
+// skipped or failed launch drops the record, leaving the watch as it
+// was, and is retried by the next pass the same way. If the record cannot be
+// dropped, a later pass settles it like any other: a UserPromptSubmit of the
+// session since the record's time confirms it as delivered although nothing
+// was launched (the cursor moves past activity that never arrived, or the
+// watch of a merged or closed PR is removed); with none, it counts as one
+// failure towards MaxFailures once ConfirmWindow has passed.
 //
 // MaxFailures unconfirmed deliveries in a row stop delivery to the watch (see
 // db.FailPRDelivery); a confirmed one resets the count. A stopped watch is still
@@ -208,11 +211,14 @@ func Pass(conn *sql.DB, now time.Time, debounce time.Duration, deps Deps, out io
 			continue
 		}
 		if err := Deliver(p, Message(p.PR, a, events), deps); err != nil {
-			// Nothing was launched: drop the record, so the next pass retries
-			// the same activity as if it had never been tried. If dropping it
-			// fails too, the record stands as an unconfirmed delivery, and
-			// confirm counts it as one failure once ConfirmWindow has passed,
-			// so MaxFailures still bounds the retries.
+			// No resume is known to have been launched (the session may
+			// already have been stopped, or the launch may have failed after
+			// side effects): drop the record, so the next pass retries the
+			// same activity as if it had never been tried. If dropping it
+			// fails too, the record stands and confirm settles it: a prompt
+			// of the session since then confirms it as delivered, otherwise
+			// it counts as one failure once ConfirmWindow has passed, so
+			// MaxFailures still bounds the retries.
 			report(out, db.SetPRDelivered(conn, p.SessionID, p.PR, 0, time.Time{}))
 			if hibernate.IsSkip(err) {
 				fmt.Fprintf(out, "pr-watch: skipped %s (%s): %v\n", id, p.PR, err)

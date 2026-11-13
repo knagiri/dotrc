@@ -516,9 +516,9 @@ func deliveredState(t *testing.T, conn *sql.DB, id string) (at sql.NullInt64, up
 	return
 }
 
-// A failed or skipped launch records nothing, so the next pass retries with the
-// same activity; once a launch succeeds, it is not delivered again while
-// awaiting confirmation.
+// The record is written before the launch and dropped after a failed or skipped
+// one, so the next pass retries with the same activity; once a launch succeeds,
+// it is not delivered again while awaiting confirmation.
 func TestPass_FailedLaunchRetried(t *testing.T) {
 	conn := ledger(t, sid)
 	if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
@@ -543,6 +543,37 @@ func TestPass_FailedLaunchRetried(t *testing.T) {
 	Pass(conn, now.Add(6*time.Minute), DefaultDebounce, w.deps(), &out)
 	if len(w.ran) != 2 {
 		t.Errorf("want the failed attempt and one retry, ran %d times:\n%s", len(w.ran), &out)
+	}
+}
+
+// A skipped launch (here: no tmux server) drops the record like a failed one,
+// and is reported as a skip, not a failure; once the cause is gone the next
+// pass launches exactly once.
+func TestPass_SkippedLaunchDropsRecord(t *testing.T) {
+	conn := ledger(t, sid)
+	if err := db.SetPRSeen(conn, sid, pr, now.Unix()-600); err != nil {
+		t.Fatal(err)
+	}
+	w := &world{activity: news, noTmux: true}
+	var out bytes.Buffer
+	if got := Pass(conn, now, DefaultDebounce, w.deps(), &out); len(got) != 0 {
+		t.Fatalf("a skipped delivery reported as resumed: %v", got)
+	}
+	if at, upTo := deliveredState(t, conn, sid); at.Valid || upTo.Valid {
+		t.Fatalf("skipped delivery left a record: at=%v upTo=%v", at, upTo)
+	}
+	s := out.String()
+	if !strings.Contains(s, "pr-watch: skipped pinnedaa") || strings.Contains(s, "failed pinnedaa") || strings.Contains(s, "woke") {
+		t.Errorf("skip not reported as such:\n%s", s)
+	}
+	if len(w.ran) != 0 {
+		t.Fatalf("launched despite the skip: %q", w.ran)
+	}
+	w.noTmux = false
+	Pass(conn, now.Add(3*time.Minute), DefaultDebounce, w.deps(), &out)
+	Pass(conn, now.Add(6*time.Minute), DefaultDebounce, w.deps(), &out)
+	if len(w.ran) != 1 {
+		t.Errorf("want exactly one launch after the cause is gone, ran %d times:\n%s", len(w.ran), &out)
 	}
 }
 
