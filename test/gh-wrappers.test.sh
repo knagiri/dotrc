@@ -421,6 +421,13 @@ if [ "$rc" -eq 0 ] \
   echo "ok: gh-list-threads issues reviewThreads query for the PR"
 else echo "FAIL: gh-list-threads rc=$rc args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
 
+# The author's __typename is part of the output contract: it is how a reader
+# tells a thread a bot started (author type Bot) from one a person started,
+# which the login alone does not show (a bot's GraphQL login has no [bot]).
+if grep -q 'author{login __typename}' "$stubdir/args"; then
+  echo "ok: gh-list-threads asks for each comment author's __typename"
+else echo "FAIL: gh-list-threads query lacks author __typename args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
+
 # gh-list-threads: output is the bare thread array, so the obvious unresolved
 # count is the real one. The stub prints the GraphQL envelope and, unlike the
 # recorder above, honours --jq (via system jq) -- the unwrap under test *is* the
