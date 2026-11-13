@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-reply-thread <thread-node-id> <body-file> -- reply to ONE PR review thread
+# that a bot started.
+#
+# Looks the thread up first and replies only when the author of its first
+# comment is a GraphQL `Bot` (CodeRabbit, Copilot and other GitHub App
+# reviewers). Any other author -- `User`, `Mannequin`, a deleted account
+# (null), or a node id that is not a review thread -- is refused before the
+# mutation is sent, so a reply to a person cannot be issued through this
+# wrapper at all. The reply is the addPullRequestReviewThreadReply mutation and
+# nothing else: the thread is NOT resolved (that is gh-resolve-thread), and no
+# flags are passed through, so the grant can be allowlisted narrowly as
+# `Bash(gh-reply-thread *)` instead of the broad `gh api graphql *`.
+#
+# The body is read from <body-file> and handed to gh as a raw string field
+# (-f), so its contents are never type-converted or treated as `@file`.
+#
+# Exit codes:
+#   0  replied
+#   1  bad arguments (usage, malformed id, missing or empty body file)
+#   2  refused: the thread's first comment is not by a Bot (reason on stderr)
+#   other  a failed gh call (auth, network, unknown node id, ...) propagates
+#          its exit code unchanged. gh mostly exits 1, so 1 alone does not mean
+#          bad arguments: read stderr.
+#
+# Usage: gh-reply-thread <thread-node-id> <body-file>
+
+usage() { echo "usage: gh-reply-thread <thread-node-id> <body-file>" >&2; exit "${1:-1}"; }
+
+case "${1:-}" in -h|--help) usage 0 ;; esac
+[ $# -eq 2 ] || usage 1
+tid="$1"
+# Sanity guard: GitHub global node IDs are base64-ish (alnum, _ - =). The value
+# is passed as a single -f arg (never interpolated into a shell or the query).
+if [[ ! "$tid" =~ ^[-A-Za-z0-9_=]+$ ]]; then
+  echo "gh-reply-thread: invalid thread node id: $tid" >&2
+  exit 1
+fi
+if [ ! -f "$2" ]; then
+  echo "gh-reply-thread: body file not found: $2" >&2
+  exit 1
+fi
+body="$(<"$2")"
+if [ -z "${body//[[:space:]]/}" ]; then
+  echo "gh-reply-thread: body file is empty: $2" >&2
+  exit 1
+fi
+
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+# `// "none"` turns every non-thread shape (null node, other node type, no
+# comments, deleted author) into a value that is not "Bot".
+author="$(gh_mise api graphql \
+  -f query='query($threadId:ID!){ node(id:$threadId){
+    ... on PullRequestReviewThread { comments(first:1){ nodes{ author{ __typename login } } } } } }' \
+  -f threadId="$tid" \
+  --jq '(.data.node.comments.nodes[0].author // {}) | (.__typename // "none") + " " + (.login // "-")')"
+
+if [ "${author%% *}" != "Bot" ]; then
+  echo "gh-reply-thread: refused: first comment of $tid is by '${author#* }' (type ${author%% *}), not a Bot" >&2
+  exit 2
+fi
+
+gh_mise api graphql \
+  -f query='mutation($threadId:ID!,$body:String!){ addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId, body:$body}){ comment{ url } } }' \
+  -f threadId="$tid" -f body="$body" \
+  --jq '.data.addPullRequestReviewThreadReply.comment.url'
