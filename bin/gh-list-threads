@@ -7,7 +7,7 @@ set -euo pipefail
 # GraphQL envelope:
 #
 #   [{"id": ..., "isResolved": ..., "isOutdated": ...,
-#     "comments": {"nodes": [{"author": {"login": ...}, "body": ..., "path": ..., "line": ...}]}}, ...]
+#     "comments": {"nodes": [{"author": {"login": ..., "__typename": ...}, "body": ..., "path": ..., "line": ...}]}}, ...]
 #
 # so `[.[] | select(.isResolved == false)] | length` counts unresolved threads.
 # Against the envelope that same filter raises no error and yields 0: `.[]` walks
@@ -44,6 +44,6 @@ gh_mise api graphql \
   -f query='query($owner:String!,$repo:String!,$pr:Int!){
     repository(owner:$owner,name:$repo){ pullRequest(number:$pr){
       reviewThreads(first:100){ nodes{ id isResolved isOutdated
-        comments(first:30){ nodes{ author{login} body path line } } } } } } }' \
+        comments(first:30){ nodes{ author{login __typename} body path line } } } } } } }' \
   -f owner="$owner" -f repo="$repo" -F pr="$pr" \
   --jq '.data.repository.pullRequest.reviewThreads.nodes'
