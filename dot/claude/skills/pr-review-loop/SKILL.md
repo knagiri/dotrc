@@ -291,7 +291,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
    でそちらを直接参照する）/
    修正役が直さなかった findings（`unfixed`）/ 実行できなかった処置（`dispositions_failed`）/ 議論待ち thread / 最後の判定 verdict の `ci_status` /
    最後の検出レポートで `missing` だった reviewer / 手順 2.a-0.5 で dispatch した専門レビュー agent と
-   skip / 失敗したもの / 停止理由・残課題を箇条書きで要約し、
+   skip / 失敗したもの / bot の指摘への処置（各イテレーションの `pr_dispositions`）/ 停止理由・残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。収束していないので、呼び出し側は `pr-automerge` を呼ばない。PR は開いたまま、レビュー結果の PR への投稿はしない（人間が引き取る）。停止までに修正役が実行した処置の記録（bot の thread への reply・PR 本文の対応節）は PR に残る。
    手順 2.c の「担当外の blocker だけが残った」で止まった場合は、停止理由を「担当外の blocker で
    停止した」と明記し、その `blocker: true, out_of_scope: true` の項目（最後の判定 verdict の
@@ -339,8 +339,9 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 > 担当内である。doc の PR では記述そのものが成果物なので、記述を直すのを担当外にすると PR が
 > 担当している作業そのものを見送ることになるため。「決定内容の変更になる」「後段の実装で詰めれば
 > よい」は、直すのに**新しい設計判断を足す必要がある**ときにだけ担当外の理由になる。その場合も
-> 黙って見送らず、人間の判断待ち（`blocker: true, out_of_scope: true`。bot の指摘なら `human`）か、
-> bot の指摘なら後回し（`defer`）にする。却下（`blocker: false` / `decline`）にはしない。
+> 黙って見送らず、人間の判断待ち（`blocker: true, out_of_scope: true`。bot の指摘なら `human`）にする。
+> bot の指摘で `issue-workflow.md` §5 の粒度を満たすなら `defer` でもよい。担当外であることを
+> 却下（`blocker: false` / `decline`）の理由にはしない（妥当でない・価値が薄いことを理由とする却下は従来どおり可）。
 > 実例: dotrc/docs/incidents/review-doc-pr-scope-misjudged.md
 >
 > **禁止事項**（呼び出し元から渡された、破壊的・不可逆・外向きの操作の制約。無ければ「なし」）:

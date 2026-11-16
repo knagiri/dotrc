@@ -47,8 +47,7 @@ $ gh api repos/<owner>/<repo>/pulls/<N>/comments --jq '.[] | select(.user.login|
 **<picture><img src=".../review-comment-icons-v1/major-16.svg" ... alt=""></picture> Major** · **Stability & Availability** · **Quick win**
 ```
 
-inline の review comment（thread の起点）は本文冒頭の太字に `Critical` / `Major` / `Minor` /
-`Trivial` 等の語を置く。review 本文（`gh pr view <N> --json reviews`）の "Outside diff range
+inline の review comment（thread の起点）は本文冒頭の太字に重大度の語を置く。review 本文（`gh pr view <N> --json reviews`）の "Outside diff range
 comments" / "Nitpick comments" に入る指摘も、個々の指摘に同じ形の重大度が付いていた。標本の PR で
 観測した値は `Major` / `Minor` / `Trivial` で、`Critical` は観測していない。
 
