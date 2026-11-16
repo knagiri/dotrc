@@ -78,6 +78,7 @@
       "Bash(gh-pr-comments *)",
       "Bash(gh-list-threads *)",
       "Bash(gh-resolve-thread *)",
+      "Bash(gh-reply-thread *)",
       "Bash(gh-pr-checks *)",
       "Bash(gh-automerge *)",
       "Bash(gh-issue-file *)",
