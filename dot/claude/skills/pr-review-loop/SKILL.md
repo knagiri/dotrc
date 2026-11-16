@@ -291,7 +291,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
    でそちらを直接参照する）/
    修正役が直さなかった findings（`unfixed`）/ 実行できなかった処置（`dispositions_failed`）/ 議論待ち thread / 最後の判定 verdict の `ci_status` /
    最後の検出レポートで `missing` だった reviewer / 手順 2.a-0.5 で dispatch した専門レビュー agent と
-   skip / 失敗したもの / 停止理由・残課題を箇条書きで要約し、
+   skip / 失敗したもの / bot の指摘への処置（各イテレーションの `pr_dispositions`）/ 停止理由・残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。収束していないので、呼び出し側は `pr-automerge` を呼ばない。PR は開いたまま、レビュー結果の PR への投稿はしない（人間が引き取る）。停止までに修正役が実行した処置の記録（bot の thread への reply・PR 本文の対応節）は PR に残る。
    手順 2.c の「担当外の blocker だけが残った」で止まった場合は、停止理由を「担当外の blocker で
    停止した」と明記し、その `blocker: true, out_of_scope: true` の項目（最後の判定 verdict の
@@ -333,6 +333,16 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 > 積まれた commit（前の委譲先や人間のものを含む）も含む。差分の外にある既存の欠陥は、担当領域が
 > それを含まない限り担当外である。
 > 実例: dotrc/docs/incidents/review-fix-scope-beyond-delegation.md
+>
+> doc（designdoc / ADR / spec 等）が成果物の PR では、レビュー対象の doc が既に決めている事柄に
+> ついての記述の誤り・楽観的すぎる記述・漏れ（リスク、手順、状態、エラー時の挙動など）を直すことは
+> 担当内である。doc の PR では記述そのものが成果物なので、記述を直すのを担当外にすると PR が
+> 担当している作業そのものを見送ることになるため。「決定内容の変更になる」「後段の実装で詰めれば
+> よい」は、直すのに**新しい設計判断を足す必要がある**ときにだけ担当外の理由になる。その場合も
+> 黙って見送らず、人間の判断待ち（`blocker: true, out_of_scope: true`。bot の指摘なら `human`）にする。
+> bot の指摘で `issue-workflow.md` §5 の粒度を満たすなら `defer` でもよい。担当外であることを
+> 却下（`blocker: false` / `decline`）の理由にはしない（妥当でない・価値が薄いことを理由とする却下は従来どおり可）。
+> 実例: dotrc/docs/incidents/review-doc-pr-scope-misjudged.md
 >
 > **禁止事項**（呼び出し元から渡された、破壊的・不可逆・外向きの操作の制約。無ければ「なし」）:
 > `<PROHIBITIONS>`
@@ -464,6 +474,10 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >      reply するので author の `__typename` は `User` になる）。`human` にせず、`pr_dispositions` に
 >      その thread の処置を `reply_done: true`（`action` は reply の処置名のまま）で載せる。修正役は reply を
 >      省いて `gh-resolve-thread` だけを再実行する。
+>    - bot が指摘本文に重大度を書いていれば、その値を `bot_severity` に残す（後述）。bot が Major 以上
+>      （Critical / Major 等）とした指摘を `decline` にするときは、`reason` にその重大度を覆す根拠を書く。
+>      bot の重大度は判断材料であって従う義務は無いが、根拠無く見送ると重大度が判断に使われたかを
+>      PR 上の記録から確かめられないため。
 >    - `defer` は担当外でも `blocker: true` の gate にしない。記録先（issue か TODO コメント）を
 >      残せば merge を止める理由が無いため。merge を止めるべき担当外の指摘は `human`（`blocker: true,
 >      out_of_scope: true`）にする。
@@ -474,10 +488,10 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >
 > ```json
 > {
->   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self", "severity": "medium", "confidence": "high"}],
->   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "out_of_scope": false, "source": "self", "severity": "low", "confidence": "low"}],
->   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "out_of_scope": false, "source": "copilot"}],
->   "pr_dispositions": [{"origin": "thread", "thread_id": "...", "source": "coderabbitai", "summary": "...", "action": "decline", "reason": "...", "detail": null, "reply_done": false}],
+>   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self", "severity": "medium", "confidence": "high", "bot_severity": null}],
+>   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "out_of_scope": false, "source": "self", "severity": "low", "confidence": "low", "bot_severity": null}],
+>   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "out_of_scope": false, "source": "copilot", "bot_severity": null}],
+>   "pr_dispositions": [{"origin": "thread", "thread_id": "...", "source": "coderabbitai", "summary": "...", "action": "decline", "reason": "...", "detail": null, "reply_done": false, "bot_severity": "Major"}],
 >   "ci_status": "pending",
 >   "mergeable": false,
 >   "summary": "一言サマリ"
@@ -505,6 +519,10 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >   `high` / `medium` / `low`。`severity` は指摘の重大度、`confidence` はその指摘が妥当だと
 >   どれだけ確信しているか。手順 5 のとおり**この 2 つを理由に findings を落とさない** — 低い値を
 >   添えて載せる。下流（orchestrator / 人間）がランク付けに使う。
+> - `bot_severity`: 4 つの配列の各要素に付ける。bot が指摘本文に書いた重大度をそのまま写した文字列
+>   （thread 由来・review 本文由来を問わない。例: CodeRabbit の `Critical` / `Major` / `Minor` /
+>   `Trivial`）。bot が書いていない・bot 以外の指摘なら `null`。あなた自身の判断である `severity` とは
+>   別物で、写すだけで換算しない。
 > - `source`: その指摘の出所。`"self"`（あなた自身のレビュー）または指摘した bot / 人間の login
 >   （例: `"copilot-pull-request-reviewer"`）、専門レビュー agent 由来なら agent 名
 >   （例: `"pr-review-toolkit:silent-failure-hunter"`）。orchestrator が AI の指摘を握り潰していないか判定するために使う。
@@ -644,7 +662,9 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 `out_of_scope: true`** のときは、`mergeable` を見ずに手順 4（停止・報告）へ抜ける。担当内の
 `blocker: true` が 1 件でも残れば次イテレーションへ進む（理由は手順 2.c）。
 
-`severity` / `confidence` は**継続判定（手順 2.c）には使わない**。終端条件は上記のとおり
-`blocker` の有無と `findings_to_fix`・実行する処置 / `made_changes` / `mergeable` だけで決まり、この 2 フィールドは
+`severity` / `confidence` / `bot_severity` は**継続判定（手順 2.c）には使わない**。終端条件は上記のとおり
+`blocker` の有無と `findings_to_fix`・実行する処置 / `made_changes` / `mergeable` だけで決まり、この 3 フィールドは
 関与しない。用途は**報告専用**で、手順 3.b / 4 の最終サマリで findings を `severity` 降順
 （`high` → `medium` → `low`）に並べて出力し、orchestrator と人間が優先度を把握できるようにする。
+`bot_severity` が非 null の項目はその値も併記し、bot が Major 以上とした指摘を見送ったもの（`decline`）は
+人間が見落とさないよう明示する。
