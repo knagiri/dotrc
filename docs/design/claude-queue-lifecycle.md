@@ -239,4 +239,4 @@ PR 監視を pin の属性として持つ旧形式の session（`pin_pr` を持�
 - picker のキー割り当て（メモ編集・pin・完了）
 - 休眠・自動再開・cascade の各処理を、監視コマンドと picker 起動時のどちらで回すか
 
-既存の stale 判定（🧟）は廃止した。長時間 idle は休眠が、死んだプロセスは reconcile が扱い、経過時間だけの閾値は最も見落としたくない `awaiting_approval` を隠すため。生きているのに `working` のまま止まった session は休眠（`idle_done` のみ対象）にも reconcile（プロセスが生きている）にも当たらず ⚙️ のまま残る。既定の一覧（`q`）では working が隠れるので見えない点は旧挙動と同じで、この穴は意図した割り切りとする。
+既存の stale 判定（🧟）は廃止した。長時間 idle は休眠が、死んだプロセスは reconcile が扱い、経過時間だけの閾値は最も見落としたくない `awaiting_approval` を隠すため。生きているのに `working` のまま止まった session は休眠（`idle_done` のみ対象）にも reconcile（プロセスが生きている）にも当たらず ⚙️ のまま残る。picker（`q` / `Q`）には ⚙️ で並ぶが動いている session と見分けがつかず、この穴は意図した割り切りとする。
