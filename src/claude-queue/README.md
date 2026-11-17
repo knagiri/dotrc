@@ -290,8 +290,8 @@ client は端末へ detach される。
 経過時間で state を置き換えることはしない（かつての stale 判定は廃止した）。長く `idle_done` の
 session は休眠が止め、プロセスが消えた session は reconcile が gone にする。時間閾値で置き換えると、
 最も見落としたくない `awaiting_approval` が隠れるため。生きているのに `working` のまま止まった
-session は休眠にも reconcile にも当たらず ⚙️ のまま残る（既定の `q` では working が隠れるので見えない。
-意図した割り切り）。
+session は休眠にも reconcile にも当たらず ⚙️ のまま残る（`q` / `Q` には ⚙️ で並ぶが、動いている session と
+見分けがつかない。意図した割り切り）。
 
 `gone` は view が `terminated_at` から導く擬似 state で、hook が書く state ではない。
 
@@ -387,7 +387,7 @@ PR 監視付きの pin（旧版は pin の列に監視を持っていた）は�
 ```tmux
 set -g status-interval 5
 set -g status-right '#(claude-queue status) | %H:%M'
-bind-key q display-popup -E -d "#{pane_current_path}" -w 80% -h 60% "claude-queue picker --repo-scope"
+bind-key q display-popup -E -d "#{pane_current_path}" -w 80% -h 60% "claude-queue picker --repo-scope --show-working"
 bind-key Q display-popup -E -w 80% -h 60% "claude-queue picker --show-working"
 ```
 
@@ -396,8 +396,8 @@ prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`q` �
 `.worktrees/*` は `--git-common-dir` を共有するので 1 グループになる）。`-d
 "#{pane_current_path}"` を明示するのは、この絞り込みが popup 自身の cwd を起点にするため。
 repo の外で `q` を押したときは一覧を出さず `not in a git repo; use prefix Q for all sessions`
-を stderr へ出して終わる。`Q` は絞り込みを外した全部入り（別 repo の session も、working
-も出す）。gone は `q` / `Q` どちらでも出る。
+を stderr へ出して終わる。`Q` は repo の絞り込みを外し、別 repo の session も出す。どちらも
+`--show-working` 付きなので、working・gone を含む全状態が並び、`q` と `Q` の違いは範囲だけになる。
 
 ### 飛んだ履歴の行き来（`claude-queue nav`）
 
@@ -465,7 +465,7 @@ make -C src/claude-queue test vet fmt-check
 - [ ] `C-q q` で popup、Enter で目的 pane にジャンプ、popup 自動閉
 - [ ] `claude --bg` で起動した background session（tmux_pane が NULL）を picker から選択、その worktree の tmux session に window が開いて `claude attach` される（popup を開いた session には増えない）
 - [ ] `<repo>/.worktrees/<name>` のサブディレクトリで起動した session が、picker の 3 列目に `<repo>_<name>` で並ぶ（メイン checkout の session は `<repo>` だけ）
-- [ ] `C-q q` が別 repo の session を出さず、現在 repo のメイン checkout + その `.worktrees/*` だけを並べる（`C-q Q` では別 repo の session も出る）
+- [ ] `C-q q` が別 repo の session を出さず、現在 repo のメイン checkout + その `.worktrees/*` だけを、working を含めて並べる（`C-q Q` では別 repo の session も出る）
 - [ ] repo の外の pane で `C-q q` を押すと `not in a git repo; use prefix Q for all sessions` が出る（`display-popup -E` は command の exit で閉じるので、読むにはシェルから直接起動する）
 - [ ] worktree 内から `git wa x` すると `<repo>/.worktrees/x` に作られる（worktree の中で実行してもネストしない）
 - [ ] 同じ repo の複数 session が、picker の 2 列目の ai-title で見分けられる（title の無い row は空欄のまま 3 列目の開始位置が揃う）
