@@ -397,7 +397,7 @@ prefix (`C-q`) のあと `q` で popup → fzf → Enter でジャンプ。`q` �
 "#{pane_current_path}"` を明示するのは、この絞り込みが popup 自身の cwd を起点にするため。
 repo の外で `q` を押したときは一覧を出さず `not in a git repo; use prefix Q for all sessions`
 を stderr へ出して終わる。`Q` は repo の絞り込みを外し、別 repo の session も出す。どちらも
-`--show-working` 付きなので、working・gone を含む全状態が並び、`q` と `Q` の違いは範囲だけになる。
+`--show-working` 付きなので working も並び（gone は flag に関わらず並ぶ）、`q` と `Q` の違いは範囲だけになる。
 
 ### 飛んだ履歴の行き来（`claude-queue nav`）
 
