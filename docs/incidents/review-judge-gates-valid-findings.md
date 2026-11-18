@@ -23,8 +23,11 @@ gate に回し、理由には「穴の指摘は正しいが…修正の価値が
 ## 観測
 
 委譲元が個人 config dir の transcript から集計した値を写す。この doc を書いた委譲では再集計して
-いない。集計の生出力は記録されておらず、下の手順は委譲元が集計に使った手順を写したもので、
-この委譲では再実行していない（156 件を `_verdict` 行の件数で数えたかも確かめていない）。
+いない。集計の生出力は記録されていない。下の手順は委譲元が集計に使った手順に、この doc の
+review で 2 点手を入れたものである。委譲元の式は判定役を `select($p | test("判定役"))` で選んで
+おり、最初の user メッセージに「判定役」を含む修正役の transcript も拾いうる。下の式はこれを判定
+prompt 固有の文言に絞り、出力に `n_fix` と `specialist_severity` を残すようにした。156 件に修正役の
+分が混ざっていたかは確かめていない。この委譲では手順を再実行していない。
 
 **集計手順**: 対象は `<config dir>/projects/*/<session>/subagents/agent-*.jsonl` のうち、最初の
 user メッセージが判定 prompt のもの。`rg -l '判定役' -g '**/subagents/*.jsonl' <config dir>/projects`
@@ -32,8 +35,9 @@ user メッセージが判定 prompt のもの。`rg -l '判定役' -g '**/subag
 `select` が行う（判定 prompt 固有の文言に一致させ、修正役を除く）。各 transcript に下の jq を
 `jq -c -s -f verdicts.jq <file>` で当て、1 行 1 件の JSON（`items.jsonl`。指摘の行のほか、
 verdict ごと 1 行の `_verdict` と、取り出せなかった `PARSE_FAIL` の行も混ざる）を得て集計した。
-専門 agent の実行回数は、同じ dir の `agent-*.meta.json` の `agentType` を数えた。jq の `//` は `false` も欠損扱いにするので、`.blocker // null` と書くと
-`blocker: false` が `null` に化ける（初回の集計でこれを踏んだ）。下の式は `has("blocker")` で分岐している。
+専門 agent の実行回数は、同じ dir の `agent-*.meta.json` の `agentType` を数えた。jq の `//` は
+`false` も欠損扱いにするので、`.blocker // null` と書くと `blocker: false` が `null` に化ける
+（初回の集計でこれを踏んだ）。下の式は `has("blocker")` で分岐している。
 
 ```jq
 # Input: one subagent transcript (jsonl) slurped with -s. Emits one JSON object per finding item
