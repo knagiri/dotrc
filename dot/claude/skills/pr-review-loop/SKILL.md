@@ -110,6 +110,10 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
         空振りするか範囲を推測で決めてしまうため、必ず書く
       - 「コードを変更しない・commit / push しない・PR にコメントを投稿しない。findings を最終
         メッセージとして返すだけ」
+      - 「各指摘に、その agent 自身の段階で重大度ラベルを付けて返す」（例: `Critical` /
+        `Important`、`CRITICAL` / `HIGH`、`Critical Gap (8)`）。段階を持たない agent
+        （type-design-analyzer。1-10 の評点のみ）には、各指摘に優先度（1 が最上位）を付けて返させる。判定役が `specialist_severity` に写し、上位の
+        指摘を gate にするときの根拠の要否を決めるのに使う。返す件数の閾値は agent の既定のままにする
       - `<PROHIBITIONS>`（a-1 の埋め方に従う。「なし」なら省いてよい）
       - 一時ファイルの置き場所（判定 subagent prompt の「一時ファイル」の段落を同じ文面で入れる）
 
@@ -251,7 +255,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
         確かめられるのが PR を読み直す fresh な判定役だけだからである。
       - 上記いずれにも該当しない（＝直すもの無し・実行する処置無し・blocker 無し・mergeable）→ ループを
         抜けて手順 3 へ。つまり bot の指摘で `decline` / `defer` / `stale` のものが全件処置済み（判定役が
-        新たに割り当てるものが無い）ことが収束の条件に含まれる。`blocker: false` の gate（＝判定役が「そもそも妥当でない」と却下した指摘）は
+        新たに割り当てるものが無い）ことが収束の条件に含まれる。`blocker: false` の gate（＝判定役が「そもそも妥当でない」と却下した指摘・3 巡目以降の絞り込みで回したもの）は
         ループを止めない。非空なだけで再イテレーションすると、fresh な判定役が毎回同じ却下を
         再生産して 5 回を使い切り、実際には何も merge を妨げていない PR が永久に収束しないため。
         却下した指摘は手順 3.b の最終サマリに残して報告する。
@@ -340,8 +344,8 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 > 担当している作業そのものを見送ることになるため。「決定内容の変更になる」「後段の実装で詰めれば
 > よい」は、直すのに**新しい設計判断を足す必要がある**ときにだけ担当外の理由になる。その場合も
 > 黙って見送らず、人間の判断待ち（`blocker: true, out_of_scope: true`。bot の指摘なら `human`）にする。
-> bot の指摘で `issue-workflow.md` §5 の粒度を満たすなら `defer` でもよい。担当外であることを
-> 却下（`blocker: false` / `decline`）の理由にはしない（妥当でない・価値が薄いことを理由とする却下は従来どおり可）。
+> bot の指摘で `issue-workflow.md` §5 の粒度を満たすなら `defer` でもよい。担当外であることが
+> 却下の理由にならないのは doc の PR に限らない（手順 5）。
 > 実例: dotrc/docs/incidents/review-doc-pr-scope-misjudged.md
 >
 > **禁止事項**（呼び出し元から渡された、破壊的・不可逆・外向きの操作の制約。無ければ「なし」）:
@@ -389,33 +393,57 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >    からという理由で、バケットに載せずに落とすことはしない。妥当でないと判断したものは
 >    `findings_gated` に `blocker: false` で載せ、`reason_gated` に却下理由を書く。仕分けは
 >    「載せた後」に行う。理由: 報告の取捨選択をこの工程でやると、実際には妥当だった指摘が記録に
->    残らないまま消える。取捨選択は orchestrator と人間が gate を見て行える。
+>    残らないまま消える。
 >
->    bot の指摘（手順 5.5 の対象）は、手順 5.5 の処置に従ってどこへ載せるかを決める。妥当でない・
->    直す価値が薄いと判断した bot の指摘は、下の `findings_gated`（`blocker: false`）ではなく
->    `pr_dispositions` に載せる。以下の bullet で「`findings_gated`（`blocker: false`）へ回す・寄せる」
->    とあるものも、bot の指摘なら `decline` にする。
+>    `<SPECIALIST_FINDINGS>` の各指摘も、必ずどれか 1 つのバケットに 1 回現れるようにする。別々の
+>    指摘を 1 項目に束ねない。束ねるとその中の 1 件への判断が全件に及び、どの指摘をなぜ見送ったかが
+>    記録から読めなくなる。1 項目にまとめてよいのは、同じ問題を複数の出所が指摘した場合だけで、
+>    そのときは `source` に全出所を書く。
+>
+>    bot の指摘（手順 5.5 の対象）は、手順 5.5 の処置に従ってどこへ載せるかを決める。妥当でないと
+>    判断した bot の指摘は、下の `findings_gated`（`blocker: false`）ではなく `pr_dispositions` に
+>    載せる。以下の bullet で「`findings_gated`（`blocker: false`）へ回す」とあるものも、bot の指摘なら
+>    `decline` にする。
 >
 >    そのうえで findings と未解決 thread を 2 つに分ける。
 >    - **直す** → `findings_to_fix`。コード修正で対応できるもの。修正役が実装できるだけの具体性
 >      （対象ファイル・何をどう直すか）を書く。thread 由来なら `thread_id` を添える。
 >    - **gate に残す** → `findings_gated` / `threads_pending`。人間の議論が必要・コード修正で
->      片付かない・そもそも妥当でない（＝直さない理由がある）もの。merge を止めるべきものは
->      `blocker: true` にする（人間の判断を待つべきもの）。妥当でないと判断して却下しただけの
->      ものは `blocker: false` — 理由は残るが merge は止めない。
+>      片付かない・担当外・妥当でないもの。merge を止めるべきものは `blocker: true` にする（人間の
+>      判断を待つべきもの）。妥当でないと判断して却下しただけのものは `blocker: false` — 理由は
+>      残るが merge は止めない。
+>    - **妥当で担当内の指摘は、`severity` / `confidence` に依らず `findings_to_fix` に入れる。**
+>      `blocker: false` の gate に入れてよいのは、妥当でないと判断したもの（事実誤認、当たらない、
+>      既に別の箇所でガード済み等）だけである（例外は下の 3 巡目以降の絞り込み）。「妥当だが価値が
+>      薄い」「誤動作は見えていない」「費用対効果が低い」「網羅性の改善に留まる」は gate の理由に
+>      しない。妥当かどうか確信が持てないときは、diff と repo 規約に当たって確かめてから仕分ける。
+>      理由: `blocker: false` の gate は merge を止めず、merge 前に gate を読む工程も無いので、ここへ
+>      回した指摘は直されないまま merge される。5 回の上限は終わらない往復を止めるためのもので、
+>      到達しても人間へ報告して止まるだけである。上限を守るために妥当な指摘を見送るのは向きが逆で、
+>      それで失うのは指摘の修正、得るのは人間への報告 1 回の回避にすぎない。
+>    - **専門 agent が上位に置いた指摘を gate にするときは、`reason_gated` にその agent の根拠を
+>      覆す理由を書く。** 妥当でないとして `blocker: false` で gate にするなら「なぜ妥当でないか」、
+>      担当外・人間判断待ち（`blocker: true`）や 3 巡目以降の絞り込みで gate にするなら、その理由
+>      （担当外である、人間の判断が要る、3 巡目以降の絞り込みの対象である）を書く。 上位とは各 agent の最上位 2 段で、agent ごとに次のとおり読む。
+>      code-reviewer は `Critical` / `Important`、comment-analyzer は `Critical Issues`（節分けで
+>      段階を持たず、`Improvement Opportunities` は上位に含めない）、pr-test-analyzer は
+>      `Critical Gaps` / `Important Improvements`、silent-failure-hunter は `CRITICAL` / `HIGH`、
+>      type-design-analyzer は既定で段階を持たない（1-10 の評点のみ）ので、手順 2.a-0.5 で返させた
+>      優先度の最上位。重大度は `specialist_severity`
+>      に写す（後述）。専門 agent の重大度は判断材料であって従う義務は無いが、根拠無く見送ると
+>      重大度が判断に使われたかを記録から確かめられない（bot の Major 以上を `decline` にするときの
+>      手順 5.5 の規定と同じ形）。
 >    - **担当外への修正を要する指摘は `findings_to_fix` に入れない**（修正役にこの PR の担当を
 >      超えさせないため）。妥当なら `findings_gated` に `blocker: true, out_of_scope: true`、
 >      妥当でなければ `blocker: false, out_of_scope: true` で載せる。thread 由来なら
 >      `threads_pending` に同じ要領で載せる。担当内のものは `out_of_scope: false`。
+>      担当外であることは却下（`blocker: false`）の理由にならない。`blocker: false, out_of_scope: true`
+>      は、担当外で**かつ**妥当でないものに限る。
 >      担当外の `blocker: true` だけが残ると orchestrator はループを打ち切って人間へ返すので、
 >      担当内で直せるものを担当外と仕分けないこと。
->    - coverage-first は「載せるか落とすか」の話であって「どのバケットに載せるか」ではない。
->      修正の価値が薄い低 severity / 低 confidence の指摘は、`findings_to_fix` ではなく
->      `findings_gated`（`blocker: false`）に寄せてよい（`findings_to_fix` が非空だと必ず次
->      イテレーションが走るため、瑣末な指摘を積むと 5 回の上限を使い切ってしまう）。
 >    - `findings_to_fix` / `findings_gated` の各要素には `severity`（`high` / `medium` / `low`）と
->      `confidence`（`high` / `medium` / `low`）を添え、下流（orchestrator / 人間）がランク付け
->      できるようにする。`threads_pending` には添えない（thread は人間の議論待ちが主で
+>      `confidence`（`high` / `medium` / `low`）を添える（報告専用で、最終サマリで `severity` 降順に並べるのに使う。
+>      バケットの仕分けには使わない）。`threads_pending` には添えない（thread は人間の議論待ちが主で
 >      severity / confidence の意味が薄いため）。
 >    - **既裁定リストに載っているものと同趣旨の指摘は、新規 finding として載せない**
 >      （`findings_to_fix` にも `findings_gated` にも）。既にバケットへ載って却下済みで、
@@ -440,6 +468,8 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >    - **PR コメント（reply も含め）は投稿しない。**
 >    - standalone コメント（`gh-pr-comments` が返すもの）は **resolve できない**。コード修正で対応させるなら
 >      `findings_to_fix` に `thread_id: null` で入れる。
+>
+>    実例: dotrc/docs/incidents/review-judge-gates-valid-findings.md
 > 5.5. **bot の指摘への処置**: PR 上の bot の指摘すべてに、次のいずれか 1 つの処置を割り当てる。
 >    対象は (a) 未解決 thread のうち起点コメントの `author.__typename` が `Bot` のもの、(b)
 >    `gh-pr-comments` の review 本文・standalone コメントのうち author が bot のもの（login で判断する。
@@ -451,7 +481,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >    | 処置 | 意味 | 載せる場所 |
 >    |---|---|---|
 >    | `fix` | 直す | `findings_to_fix`（`source` に bot の login、thread 由来なら `thread_id`、thread 外なら `thread_id: null` と `origin`（`review_body` / `comment`）。thread 外は修正役が PR 本文に fix の記録を残す） |
->    | `decline` | 妥当でない、または直す価値が薄いので直さない | `pr_dispositions` |
+>    | `decline` | 妥当でないので直さない（妥当なら担当内は `fix`、担当外は `defer` / `human`。理由は手順 5 の「妥当で担当内の指摘は…」と同じ。例外は 3 巡目以降の絞り込みで回す妥当な指摘で、手順 5 本体と同じく `decline` にする） | `pr_dispositions` |
 >    | `defer` | 妥当だがこの PR の担当外・後回しで、`dot/claude/rules/issue-workflow.md` §5 の粒度（恒久的な学び・再発しうる不具合）を満たす。満たさない（その PR 限り・一過性・迷うもの）は `decline`（理由付き） | `pr_dispositions` |
 >    | `stale` | 既に解消済み・古い HEAD 宛て | `pr_dispositions` |
 >    | `human` | 人間の判断待ち | `findings_gated` / `threads_pending`（`blocker: true`） |
@@ -488,8 +518,8 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >
 > ```json
 > {
->   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self", "severity": "medium", "confidence": "high", "bot_severity": null}],
->   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "out_of_scope": false, "source": "self", "severity": "low", "confidence": "low", "bot_severity": null}],
+>   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self", "severity": "medium", "confidence": "high", "bot_severity": null, "specialist_severity": null}],
+>   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "out_of_scope": false, "source": "pr-review-toolkit:pr-test-analyzer", "severity": "medium", "confidence": "high", "bot_severity": null, "specialist_severity": "Important"}],
 >   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "out_of_scope": false, "source": "copilot", "bot_severity": null}],
 >   "pr_dispositions": [{"origin": "thread", "thread_id": "...", "source": "coderabbitai", "summary": "...", "action": "decline", "reason": "...", "detail": null, "reply_done": false, "bot_severity": "Major"}],
 >   "ci_status": "pending",
@@ -509,23 +539,30 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >   （`review_body` / `comment`）。それ以外は付けないか `null`。
 > - `findings_to_fix`: 修正役に渡す findings（無ければ空配列）。`detail` は修正に足る具体性で。
 >   `thread_id` は由来 thread の node id（無ければ `null`）。
-> - `findings_gated`: 直さないと判断した findings（無ければ空配列）。`reason_gated` に理由を書く。
+> - `findings_gated`: この PR では直さない findings（無ければ空配列）。`reason_gated` に理由を書く。
 >   `blocker` は merge を止めるべきか（人間の判断待ち = `true`、妥当でないと却下しただけ = `false`）。
+>   妥当と認めた担当内の指摘はここに置かない（手順 5。例外は 3 巡目以降の絞り込み）。
 > - `threads_pending`: resolve せず残す thread（無ければ空配列）。`blocker` は merge を止めるべきか。
 >   `severity` / `confidence` は付けない（thread は人間の議論待ちが主で意味が薄いため）。
 > - `out_of_scope`: `findings_gated` / `threads_pending` の各要素に必ず付ける boolean。直すには
 >   この PR の担当を超える作業が要るなら `true`、担当内なら `false`（手順 5）。
 > - `severity` / `confidence`: `findings_to_fix` / `findings_gated` の各要素に付ける。ともに
 >   `high` / `medium` / `low`。`severity` は指摘の重大度、`confidence` はその指摘が妥当だと
->   どれだけ確信しているか。手順 5 のとおり**この 2 つを理由に findings を落とさない** — 低い値を
->   添えて載せる。下流（orchestrator / 人間）がランク付けに使う。
+>   どれだけ確信しているか。手順 5 のとおり**この 2 つを理由に findings を落とさず、バケットも
+>   変えない** — 低い値を添えて載せる。最終サマリの並び順に使う。
 > - `bot_severity`: 4 つの配列の各要素に付ける。bot が指摘本文に書いた重大度をそのまま写した文字列
 >   （thread 由来・review 本文由来を問わない。例: CodeRabbit の `Critical` / `Major` / `Minor` /
 >   `Trivial`）。bot が書いていない・bot 以外の指摘なら `null`。あなた自身の判断である `severity` とは
 >   別物で、写すだけで換算しない。
+> - `specialist_severity`: `findings_to_fix` / `findings_gated` の各要素に付ける。専門レビュー agent が
+>   付けた重大度ラベルをそのまま写した文字列（例: `Important`、`Critical Gap (8)`、`HIGH`）。専門
+>   agent 由来でなければ `null`。`bot_severity` と同じく写すだけで換算しない。複数の出所をまとめた
+>   項目では、`<agent 名>: <ラベル>` の対を `, ` 区切りで並べる（`source` に `self` や bot が混ざっても
+>   対応が崩れない）。
 > - `source`: その指摘の出所。`"self"`（あなた自身のレビュー）または指摘した bot / 人間の login
 >   （例: `"copilot-pull-request-reviewer"`）、専門レビュー agent 由来なら agent 名
->   （例: `"pr-review-toolkit:silent-failure-hunter"`）。orchestrator が AI の指摘を握り潰していないか判定するために使う。
+>   （例: `"pr-review-toolkit:silent-failure-hunter"`）。同じ問題を複数の出所が指摘して 1 項目に
+>   まとめたときは、全出所を `, ` 区切りで並べる（手順 5）。orchestrator が AI の指摘を握り潰していないか判定するために使う。
 > - `ci_status`: `gh-pr-checks <PR>` を実行して判断する（raw `gh pr checks` は使わない。fine-grained PAT では
 >   必ず失敗する）。`has_failure` が `true` なら `fail`、`false` かつ `pending_count` が 0 なら `pass`、
 >   それ以外は `pending`。実行できず不明なら `pending`。
@@ -541,7 +578,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >   使い切って `pr-automerge` の切り分けにたどり着けなくなるため。merge の gate 自体は `pr-automerge` が
 >   `has_failure` で閉じたままにするので、ここを緩めても cancelled のまま merge されることはない。
 > - `mergeable`: レビュー観点で merge して良いと判断したか。**ただし `ci_status` が `fail` の場合は必ず `false` にする**（orchestrator が再イテレーションするため）。
->   `blocker: false` の gate（却下した指摘・低 severity / 低 confidence で `findings_gated` に寄せたもの）が
+>   `blocker: false` の gate（妥当でないと却下した指摘・3 巡目以降の絞り込みで回したもの）が
 >   残っているだけの状態は `mergeable: true` にしてよい。gate の非空は merge を止める理由にしない
 >   （手順 2.c と同じ理由）。ここを厳しく取ると、coverage-first で `findings_gated` が常時非空になった
 >   場合に `mergeable` 経由で手順 2.c が潰したはずの無限ループが復活する。
@@ -549,10 +586,11 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 <!-- なぜ: 手順 5 の coverage-first（まず全件バケットに載せる）と `severity` / `confidence` は、
      「保守的に報告せよ」「重大なものだけ報告せよ」といった severity フィルタ指示をモデルが
      literal に守ると、見つけていても報告件数が減って recall が落ちるため。そこで判定役は
-     見つけたものを確信度・重大度を添えて全部挙げ、フィルタは別工程に任せる。
-     出典: Anthropic 公式の移行ガイド（severity フィルタ指示と recall の指摘）。この skill では
-     orchestrator と人間が別工程として既に存在するので、判定役側は coverage-first に寄せ、
-     取捨選択を下流へ渡す。 -->
+     見つけたものを確信度・重大度を添えて全部挙げる。
+     出典: Anthropic 公式の移行ガイド（severity フィルタ指示と recall の指摘）。重大度による
+     取捨選択はどの工程でも行わない。merge 前に gate を読む工程は無く、`blocker: false` に回した
+     指摘はそのまま直されずに merge されるため、仕分けの軸は妥当性・担当内外・人間の判断要否で、例外は 3 巡目以降の
+     correctness / 安全性への絞り込みだけにする。 -->
 
 <!-- 決定済み（再指摘防止のため理由を残す）: 判定役の「コードを変更しない」は、tool で機械的に
      縛らず散文の不変条件で担保する。両役とも agent 定義を持たず general-purpose で起こすので、
@@ -662,9 +700,9 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 `out_of_scope: true`** のときは、`mergeable` を見ずに手順 4（停止・報告）へ抜ける。担当内の
 `blocker: true` が 1 件でも残れば次イテレーションへ進む（理由は手順 2.c）。
 
-`severity` / `confidence` / `bot_severity` は**継続判定（手順 2.c）には使わない**。終端条件は上記のとおり
-`blocker` の有無と `findings_to_fix`・実行する処置 / `made_changes` / `mergeable` だけで決まり、この 3 フィールドは
+`severity` / `confidence` / `bot_severity` / `specialist_severity` は**継続判定（手順 2.c）には使わない**。終端条件は上記のとおり
+`blocker` の有無と `findings_to_fix`・実行する処置 / `made_changes` / `mergeable` だけで決まり、この 4 フィールドは
 関与しない。用途は**報告専用**で、手順 3.b / 4 の最終サマリで findings を `severity` 降順
 （`high` → `medium` → `low`）に並べて出力し、orchestrator と人間が優先度を把握できるようにする。
-`bot_severity` が非 null の項目はその値も併記し、bot が Major 以上とした指摘を見送ったもの（`decline`）は
-人間が見落とさないよう明示する。
+`bot_severity` / `specialist_severity` が非 null の項目はその値も併記し、bot が Major 以上とした指摘を
+見送ったもの（`decline`）と、専門 agent が上位 2 段とした指摘（定義は判定 subagent prompt の手順 5）を gate にしたものは、人間が見落とさないよう明示する。
