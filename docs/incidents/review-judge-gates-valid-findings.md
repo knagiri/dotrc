@@ -26,9 +26,10 @@ gate に回し、理由には「穴の指摘は正しいが…修正の価値が
 verdict JSON を取り出し、指摘ごとの行き先を jq で数えた。5 PR については、専門 agent の最終
 メッセージと 1 巡目の判定 verdict を手で突き合わせた。
 
-各 transcript に下の式を `jq -c -s -f verdicts.jq <file>` で当て、出力を `items.jsonl` に溜めれば集計できる。jq の `//` は
-`false` も欠損扱いにするので、`.blocker // null` と書くと `blocker: false` が `null` に化ける。
-下の式は `has("blocker")` で分岐している。
+各 transcript に下の式を `jq -c -s -f verdicts.jq <file>` で当て、
+出力を `items.jsonl` に溜めれば集計できる。jq の `//` は `false` も
+欠損扱いにするので、`.blocker // null` と書くと `blocker: false` が
+`null` に化ける。下の式は `has("blocker")` で分岐している。
 
 ```jq
 # Input: one subagent transcript (jsonl) slurped with -s. Emits one JSON object per finding item
@@ -82,13 +83,15 @@ jq -r 'select(.bucket=="gated") | [.blocker, .severity, (.source // "null")] | @
 結果は次の 3 点である。
 
 - 専門 agent 由来の指摘は、直したもの（約 170）より `blocker: false` で gate したもの（300）の
-  ほうが多く、gate したもののほぼすべては判定役が severity を `low` に付け直していた。却下理由には
-  「誤動作は見えていない」「費用対効果が低い」のように、妥当と認めたうえで見送ったものが多かった。
-- `medium` 以上を gate したものは全件 1 巡目で、3 巡目以降の絞り込みの寄与は小さい。
+  ほうが多く、gate したものは、ほぼすべて判定役の severity が `low` だった。
+- `medium` 以上を gate したものは全件 1 巡目だった。3 巡目以降は `findings_to_fix` を
+  correctness / 安全性に絞る規定があるが、3 巡目以降まで進んだ判定は 11 件しかなく、
+  この絞り込みの寄与は小さい。
 - 5 PR（#185, #191, #216, #227, #234）で専門 agent が上位に置いた指摘を追うと、下表のとおり
-  妥当でないとして gate したものは無かった。gate に回ったのは主に pr-test-analyzer の Important
-  Improvements と silent-failure-hunter の HIGH である。#191 では別々の指摘が 1 項目に束ねられ、
-  #234 では指摘が判定役の出力から落ちていた。
+  妥当でないとして gate したものは無かった。gate の理由は「誤動作は見えていない」「費用対効果が
+  低い」のように、妥当と認めたうえで見送るものだった。gate に回ったのは主に pr-test-analyzer の
+  Important Improvements で、ほかに #191 の silent-failure-hunter の HIGH がある。#191 では
+  別々の指摘が 1 項目に束ねられ、#234 では指摘が判定役の出力から落ちていた。
 
 | 結果 | 件数 |
 |---|---|
