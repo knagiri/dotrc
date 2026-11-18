@@ -26,10 +26,9 @@ gate に回し、理由には「穴の指摘は正しいが…修正の価値が
 verdict JSON を取り出し、指摘ごとの行き先を jq で数えた。5 PR については、専門 agent の最終
 メッセージと 1 巡目の判定 verdict を手で突き合わせた。
 
-各 transcript に下の式を `jq -c -s -f verdicts.jq <file>` で当て、
-出力を `items.jsonl` に溜めれば集計できる。jq の `//` は `false` も
-欠損扱いにするので、`.blocker // null` と書くと `blocker: false` が
-`null` に化ける。下の式は `has("blocker")` で分岐している。
+各 transcript に下の式を `jq -c -s -f verdicts.jq <file>` で当て、出力を `items.jsonl` に溜めれば
+集計できる。jq の `//` は `false` も欠損扱いにするので、`.blocker // null` と書くと
+`blocker: false` が `null` に化ける。下の式は `has("blocker")` で分岐している。
 
 ```jq
 # Input: one subagent transcript (jsonl) slurped with -s. Emits one JSON object per finding item
