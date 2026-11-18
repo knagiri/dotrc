@@ -49,7 +49,13 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
   限り、他の用途（並列委譲の担当領域等）を混ぜない。
   節名は `禁止事項` で固定する。強度を名前に埋め込むと、後から非目標（やらないこと）を書く節を
   足したときに意味が被るため。
+  **禁止事項は対象 repo の deny と doc が定める境界に合わせて書く。** それより広い一律禁止
+  （例: 「`.env*` を読まない」）を書くと、repo の手順が要求する操作（git 管理下のテンプレート
+  `.env` を source してコードを生成する等）まで塞ぐ。委譲先は禁止事項と repo の手順のどちらにも
+  従えず、人間不在なので板挟みのまま止まる。広く禁じたい場合は、repo の手順が要る例外を名指しで
+  併記する。
   実例: dotrc/docs/incidents/delegate-prohibition-not-propagated.md
+  実例: dotrc/docs/incidents/delegate-prohibition-broader-than-repo.md
 - **複数を並列委譲するときは、各プロンプトに他の委譲が並行していることと、その担当領域を
   伝える。** 上の `## 禁止事項` とは別の `## 並行している委譲` 節に書く。他の委譲の担当領域は
   編集の禁止ではなく情報で、`## 禁止事項` に書くと転記先が制約として読むため（破壊的操作は上の
