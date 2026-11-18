@@ -23,7 +23,11 @@ gate に回し、理由には「穴の指摘は正しいが…修正の価値が
 ## 観測
 
 委譲元が個人 config dir の transcript から集計した値を写す。この doc を書いた委譲では再集計して
-いない。
+いない。集計に使った `jq` 式と生出力は、この doc を書いた session に渡されておらず、ここには記録
+されていない（再現手順が欠けている）。再現するには、対象 transcript の範囲（個人 config dir 配下の
+`pr-review-loop` 判定役 156 件を選んだ条件）と、最終メッセージから verdict JSON を取り出す抽出方法
+（`SubagentHandback` の `input.message`、無ければ最後の assistant text）を、集計した側から得る
+必要がある。
 
 **対象**: `pr-review-loop` 判定役の verdict 156 件。各 subagent transcript の最終メッセージ
 （`SubagentHandback` の `input.message`、無ければ最後の assistant text）から JSON を取り出し、
@@ -41,6 +45,8 @@ comment-analyzer 48 / pr-test-analyzer 33 / silent-failure-hunter 19 / type-desi
 
 **`blocker: false` の却下理由**（理由文のキーワードで分類）: 「価値が薄い / 軽微 / 低優先」系 約 61、
 「担当外 / 既存」系 約 54（うち `out_of_scope: true` が 39）、「誤り / 当たらない」系 約 20。
+この 3 系の計は約 135 件で、300 件の残り約 165 件は 3 系のキーワードに当たらなかったものである。
+その内訳は委譲元から渡されておらず、不明である。
 担当外の指摘は、妥当なら `blocker: true, out_of_scope: true` にする規定が既にあったが、
 `blocker: false, out_of_scope: true` で却下されたものが多かった。
 
@@ -48,8 +54,10 @@ comment-analyzer 48 / pr-test-analyzer 33 / silent-failure-hunter 19 / type-desi
 11 件しかなく、3 巡目以降に `findings_to_fix` を correctness / 安全性に絞る規定の寄与は小さい。
 
 **上位の指摘の追跡**: 5 PR（#185, #191, #216, #227, #234）で、専門 agent が上位に置いた指摘
-38 件（code-reviewer Important、comment-analyzer Critical、pr-test-analyzer Critical Gaps / Important、
-silent-failure-hunter HIGH、type-design-analyzer 優先度 1）を 1 件ずつ追跡した。
+38 件（code-reviewer Important、comment-analyzer Critical、pr-test-analyzer Critical Gaps / Important
+Improvements、silent-failure-hunter HIGH、type-design-analyzer 優先度 1）を 1 件ずつ追跡した。
+silent-failure-hunter の段階は CRITICAL / HIGH / MEDIUM だが、追跡対象に CRITICAL を含めて数えたのか、
+該当が HIGH だけだったのかは委譲元から渡されておらず、判別できない。
 
 | 結果 | 件数 |
 |---|---|
@@ -59,7 +67,7 @@ silent-failure-hunter HIGH、type-design-analyzer 優先度 1）を 1 件ずつ�
 | 担当外 | 1 |
 | 判定役の出力から脱落 | 1 |
 
-gate されたのは pr-test-analyzer の Important 全 15 件と、#191 の silent-failure-hunter HIGH 3 件
+gate されたのは pr-test-analyzer の Important Improvements 全 15 件と、#191 の silent-failure-hunter HIGH 3 件
 など。理由は「網羅性の改善に留まる」「誤動作は見えていない」「費用対効果が低い」だった。
 #191 では pr-test-analyzer の 4 件が 1 項目に束ねられて gate され、#234 では comment-analyzer の
 Critical 1 件が判定役の出力から落ちていた。
@@ -72,7 +80,8 @@ Critical 1 件が判定役の出力から落ちていた。
   「妥当でない」に限った。3 巡目以降の correctness / 安全性への絞り込みは変えていない
 - 担当外であることは却下の理由にならない、という規定を doc の PR に限らず手順 5 本体に置いた
 - 専門 agent に重大度ラベルを付けて返させ、verdict に `specialist_severity` として写させた。上位
-  2 段の指摘を gate にするときは、その agent の根拠を覆す理由を `reason_gated` に書かせる
+  2 段（agent ごとの段階の読み方は SKILL.md 手順 5）の指摘を gate にするときは、その agent の
+  根拠を覆す理由を `reason_gated` に書かせる
 - 専門 agent の各指摘が必ずどれかのバケットに 1 回現れること、別々の指摘を 1 項目に束ねないことを
   明示した
 
