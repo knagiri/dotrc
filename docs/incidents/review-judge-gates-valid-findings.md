@@ -23,15 +23,68 @@ gate に回し、理由には「穴の指摘は正しいが…修正の価値が
 ## 観測
 
 委譲元が個人 config dir の transcript から集計した値を写す。この doc を書いた委譲では再集計して
-いない。集計に使った `jq` 式と生出力は、この doc を書いた session に渡されておらず、ここには記録
-されていない（再現手順が欠けている）。再現するには、対象 transcript の範囲（個人 config dir 配下の
-`pr-review-loop` 判定役 156 件を選んだ条件）と、最終メッセージから verdict JSON を取り出す抽出方法
-（`SubagentHandback` の `input.message`、無ければ最後の assistant text）を、集計した側から得る
-必要がある。
+いない。集計の生出力は記録されていないが、下の手順で再現できる。
 
-**対象**: `pr-review-loop` 判定役の verdict 156 件。各 subagent transcript の最終メッセージ
-（`SubagentHandback` の `input.message`、無ければ最後の assistant text）から JSON を取り出し、
-`jq` で集計した。専門 agent の subagent transcript は `agentType` 別に code-reviewer 49 /
+**再現手順**: 対象は `<config dir>/projects/*/<session>/subagents/agent-*.jsonl` のうち、最初の
+user メッセージに「判定役」を含むもの（`rg -l '判定役' -g '**/subagents/*.jsonl' <config dir>/projects`）。
+各 transcript に下の jq を `jq -c -s -f verdicts.jq <file>` で当て、1 指摘 1 行の JSON
+（`items.jsonl`）を得て集計した。専門 agent の実行回数は、同じ dir の `agent-*.meta.json` の
+`agentType` を数えた。jq の `//` は `false` も欠損扱いにするので、`.blocker // null` と書くと
+`blocker: false` が `null` に化ける（初回の集計でこれを踏んだ）。下の式は `has("blocker")` で分岐している。
+
+```jq
+# Input: one subagent transcript (jsonl) slurped with -s. Emits one JSON object per finding item
+# from the judge's final verdict, or nothing if this transcript is not a judge.
+def prompt_text:
+  [ .[] | select(.type=="user") | .message.content
+    | if type=="string" then . else (map(select(.type=="text") | .text) | join("")) end ][0] // "";
+
+def final_text:
+  ( [ .[] | select(.type=="assistant") | .message.content[]?
+      | select(.type=="tool_use" and .name=="SubagentHandback") | .input.message ] | last )
+  // ( [ .[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text ] | last )
+  // "";
+
+def extract_json:
+  # take from first "{" to last "}"
+  (index("{")) as $s | (rindex("}")) as $e
+  | if $s == null or $e == null then null else .[$s:$e+1] end;
+
+prompt_text as $p
+| select($p | test("判定役"))
+| ($p | capture("PR #`?(?<pr>[0-9]+)`?") .pr // "?") as $pr
+| ($p | capture("`?(?<it>[0-9]+)`? 巡目") .it // "?") as $it
+| ($p | test("専門レビュー agent の findings")) as $has_spec_slot
+| ($p | test("なし（専門レビューは skip / 全失敗）")) as $spec_skipped
+| (final_text | extract_json | (try fromjson catch null)) as $v
+| if $v == null then {pr:$pr, it:$it, bucket:"PARSE_FAIL"}
+  else
+    ( ($v.findings_to_fix // [])[] | {bucket:"fix"} + . ),
+    ( ($v.findings_gated // [])[] | {bucket:"gated"} + . ),
+    ( ($v.threads_pending // [])[] | {bucket:"pending"} + . ),
+    ( ($v.pr_dispositions // [])[] | {bucket:("disp:" + (.action // "?"))} + . ),
+    {bucket:"_verdict", n_fix:(($v.findings_to_fix//[])|length)}
+    | {pr:$pr, it:$it, spec_slot:$has_spec_slot, spec_skipped:$spec_skipped,
+       bucket, source:(.source // null), severity:(.severity // null),
+       blocker:(if has("blocker") then .blocker else null end),
+       oos:(if has("out_of_scope") then .out_of_scope else null end),
+       bot_severity:(.bot_severity // null),
+       summary:((.summary // "")[0:120]), reason:(((.reason_gated // .reason) // "")[0:200])}
+  end
+```
+
+集計の例（gate の `blocker` × 判定役の severity × 出所）:
+
+```sh
+jq -r 'select(.bucket=="gated") | [.blocker, .severity, (.source // "null")] | @tsv' items.jsonl | sort | uniq -c
+```
+
+後述の 5 PR の上位指摘の追跡は、各 PR の subagents dir で専門 agent の最終メッセージと 1 巡目の
+判定 verdict を突き合わせた手作業である（文面の照合なので機械化していない）。
+
+**対象**: `pr-review-loop` 判定役の verdict 156 件。verdict JSON は各 transcript の最終メッセージ
+（`SubagentHandback` の `input.message`、無ければ最後の assistant text）から取り出した。専門 agent の
+subagent transcript は `agentType` 別に code-reviewer 49 /
 comment-analyzer 48 / pr-test-analyzer 33 / silent-failure-hunter 19 / type-design-analyzer 2 件あり、
 専門レビューは skip されずに走っていた。
 
@@ -80,8 +133,8 @@ Critical 1 件が判定役の出力から落ちていた。
   「妥当でない」に限った。3 巡目以降の correctness / 安全性への絞り込みは変えていない
 - 担当外であることは却下の理由にならない、という規定を doc の PR に限らず手順 5 本体に置いた
 - 専門 agent に重大度ラベルを付けて返させ、verdict に `specialist_severity` として写させた。上位
-  2 段（agent ごとの段階の読み方は SKILL.md 手順 5）の指摘を gate にするときは、その agent の
-  根拠を覆す理由を `reason_gated` に書かせる
+  （agent ごとに含める段階は SKILL.md 手順 5）の指摘を gate にするときは、その agent の根拠を
+  覆す理由を `reason_gated` に書かせる
 - 専門 agent の各指摘が必ずどれかのバケットに 1 回現れること、別々の指摘を 1 項目に束ねないことを
   明示した
 
