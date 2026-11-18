@@ -30,9 +30,14 @@ $ rg -n '\.env' .claude/settings.json
 dotrc 側に一律禁止の出どころが無いことも確かめた。
 
 ```
-$ rg -n '\.env\*' dot/
-（出力なし、exit 1）
+$ git grep -n '\.env' origin/main -- dot/claude/settings.json dot/claude/skills
+origin/main:dot/claude/settings.json:127:      "Read(.env)",
+origin/main:dot/claude/settings.json:128:      "Read(app/.env)",
 ```
+
+出たのは global deny の `.env` 完全一致 2 件だけで、`.env.ci` には一致しない。skill 側に `.env`
+を一律に禁じる記述は無かった（base 指定にしたのは、この PR 自身が skill に例として `.env*` を
+書き足すため）。
 
 ## 直し方
 
