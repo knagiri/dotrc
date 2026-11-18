@@ -30,9 +30,9 @@ gate に回し、理由には「穴の指摘は正しいが…修正の価値が
 user メッセージが判定 prompt のもの。`rg -l '判定役' -g '**/subagents/*.jsonl' <config dir>/projects`
 は修正役の transcript も拾う粗い候補の絞り込みで、最初の user メッセージによる選別は下の jq の
 `select` が行う（判定 prompt 固有の文言に一致させ、修正役を除く）。各 transcript に下の jq を
-`jq -c -s -f verdicts.jq <file>` で当て、1 行 1 件の JSON（`items.jsonl`。指摘の行のほか、verdict ごと
-1 行の `_verdict` と、取り出せなかった `PARSE_FAIL` の行も混ざる）を得て集計した。専門 agent の実行回数は、同じ dir の `agent-*.meta.json` の
-`agentType` を数えた。jq の `//` は `false` も欠損扱いにするので、`.blocker // null` と書くと
+`jq -c -s -f verdicts.jq <file>` で当て、1 行 1 件の JSON（`items.jsonl`。指摘の行のほか、
+verdict ごと 1 行の `_verdict` と、取り出せなかった `PARSE_FAIL` の行も混ざる）を得て集計した。
+専門 agent の実行回数は、同じ dir の `agent-*.meta.json` の `agentType` を数えた。jq の `//` は `false` も欠損扱いにするので、`.blocker // null` と書くと
 `blocker: false` が `null` に化ける（初回の集計でこれを踏んだ）。下の式は `has("blocker")` で分岐している。
 
 ```jq
@@ -89,10 +89,9 @@ jq -r 'select(.bucket=="gated") | [.blocker, .severity, (.source // "null")] | @
 後述の 5 PR の上位指摘の追跡は、各 PR の subagents dir で専門 agent の最終メッセージと 1 巡目の
 判定 verdict を突き合わせた手作業である（文面の照合なので機械化していない）。
 
-**対象**: `pr-review-loop` 判定役の verdict 156 件。専門 agent の
-subagent transcript は `agentType` 別に code-reviewer 49 /
-comment-analyzer 48 / pr-test-analyzer 33 / silent-failure-hunter 19 / type-design-analyzer 2 件あり、
-専門レビューは skip されずに走っていた。
+**対象**: `pr-review-loop` 判定役の verdict 156 件。専門 agent の subagent transcript は
+`agentType` 別に code-reviewer 49 / comment-analyzer 48 / pr-test-analyzer 33 /
+silent-failure-hunter 19 / type-design-analyzer 2 件あり、専門レビューは skip されずに走っていた。
 
 **専門 agent 由来（`source` が `pr-review-toolkit:*`）の項目の行き先**:
 
@@ -139,8 +138,8 @@ Critical 1 件が判定役の出力から落ちていた。
   「妥当でない」に限った。3 巡目以降の correctness / 安全性への絞り込みは変えていない
 - 担当外であることは却下の理由にならない、という規定を doc の PR に限らず手順 5 本体に置いた
 - 専門 agent に重大度ラベルを付けて返させ、verdict に `specialist_severity` として写させた。上位
-  （agent ごとに含める段階は SKILL.md の判定 subagent prompt の手順 5）の指摘を gate にするときは、その agent の根拠を
-  覆す理由を `reason_gated` に書かせる
+  （agent ごとに含める段階は SKILL.md の判定 subagent prompt の手順 5）の指摘を gate にするときは、
+  その agent の根拠を覆す理由を `reason_gated` に書かせる
 - 専門 agent の各指摘が必ずどれかのバケットに 1 回現れること、別々の指摘を 1 項目に束ねないことを
   明示した
 
