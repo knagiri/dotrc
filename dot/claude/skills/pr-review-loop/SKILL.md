@@ -424,15 +424,15 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >    - **専門 agent が上位に置いた指摘を gate にするときは、`reason_gated` にその agent の根拠を
 >      覆す理由を書く。** 妥当でないとして `blocker: false` で gate にするなら「なぜ妥当でないか」、
 >      担当外・人間判断待ち（`blocker: true`）や 3 巡目以降の絞り込みで gate にするなら、その理由
->      （担当外である、人間の判断が要る、3 巡目以降の絞り込みの対象である）を書く。 上位とは各 agent の最上位 2 段で、agent ごとに次のとおり読む。
->      code-reviewer は `Critical` / `Important`、comment-analyzer は `Critical Issues`（節分けで
->      段階を持たず、`Improvement Opportunities` は上位に含めない）、pr-test-analyzer は
->      `Critical Gaps` / `Important Improvements`、silent-failure-hunter は `CRITICAL` / `HIGH`、
->      type-design-analyzer は既定で段階を持たない（1-10 の評点のみ）ので、手順 2.a-0.5 で返させた
->      優先度の最上位。重大度は `specialist_severity`
->      に写す（後述）。専門 agent の重大度は判断材料であって従う義務は無いが、根拠無く見送ると
->      重大度が判断に使われたかを記録から確かめられない（bot の Major 以上を `decline` にするときの
->      手順 5.5 の規定と同じ形）。
+>      （担当外である、人間の判断が要る、3 巡目以降の絞り込みの対象である）を書く。上位に含める
+>      段階は agent ごとに次のとおり読む。code-reviewer は `Critical` / `Important`、
+>      comment-analyzer は節が段階を兼ね、上位は `Critical Issues` だけ（`Improvement Opportunities` /
+>      `Recommended Removals` は含めない）、pr-test-analyzer は `Critical Gaps` / `Important Improvements`、
+>      silent-failure-hunter は `CRITICAL` / `HIGH`、type-design-analyzer は既定で段階を持たない
+>      （1-10 の評点のみ）ので、手順 2.a-0.5 で返させた優先度 1 だけ。重大度は
+>      `specialist_severity` に写す（後述）。専門 agent の重大度は判断材料であって従う義務は無いが、
+>      根拠無く見送ると重大度が判断に使われたかを記録から確かめられない（bot の Major 以上を
+>      `decline` にするときの手順 5.5 の規定と同じ形）。
 >    - **担当外への修正を要する指摘は `findings_to_fix` に入れない**（修正役にこの PR の担当を
 >      超えさせないため）。妥当なら `findings_gated` に `blocker: true, out_of_scope: true`、
 >      妥当でなければ `blocker: false, out_of_scope: true` で載せる。thread 由来なら
@@ -705,4 +705,4 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 関与しない。用途は**報告専用**で、手順 3.b / 4 の最終サマリで findings を `severity` 降順
 （`high` → `medium` → `low`）に並べて出力し、orchestrator と人間が優先度を把握できるようにする。
 `bot_severity` / `specialist_severity` が非 null の項目はその値も併記し、bot が Major 以上とした指摘を
-見送ったもの（`decline`）と、専門 agent が上位 2 段とした指摘（定義は判定 subagent prompt の手順 5）を gate にしたものは、人間が見落とさないよう明示する。
+見送ったもの（`decline`）と、専門 agent が上位とした指摘（agent ごとの範囲は判定 subagent prompt の手順 5）を gate にしたものは、人間が見落とさないよう明示する。
