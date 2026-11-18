@@ -23,18 +23,22 @@ gate に回し、理由には「穴の指摘は正しいが…修正の価値が
 ## 観測
 
 委譲元が個人 config dir の transcript から集計した値を写す。この doc を書いた委譲では再集計して
-いない。集計の生出力は記録されていないが、下の手順で再現できる。
+いない。集計の生出力は記録されておらず、下の手順は委譲元が集計に使った手順を写したもので、
+この委譲では再実行していない（156 件を `_verdict` 行の件数で数えたかも確かめていない）。
 
-**再現手順**: 対象は `<config dir>/projects/*/<session>/subagents/agent-*.jsonl` のうち、最初の
-user メッセージに「判定役」を含むもの（`rg -l '判定役' -g '**/subagents/*.jsonl' <config dir>/projects`）。
-各 transcript に下の jq を `jq -c -s -f verdicts.jq <file>` で当て、1 指摘 1 行の JSON
-（`items.jsonl`）を得て集計した。専門 agent の実行回数は、同じ dir の `agent-*.meta.json` の
+**集計手順**: 対象は `<config dir>/projects/*/<session>/subagents/agent-*.jsonl` のうち、最初の
+user メッセージが判定 prompt のもの。`rg -l '判定役' -g '**/subagents/*.jsonl' <config dir>/projects`
+は修正役の transcript も拾う粗い候補の絞り込みで、最初の user メッセージによる選別は下の jq の
+`select` が行う（判定 prompt 固有の文言に一致させ、修正役を除く）。各 transcript に下の jq を
+`jq -c -s -f verdicts.jq <file>` で当て、1 行 1 件の JSON（`items.jsonl`。指摘の行のほか、verdict ごと
+1 行の `_verdict` と、取り出せなかった `PARSE_FAIL` の行も混ざる）を得て集計した。専門 agent の実行回数は、同じ dir の `agent-*.meta.json` の
 `agentType` を数えた。jq の `//` は `false` も欠損扱いにするので、`.blocker // null` と書くと
 `blocker: false` が `null` に化ける（初回の集計でこれを踏んだ）。下の式は `has("blocker")` で分岐している。
 
 ```jq
 # Input: one subagent transcript (jsonl) slurped with -s. Emits one JSON object per finding item
-# from the judge's final verdict, or nothing if this transcript is not a judge.
+# from the judge's final verdict, or nothing if this transcript is not a judge prompt
+# (the fixer prompt also mentions 判定役, so match the judge prompt's own phrase).
 def prompt_text:
   [ .[] | select(.type=="user") | .message.content
     | if type=="string" then . else (map(select(.type=="text") | .text) | join("")) end ][0] // "";
@@ -51,7 +55,7 @@ def extract_json:
   | if $s == null or $e == null then null else .[$s:$e+1] end;
 
 prompt_text as $p
-| select($p | test("判定役"))
+| select($p | test("独立した立場でレビューする\\*\\*判定役\\*\\*"))
 | ($p | capture("PR #`?(?<pr>[0-9]+)`?") .pr // "?") as $pr
 | ($p | capture("`?(?<it>[0-9]+)`? 巡目") .it // "?") as $it
 | ($p | test("専門レビュー agent の findings")) as $has_spec_slot
@@ -65,7 +69,8 @@ prompt_text as $p
     ( ($v.pr_dispositions // [])[] | {bucket:("disp:" + (.action // "?"))} + . ),
     {bucket:"_verdict", n_fix:(($v.findings_to_fix//[])|length)}
     | {pr:$pr, it:$it, spec_slot:$has_spec_slot, spec_skipped:$spec_skipped,
-       bucket, source:(.source // null), severity:(.severity // null),
+       bucket, n_fix:(.n_fix // null), source:(.source // null), severity:(.severity // null),
+       specialist_severity:(.specialist_severity // null),
        blocker:(if has("blocker") then .blocker else null end),
        oos:(if has("out_of_scope") then .out_of_scope else null end),
        bot_severity:(.bot_severity // null),
@@ -79,11 +84,12 @@ prompt_text as $p
 jq -r 'select(.bucket=="gated") | [.blocker, .severity, (.source // "null")] | @tsv' items.jsonl | sort | uniq -c
 ```
 
+`specialist_severity` は 156 件の導入前のフィールドなので、今回の数値には影響しない（再集計用）。
+
 後述の 5 PR の上位指摘の追跡は、各 PR の subagents dir で専門 agent の最終メッセージと 1 巡目の
 判定 verdict を突き合わせた手作業である（文面の照合なので機械化していない）。
 
-**対象**: `pr-review-loop` 判定役の verdict 156 件。verdict JSON は各 transcript の最終メッセージ
-（`SubagentHandback` の `input.message`、無ければ最後の assistant text）から取り出した。専門 agent の
+**対象**: `pr-review-loop` 判定役の verdict 156 件。専門 agent の
 subagent transcript は `agentType` 別に code-reviewer 49 /
 comment-analyzer 48 / pr-test-analyzer 33 / silent-failure-hunter 19 / type-design-analyzer 2 件あり、
 専門レビューは skip されずに走っていた。
@@ -133,7 +139,7 @@ Critical 1 件が判定役の出力から落ちていた。
   「妥当でない」に限った。3 巡目以降の correctness / 安全性への絞り込みは変えていない
 - 担当外であることは却下の理由にならない、という規定を doc の PR に限らず手順 5 本体に置いた
 - 専門 agent に重大度ラベルを付けて返させ、verdict に `specialist_severity` として写させた。上位
-  （agent ごとに含める段階は SKILL.md 手順 5）の指摘を gate にするときは、その agent の根拠を
+  （agent ごとに含める段階は SKILL.md の判定 subagent prompt の手順 5）の指摘を gate にするときは、その agent の根拠を
   覆す理由を `reason_gated` に書かせる
 - 専門 agent の各指摘が必ずどれかのバケットに 1 回現れること、別々の指摘を 1 項目に束ねないことを
   明示した

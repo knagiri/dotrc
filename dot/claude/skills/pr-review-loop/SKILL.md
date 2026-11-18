@@ -426,10 +426,10 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >      担当外・人間判断待ち（`blocker: true`）や 3 巡目以降の絞り込みで gate にするなら、その理由
 >      （担当外である、人間の判断が要る、3 巡目以降の絞り込みの対象である）を書く。上位に含める
 >      段階は agent ごとに次のとおり読む。code-reviewer は `Critical` / `Important`、
->      comment-analyzer は `Critical Issues` だけ（節分けで段階を持たず、`Improvement Opportunities`
->      は上位に含めない）、pr-test-analyzer は `Critical Gaps` / `Important Improvements`、
+>      comment-analyzer は節が段階を兼ね、上位は `Critical Issues` だけ（`Improvement Opportunities` /
+>      `Recommended Removals` は含めない）、pr-test-analyzer は `Critical Gaps` / `Important Improvements`、
 >      silent-failure-hunter は `CRITICAL` / `HIGH`、type-design-analyzer は既定で段階を持たない
->      （1-10 の評点のみ）ので、手順 2.a-0.5 で返させた優先度の最上位だけ。重大度は
+>      （1-10 の評点のみ）ので、手順 2.a-0.5 で返させた優先度 1 だけ。重大度は
 >      `specialist_severity` に写す（後述）。専門 agent の重大度は判断材料であって従う義務は無いが、
 >      根拠無く見送ると重大度が判断に使われたかを記録から確かめられない（bot の Major 以上を
 >      `decline` にするときの手順 5.5 の規定と同じ形）。
