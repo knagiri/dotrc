@@ -22,22 +22,13 @@ gate に回し、理由には「穴の指摘は正しいが…修正の価値が
 
 ## 観測
 
-委譲元が個人 config dir の transcript から集計した値を写す。この doc を書いた委譲では再集計して
-いない。集計の生出力は記録されていない。下の手順は委譲元が集計に使った手順に、この doc の
-review で 2 点手を入れたものである。委譲元の式は判定役を `select($p | test("判定役"))` で選んで
-おり、最初の user メッセージに「判定役」を含む修正役の transcript も拾いうる。下の式はこれを判定
-prompt 固有の文言に絞り、出力に `n_fix` と `specialist_severity` を残すようにした。156 件に修正役の
-分が混ざっていたかは確かめていない。この委譲では手順を再実行していない。
+`<config dir>/projects/*/<session>/subagents/` にある判定役の transcript の最終メッセージから
+verdict JSON を取り出し、指摘ごとの行き先を jq で数えた。5 PR については、専門 agent の最終
+メッセージと 1 巡目の判定 verdict を手で突き合わせた。
 
-**集計手順**: 対象は `<config dir>/projects/*/<session>/subagents/agent-*.jsonl` のうち、最初の
-user メッセージが判定 prompt のもの。`rg -l '判定役' -g '**/subagents/*.jsonl' <config dir>/projects`
-は修正役の transcript も拾う粗い候補の絞り込みで、最初の user メッセージによる選別は下の jq の
-`select` が行う（判定 prompt 固有の文言に一致させ、修正役を除く）。各 transcript に下の jq を
-`jq -c -s -f verdicts.jq <file>` で当て、1 行 1 件の JSON（`items.jsonl`。指摘の行のほか、
-verdict ごと 1 行の `_verdict` と、取り出せなかった `PARSE_FAIL` の行も混ざる）を得て集計した。
-専門 agent の実行回数は、同じ dir の `agent-*.meta.json` の `agentType` を数えた。jq の `//` は
-`false` も欠損扱いにするので、`.blocker // null` と書くと `blocker: false` が `null` に化ける
-（初回の集計でこれを踏んだ）。下の式は `has("blocker")` で分岐している。
+各 transcript に下の式を `jq -c -s -f verdicts.jq <file>` で当て、出力を `items.jsonl` に溜めれば
+集計できる。jq の `//` は `false` も欠損扱いにするので、`.blocker // null` と書くと
+`blocker: false` が `null` に化ける。下の式は `has("blocker")` で分岐している。
 
 ```jq
 # Input: one subagent transcript (jsonl) slurped with -s. Emits one JSON object per finding item
@@ -88,51 +79,26 @@ prompt_text as $p
 jq -r 'select(.bucket=="gated") | [.blocker, .severity, (.source // "null")] | @tsv' items.jsonl | sort | uniq -c
 ```
 
-`specialist_severity` は 156 件の導入前のフィールドなので、今回の数値には影響しない（再集計用）。
+結果は次の 3 点である。
 
-後述の 5 PR の上位指摘の追跡は、各 PR の subagents dir で専門 agent の最終メッセージと 1 巡目の
-判定 verdict を突き合わせた手作業である（文面の照合なので機械化していない）。
-
-**対象**: `pr-review-loop` 判定役の verdict 156 件。専門 agent の subagent transcript は
-`agentType` 別に code-reviewer 49 / comment-analyzer 48 / pr-test-analyzer 33 /
-silent-failure-hunter 19 / type-design-analyzer 2 件あり、専門レビューは skip されずに走っていた。
-
-**専門 agent 由来（`source` が `pr-review-toolkit:*`）の項目の行き先**:
-
-| 行き先 | 件数 |
-|---|---|
-| `findings_to_fix` | 約 169 |
-| `findings_gated`（`blocker: false`） | 300（判定役の severity `low` 287、`medium` 13） |
-| `findings_gated`（`blocker: true`） | 3 |
-
-**`blocker: false` の却下理由**（理由文のキーワードで分類）: 「価値が薄い / 軽微 / 低優先」系 約 61、
-「担当外 / 既存」系 約 54（うち `out_of_scope: true` が 39）、「誤り / 当たらない」系 約 20。
-この 3 系の計は約 135 件で、300 件の残り約 165 件は 3 系のキーワードに当たらなかったものである。
-その内訳は委譲元から渡されておらず、不明である。
-担当外の指摘は、妥当なら `blocker: true, out_of_scope: true` にする規定が既にあったが、
-`blocker: false, out_of_scope: true` で却下されたものが多かった。
-
-**巡目**: `medium` 以上を `blocker: false` で gate したものは全件 1 巡目だった。3 巡目以降の判定は
-11 件しかなく、3 巡目以降に `findings_to_fix` を correctness / 安全性に絞る規定の寄与は小さい。
-
-**上位の指摘の追跡**: 5 PR（#185, #191, #216, #227, #234）で、専門 agent が上位に置いた指摘
-38 件（code-reviewer Important、comment-analyzer Critical、pr-test-analyzer Critical Gaps / Important
-Improvements、silent-failure-hunter HIGH、type-design-analyzer 優先度 1）を 1 件ずつ追跡した。
-silent-failure-hunter の段階は CRITICAL / HIGH / MEDIUM だが、追跡対象に CRITICAL を含めて数えたのか、
-該当が HIGH だけだったのかは委譲元から渡されておらず、判別できない。
+- 専門 agent 由来の指摘は、直したもの（約 170）より `blocker: false` で gate したもの（300）の
+  ほうが多く、gate したものは、ほぼすべて判定役の severity が `low` だった。
+- `medium` 以上を gate したものは全件 1 巡目だった。3 巡目以降は `findings_to_fix` を
+  correctness / 安全性に絞る規定があるが、3 巡目以降まで進んだ判定は 11 件しかなく、
+  この絞り込みの寄与は小さい。
+- 5 PR（#185, #191, #216, #227, #234）で専門 agent が上位に置いた指摘を追うと、下表のとおり
+  妥当でないとして gate したものは無かった。gate の理由は「誤動作は見えていない」「費用対効果が
+  低い」のように、妥当と認めたうえで見送るものだった。gate に回ったのは主に pr-test-analyzer の
+  Important Improvements で、ほかに #191 の silent-failure-hunter の HIGH がある。#191 では
+  別々の指摘が 1 項目に束ねられ、#234 では指摘が判定役の出力から落ちていた。
 
 | 結果 | 件数 |
 |---|---|
-| 直した（全件修正済み） | 17 |
-| 妥当だが価値低・先送りとして gate | 19 |
+| 直した | 17 |
+| 妥当だが価値低として gate | 19 |
 | 妥当でないとして gate | 0 |
 | 担当外 | 1 |
 | 判定役の出力から脱落 | 1 |
-
-gate されたのは pr-test-analyzer の Important Improvements 全 15 件と、#191 の silent-failure-hunter HIGH 3 件
-など。理由は「網羅性の改善に留まる」「誤動作は見えていない」「費用対効果が低い」だった。
-#191 では pr-test-analyzer の 4 件が 1 項目に束ねられて gate され、#234 では comment-analyzer の
-Critical 1 件が判定役の出力から落ちていた。
 
 ## 直し方
 
