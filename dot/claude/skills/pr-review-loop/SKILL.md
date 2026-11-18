@@ -111,7 +111,8 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
       - 「コードを変更しない・commit / push しない・PR にコメントを投稿しない。findings を最終
         メッセージとして返すだけ」
       - 「各指摘に、その agent 自身の段階で重大度ラベルを付けて返す」（例: `Critical` /
-        `Important`、`CRITICAL` / `HIGH`、`Critical Gap (8)`）。判定役が `specialist_severity` に写し、上位の
+        `Important`、`CRITICAL` / `HIGH`、`Critical Gap (8)`）。段階を持たない agent
+        （type-design-analyzer。1-10 の評点のみ）には、各指摘に優先度（1 が最上位）を付けて返させる。判定役が `specialist_severity` に写し、上位の
         指摘を gate にするときの根拠の要否を決めるのに使う。返す件数の閾値は agent の既定のままにする
       - `<PROHIBITIONS>`（a-1 の埋め方に従う。「なし」なら省いてよい）
       - 一時ファイルの置き場所（判定 subagent prompt の「一時ファイル」の段落を同じ文面で入れる）
