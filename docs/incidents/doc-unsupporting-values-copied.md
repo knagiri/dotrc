@@ -33,10 +33,9 @@ $ git show 73d9deb --format=%B --no-patch | sed -n 3,5p
 
 $ git show 73d9deb -- docs/incidents/review-judge-gates-valid-findings.md | rg '^-' | rg '156|不明|影響しない'
 -prompt 固有の文言に絞り、出力に `n_fix` と `specialist_severity` を残すようにした。156 件に修正役の
--分が混ざっていたかは確かめていない。この委譲では手順を再実行していない。
+-`specialist_severity` は 156 件の導入前のフィールドなので、今回の数値には影響しない（再集計用）。
 -**対象**: `pr-review-loop` 判定役の verdict 156 件。専門 agent の subagent transcript は
 -その内訳は委譲元から渡されておらず、不明である。
--`specialist_severity` は 156 件の導入前のフィールドなので、今回の数値には影響しない（再集計用）。
 ```
 
 ## 直し方
