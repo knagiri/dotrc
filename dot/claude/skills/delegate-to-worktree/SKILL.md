@@ -82,8 +82,10 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    **spec / plan に実測を書くときは、実行したコマンドと観測した出力を併記する。** 結論だけの
    実測記述（「〜を確認した」「〜は起きない」）は委譲先が検証できないので、誤っていても
    前提として使われ、増幅されるだけになる。並列委譲では同じ誤りが同時に複数 worktree へ流れ、
-   撤回コストが本数に比例する。
+   撤回コストが本数に比例する。実測を渡すときは、どの値が結論を支えるかも明示する。受け手は
+   渡された値を doc へそのまま写しやすく、結論に効かない値まで incident doc 等に残る。
    実例: dotrc/docs/incidents/absence-wait-before-registration.md
+   実例: dotrc/docs/incidents/doc-unsupporting-values-copied.md
 
    **issue 起点で委譲する場合**、着手条件は `status/ready` label が付いていることだけである。
    `status/triage` の issue は HOW が未確定でありうるので委譲しない（上の「WHAT と HOW が固まって
