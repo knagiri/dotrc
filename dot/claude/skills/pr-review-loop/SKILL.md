@@ -49,7 +49,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 - レビュー結果全体（各イテレーションの 指摘→対応、最終 verdict）は **PR に投稿しない**。**session の最終メッセージとして出力するだけ**にする。PR 本文で書き換えてよいのは、thread にならない bot の指摘の処置を記録する「レビュー指摘への対応」節への追記だけで、修正役が `gh-pr-edit-body` で行う。
 - CI の状態は **`gh-pr-checks <PR>`** ラッパーで読む（判定役の `ci_status`）。`gh pr checks` は使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
 - 未解決 thread の取得は **`gh-list-threads <PR>`**、resolve は **`gh-resolve-thread <id>`** ラッパーのみ。raw `gh api graphql` は使わない。
-- 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。API / tool 由来の失敗による判定役の再 dispatch はこれに数えない（別枠で 1 イテレーションあたり最大 2 回。手順 2.a-1）。修正役の同種の失敗は再 dispatch せず、1 イテレーションとして消費する（手順 2.a-2）。監査巡（手順 2.e）は、直すもの無しを返せば上限を消費せず、直すものを返せば通常の 1 イテレーションとして数える（上限に達していて数えられなければ停止・報告）。未収束・CI 連続 fail・再 dispatch 上限到達・担当外の blocker のみ残存（手順 2.c）・修正役の API / tool 由来の失敗の 2 イテレーション連続（手順 2.a-2）なら **収束とせず停止・報告**（手順 4）。PR は閉じない。
+- 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。API / tool 由来の失敗による判定役の再 dispatch はこれに数えない（別枠で 1 イテレーションあたり最大 2 回。手順 2.a-1）。修正役の同種の失敗は再 dispatch せず、1 イテレーションとして消費する（手順 2.a-2）。監査巡（手順 2.e）は、その verdict が収束条件（手順 2.c）を満たせば上限を消費せず、満たさなければ通常の 1 イテレーションとして数える（上限に達していて数えられなければ停止・報告）。未収束・CI 連続 fail・再 dispatch 上限到達・担当外の blocker のみ残存（手順 2.c）・修正役の API / tool 由来の失敗の 2 イテレーション連続（手順 2.a-2）なら **収束とせず停止・報告**（手順 4）。PR は閉じない。
 - 対応した review thread は resolve、意図的な箇所はソースコメントで理由を残す。
 
 ## orchestrator ループ
@@ -67,6 +67,8 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
    されている」のか「bot は居るがまだ何も投稿していないだけ」なのかを区別できないという意味しか持たない。
    実際に届いた review は判定役が `gh-pr-comments` で読む（判定 subagent prompt の手順 2）前提を維持する。
 1. `owner` / `repo` を取得: `gh repo view --json owner,name --jq '.owner.login + " " + .name'`。
+   あわせて監査巡（手順 2.e）の状態を初期化する: `AUDIT_PENDING` は下ろし、`PRIOR_FIXES` は空で
+   始める（手順 3.a で手順 2 へ戻っても初期化しない）。
 2. イテレーション `i` を 1..5 で回す:
 
    a-0. **`LAST_SEEN` の更新**: イテレーション 2 以降は、判定役を dispatch する**前**に
@@ -189,7 +191,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
       `detail` は要約せず渡したとおりに写す。監査巡が検証し直すのは `detail` に書かれた条件そのものなので）。
       修正 verdict の `made_changes` が `true` なら、またはこの回の `made_changes` が下記の API / tool
       由来の失敗で不明なら、`AUDIT_PENDING` を立てる（手順 2.e が見る。不明を立てる側に倒すのは、
-      途中まで push されている可能性があるため）。`AUDIT_PENDING` は手順 0 の時点では下ろしておく。
+      途中まで push されている可能性があるため）。初期値は手順 1 を参照。
 
       **API / tool 由来の失敗は再 dispatch しない（イテレーションを消費する）**: 修正役が a-1 と同じ
       3 条件（`Task` の dispatch 自体のエラー・最終メッセージ無し・rate limit / overload / timeout 等の
@@ -294,11 +296,14 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
         数えられた場合の番号（`i + 1`。上限に達していれば `i`）を入れる。dispatch の形（`model: "opus"`
         の fresh な `general-purpose`）と API / tool 由来の失敗の再 dispatch（最大 2 回、上限 5 とは別枠）は
         a-1 と同じ扱いにする。
-      - verdict を得たら `AUDIT_PENDING` を下ろし、a-3 と同じ要領で `GATED_CARRYOVER` を累積する。
-      - verdict を 2.c の条件で評価する。収束の条件（直すもの無し・実行する処置無し・blocker 無し・
-        mergeable）を満たせば手順 3 へ進む。このとき 5 回の上限は**消費しない**。
+      - verdict を得たら `AUDIT_PENDING` を下ろす（以下のどちらの経路でも共通）。
+      - verdict を 2.c の条件で評価する。監査の時点では修正 verdict が存在しないので、判定 verdict 側の
+        条件（`findings_to_fix` と実行する処置が空・`blocker: true` 無し・`mergeable == true`）で見る。
+        満たせば、a-3 と同じ要領で `GATED_CARRYOVER` を累積して手順 3 へ進む。このとき 5 回の上限は
+        **消費しない**。
       - 満たさなければ、この監査を通常の 1 イテレーションとして数える（`i` を 1 進め、監査の verdict を
-        その巡の判定 verdict として a-2 以降を通常どおり進める）。修正後は通常の判定巡（a-0 から）へ
+        その巡の判定 verdict として a-2 以降を通常どおり進める。`GATED_CARRYOVER` の累積はその巡の
+        a-3 が行うので、ここでは累積しない）。修正後は通常の判定巡（a-0 から）へ
         戻り、修正役がまたコードを変えれば `AUDIT_PENDING` が立つので、次に 2.c で抜けたとき再び監査が
         走る。手順 3.a の遅着 review で手順 2 へ戻った場合も同じ条件で決まる。
       - 上限 5 に達していて数えられない（監査を 1 イテレーションとして消費できない）なら、収束とせず
@@ -348,8 +353,9 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
    手順 2.a-2 の修正役の連続失敗で止まった場合も同じ理由で、停止理由を「修正役の API / tool 由来の
    失敗で停止した」と明記し、失敗した 2 イテレーションの番号と最後のエラー内容を添える。修正役が
    途中まで push している可能性があるので、その旨も添える。
-   手順 2.e の監査巡が直すものを返したが上限 5 に達していて修正へ進めなかった場合は、停止理由を
-   「監査巡で誤りが見つかったが上限に達した」と明記し、監査の verdict の `findings_to_fix` を一覧で
+   手順 2.e の監査巡の verdict が収束条件を満たさず、上限 5 に達していて修正へ進めなかった場合は、
+   停止理由を「監査巡の verdict が収束条件を満たさず、上限に達して修正へ進めなかった」と明記し、
+   監査の verdict の `findings_to_fix`・実行する処置・`blocker: true` の項目・`ci_status` / `mergeable` を
    載せる。loop 自身の過去の修正指示が誤っていたなら、PR には loop が持ち込んだ不具合が残っているため。
 
 ## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` / `<SCOPE>` / `<PROHIBITIONS>` / `<SPECIALIST_FINDINGS>` / `<REVIEW_MODE>` / `<PRIOR_FIXES>` を埋めて判定役に渡す）
@@ -452,7 +458,9 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >      （挙動、公開 API の有無）を確かめる。公開 API で書けるのに内部へ踏み込んでいる・不要な
 >      型キャストをしている、といった形もここで拾う。
 >    - 誤りが見つかったら（過去の修正指示の条件が誤っていた場合を含む）、通常の指摘として
->      手順 5 で仕分ける。動作の誤りは correctness なので、3 巡目以降の絞り込みでも
+>      手順 5 で仕分ける。correctness に当たらないもの（内部へ踏み込んでいる・不要な型キャスト等）は
+>      手順 5 の 3 巡目以降の絞り込みに従う（監査巡の `<ITERATION>` は 3 以上になりやすく、その場合は
+>      `findings_gated`（`blocker: false`）へ回って最終サマリに残る）。動作の誤りは correctness なので、3 巡目以降の絞り込みでも
 >      `findings_to_fix` に載せる。一次情報を入手できず検証しきれなかったものは黙って通さず、
 >      `findings_gated`（`blocker: false`）に「一次情報で未検証」と理由を書いて載せる（最終サマリで
 >      人間の目に入るようにするため）。
@@ -770,7 +778,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 **`findings_to_fix` と実行する処置がともに空（＝修正役を走らせていない） && `made_changes==false` &&
 `findings_gated` / `threads_pending` に `blocker: true` 無し && `mergeable==true`** を満たしたときのみ
 ループを抜け、前回の監査以降に修正役がコードを変えていれば監査巡（手順 2.e）を経て、手順 3
-（遅着 review の再確認 → 収束）に進む。監査巡の verdict もこの同じ条件で評価する。gate の**非空**そのものは
+（遅着 review の再確認 → 収束）に進む。監査巡の verdict は判定 verdict 側の条件（`findings_to_fix` と実行する処置が空・`blocker: true` 無し・`mergeable==true`）で評価する（監査の時点では修正 verdict が無い）。gate の**非空**そのものは
 終端条件にしない（理由は手順 2.c）。`not_a_finding` だけの `pr_dispositions` も終端を妨げない。
 一方、**`findings_to_fix` と実行する処置がともに空 && `ci_status != fail` && `blocker: true` が 1 件以上あり、そのすべてが
 `out_of_scope: true`** のときは、`mergeable` を見ずに手順 4（停止・報告）へ抜ける。担当内の
