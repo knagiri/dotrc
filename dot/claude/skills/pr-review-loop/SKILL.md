@@ -299,6 +299,12 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
         の fresh な `general-purpose`）と API / tool 由来の失敗の再 dispatch（最大 2 回、上限 5 とは別枠）は
         a-1 と同じ扱いにする。
       - verdict を得たら `AUDIT_PENDING` を下ろす（以下のどちらの経路でも共通）。
+      - 監査の判定役が verdict を返そうとして JSON が壊れている・スキーマを満たさない（手順 2.b の
+        parse 失敗）ときは、verdict を得たことにならないので `AUDIT_PENDING` は立てたままにし、収束
+        条件を満たさない場合と同じく通常の 1 イテレーションとして数える（`i` を 1 進め、手順 2.b と
+        同じく当イテレーションを失敗扱いにして次イテレーションへ進む）。次に 2.c で抜けたとき再び監査が
+        走るので、監査を経ずに収束することは無い。上限 5 に達していて数えられなければ、収束とせず
+        手順 4（停止・報告）へ抜ける。
       - verdict を 2.c の条件で評価する。監査の時点では修正 verdict が存在しないので、判定 verdict 側の
         条件（`findings_to_fix` と実行する処置が空・`blocker: true` 無し・`mergeable == true`）で見る。
         満たせば、a-3 と同じ要領で `GATED_CARRYOVER` を累積して手順 3 へ進む。このとき 5 回の上限は
@@ -359,6 +365,10 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
    停止理由を「監査巡の verdict が収束条件を満たさず、上限に達して修正へ進めなかった」と明記し、
    監査の verdict の `findings_to_fix`・実行する処置・`blocker: true` の項目・`ci_status` / `mergeable` を
    載せる。loop 自身の過去の修正指示が誤っていたなら、PR には loop が持ち込んだ不具合が残っているため。
+   手順 2.e の監査巡の verdict が parse に失敗し、上限 5 に達していて数えられなかった場合は、
+   停止理由を「監査巡の verdict が parse できず、上限に達して再監査できなかった」と明記し、監査を
+   経ていないので loop 自身の過去の修正指示は検証されていない旨を添える（verdict が無いので、載せられる
+   項目は最後の検出レポートの `missing` と各回の結果になる）。
 
 ## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` / `<SCOPE>` / `<PROHIBITIONS>` / `<SPECIALIST_FINDINGS>` / `<REVIEW_MODE>` / `<PRIOR_FIXES>` を埋めて判定役に渡す）
 
