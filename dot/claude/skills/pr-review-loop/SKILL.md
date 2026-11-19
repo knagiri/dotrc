@@ -456,6 +456,11 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >    判断する。一覧は必ず漏れ、漏れた語は照合を素通りするため。見つけたものは書き換えで
 >    直せるので `findings_to_fix` に載せる（公開面への露出なので、手順 5 の 3 巡目以降の
 >    絞り込みでも安全性の指摘として扱う）。
+>    あわせて `~/.claude/rules/structural-fix.md`（dotrc では `dot/claude/rules/structural-fix.md`）
+>    の観点でも見る。設計のズレの指摘は、担当内で直せるなら `findings_to_fix`、作り直しが
+>    この PR の担当を超えるなら `findings_gated` に `blocker: true, out_of_scope: true` で載せる。
+>    手順 5 の 3 巡目以降の絞り込みはこの観点にも掛かり、実害（誤動作）を伴うものだけを
+>    correctness として `findings_to_fix` に載せる。
 > 3.5. **監査（`<REVIEW_MODE>` が `監査巡` のときだけ）**: この巡は、loop が収束と判定する直前に
 >    走る監査である。前の巡までの判定役は巡を重ねるにつれ直前の小さな差分しか見なくなりやすく、
 >    loop 自身が出した修正指示の条件を一次情報で確かめ直した者はいない。次を手順 3 に加えて行う。
