@@ -44,10 +44,10 @@ origin/main:dot/claude/settings.json:128:      "Read(app/.env)",
 委譲プロンプトの禁止事項には、repo の deny・CLAUDE.md 等の doc・global の rule が既に担保して
 いない、そのタスク固有の制約だけを書く。委譲先は worktree を cwd にした通常の session なので
 repo の doc と global の rule を読み込み、deny は prompt と無関係に harness が強制する。それらを
-禁止事項へ書き写しても効き目は増えず、書き写すと境界が広がりうる（今回の禁止事項も repo の deny より
-広かった）。今回の禁止事項が対象にした `.env` 系のうち、実値を持つものは repo の deny が既に
-塞いでいた。
-repo の grant を広げる変更は要らない（grant と doc は既に一致しており、塞いでいたのは
+禁止事項へ書き写しても効き目は増えず、書き写すと境界が広がりうる
+（今回の禁止事項も repo の deny より広かった）。今回の禁止事項が対象にした
+`.env` 系のうち、実値を持つものは repo の deny が既に塞いでいた。repo の grant を
+広げる変更は要らない（grant と doc は既に一致しており、塞いでいたのは
 委譲プロンプトだけだったため）。
 
 当初（#246）の直し方は「repo の手順が要る例外を名指しで併記する」だったが、#247 でこの基準に
