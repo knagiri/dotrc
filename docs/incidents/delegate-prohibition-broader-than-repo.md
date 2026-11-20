@@ -41,8 +41,9 @@ origin/main:dot/claude/settings.json:128:      "Read(app/.env)",
 
 ## 直し方
 
-委譲プロンプトの禁止事項を、対象 repo の deny と doc が定める境界に合わせる。広く禁じたい場合は、
-repo の手順が要る例外を名指しで併記する。repo の grant を広げる変更は要らない（grant と doc は
+委譲プロンプトの禁止事項は、タスクの遂行に repo の手順が要る操作を塞がないように書く。書く前に
+対象 repo の手順（CLAUDE.md 等の doc）と deny を確かめ、手順が要る操作を禁止に含めない。広く
+禁じたい場合は、repo の手順が要る例外を名指しで併記する。repo の grant を広げる変更は要らない（grant と doc は
 既に一致しており、塞いでいたのは委譲プロンプトだけだったため）。
 
 ## 反映先
