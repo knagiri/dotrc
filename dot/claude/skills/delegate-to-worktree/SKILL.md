@@ -49,11 +49,11 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
   されるので、破壊的・不可逆・外向きの操作に限り、他の用途（並列委譲の担当領域等）を混ぜない。
   節名は `禁止事項` で固定する。強度を名前に埋め込むと、後から非目標（やらないこと）を書く節を
   足したときに意味が被るため。
-  **禁止事項には、repo の deny・CLAUDE.md 等の doc・global の rule が既に担保していない、
-  このタスク固有の制約だけを書く。** それらは委譲先も読み込み、deny は harness が強制するので、
-  書き写しても効き目は増えない。書き写すと要約の過程で境界が広がり、repo の手順が要る操作
-  （実値を持たない git 管理下のテンプレート `.env` を source する等）まで塞いで、人間不在の
-  委譲先を板挟みで止める。
+  **禁止事項には、settings の deny（repo・global）・CLAUDE.md 等の doc・global の rule が既に
+  担保していない、このタスク固有の制約だけを書く。** それらは委譲先も読み込み、deny は harness
+  が強制するので、書き写しても効き目は増えない。書き写すと要約の過程で境界が広がり、repo の
+  手順が要る操作（実値を持たない git 管理下のテンプレート（`.env.ci` 等）を source する等）まで
+  塞いで、人間不在の委譲先を板挟みで止める。
   実例: dotrc/docs/incidents/delegate-prohibition-not-propagated.md
   実例: dotrc/docs/incidents/delegate-prohibition-broader-than-repo.md
 - **複数を並列委譲するときは、各プロンプトに他の委譲が並行していることと、その担当領域を
