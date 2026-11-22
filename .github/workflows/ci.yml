@@ -53,6 +53,7 @@ jobs:
             bin/gh-automerge \
             bin/gh-await-reviews \
             bin/gh-issue-file \
+            bin/gh-issue-group \
             bin/gh-issue-mark-delegated \
             bin/gh-list-threads \
             bin/gh-pr-checks \
@@ -72,6 +73,7 @@ jobs:
             test/claude-worktree.test.sh \
             test/deploy.test.sh \
             test/gh-issue-file.test.sh \
+            test/gh-issue-group.test.sh \
             test/gh-wrappers.test.sh \
             test/git-reap-gone.test.sh \
             test/lib/sandbox.sh \

@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-issue-group -- the guarded write path for observation groups
+# (dot/claude/rules/issue-workflow.md).
+#
+# Every write the clustering crawler makes goes through here, so the grant can
+# be allowlisted as `Bash(gh-issue-group *)` without handing out raw
+# `gh issue edit`: each subcommand does one fixed edit, there is no flag
+# pass-through, and every target is read first and refused unless it was filed
+# by the repo owner and carries the label the operation is for. Anyone can open
+# an issue in a public repo; an issue someone else wrote never becomes part of
+# a group, and never gets closed or relabelled by this wrapper.
+#
+# Usage:
+#   gh-issue-group create --title <title> --body-file <path>
+#       Open a group (labels agent-task, group). Prints its URL.
+#   gh-issue-group attach <group> <observation>...
+#       Add observations as sub-issues of <group>. A closed group is reopened
+#       and group/rejected is removed: a new observation is what lifts a
+#       rejection. An observation that already has a parent must be detached
+#       first.
+#   gh-issue-group detach <observation>
+#       Remove the observation's parent.
+#   gh-issue-group set-body <group> <path>
+#       Replace the group's body.
+#   gh-issue-group close <observation|group> [--not-planned]
+#       Close as completed, or as not planned (expiry).
+#   gh-issue-group reopen <group>
+#   gh-issue-group mark <group> delegated|rejected|clear
+#       Set the group's state: group/delegated and group/rejected are exclusive;
+#       clear removes both.
+#
+# Exit: 0 done / 1 bad input or a target that fails its check (no write is
+#       made) / anything else: gh's own exit code (bin/lib/gh-mise.sh).
+
+usage() {
+  sed -n '/^# Usage:/,/^# Exit:/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^Exit:/d' >&2
+  exit "${1:-1}"
+}
+die() { echo "gh-issue-group: $*" >&2; exit 1; }
+num() { [[ "$1" =~ ^[0-9]+$ ]] || die "issue number must be numeric (got: $1)"; }
+
+[ $# -ge 1 ] || usage 1
+cmd="$1"; shift
+case "$cmd" in
+  -h|--help) usage 0 ;;
+  create|attach|detach|set-body|close|reopen|mark) ;;
+  *) die "unknown subcommand: $cmd" ;;
+esac
+
+# Validate the arguments fully before any gh call.
+case "$cmd" in
+  create)
+    title=""; body_file=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --title)     [ $# -ge 2 ] || usage 1; title="$2"; shift 2 ;;
+        --body-file) [ $# -ge 2 ] || usage 1; body_file="$2"; shift 2 ;;
+        *) die "unknown argument: $1" ;;
+      esac
+    done
+    [ -n "$title" ] || die "--title is required"
+    [ -r "$body_file" ] || die "cannot read body file: $body_file" ;;
+  attach)
+    [ $# -ge 2 ] || usage 1
+    for n in "$@"; do num "$n"; done ;;
+  detach|reopen)
+    [ $# -eq 1 ] || usage 1; num "$1" ;;
+  set-body)
+    [ $# -eq 2 ] || usage 1; num "$1"
+    [ -r "$2" ] || die "cannot read body file: $2" ;;
+  close)
+    { [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = --not-planned ]; }; } || usage 1
+    num "$1" ;;
+  mark)
+    [ $# -eq 2 ] || usage 1; num "$1"
+    case "$2" in delegated|rejected|clear) ;; *) die "mark state must be delegated, rejected or clear (got: $2)" ;; esac ;;
+esac
+
+# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
+# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+
+owner=""
+# check <issue> <label>... -- refuse unless <issue> was filed by the owner and
+# carries one of the labels. Leaves its state in $state and labels in $labels.
+check() {
+  local n="$1" line author l ok=0
+  shift
+  [ -n "$owner" ] || owner="$(gh_mise repo view --json owner --jq .owner.login)"
+  line="$(gh_mise issue view "$n" --json state,author,labels \
+    --jq '"\(.state)\t\(.author.login)\t\([.labels[].name] | join(","))"')"
+  IFS=$'\t' read -r state author labels <<<"$line"
+  [ "$author" = "$owner" ] || die "#$n was not filed by $owner (author: $author)"  # owner-check@dotrc
+  for l in "$@"; do
+    case ",$labels," in *",$l,"*) ok=1 ;; esac
+  done
+  [ "$ok" = 1 ] || die "#$n carries none of: $* (labels: ${labels:-none})"
+}
+has_label() { case ",$labels," in *",$1,"*) return 0 ;; esac; return 1; }
+
+case "$cmd" in
+  create)
+    # gh runs in the repo root (gh_mise), so hand it an absolute path.
+    gh_mise issue create --title "$title" --body-file "$(realpath -- "$body_file")" \
+      --label agent-task --label group ;;
+  attach)
+    group="$1"; shift
+    # Check every observation before the first write, so a bad one leaves the
+    # group untouched.
+    for o in "$@"; do check "$o" observation; done
+    check "$group" group
+    [ "$state" != CLOSED ] || gh_mise issue reopen "$group"
+    ! has_label group/rejected || gh_mise issue edit "$group" --remove-label group/rejected
+    obs="$(IFS=,; printf '%s' "$*")"
+    gh_mise issue edit "$group" --add-sub-issue "$obs" ;;
+  detach)
+    check "$1" observation
+    gh_mise issue edit "$1" --remove-parent ;;
+  set-body)
+    check "$1" group
+    gh_mise issue edit "$1" --body-file "$(realpath -- "$2")" ;;
+  close)
+    check "$1" observation group
+    if [ "${2:-}" = --not-planned ]; then
+      gh_mise issue close "$1" --reason "not planned"
+    else
+      gh_mise issue close "$1"
+    fi ;;
+  reopen)
+    check "$1" group
+    gh_mise issue reopen "$1" ;;
+  mark)
+    check "$1" group
+    case "$2" in
+      delegated) gh_mise issue edit "$1" --add-label group/delegated --remove-label group/rejected ;;
+      rejected)  gh_mise issue edit "$1" --add-label group/rejected --remove-label group/delegated ;;
+      clear)     gh_mise issue edit "$1" --remove-label group/delegated --remove-label group/rejected ;;
+    esac ;;
+esac

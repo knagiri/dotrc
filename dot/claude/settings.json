@@ -85,6 +85,7 @@
       "Bash(gh-pr-create *)",
       "Bash(gh-pr-edit-body *)",
       "Bash(gh-issue-mark-delegated *)",
+      "Bash(gh-issue-group *)",
       "Bash(node --version)",
       "Bash(yarn --version)",
       "Bash(uv run ruff format)",
