@@ -111,30 +111,38 @@ act() {
   "$@" || { echo "error: $what failed" >&2; failed=1; return 1; }
 }
 
-# --- reads (all of them, before the first write) --------------------------------
+# --- reads (before the first write; step 2 re-reads what it may have changed) ----
 owner="$(gh_mise repo view --json owner --jq .owner.login)" || die "cannot read the repo owner"
 fields=number,title,author,createdAt,body,labels,parent,state
 mine() { jq -c --arg owner "$owner" '[.[] | select(.author.login == $owner)]'; }
 
 obs_open="$(gh_mise issue list --label observation --state open --author "$owner" \
   --limit 1000 --json "$fields" | mine)" || die "cannot list open observations"
-obs_recent="$(gh_mise issue list --label observation --state all --author "$owner" \
-  --search "created:>=${since%%T*}" --limit 1000 --json "$fields" | mine)" \
-  || die "cannot list recent observations"
-groups="$(gh_mise issue list --label group --state all --author "$owner" \
-  --limit 1000 --json number,author,labels,state,stateReason,closedAt | mine)" \
-  || die "cannot list groups"
-# Every automatic PR, any state: the follow step reads the newest branch's PRs
-# and the delegate step counts the open ones.
-prs_all="$(gh_mise pr list --label auto/structural --state all --limit 1000 \
-  --json number,state,mergedAt,closedAt,headRefName)" || die "cannot list automatic PRs"
-branches_raw="$(git -C "$root" for-each-ref --format='%(refname:short)' \
-  'refs/heads/group-*' 'refs/remotes/origin/group-*')" || die "cannot list group branches"
-branches="$(printf '%s\n' "$branches_raw" | sed 's#^origin/##')"
+# read_state -- (re)read the recent observations, groups, automatic PRs and group
+# branches. Step 2 may rewrite groups (attach, detach, close), so a pass that ran
+# it reads these again before steps 3 and 4. Returns 1 after printing why.
+read_state() {
+  obs_recent="$(gh_mise issue list --label observation --state all --author "$owner" \
+    --search "created:>=${since%%T*}" --limit 1000 --json "$fields" | mine)" \
+    || { echo "issue-crawl: cannot list recent observations" >&2; return 1; }
+  groups="$(gh_mise issue list --label group --state all --author "$owner" \
+    --limit 1000 --json number,author,labels,state,stateReason,closedAt | mine)" \
+    || { echo "issue-crawl: cannot list groups" >&2; return 1; }
+  # Every automatic PR, any state: the follow step reads the newest branch's PRs
+  # and the delegate step counts the open ones.
+  prs_all="$(gh_mise pr list --label auto/structural --state all --limit 1000 \
+    --json number,state,mergedAt,closedAt,headRefName)" \
+    || { echo "issue-crawl: cannot list automatic PRs" >&2; return 1; }
+  branches_raw="$(git -C "$root" for-each-ref --format='%(refname:short)' \
+    'refs/heads/group-*' 'refs/remotes/origin/group-*')" \
+    || { echo "issue-crawl: cannot list group branches" >&2; return 1; }
+  branches="$(printf '%s\n' "$branches_raw" | sed 's#^origin/##')"
+  # The search above is by date only; re-apply the exact instant.
+  obs_recent="$(jq -c --arg since "$since" '[.[] | select(.createdAt >= $since)]' <<<"$obs_recent")" \
+    || { echo "issue-crawl: cannot filter recent observations" >&2; return 1; }
+}
+read_state || exit 1
 
-# The search above is by date only; re-apply the exact instant.
-obs_recent="$(jq -c --arg since "$since" '[.[] | select(.createdAt >= $since)]' <<<"$obs_recent")" \
-  || die "cannot filter recent observations"
 in_group() { jq -c --argjson g "$1" '[.[] | select(.parent.number? == $g)]' <<<"$obs_recent"; }
 has_label() { jq -e --argjson g "$1" --arg l "$2" \
   'any(.[] | select(.number == $g) | .labels[].name; . == $l)' <<<"$groups" >/dev/null; }
@@ -236,6 +244,12 @@ if [ "$unparented" -gt 0 ]; then
       | in_repo claude -p --model sonnet \
           --allowedTools "Bash(gh-issue-group *),Bash(gh issue view *),Bash(gh issue list *),Edit(/$workdir/**)" \
       || { echo "error: cluster: claude -p failed" >&2; failed=1; }
+    # claude -p wrote: it may have closed a group by merging it into another and
+    # moved observations. Steps 3 and 4 must not judge the pre-write picture
+    # (they would delegate a group that is now closed and empty, and its
+    # observations' new group in the same pass), so read again; if that fails,
+    # end the pass here.
+    read_state || { echo "error: cannot re-read after clustering; skipping follow and delegate" >&2; exit 2; }
   fi
 fi
 

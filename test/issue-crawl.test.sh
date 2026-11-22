@@ -28,10 +28,17 @@ has() { local a; for a in "${@:2}"; do [ "$a" = "$1" ] && return 0; done; return
 after() { local p=""; for a in "${@:2}"; do [ "$p" = "$1" ] && { echo "$a"; return; }; p="$a"; done; }
 # GH_FAIL=<word>_<word> (e.g. issue_list) makes that read fail.
 [ "${GH_FAIL:-}" != "$1_${2:-}" ] || { echo "gh stub: forced failure" >&2; exit 1; }
+# After claude -p has run: GH_FAIL_AFTER fails that read, and groups_after.json
+# (if present) replaces groups.json, as if claude -p had rewritten the groups.
+if [ -e "$FIX/claude_ran" ]; then
+  [ "${GH_FAIL_AFTER:-}" != "$1_${2:-}" ] || { echo "gh stub: forced failure after claude" >&2; exit 1; }
+  [ ! -e "$FIX/groups_after.json" ] || groups_file="$FIX/groups_after.json"
+fi
+groups_file="${groups_file:-$FIX/groups.json}"
 case "$1 ${2:-}" in
   "repo view") echo example-owner ;;
   "issue list")
-    if [ "$(after --label "$@")" = group ]; then cat "$FIX/groups.json"
+    if [ "$(after --label "$@")" = group ]; then cat "$groups_file"
     elif has --search "$@"; then cat "$FIX/obs_recent.json"
     else cat "$FIX/obs_open.json"; fi ;;
   "pr list") cat "$FIX/prs.json" ;;
@@ -50,6 +57,7 @@ STUB
 cat >"$stubdir/claude" <<'STUB'
 #!/usr/bin/env bash
 printf 'claude' >>"$CALLS"; printf ' [%s]' "$@" >>"$CALLS"; echo >>"$CALLS"
+: >"$FIX/claude_ran"
 printf '%s' "${CLAUDE_CONFIG_DIR-unset}" >"$CLAUDE_STDIN.configdir"
 cat >"$CLAUDE_STDIN"
 STUB
@@ -85,7 +93,7 @@ done
 
 now=2026-06-30T00:00:00Z
 run() {  # run issue-crawl against the fixtures; sets $rc
-  : >"$calls"; : >"$tmp/stdin"
+  : >"$calls"; : >"$tmp/stdin"; rm -f "$fix/claude_ran"
   env CALLS="$calls" FIX="$fix" CLAUDE_STDIN="$tmp/stdin" PATH="$stubdir:$PATH" \
     CLAUDE_CONFIG_DIR=/leaked-from-the-timer-env \
     "$crawl" --now "$now" "$@" >"$tmp/out" 2>"$tmp/err"
@@ -441,5 +449,48 @@ run
 if grep -q '^claude-worktree .* group-21-' "$calls" && ! grep -q '^claude-worktree .* group-20-' "$calls"; then
   echo "ok: only observations filed after the group's last merged PR are counted"
 else echo "FAIL: count after merge calls=$(cat "$calls")"; fail=1; fi
+
+# --- claude -p rewrites groups: steps 3-4 judge the new picture ---------------------
+# Group 20 and 21 both reach the threshold, and an unparented observation makes
+# claude -p run. The stub then reports group 20 as closed (merged into another
+# group by the clustering step): it must not be marked or delegated, while 21 is.
+{
+  echo '['
+  group 20 OPEN agent-task,group; echo ,
+  group 21 OPEN agent-task,group
+  echo ']'
+} >"$fix/groups.json"
+{
+  echo '['
+  group 20 CLOSED agent-task,group NOT_PLANNED 2026-06-29T00:00:00Z; echo ,
+  group 21 OPEN agent-task,group
+  echo ']'
+} >"$fix/groups_after.json"
+(IFS=,; printf '[%s]\n' "${o20[*]},${o21[*]},$(obs 90 null 2026-06-25T00:00:00Z g1)") >"$fix/obs_recent.json"
+echo '[]' >"$fix/obs_open.json"
+prs
+run
+if grep -q '^claude ' "$calls" && [ "$rc" -eq 0 ] \
+  && ! grep -q 'mark 20 \|group-20-' "$calls" \
+  && called "gh-issue-group mark 21 delegated" && grep -q '^claude-worktree .* group-21-' "$calls"; then
+  echo "ok: a group closed by the clustering step is not delegated in the same pass"
+else echo "FAIL: stale groups after clustering rc=$rc calls=$(cat "$calls")"; fail=1; fi
+
+# Without the second read the stale groups are judged (control: both go).
+rm -f "$fix/groups_after.json"
+run
+if grep -q '^claude-worktree .* group-20-' "$calls" && grep -q '^claude-worktree .* group-21-' "$calls"; then
+  echo "ok: with the groups unchanged by clustering, both candidates are delegated (the case above is discriminating)"
+else echo "FAIL: control for re-read calls=$(cat "$calls")"; fail=1; fi
+
+# A failed re-read ends the pass after clustering: error, exit 2, no delegation.
+for what in issue_list pr_list; do
+  GH_FAIL_AFTER="$what" run
+  if [ "$rc" -eq 2 ] && grep -q '^claude ' "$calls" \
+    && ! grep -qE '^(gh-issue-group mark|claude-worktree) ' "$calls" \
+    && grep -q 'cannot re-read after clustering' "$tmp/err"; then
+    echo "ok: a failing $what re-read after clustering skips follow and delegate"
+  else echo "FAIL: $what re-read failure rc=$rc calls=$(cat "$calls") err=$(cat "$tmp/err")"; fail=1; fi
+done
 
 exit "$fail"
