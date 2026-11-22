@@ -46,14 +46,17 @@ repo に `.github/ISSUE_TEMPLATE/<kind>.md` が無くて exit 1 になり、起�
 | code | 意味 | 対応 |
 |---|---|---|
 | 0 | 起票した（`--list-groups` なら一覧を出した） | stdout の URL を報告する |
-| 1 | 引数か body の不備 | stderr を読んで切り分ける |
-| 3 | denylist に当たった、または denylist が無い環境で dotrc 以外の repo から起票した | 前者なら具体名を除いて書き直して再実行する。後者は起票せず、内容を完了報告に書く（denylist の作成は人が行う） |
+| 1 | 引数か body の不備（`--parent` が owner 起票の group でない場合を含む） | stderr を読んで切り分ける |
+| 3 | denylist に当たった、denylist を読めない、または使える denylist（ファイルが無い、パターンが 0 件）が無い環境で dotrc 以外の repo から起票した | 当たった場合は具体名を除いて書き直して再実行する。それ以外は起票せず、内容を完了報告に書く（denylist の作成・修復は人が行う） |
+| 4 | **起票は済んだ**が、`--resolved-by` の後処理（番号の読み取り・close）が失敗した | **再実行しない**（二重起票になる）。stderr の URL を報告し、close は人に任せる |
 | 128 | `--global` 無しで git repo 外から呼んだ（`set -e` 下で git 自体の失敗が素通しする） | cwd を repo 内へ移して再実行する |
 | 上記以外の非 0 | gh の失敗がそのまま伝播する（`set -e` は gh の実際の終了コードを返し、1 に丸めない。実測: 未認証の gh は exit 4） | stderr を読む。委譲 worktree では token 未供給を疑う（`worktree-scope.md` §6 の既知 gap） |
 
-code 1 は `bin/gh-issue-file` 自身の検証の失敗である。stderr が欠落見出しを名指ししていれば body
-側の不備なので直して再実行、そうでなければ gh 側の失敗（label 未作成・認証エラー・ネットワーク
-エラー等）なので body を直さず原因を潰してから再実行する。
+code 1 と 3 は `bin/gh-issue-file` 自身の検証の失敗で、gh は起票前の呼び出しも含め呼ばれていても
+issue は作られていない。code 1 は stderr が欠落見出しや引数を名指ししていれば body・引数の不備なので
+直して再実行する。gh の失敗（label 未作成・認証エラー・ネットワークエラー等）は上表の「上記以外の
+非 0」で返り、起票前の失敗なので body を直さず原因を潰してから再実行する。code 4 だけは起票後の
+失敗で、再実行してはならない。
 
 ### 3. task の `status/*` label と委譲の条件
 
@@ -167,3 +170,6 @@ crawler も委譲先も、repo owner が起票した issue だけを扱う。pub
 グループと観測の label・親子・open/close を変えるのは crawler（とその振り分け用の `claude -p`）
 だけで、書き込みは遷移を検査する `bin/gh-issue-group` を通す。agent が作業中にこれらを
 直接触らない。状態を持つ主体が 1 つなら、委譲先と crawler の書き込みが食い違わない。
+例外は起票時の `--parent`（新しい観測を既存グループに付ける）と `--resolved-by`（起票した観測を
+その場で close する）で、どちらも自分が起票した 1 件にしか効かず、`--parent` は owner 起票の
+グループにしか付けられない。

@@ -47,7 +47,13 @@ cat >"$stubdir/gh" <<'STUB'
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$1 ${2:-}" in
   "repo view")
-    echo "example-owner" ;;
+    case "$*" in
+      *nameWithOwner*) echo "${GH_NWO:-o/r}" ;;
+      *) echo "example-owner" ;;
+    esac ;;
+  "issue view")
+    # What the wrapper's --jq prints: author<TAB>labels (a group by default).
+    printf '%s\n' "${GH_VIEW_OUT:-example-owner$(printf '\t')agent-task,group}" ;;
   "issue list")
     [ -z "${GH_EXIT_LIST:-}" ] || exit "$GH_EXIT_LIST"
     printf '%s' "${GH_LIST_OUT:-}" ;;
@@ -92,10 +98,20 @@ cd "${dir:-.}" && exec "$@"
 STUB
 chmod +x "$stubdir/mise"
 
+# The wrapper reads $root/.issue-denylist of the main working tree of the repo it
+# runs in. Running from this checkout would make every case below depend on
+# whether the person running the tests has created a real denylist, so the
+# cases run in a throwaway repo that carries copies of the templates and bin/.
+isorepo="$tmp/isorepo"
+mkdir -p "$isorepo/.github"
+cp -a "$here/../.github/ISSUE_TEMPLATE" "$isorepo/.github/"
+cp -a "$bindir" "$isorepo/bin"
+git init -q "$isorepo"
+
 run() {  # run gh-issue-file with a fresh argv log; echoes nothing, sets $rc
   : >"$tmp/args"
-  env -u CLAUDE_CODE_SESSION_ID GH_ARGS_FILE="$tmp/args" \
-    PATH="$stubdir:$PATH" "$bindir/gh-issue-file" "$@" >"$tmp/out" 2>"$tmp/err"
+  ( cd "$isorepo" && env -u CLAUDE_CODE_SESSION_ID GH_ARGS_FILE="$tmp/args" \
+      PATH="$stubdir:$PATH" "$isorepo/bin/gh-issue-file" "$@" ) >"$tmp/out" 2>"$tmp/err"
   rc=$?
 }
 
@@ -185,14 +201,28 @@ if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
   echo "ok: non-numeric --parent exits 1 without calling gh"
 else echo "FAIL: --parent x rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
+# The parent must be a group the owner filed: anyone can open an issue in a
+# public repo, and a sub-issue under someone else's issue is not ours to make.
+GH_VIEW_OUT="$(printf 'someone-else\tagent-task,group')" \
+  run --kind harness --title t --body-file "$full_body" --parent 12
+if [ "$rc" -eq 1 ] && ! grep -qxF '[create]' "$tmp/args" && grep -q 'not filed by' "$tmp/err"; then
+  echo "ok: --parent filed by someone else exits 1 before create"
+else echo "FAIL: --parent non-owner rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+GH_VIEW_OUT="$(printf 'example-owner\tagent-task,kind/task')" \
+  run --kind harness --title t --body-file "$full_body" --parent 12
+if [ "$rc" -eq 1 ] && ! grep -qxF '[create]' "$tmp/args" && grep -q 'not a group' "$tmp/err"; then
+  echo "ok: --parent that is not a group exits 1 before create"
+else echo "FAIL: --parent non-group rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
 # --- session marker -----------------------------------------------------------
 # The marker is what lets the crawler count one session's repeated filings as
 # one. It is appended to a copy: the caller's file must stay untouched.
 cp "$full_body" "$tmp/marker_src.md"
 : >"$tmp/args"; : >"$tmp/body"
-env CLAUDE_CODE_SESSION_ID=abc GH_ARGS_FILE="$tmp/args" GH_BODY_OUT="$tmp/body" \
-  PATH="$stubdir:$PATH" "$bindir/gh-issue-file" --kind harness --title t \
-  --body-file "$tmp/marker_src.md" >"$tmp/out" 2>"$tmp/err"
+( cd "$isorepo" && env CLAUDE_CODE_SESSION_ID=abc GH_ARGS_FILE="$tmp/args" GH_BODY_OUT="$tmp/body" \
+  PATH="$stubdir:$PATH" "$isorepo/bin/gh-issue-file" --kind harness --title t \
+  --body-file "$tmp/marker_src.md" ) >"$tmp/out" 2>"$tmp/err"
 rc=$?
 if [ "$rc" -eq 0 ] \
   && [ "$(tail -n1 "$tmp/body")" = '<!-- observed-session: abc -->' ] \
@@ -201,9 +231,9 @@ if [ "$rc" -eq 0 ] \
 else echo "FAIL: session marker rc=$rc body=$(cat "$tmp/body") err=$(cat "$tmp/err")"; fail=1; fi
 
 : >"$tmp/body"
-env -u CLAUDE_CODE_SESSION_ID GH_ARGS_FILE="$tmp/args" GH_BODY_OUT="$tmp/body" \
-  PATH="$stubdir:$PATH" "$bindir/gh-issue-file" --kind harness --title t \
-  --body-file "$full_body" >"$tmp/out" 2>"$tmp/err"
+( cd "$isorepo" && env -u CLAUDE_CODE_SESSION_ID GH_ARGS_FILE="$tmp/args" GH_BODY_OUT="$tmp/body" \
+  PATH="$stubdir:$PATH" "$isorepo/bin/gh-issue-file" --kind harness --title t \
+  --body-file "$full_body" ) >"$tmp/out" 2>"$tmp/err"
 if ! grep -q 'observed-session' "$tmp/body"; then
   echo "ok: no session id, no marker"
 else echo "FAIL: marker without session id body=$(cat "$tmp/body")"; fail=1; fi
@@ -229,6 +259,29 @@ if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
   echo "ok: malformed --resolved-by exits 1 without calling gh"
 else echo "FAIL: bad --resolved-by rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
+# A PR of another repository is not named in the public comment.
+GH_CREATE_URL="https://github.com/o/r/issues/58" \
+  run --kind harness --title t --body-file "$full_body" \
+  --resolved-by https://github.com/elsewhere/private/pull/3
+if [ "$rc" -eq 0 ] && grep -A1 -xF '[--comment]' "$tmp/args" | grep -q 'another repository' \
+  && ! grep -q 'elsewhere' "$tmp/args"; then
+  echo "ok: --resolved-by into another repo is not named in the comment"
+else echo "FAIL: foreign --resolved-by rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# --resolved-by failing after the issue exists exits 4, never gh's own code or
+# 1, so a caller that retries on failure cannot file twice.
+GH_EXIT_CLOSE=7 run --kind harness --title t --body-file "$full_body" \
+  --resolved-by https://github.com/o/r/pull/9
+if [ "$rc" -eq 4 ] && grep -qxF '[create]' "$tmp/args" && grep -q 'Do not run again' "$tmp/err"; then
+  echo "ok: a failed close after filing exits 4 with a do-not-rerun message"
+else echo "FAIL: close failure rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+GH_CREATE_URL="https://example.invalid/oops" run --kind harness --title t --body-file "$full_body" \
+  --resolved-by https://github.com/o/r/pull/9
+if [ "$rc" -eq 4 ] && ! grep -qxF '[close]' "$tmp/args" && grep -q 'Do not run again' "$tmp/err"; then
+  echo "ok: an unreadable issue number after filing exits 4 without closing"
+else echo "FAIL: number parse failure rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
 # --- --list-groups ------------------------------------------------------------
 # Lists open groups so the caller can pick --parent. No body, no template.
 GH_LIST_OUT="$(printf '#5\tsome group\n')" run --list-groups
@@ -241,6 +294,13 @@ if [ "$rc" -eq 0 ] \
   && grep -qF "$(printf '#5\tsome group')" "$tmp/out"; then
   echo "ok: --list-groups lists the owner's open groups without validating a body"
 else echo "FAIL: --list-groups rc=$rc args=$(cat "$tmp/args") out=$(cat "$tmp/out")"; fail=1; fi
+
+# --list-groups takes nothing but --global: combined with a filing flag it is
+# refused before gh is called, rather than silently ignoring the flag.
+run --list-groups --kind harness
+if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
+  echo "ok: --list-groups with another flag exits 1 without calling gh"
+else echo "FAIL: --list-groups exclusivity rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
 # Case H: a body whose heading lines carry trailing whitespace still passes.
 # The wrapper strips trailing whitespace off body lines before comparing
@@ -345,11 +405,6 @@ if [ "$rc" -eq 4 ]; then
   echo "ok: a failing gh issue create propagates its own exit code through mise exec"
 else echo "FAIL: gh issue create exit code rc=$rc (want 4)"; fail=1; fi
 
-GH_EXIT_CLOSE=4 run --kind harness --title t --body-file "$full_body" \
-  --resolved-by https://github.com/o/r/pull/9
-if [ "$rc" -eq 4 ]; then
-  echo "ok: a failing gh issue close (--resolved-by) propagates its own exit code"
-else echo "FAIL: gh issue close exit code rc=$rc (want 4)"; fail=1; fi
 
 # --- Case P: --global files into the script's own repo ----------------------
 # An agent working in an unrelated project still has to be able to open a
@@ -425,30 +480,72 @@ if [ "$rc" -eq 1 ] && grep -q 'no template at' "$tmp/err"; then
 else echo "FAIL: --global mutant rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 
 # --- denylist -----------------------------------------------------------------
-# Filings from other repos reach the public repo unattended, so title and body
-# are matched (case-insensitively, as fixed strings) against the gitignored
-# $root/.issue-denylist and refused with exit 3 on a hit.
+# Filings from other repos reach the public repo unattended, so title, body and
+# a --resolved-by URL are matched (case-insensitively, as fixed strings) against
+# the gitignored .issue-denylist and refused with exit 3 on a hit. The matched
+# term is never echoed.
 printf 'Example-Corp\n' >"$deny"
 globalrun "$scriptrepo/bin" "$otherrepo" 'about example-corp things' --global
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: a denylisted term in the title (any case) exits 3 before create"
-else echo "FAIL: denylist title rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args" && ! grep -qi 'example-corp' "$tmp/err"; then
+  echo "ok: a denylisted term in the title (any case) exits 3 before create, without echoing it"
+else echo "FAIL: denylist title rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
 
 printf '## やること（WHAT）\nseen at EXAMPLE-CORP\n' >"$tmp/deny_body.md"
 cp "$tmp/deny_body.md" "$global_body"
 globalrun "$scriptrepo/bin" "$otherrepo" t --global
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: a denylisted term in the body exits 3 before create"
+if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args" && ! grep -qi 'example-corp' "$tmp/err"; then
+  echo "ok: a denylisted term in the body exits 3 before create, without echoing it"
 else echo "FAIL: denylist body rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 printf '## やること（WHAT）\nsomething\n' >"$global_body"
 
-# Blank and whitespace-only lines must not turn into an empty pattern, which
-# grep -F matches against every line and would stop every filing.
+globalrun "$scriptrepo/bin" "$otherrepo" t --global \
+  --resolved-by https://github.com/example-corp/app/pull/3
+if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args" && ! grep -qi 'example-corp' "$tmp/err"; then
+  echo "ok: a denylisted term in the --resolved-by URL exits 3 before create"
+else echo "FAIL: denylist URL rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# A body larger than a pipe buffer with the term on its first line. The match
+# must still refuse: with `{ title; cat body; } | grep -q`, grep exits at the
+# hit, cat dies of SIGPIPE, and pipefail turned the match into "no match".
+{ printf '## やること（WHAT）\nseen at EXAMPLE-CORP\n'; head -c 300000 /dev/zero | tr '\0' 'x'; echo; } >"$tmp/big_body.md"
+cp "$tmp/big_body.md" "$global_body"
+globalrun "$scriptrepo/bin" "$otherrepo" t --global
+if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
+  echo "ok: a denylisted term at the top of a body larger than a pipe buffer still exits 3"
+else echo "FAIL: large body denylist rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# Discrimination: with the pipeline form back, the same run slips through.
+grepmutant="$tmp/grepmutant"
+rm -rf "$grepmutant"; mkdir -p "$grepmutant"
+cp -a "$scriptrepo/bin/." "$grepmutant/"
+sed 's#^.*deny-grep@dotrc$#  if { printf "%s\\n" "$title"; cat -- "$body_file"; } | grep -qiF -f "$tmpdir/patterns"; then rc=0; else rc=1; fi#' \
+  "$bindir/gh-issue-file" >"$grepmutant/gh-issue-file"
+chmod +x "$grepmutant/gh-issue-file"
+if cmp -s "$bindir/gh-issue-file" "$grepmutant/gh-issue-file"; then
+  echo "FAIL: the pipeline mutant is identical to gh-issue-file; the check below is a no-op"; fail=1
+fi
+cp "$scriptrepo/bin/gh-issue-file" "$tmp/gh-issue-file.keep"
+cp "$grepmutant/gh-issue-file" "$scriptrepo/bin/gh-issue-file"
+globalrun "$scriptrepo/bin" "$otherrepo" t --global
+cp "$tmp/gh-issue-file.keep" "$scriptrepo/bin/gh-issue-file"
+if [ "$rc" -ne 3 ] && grep -qxF '[create]' "$tmp/args"; then
+  echo "ok: with the pipeline form the large-body match is lost (the case above is discriminating)"
+else echo "FAIL: pipeline mutant rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+printf '## やること（WHAT）\nsomething\n' >"$global_body"
+
+# A file with no pattern checks nothing, so it counts as no denylist: another
+# repo is refused and the root's own repo is not. Blank lines must also never
+# become an empty pattern, which grep -F matches against every line.
 printf '\n  \n' >"$deny"
 globalrun "$scriptrepo/bin" "$otherrepo" t --global
+if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
+  echo "ok: a denylist with no pattern refuses a filing from another repo"
+else echo "FAIL: blank denylist foreign rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+globalrun "$scriptrepo/bin" "$scriptrepo" t --global
 if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: a denylist of blank lines matches nothing"
-else echo "FAIL: blank denylist rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+  echo "ok: a denylist of blank lines matches nothing for the root's own repo"
+else echo "FAIL: blank denylist same repo rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 
 # Discrimination: without the blank-line filter the same run is refused.
 blankmutant="$tmp/blankmutant"
@@ -464,11 +561,25 @@ fi
 # --global root by placing it there temporarily.
 cp "$scriptrepo/bin/gh-issue-file" "$tmp/gh-issue-file.keep"
 cp "$blankmutant/gh-issue-file" "$scriptrepo/bin/gh-issue-file"
-globalrun "$scriptrepo/bin" "$otherrepo" t --global
+globalrun "$scriptrepo/bin" "$scriptrepo" t --global
 cp "$tmp/gh-issue-file.keep" "$scriptrepo/bin/gh-issue-file"
 if [ "$rc" -eq 3 ]; then
   echo "ok: without the blank-line filter every filing is refused (the case above is discriminating)"
 else echo "FAIL: blank-line mutant rc=$rc (want 3)"; fail=1; fi
+
+# A denylist that exists but cannot be read refuses, even for the root's own
+# repo: treating it as absent would let that filing skip the check.
+printf 'unrelated-term\n' >"$deny"
+chmod 000 "$deny"
+if [ -r "$deny" ]; then
+  echo "ok: (skipped) the unreadable-denylist case needs a non-root user"
+else
+  globalrun "$scriptrepo/bin" "$scriptrepo" t --global
+  if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args" && grep -q 'cannot read' "$tmp/err"; then
+    echo "ok: an unreadable denylist exits 3 even from the root's own repo"
+  else echo "FAIL: unreadable denylist rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
+fi
+chmod 600 "$deny"
 
 # No denylist: a filing from another repo is refused (fail closed), while one
 # from the root's own repo still goes through.
@@ -491,5 +602,34 @@ globalrun "$scriptrepo/bin" "$tmp/scriptwt" t --global
 if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
   echo "ok: a linked worktree of the root's repo counts as the same repo"
 else echo "FAIL: worktree same repo rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+# The denylist is gitignored, so it lives only in the main working tree. A run
+# whose root is a linked worktree (no --global) must still read it from there.
+printf 'Example-Corp\n' >"$deny"
+wtrun() {  # wtrun <bindir> <title>; cwd = the linked worktree, root = that worktree
+  : >"$tmp/args"
+  ( cd "$tmp/scriptwt" && env -u CLAUDE_CODE_SESSION_ID GH_ARGS_FILE="$tmp/args" \
+      PATH="$stubdir:$PATH" "$1/gh-issue-file" --kind harness --title "$2" \
+      --body-file "$global_body" ) >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+}
+wtrun "$scriptrepo/bin" 'about example-corp things'
+if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
+  echo "ok: a root that is a linked worktree reads the main working tree's denylist"
+else echo "FAIL: worktree-root denylist rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# Discrimination: reading it from the worktree root instead loses the match.
+rootmutant="$tmp/rootmutant"
+rm -rf "$rootmutant"; mkdir -p "$rootmutant"
+cp -a "$scriptrepo/bin/." "$rootmutant/"
+sed 's|^.*deny-root@dotrc$|  :|' "$bindir/gh-issue-file" >"$rootmutant/gh-issue-file"
+chmod +x "$rootmutant/gh-issue-file"
+if cmp -s "$bindir/gh-issue-file" "$rootmutant/gh-issue-file"; then
+  echo "FAIL: the deny-root mutant is identical to gh-issue-file; the check below is a no-op"; fail=1
+fi
+wtrun "$rootmutant" 'about example-corp things'
+if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
+  echo "ok: reading the denylist from the worktree root misses it (the case above is discriminating)"
+else echo "FAIL: deny-root mutant rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
 exit "$fail"

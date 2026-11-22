@@ -10,12 +10,14 @@ set -euo pipefail
 #      body is checked here, against the very same .github/ISSUE_TEMPLATE file
 #      the web UI serves -- one source of truth, no second skeleton to drift.
 #   2. Fixed labels. harness and bug are observations (label `observation`, no
-#      status/*): duplicates are not refused, they are what the clustering
-#      crawler counts. task keeps status/triage, the human gate.
-#   3. A denylist. Title and body are matched against the gitignored
-#      $root/.issue-denylist (fixed strings, case-insensitive) and refused on a
-#      hit. Without that file, a filing from a repo other than $root's is
+#      status/*): duplicates are not refused. task keeps status/triage, the
+#      human gate.
+#   3. A denylist. Title, body and a --resolved-by URL are matched against the
+#      gitignored .issue-denylist of $root's main working tree (fixed strings,
+#      case-insensitive) and refused on a hit. Without a usable denylist (no
+#      file, or no pattern in it), a filing from a repo other than $root's is
 #      refused outright: it would reach a public repo with nobody reading it.
+#      A denylist that exists but cannot be read refuses every filing.
 #
 # Each body gets `<!-- observed-session: <id> -->` appended (from
 # $CLAUDE_CODE_SESSION_ID, omitted when unset) so repeated filings by one
@@ -28,8 +30,10 @@ set -euo pipefail
 #                      --body-file <path> [--parent N] [--resolved-by <PR-URL>]
 #        gh-issue-file [--global] --list-groups
 #
-# --parent N files the issue as a sub-issue of group #N. --resolved-by files it
-# and then closes it with a comment pointing at the PR that already fixed it.
+# --parent N files the issue as a sub-issue of group #N; #N must be a group
+# filed by the repo owner. --resolved-by files it and then closes it with a
+# comment pointing at the PR that already fixed it; a PR in another repository
+# is not named in the comment.
 # --list-groups prints the repo owner's open groups as `#N<TAB>title`, one per
 # line, to choose --parent from.
 #
@@ -40,11 +44,13 @@ set -euo pipefail
 # at exit 1. Same spelling, and the same intent, as claude-worktree --global.
 #
 # Exit:  0 created (or listed) / 1 bad input / 3 refused by the denylist, or no
-#          denylist while filing from another repo
+#          usable denylist while filing from another repo
+#        / 4 the issue WAS created but the --resolved-by follow-up (reading the
+#          number, closing) failed: do not run again, it would file a duplicate
 #        / 128 called outside a git repo without --global (git itself fails
 #          `set -e` below)
-#        / anything else: gh's own exit code, passed through unchanged by
-#          `set -e` (not rounded to 1). gh runs through gh_mise
+#        / anything else: gh's own exit code from before the issue exists,
+#          passed through unchanged by `set -e` (not rounded to 1). gh runs through gh_mise
 #          (bin/lib/gh-mise.sh); `mise exec` propagates its child's status
 #          unchanged. See dot/claude/rules/issue-workflow.md §2.
 
@@ -146,12 +152,19 @@ required_headings() {
   ' "$1"
 }
 
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Compare with trailing whitespace stripped on both sides, so a stray space at
+# the end of a heading line in the body is not treated as a missing section.
+# Written to a file and matched by a single grep: `sed | grep -q` would let
+# grep exit at the first hit and sed die of SIGPIPE, which pipefail reports as
+# a failure on a large body.
+sed -e 's/[ \t]*$//' "$body_file" >"$tmpdir/body.norm"
 missing=""
 while IFS= read -r heading; do
   [ -n "$heading" ] || continue
-  # Compare with trailing whitespace stripped on both sides, so a stray space at
-  # the end of a heading line in the body is not treated as a missing section.
-  if ! sed -e 's/[ \t]*$//' "$body_file" | grep -qxF "$heading"; then
+  if ! grep -qxF "$heading" "$tmpdir/body.norm"; then
     missing="$missing$heading"$'\n'
   fi
 done < <(required_headings "$template")
@@ -169,28 +182,84 @@ common_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/
 caller_common="$(common_dir "$PWD")"
 root_common="$(common_dir "$root")"
 
-deny_file="$root/.issue-denylist"
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
-if [ -r "$deny_file" ]; then
+# The denylist is gitignored, so it exists only in the main working tree. When
+# $root is a linked worktree, look there rather than in the worktree root.
+deny_root="$root"
+case "$root_common" in */.git) deny_root="${root_common%/.git}" ;; esac  # deny-root@dotrc
+deny_file="$deny_root/.issue-denylist"
+
+deny_active=0
+if [ -e "$deny_file" ]; then
+  # Present but unreadable is a refusal, not "no denylist": falling through
+  # would let a same-repo filing skip the check.
+  if [ ! -r "$deny_file" ]; then
+    echo "gh-issue-file: cannot read $deny_file; not filed." >&2
+    exit 3
+  fi
   # Blank and whitespace-only lines are dropped, and surrounding whitespace is
   # trimmed: an empty pattern makes grep -F match every line, which would stop
   # every filing.
   deny_patterns() {
     sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -- "$deny_file"  # deny-blank@dotrc
   }
-  deny_patterns >"$tmpdir/patterns"
-  if [ -s "$tmpdir/patterns" ] \
-    && { printf '%s\n' "$title"; cat -- "$body_file"; } | grep -qiF -f "$tmpdir/patterns"; then
-    # The matched term is not echoed: the denylist's contents stay out of
-    # transcripts and logs, same as they stay out of git.
-    echo "gh-issue-file: title or body matches $deny_file; not filed. Rewrite it without the specific name." >&2
-    exit 3
-  fi
+  deny_patterns >"$tmpdir/patterns" || { echo "gh-issue-file: cannot read $deny_file; not filed." >&2; exit 3; }
+  # A file with no pattern checks nothing, so it counts as no denylist.
+  [ ! -s "$tmpdir/patterns" ] || deny_active=1
+fi
+
+if [ "$deny_active" = 1 ]; then
+  # Everything that will be published, in one file and one grep process: with
+  # `{ ...; cat body; } | grep -q`, grep exits at its first hit, cat dies of
+  # SIGPIPE on a large body, and pipefail turns a match into a "no match".
+  { printf '%s\n' "$title"; cat -- "$body_file"; printf '\n%s\n' "$resolved_by"; } >"$tmpdir/subject"
+  rc=0
+  grep -qiF -f "$tmpdir/patterns" "$tmpdir/subject" || rc=$?  # deny-grep@dotrc
+  case "$rc" in
+    0)
+      # The matched term is not echoed: the denylist's contents stay out of
+      # transcripts and logs, same as they stay out of git.
+      echo "gh-issue-file: title, body or PR URL matches $deny_file; not filed. Rewrite it without the specific name." >&2
+      exit 3 ;;
+    1) ;;
+    *)
+      # grep failed (2 or more): the answer is unknown, so refuse.
+      echo "gh-issue-file: denylist check failed (grep exit $rc); not filed." >&2
+      exit 3 ;;
+  esac
 elif [ -z "$caller_common" ] || [ "$caller_common" != "$root_common" ]; then
-  echo "gh-issue-file: no $deny_file, and this filing comes from outside $root's repo; refusing." >&2
+  echo "gh-issue-file: no usable $deny_file, and this filing comes from outside $root's repo; refusing." >&2
   echo "  Create the denylist first (see docs/design/agent-issue-workflow.md)." >&2
   exit 3
+fi
+
+# --- checks before create ---------------------------------------------------
+if [ -n "$parent" ]; then
+  # Only the owner's groups: anyone can open an issue in a public repo.
+  owner="$(gh_mise repo view --json owner --jq .owner.login)"
+  parent_line="$(gh_mise issue view "$parent" --json author,labels \
+    --jq '"\(.author.login)\t\([.labels[].name] | join(","))"')"
+  IFS=$'\t' read -r parent_author parent_labels <<<"$parent_line"
+  if [ "$parent_author" != "$owner" ]; then
+    echo "gh-issue-file: --parent #$parent was not filed by $owner; not filed." >&2
+    exit 1
+  fi
+  case ",$parent_labels," in
+    *,group,*) ;;
+    *) echo "gh-issue-file: --parent #$parent is not a group; not filed." >&2; exit 1 ;;
+  esac
+fi
+
+resolved_note=""
+if [ -n "$resolved_by" ]; then
+  nwo="$(gh_mise repo view --json nameWithOwner --jq .nameWithOwner)"
+  pr_repo="${resolved_by#https://github.com/}"; pr_repo="${pr_repo%/pull/*}"
+  # Only a PR of this repo is named in the public comment: a link into another
+  # repository can disclose it.
+  if [ "${pr_repo,,}" = "${nwo,,}" ]; then
+    resolved_note="Resolved by $resolved_by"
+  else
+    resolved_note="Resolved by a PR in another repository"
+  fi
 fi
 
 # --- create -----------------------------------------------------------------
@@ -224,10 +293,13 @@ url="$(gh_mise issue create --title "$title" --body-file "$body" \
 printf '%s\n' "$url"
 
 if [ -n "$resolved_by" ]; then
+  # From here the issue exists. A failure now exits 4, never gh's own code or 1,
+  # so a caller that retries on failure cannot file the same issue twice.
   number="${url##*/}"
   if [[ ! "$number" =~ ^[0-9]+$ ]]; then
-    echo "gh-issue-file: cannot read the issue number from gh's output ($url); not closed" >&2
-    exit 1
+    echo "gh-issue-file: filed $url but cannot read its number; NOT closed. Do not run again." >&2
+    exit 4
   fi
-  gh_mise issue close "$number" --comment "Resolved by $resolved_by"
+  gh_mise issue close "$number" --comment "$resolved_note" \
+    || { echo "gh-issue-file: filed $url but closing it failed; NOT closed. Do not run again." >&2; exit 4; }
 fi
