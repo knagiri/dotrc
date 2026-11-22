@@ -1,16 +1,17 @@
 ---
 name: harness-from-retrospective
-description: 委譲されたタスクなどを完遂した直後に、自分の作業を振り返って「こうすればよかった」を恒久ハーネス（rule / CLAUDE.md / lint / test / hook / allowlist）の候補として拾い、方針として提示するときに使う。実装はせず提案まで。「この作業を振り返って提案して」「振り返ってハーネス提案して」等の依頼でも使う。
-allowed-tools: Read, Glob, Grep
+description: 委譲されたタスクなどを完遂した直後に、自分の作業を振り返って「こうすればよかった」を恒久ハーネス（rule / CLAUDE.md / lint / test / hook / allowlist）の候補として拾い、観測として起票するときに使う。実装はしない。「この作業を振り返って提案して」「振り返ってハーネス提案して」等の依頼でも使う。
+allowed-tools: Read, Glob, Grep, Bash(gh-issue-file *)
 ---
 
 # harness-from-retrospective
 
 タスクを完遂した agent が**自分の実行文脈を振り返り**、再発防止・改善に値する学びを恒久ハーネスの
-候補として拾い上げ、**方針として提示して終わる**。実装はしない（承認後に harness-from-feedback が担う）。
+候補として拾い上げ、**観測 issue として起票して終わる**。実装はしない。
 
-harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill は**入口＝自己内省**。両者は
-「内省で発見・提案 → 人間が承認 → feedback で実装」と直列に合成される。設計は
+harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill は**入口＝自己内省**。起票した
+観測は日次の crawler がグループへ束ね、件数が閾値に届いたグループだけが構造的な改善の PR まで
+自動で回る（`dot/claude/rules/issue-workflow.md`）。設計は
 `docs/superpowers/specs/2026-07-25-harness-from-retrospective-design.md` を参照。
 
 ## いつ呼ばれるか
@@ -27,7 +28,7 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 
 - 振り返るのは**その作業をやり切った自分自身**。自分の実行文脈（推測で決めた箇所・accept で
   止まった箇所・代替の有無・繰り返した失敗）を材料にする。claude-queue 等の外部ソースは使わない。
-- **提案までで止める**。grant（allowlist）を書いたり rule/test を実装したりはしない。
+- **起票までで止める**。grant（allowlist）を書いたり rule/test を実装したりはしない。
 
 ## 手順
 
@@ -48,33 +49,33 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
      incident doc に置く。範囲・対象 repo が dotrc 以外のときの扱い・置き場所・書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）
    - 受け入れ確認（どの状況でロードされ何を防ぐか 等）
 
-3. **方針を提示して終了**: 上記を構造化した**最終メッセージ**として出力する（新規ファイルは
-   作らない。出力は実行中セッションの最終メッセージとして残る。`--tmux` 委譲先なら
-   `gts <session>` / `tmux attach` で後から読める。既定の background 委譲先は人間不在で走り、
-   最終メッセージは誰にも読まれないまま委譲元に閉じられるので、既定の background 委譲先として
-   走っているなら、委譲元への完了報告（SendMessage）に要点を添えて届ける）。**改善点が無ければ
-   「対応すべきハーネスなし」と述べて no-op 終了**する。実装や委譲はしない。
+3. **観測として起票して終了**: 改善点ごとに観測 issue を 1 件起票する。重複を気にして起票を
+   控えない。同じ指摘が別 session から何度も入ることが優先度の信号になる。
+   - `gh-issue-file --global --list-groups` で open なグループを見て、根本原因が合うものがあれば
+     `--parent <N>` を付ける。迷えば付けない（日次の振り分けが拾う）
+   - 本文は harness template の見出し（やること（WHAT）/ 設計（HOW）/ 受け入れ確認 / 由来）に
+     手順 2 の方針を写し、`$CLAUDE_JOB_DIR` 配下のファイルに書く。具体名（組織名・repo 名・
+     サービス名など）を書かない
+   - `gh-issue-file --global --kind harness --title <title> --body-file <path> [--parent <N>]`
+   - exit 3 で denylist に当たったら、具体名を除いて書き直して再実行する。denylist が無いため
+     に拒否されたら起票せず、方針を下の報告に書く
+   - 最終メッセージには起票した URL だけを書く。方針の本文は issue にある。既定の background
+     委譲先として走っているなら、最終メッセージは誰にも読まれないまま委譲元に閉じられるので、
+     委譲元への完了報告（SendMessage）に URL を添えて届ける
 
-## 承認後（この skill の外）
+   **改善点が無ければ「対応すべきハーネスなし」と述べて no-op 終了**する。実装や委譲はしない。
 
-ユーザーが方針を review し、承認した項目の行き先を選ぶ。経路は 2 つあり、**どちらを選ぶかは
-ユーザーが決める**。
+## 起票の後（この skill の外）
 
-- **今すぐ実装する** → `harness-from-feedback` を起動する。以降は harness-from-feedback の
-  既存フロー（要件確定 → 委譲 → 実装 → PR）
-- **backlog へ回す** → `gh-issue-file` で起票する（`issue-workflow.md` §1）。以降はその rule の
-  §3 の人間ゲートと §6 の消化経路に乗る。起票した時点でその気づきに対する task は完了で、
-  実装するのは別の主体になる（§6.1 / §6.2）
+起票した観測をどう消化するかは `dot/claude/rules/issue-workflow.md` が持つ。この skill の task は
+起票した時点で完了で、起票した観測を残タスクとして数えない。
 
-**この skill が自動で起票することはない。** 起票するかどうかの判断はユーザーに残す。理由は
-`docs/design/agent-issue-workflow.md`「代替案 — 自己内省から自動起票」を参照。
-
-allowlist（grant）候補も harness-from-feedback へ渡してよい。ただし **grant を含む委譲は
-auto-merge させず、人間の approve を待つ**（条件と理由の正典は `gh-commands.md` §5「grant 変更を
-含む PR は auto-merge させない」）。この skill 自身が grant を書かないことは変わらない（下の
-不変条件）。変わるのは、承認後の実装を人間に限るか委譲できるかのほうである。
+すぐに直したい学びは、ユーザーが `harness-from-feedback` を起動して即時に委譲できる。
+allowlist（grant）候補も渡してよい。ただし **grant を含む委譲は auto-merge させず、人間の
+approve を待つ**（条件と理由の正典は `gh-commands.md` §5「grant 変更を含む PR は auto-merge
+させない」）。この skill 自身が grant を書かないことは変わらない（下の不変条件）。
 
 ## 不変条件
 
-- 提案のみ。実装・委譲・grant 記述はしない。
+- 起票まで。実装・委譲・grant 記述はしない。起票は `gh-issue-file` 経由に限る。
 - 対象は「恒久ハーネスにする価値のある学び」。無ければ no-op（空振りは正常）。

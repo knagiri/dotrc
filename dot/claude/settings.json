@@ -118,6 +118,7 @@
       "Skill(delegate-to-worktree)",
       "Skill(harness-from-feedback)",
       "Skill(harness-from-retrospective)",
+      "Skill(design-from-observations)",
       "Skill(implement-and-review)",
       "Skill(pr-review-loop)",
       "Skill(pr-automerge)",
