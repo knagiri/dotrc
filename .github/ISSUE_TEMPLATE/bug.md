@@ -2,7 +2,7 @@
 name: bug
 about: 再現する不具合の報告
 title: ''
-labels: agent-task, kind/bug, status/triage
+labels: agent-task, kind/bug, observation
 assignees: ''
 ---
 

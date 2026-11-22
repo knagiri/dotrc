@@ -3,55 +3,71 @@ set -euo pipefail
 
 # gh-issue-file -- the single path an agent uses to open an issue in this repo.
 #
-# Two things it enforces that a bare `gh issue create` cannot:
+# What it enforces that a bare `gh issue create` cannot:
 #   1. Structure. `gh issue create --title X --body Y` never applies an issue
 #      template (-T/--template is starting text for the interactive/editor
 #      path), and YAML issue forms are unreachable non-interactively. So the
 #      body is checked here, against the very same .github/ISSUE_TEMPLATE file
 #      the web UI serves -- one source of truth, no second skeleton to drift.
-#   2. Deduplication. Multiple sessions independently propose the same task,
-#      so the caller is shown every existing agent task and must name them all
-#      via --not-dup-of before a new one is created.
+#   2. Fixed labels. harness and bug are observations (label `observation`, no
+#      status/*): duplicates are not refused, they are what the clustering
+#      crawler counts. task keeps status/triage, the human gate.
+#   3. A denylist. Title and body are matched against the gitignored
+#      $root/.issue-denylist (fixed strings, case-insensitive) and refused on a
+#      hit. Without that file, a filing from a repo other than $root's is
+#      refused outright: it would reach a public repo with nobody reading it.
+#
+# Each body gets `<!-- observed-session: <id> -->` appended (from
+# $CLAUDE_CODE_SESSION_ID, omitted when unset) so repeated filings by one
+# session can be counted once. The caller's file is never modified.
 #
 # Allowlist as `Bash(gh-issue-file *)`. No flag pass-through: labels are fixed
 # and unknown flags are refused rather than handed to gh.
 #
 # Usage: gh-issue-file [--global] --kind <harness|bug|task> --title <title>
-#                      --body-file <path> [--not-dup-of N[,N...]]
+#                      --body-file <path> [--parent N] [--resolved-by <PR-URL>]
+#        gh-issue-file [--global] --list-groups
+#
+# --parent N files the issue as a sub-issue of group #N. --resolved-by files it
+# and then closes it with a comment pointing at the PR that already fixed it.
+# --list-groups prints the repo owner's open groups as `#N<TAB>title`, one per
+# line, to choose --parent from.
 #
 # --global files into the repo this script lives in (the dotfiles repo) instead
 # of cwd's, so an agent working in an unrelated project can still open a harness
 # issue where the harness lives. Without it, that agent has no filing path at
 # all: cwd's repo has no .github/ISSUE_TEMPLATE/<kind>.md and the wrapper stops
 # at exit 1. Same spelling, and the same intent, as claude-worktree --global.
-# Exit:  0 created / 1 bad input / 2 dedup gate (candidates printed to stderr)
-#        / 128 called outside a git repo (git itself fails `set -e` below;
-#          --global does not resolve cwd's repo, so it never lands here)
+#
+# Exit:  0 created (or listed) / 1 bad input / 3 refused by the denylist, or no
+#          denylist while filing from another repo
+#        / 128 called outside a git repo without --global (git itself fails
+#          `set -e` below)
 #        / anything else: gh's own exit code, passed through unchanged by
-#          `set -e` (not rounded to 1) -- from the `gh issue list` dedup query
-#          or the trailing `gh issue create`. Both now run through gh_mise
-#          (bin/lib/gh-mise.sh) rather than `exec`; `mise exec` propagates its
-#          child's status unchanged (measured: a gh exiting 4 still arrives as
-#          4), so the contract below is unaffected. See
-#          dot/claude/rules/issue-workflow.md §2 for the read-and-diagnose flow.
+#          `set -e` (not rounded to 1). gh runs through gh_mise
+#          (bin/lib/gh-mise.sh); `mise exec` propagates its child's status
+#          unchanged. See dot/claude/rules/issue-workflow.md §2.
 
 usage() {
   cat >&2 <<'EOF'
 usage: gh-issue-file [--global] --kind <harness|bug|task> --title <title>
-                     --body-file <path> [--not-dup-of N[,N...]]
+                     --body-file <path> [--parent N] [--resolved-by <PR-URL>]
+       gh-issue-file [--global] --list-groups
 EOF
   exit "${1:-1}"
 }
 
-kind=""; title=""; body_file=""; not_dup_of=""; file_global=0
+kind=""; title=""; body_file=""; parent=""; resolved_by=""; file_global=0; list_groups=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)     usage 0 ;;
     --global)      file_global=1; shift ;;
+    --list-groups) list_groups=1; shift ;;
     --kind)        [ $# -ge 2 ] || usage 1; kind="$2"; shift 2 ;;
     --title)       [ $# -ge 2 ] || usage 1; title="$2"; shift 2 ;;
     --body-file)   [ $# -ge 2 ] || usage 1; body_file="$2"; shift 2 ;;
-    --not-dup-of)  [ $# -ge 2 ] || usage 1; not_dup_of="$2"; shift 2 ;;
+    --parent)      [ $# -ge 2 ] || usage 1; parent="$2"; shift 2 ;;
+    --resolved-by) [ $# -ge 2 ] || usage 1; resolved_by="$2"; shift 2 ;;
     *)
       # No pass-through: an unrecognised flag is a caller bug, not something to
       # forward to gh, where it could add labels or assignees behind our back.
@@ -60,42 +76,54 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-case "$kind" in
-  harness|bug|task) ;;
-  "") echo "gh-issue-file: --kind is required" >&2; usage 1 ;;
-  *)  echo "gh-issue-file: --kind must be harness, bug or task (got: $kind)" >&2; exit 1 ;;
-esac
-[ -n "$title" ] || { echo "gh-issue-file: --title is required" >&2; usage 1; }
-[ -n "$body_file" ] || { echo "gh-issue-file: --body-file is required" >&2; usage 1; }
-[ -r "$body_file" ] || { echo "gh-issue-file: cannot read body file: $body_file" >&2; exit 1; }
-if [ -n "$not_dup_of" ] && [[ ! "$not_dup_of" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-  echo "gh-issue-file: --not-dup-of must be comma-separated issue numbers (got: $not_dup_of)" >&2
-  exit 1
+if [ "$list_groups" = 0 ]; then
+  case "$kind" in
+    harness|bug|task) ;;
+    "") echo "gh-issue-file: --kind is required" >&2; usage 1 ;;
+    *)  echo "gh-issue-file: --kind must be harness, bug or task (got: $kind)" >&2; exit 1 ;;
+  esac
+  [ -n "$title" ] || { echo "gh-issue-file: --title is required" >&2; usage 1; }
+  [ -n "$body_file" ] || { echo "gh-issue-file: --body-file is required" >&2; usage 1; }
+  [ -r "$body_file" ] || { echo "gh-issue-file: cannot read body file: $body_file" >&2; exit 1; }
+  if [ -n "$parent" ] && [[ ! "$parent" =~ ^[0-9]+$ ]]; then
+    echo "gh-issue-file: --parent must be an issue number (got: $parent)" >&2
+    exit 1
+  fi
+  if [ -n "$resolved_by" ] && [[ ! "$resolved_by" =~ ^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$ ]]; then
+    echo "gh-issue-file: --resolved-by must be a GitHub PR URL (got: $resolved_by)" >&2
+    exit 1
+  fi
+elif [ -n "$kind$title$body_file$parent$resolved_by" ]; then
+  echo "gh-issue-file: --list-groups takes no other flag but --global" >&2
+  usage 1
 fi
 
 # Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
 # is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
 
-# One $root decides all three things this wrapper does -- which template the
-# body is checked against, which repo the dedup candidates come from, and which
-# repo the issue is filed into -- so they can never drift apart. --global moves
-# it to the repo holding this script (resolving any PATH symlink first), the
-# same anchor claude-worktree --global uses.
+# One $root decides everything this wrapper does -- which template the body is
+# checked against, which denylist applies, and which repo the issue is filed
+# into -- so they can never drift apart. --global moves it to the repo holding
+# this script (resolving any PATH symlink first), the same anchor
+# claude-worktree --global uses.
 if [ "$file_global" = 1 ]; then
   root="$(gh_mise_repo_root "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"  # global-root@dotrc
 else
   root="$(git rev-parse --show-toplevel)"
 fi
-# gh_mise runs gh with $root as its cwd, which is what makes the dedup query and
-# the create land in $root's repo rather than the caller's.
+# gh_mise runs gh with $root as its cwd, which is what makes every call land in
+# $root's repo rather than the caller's.
 gh_mise_use "$root"
 
-# gh runs with $root as its cwd (gh_mise), not the caller's, so a relative
-# --body-file would be resolved against the repo root -- reading a different
-# file, or none. Absolutise it here, after the readability check above has
-# already passed against the caller's cwd.
-body_file="$(realpath -- "$body_file")"   # abs-body-file@dotrc
+if [ "$list_groups" = 1 ]; then
+  # Only the owner's groups: anyone can open an issue in a public repo, and a
+  # title written by someone else is not something to put in front of an agent.
+  owner="$(gh_mise repo view --json owner --jq .owner.login)"
+  gh_mise issue list --label group --state open --author "$owner" --limit 200 \
+    --json number,title --jq '.[] | "#\(.number)\t\(.title)"'
+  exit 0
+fi
 
 template="$root/.github/ISSUE_TEMPLATE/$kind.md"
 if [ ! -r "$template" ]; then
@@ -134,76 +162,72 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
-# --- dedup gate -------------------------------------------------------------
-# Scope is every agent task, not just this kind: the duplication being prevented
-# is two sessions filing the same idea under different kinds. gh's built-in --jq
-# is used so no system jq is required.
-limit=200
-candidates="$(gh_mise issue list --state all --label agent-task --limit "$limit" \
-  --json number,title,state,labels \
-  --jq '.[] | [(.number|tostring), .state,
-               ((.labels // []) | map(.name) | map(select(startswith("kind/"))) | first // "kind/?"),
-               .title] | @tsv')"
+# --- denylist ---------------------------------------------------------------
+# Repos are told apart by their common git dir, so a linked worktree of $root's
+# repo counts as the same repo. Outside any checkout the caller is foreign.
+common_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true; }
+caller_common="$(common_dir "$PWD")"
+root_common="$(common_dir "$root")"
 
-if [ -n "$candidates" ]; then
-  numbers="$(printf '%s\n' "$candidates" | cut -f1 | sort -n)"
-  csv="$(printf '%s\n' "$numbers" | paste -sd, -)"
-  count="$(printf '%s\n' "$numbers" | grep -c .)"
-
-  # gh's --limit silently truncates rather than erroring, so a count at the cap
-  # means the list may be cut off -- there could be more candidates beyond what
-  # was shown. Warn regardless of whether the gate below fires: even a
-  # --not-dup-of that covers every printed number does not cover issues gh
-  # never returned. See docs/design/agent-issue-workflow.md 既知の限界.
-  if [ "$count" -ge "$limit" ]; then
-    echo "gh-issue-file: 候補が上限 ${limit} 件に達しています。一覧が切れている可能性があるため、この起票は dedup を保証しません。docs/design/agent-issue-workflow.md の既知の限界に従い絞り込みへ移行してください。" >&2
+deny_file="$root/.issue-denylist"
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+if [ -r "$deny_file" ]; then
+  # Blank and whitespace-only lines are dropped, and surrounding whitespace is
+  # trimmed: an empty pattern makes grep -F match every line, which would stop
+  # every filing.
+  deny_patterns() {
+    sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -- "$deny_file"  # deny-blank@dotrc
+  }
+  deny_patterns >"$tmpdir/patterns"
+  if [ -s "$tmpdir/patterns" ] \
+    && { printf '%s\n' "$title"; cat -- "$body_file"; } | grep -qiF -f "$tmpdir/patterns"; then
+    # The matched term is not echoed: the denylist's contents stay out of
+    # transcripts and logs, same as they stay out of git.
+    echo "gh-issue-file: title or body matches $deny_file; not filed. Rewrite it without the specific name." >&2
+    exit 3
   fi
-
-  # Anything the caller has not named is still unreviewed -- including issues
-  # opened after they last read the list. Membership is tested by substring on a
-  # comma-fenced list rather than with comm, because the candidate numbers are
-  # sorted numerically (7,9,12) while comm requires lexical order (12,7,9) and
-  # would silently mis-pair them.
-  unreviewed=""
-  while IFS= read -r n; do
-    [ -n "$n" ] || continue
-    case ",$not_dup_of," in
-      *",$n,"*) ;;
-      *) unreviewed="$unreviewed$n "  ;;
-    esac
-  done <<<"$numbers"
-
-  if [ -n "$unreviewed" ]; then
-    {
-      echo "gh-issue-file: 既存の agent task が ${count} 件あります。重複していないか確認してください。"
-      echo
-      printf '%s\n' "$candidates" | sort -t"$(printf '\t')" -k3,3 -k1,1n \
-        | awk -F'\t' '
-            $3 != last { if (NR > 1) print ""; print $3; last = $3 }
-                       { printf "  #%-4s [%s] %s\n", $1, $2, $4 }
-          '
-      echo
-      echo "重複でなければ次を付けて再実行してください:"
-      echo "  --not-dup-of $csv"
-      echo "重複していれば起票せず、既存 issue の番号を報告してください。"
-    } >&2
-    exit 2
-  fi
+elif [ -z "$caller_common" ] || [ "$caller_common" != "$root_common" ]; then
+  echo "gh-issue-file: no $deny_file, and this filing comes from outside $root's repo; refusing." >&2
+  echo "  Create the denylist first (see docs/design/agent-issue-workflow.md)." >&2
+  exit 3
 fi
 
 # --- create -----------------------------------------------------------------
-# Labels are fixed here rather than accepted from the caller. status/triage in
-# particular is not the caller's to choose: promoting an issue to status/ready
-# is the human gate that makes it delegatable (see
-# dot/claude/rules/issue-workflow.md).
+# gh is handed this absolute copy, never the caller's path: gh runs with $root
+# as its cwd (gh_mise), so a relative --body-file would be resolved against the
+# repo root -- reading a different file, or none. The copy is read here, in the
+# caller's cwd.
+body="$tmpdir/body.md"
+cp -- "$body_file" "$body"
+if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+  printf '\n<!-- observed-session: %s -->\n' "$CLAUDE_CODE_SESSION_ID" >>"$body"
+fi
+
+# Labels are fixed here rather than accepted from the caller. For task,
+# status/triage in particular is not the caller's to choose: promoting it to
+# status/ready is the human gate (dot/claude/rules/issue-workflow.md).
 #
 # If these labels do not exist yet in the repo, gh fails right here. That is
 # intentional -- the wrapper does not create labels (that would widen what this
 # grant can do); run the one-time setup in
 # docs/design/agent-issue-workflow.md first.
-gh_mise issue create \
-  --title "$title" \
-  --body-file "$body_file" \
-  --label agent-task \
-  --label "kind/$kind" \
-  --label status/triage
+case "$kind" in
+  task) labels=(--label agent-task --label kind/task --label status/triage) ;;
+  *)    labels=(--label agent-task --label "kind/$kind" --label observation) ;;
+esac
+parent_args=()
+[ -z "$parent" ] || parent_args=(--parent "$parent")
+
+url="$(gh_mise issue create --title "$title" --body-file "$body" \
+  "${labels[@]}" ${parent_args[@]+"${parent_args[@]}"})"
+printf '%s\n' "$url"
+
+if [ -n "$resolved_by" ]; then
+  number="${url##*/}"
+  if [[ ! "$number" =~ ^[0-9]+$ ]]; then
+    echo "gh-issue-file: cannot read the issue number from gh's output ($url); not closed" >&2
+    exit 1
+  fi
+  gh_mise issue close "$number" --comment "Resolved by $resolved_by"
+fi
