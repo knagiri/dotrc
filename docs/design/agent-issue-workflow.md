@@ -43,8 +43,8 @@ agent が生む気づき（harness 改善案・不具合）を、人の手と目
 2. **定期処理**: `bin/issue-crawl` を `issue-crawl.timer`（`systemd-user`、毎日 05:00）で 1 日 1 回
    起動する。期限切れ・未分類の観測の振り分け・PR の後始末・委譲判定を順に行う。振り分けだけ
    `claude -p` に任せ、件数・期限・委譲の判定は決定論的に行う
-3. **委譲**: 閾値を超えたグループごとに `claude-worktree --global` で委譲先（branch `group-<N>`）を
-   起こす。委譲先は `design-from-observations` skill で観測を全部読んで構造的な改善策を設計し、
+3. **委譲**: 閾値を超えたグループごとに `claude-worktree --global` で委譲先（委譲ごとに新しい
+   branch `group-<N>-<stamp>`）を起こす。委譲先は `design-from-observations` skill で観測を全部読んで構造的な改善策を設計し、
    `implement-and-review` で実装して PR（label `auto/structural`）を出す。PR 本文の冒頭に、どの
    観測をどう束ね、なぜこの策にしたかを書く。`pr-review-loop` までは回し、`pr-automerge` は
    呼ばない
@@ -52,19 +52,26 @@ agent が生む気づき（harness 改善案・不具合）を、人の手と目
    方針が違えば理由をコメントして PR を close する。crawler はグループを `group/rejected` にし、
    次に委譲するとき委譲先がその理由を読む
 5. **期限切れ**: 作成から 30 日経った観測は close する（事例として残る）。直近 30 日の観測が
-   0 件になったグループも close し、その後に観測が付けば reopen する
+   0 件になったグループも close する。close 後の再発は、振り分けが close 済みのグループ（直近 30 日に
+   close）へ `attach` すると reopen される
 
 ## 数え方と歯止め
 
-- 件数は、直近 30 日に作成された観測を、本文末尾の `<!-- observed-session: <id> -->` 単位で重複
+- 件数は、直近 30 日に作成され、かつそのグループの最新の PR が merge / close された後に作成された
+  観測を、本文末尾の `<!-- observed-session: <id> -->` 単位で重複
   除去して数える。1 つの不具合を同じ session が何度書いても 1 件になる。marker の無い観測
   （web UI から人が起票したもの）は 1 件ずつ数える。close 済みの観測も数える
 - 閾値は 3
 - 委譲中のグループ（`group/delegated`）と open な自動 PR の多いほうを in-flight とし、2 本まで。
   上限中、crawler は集計だけして委譲しない
 - `group/rejected` のグループは、close された PR より後に観測が付くまで再委譲しない。新しい観測を
-  得たら crawler が rejected を外す（振り分けで `gh-issue-group attach` されたときも外れる）
-- グループの label・親子・open/close を変えるのは crawler だけで、委譲先は issue を動かさない
+  得たら crawler が rejected を外す。外すのは crawler の follow 手順だけで、振り分けの `attach` は
+  label に触れない
+- merge で閉じたグループが reopen されて `group/delegated` のまま残ったときも、crawler が最新 branch の
+  merged PR を見て外す
+- グループの label・親子・open/close を変えるのは crawler だけで、委譲先は issue を動かさない。
+  例外は起票時の `--parent`（owner 起票のグループにだけ付く）と `--resolved-by`（自分が起票した 1 件の
+  close）
 
 ## 制約
 
@@ -129,9 +136,12 @@ form を正典にすると本文骨格をラッパーへ再実装することに
 
 - 振り分けの質は `claude -p` の判断に依存する。誤った束ね方は次回以降の振り分けで直るが、
   閾値に届いた時点の束ね方で委譲される
-- 再委譲は前回と同じ branch `group-<N>` を使うので、close 済み PR の commit が branch に残る。
-  委譲先が `git revert` で打ち消してから始める
-- `gh issue list` の `--limit 1000` を超える観測・グループは読まれない
+- 最新の branch は、local・origin の ref と PR の head 名から引く。PR を出す前に branch が消えると
+  1 つ前の branch を最新と見なすので、委譲先の失敗は次の pass での再委譲に頼る
+- crawler の `gh issue list` は `--limit 1000`、振り分けの `claude -p` と `--list-groups` は
+  `--limit 200` までしか読まない。超えた分は読まれない
+- 起票ラッパーの denylist は main working tree の `.issue-denylist` を読む。linked worktree の root には
+  置かない
 
 ## setup（人間が 1 回実行する）
 
@@ -148,8 +158,8 @@ gh label create status/ready     --description "HOW 確定。着手してよい�
 gh label create status/delegated --description "着手済み（委譲またはインライン）" --color c5def5
 gh label create observation      --description "観測。crawler がグループに束ねる" --color bfdadc
 gh label create group            --description "観測のグループ（親 issue）"   --color 1d76db
-gh label create group/delegated  --description "改善 PR の委譲中"           --color c5def5
-gh label create group/rejected   --description "改善 PR が close された。新しい観測まで再委譲しない" --color e99695
+gh label create group/delegated  --description "改善 PR を作る委譲先が走っている、または PR が open" --color c5def5
+gh label create group/rejected   --description "改善 PR が merge されずに close された。新しい観測が付くまで再委譲しない" --color e99695
 gh label create auto/structural  --description "グループから自動で作られた改善 PR" --color 5319e7
 ```
 

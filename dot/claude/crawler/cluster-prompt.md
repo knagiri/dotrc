@@ -13,12 +13,18 @@
 ## 読むもの
 
 ```
-gh issue list --label observation --state open --author <owner> --limit 200 --json number,title,body,parent
-gh issue list --label group --state open --author <owner> --limit 200 --json number,title,body
+gh issue list --label observation --state all --author <owner> --search "created:>=<since>" --limit 200 --json number,title,body,parent
+gh issue list --label group --state all --author <owner> --limit 200 --json number,title,body,state,closedAt
 gh issue view <N> --json number,title,body,author,parent,subIssues
 ```
 
-`parent` が null の観測が振り分けの対象。既存グループの中身は、本文と sub-issue を読んで掴む。
+`<since>` と `<owner>` は末尾の `since:` と `repo owner:` の値。観測は close 済みのものも含む（その場で
+直されて close 済みで起票された観測も、件数に数えるためグループに入れる）。`parent` が null の観測が
+振り分けの対象。
+
+グループは open なものと、`closedAt` が `since` 以降の close 済みのものが対象。close 済みのグループに
+`attach` すると reopen される（直した後の再発を同じグループに戻す）。既存グループの中身は、本文と
+sub-issue を読んで掴む。
 
 ## やること
 
@@ -28,13 +34,14 @@ gh issue view <N> --json number,title,body,author,parent,subIssues
    付ける。表面の症状ではなく根本原因で判断する。別の場所で起きた別の症状でも、同じ仕組みの
    欠落から来ているなら同じグループに入れる
 2. 合う既存グループが無く、根本原因が同じ親の無い観測が 2 件以上そろえば、グループを作る。
-   本文をファイルに書いて `gh-issue-group create --title <title> --body-file <path>` し、出力された
-   URL の番号へ `attach` する。そろわない観測は親の無いまま残す（次回以降に仲間が来れば束ねる）
+   本文を末尾の `work dir:` 配下のファイルに書いて（他の場所へは書けない。cwd にも書かない）
+   `gh-issue-group create --title <title> --body-file <path>` し、出力された URL の番号へ
+   `attach` する。そろわない観測は親の無いまま残す（次回以降に仲間が来れば束ねる）
 3. 明らかに同じ根本原因の既存グループが 2 つあれば、小さいほうの sub-issue を
    `gh-issue-group detach <観測>` してから大きいほうへ `attach` し、小さいほうを
    `gh-issue-group close <group> --not-planned` で閉じる。sub-issue が付け替え済みであることを
    確かめてから閉じる。`group/delegated` のグループは動かさない
-4. 束ね方を変えたグループは、本文を書き直して `gh-issue-group set-body <group> <path>` で置き換える
+4. 束ね方を変えたグループは、本文を `work dir:` 配下に書き直して `gh-issue-group set-body <group> <path>` で置き換える
 
 ## グループ本文の書式
 

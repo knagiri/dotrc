@@ -12,8 +12,8 @@
 # PATH is set explicitly because a systemd user unit inherits none of the
 # shell's: ~/.bashrc returns early for non-interactive shells, so the
 # dotrc bin directory it appends is never on the PATH here. The pass needs
-# `claude`, `gh`, `mise` (the token path of bin/lib/gh-mise.sh) and the dotrc
-# wrappers on it.
+# `claude`, `gh`, `git`, `jq`, `mise` (the token path of bin/lib/gh-mise.sh),
+# `claude-queue` and the dotrc wrappers on it.
 #
 # KillMode is left at its default (control-group), which kills whatever the
 # service started when it exits. The crawler never starts a claude daemon
@@ -31,6 +31,6 @@ Description=issue-crawl: expire, cluster and delegate agent observation issues
 Type=oneshot
 Environment=PATH=%h/ghq/github.com/knagiri/dotrc/bin:%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/nice -n 10 %h/ghq/github.com/knagiri/dotrc/bin/issue-crawl
-# The clustering step is an LLM call over every open observation, so a pass can
-# run for minutes; it should still never pile up behind the next tick.
+# The clustering step is an LLM call that can run for minutes. The limit exists
+# to cut off a stuck `claude -p` so one pass cannot pile up behind the next tick.
 TimeoutStartSec=30min
