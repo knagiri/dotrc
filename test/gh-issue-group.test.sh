@@ -17,7 +17,7 @@ tmp="$(mktemp -d)"
 trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
 # gh stub. It does not implement --jq, so GH_VIEW_<N> holds what the wrapper's
-# --jq would print for issue N: `state<TAB>author<TAB>label,label,...`.
+# --jq would print for issue N: `state<TAB>author<TAB>parent|none<TAB>label,label,...`.
 stubdir="$tmp/stub"; mkdir -p "$stubdir"
 cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -66,12 +66,13 @@ run() {  # run gh-issue-group with a fresh argv log; sets $rc
 wrote() { grep -qxF '[edit]' "$tmp/args" || grep -qxF '[close]' "$tmp/args" \
   || grep -qxF '[reopen]' "$tmp/args" || grep -qxF '[create]' "$tmp/args"; }
 
-export GH_VIEW_5=$'OPEN\texample-owner\tagent-task,group'
-export GH_VIEW_6=$'CLOSED\texample-owner\tagent-task,group,group/rejected'
-export GH_VIEW_10=$'OPEN\texample-owner\tagent-task,kind/harness,observation'
-export GH_VIEW_11=$'OPEN\texample-owner\tagent-task,kind/bug,observation'
-export GH_VIEW_20=$'OPEN\tsomeone-else\tagent-task,kind/harness,observation'
-export GH_VIEW_30=$'OPEN\texample-owner\tagent-task,kind/task,status/ready'
+export GH_VIEW_5=$'OPEN\texample-owner\tnone\tagent-task,group'
+export GH_VIEW_6=$'CLOSED\texample-owner\tnone\tagent-task,group,group/rejected'
+export GH_VIEW_10=$'OPEN\texample-owner\tnone\tagent-task,kind/harness,observation'
+export GH_VIEW_11=$'OPEN\texample-owner\tnone\tagent-task,kind/bug,observation'
+export GH_VIEW_12=$'OPEN\texample-owner\t5\tagent-task,kind/bug,observation'
+export GH_VIEW_20=$'OPEN\tsomeone-else\tnone\tagent-task,kind/harness,observation'
+export GH_VIEW_30=$'OPEN\texample-owner\tnone\tagent-task,kind/task,status/ready'
 
 # --- attach -------------------------------------------------------------------
 run attach 5 10 11
@@ -97,14 +98,23 @@ if [ "$rc" -eq 1 ] && ! wrote; then
   echo "ok: attach refuses a target that is not a group"
 else echo "FAIL: attach to non-group rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
-# A new observation is what lifts a rejection and revives a closed group.
+# A new observation revives a closed group. group/rejected is not touched here:
+# lifting a rejection depends on when the observation was filed, which only the
+# crawler's follow step looks at.
 run attach 6 10
 if [ "$rc" -eq 0 ] \
   && grep -A1 -xF '[reopen]' "$tmp/args" | grep -qxF '[6]' \
-  && grep -A1 -xF '[--remove-label]' "$tmp/args" | grep -qxF '[group/rejected]' \
+  && ! grep -qxF '[--remove-label]' "$tmp/args" \
   && grep -qxF '[--add-sub-issue]' "$tmp/args"; then
-  echo "ok: attach reopens a closed group and clears group/rejected"
+  echo "ok: attach reopens a closed group and leaves group/rejected alone"
 else echo "FAIL: attach reopen rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# An observation that already has a parent is refused before any write: the
+# group is neither reopened nor edited, even when the parented one comes last.
+run attach 6 10 12
+if [ "$rc" -eq 1 ] && ! wrote && grep -q 'already has parent #5' "$tmp/err"; then
+  echo "ok: attach refuses an observation that already has a parent, before any write"
+else echo "FAIL: attach parented rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
 
 # Discrimination (evidence-over-guesswork §4): with the owner check removed the
 # non-owner case must go through.
@@ -127,6 +137,26 @@ run detach 10
 if [ "$rc" -eq 0 ] && grep -qxF '[--remove-parent]' "$tmp/args"; then
   echo "ok: detach removes the observation's parent"
 else echo "FAIL: detach rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# set-body and detach refuse the same targets: nothing but the owner's issue
+# with the right label is ever written.
+printf 'body\n' >"$tmp/sb.md"
+run set-body 20 "$tmp/sb.md"
+if [ "$rc" -eq 1 ] && ! wrote; then
+  echo "ok: set-body refuses an issue not filed by the owner"
+else echo "FAIL: set-body non-owner rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+run set-body 10 "$tmp/sb.md"
+if [ "$rc" -eq 1 ] && ! wrote; then
+  echo "ok: set-body refuses an issue that is not a group"
+else echo "FAIL: set-body non-group rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+run detach 20
+if [ "$rc" -eq 1 ] && ! wrote && ! grep -qxF '[--remove-parent]' "$tmp/args"; then
+  echo "ok: detach refuses an observation not filed by the owner"
+else echo "FAIL: detach non-owner rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+run detach 5
+if [ "$rc" -eq 1 ] && ! grep -qxF '[--remove-parent]' "$tmp/args"; then
+  echo "ok: detach refuses an issue without the observation label"
+else echo "FAIL: detach non-observation rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
 run close 30
 if [ "$rc" -eq 1 ] && ! wrote; then
@@ -193,6 +223,20 @@ if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args" \
   && grep -q 'issues/77' "$tmp/out"; then
   echo "ok: create files a group with the fixed labels"
 else echo "FAIL: create rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# gh runs in the repo root, so the wrapper must hand it an absolute path: a
+# relative --body-file given from another cwd would be read from the root.
+mkdir -p "$tmp/sub"; printf 'rel body\n' >"$tmp/sub/rel.md"
+for c in "create --title g --body-file rel.md" "set-body 5 rel.md"; do
+  : >"$tmp/args"
+  # shellcheck disable=SC2086
+  ( cd "$tmp/sub" && env GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+      "$bindir/gh-issue-group" $c ) >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  if [ "$rc" -eq 0 ] && grep -A1 -xF '[--body-file]' "$tmp/args" | grep -qxF "[$(cd "$tmp/sub" && pwd -P)/rel.md]"; then
+    echo "ok: ${c%% *} hands gh an absolute --body-file resolved in the caller's cwd"
+  else echo "FAIL: ${c%% *} relative body rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+done
 
 run create --title 'g' --body-file "$tmp/gbody.md" --label extra
 if [ "$rc" -eq 1 ] && ! wrote; then

@@ -4,9 +4,8 @@ set -euo pipefail
 # gh-issue-group -- the guarded write path for observation groups
 # (dot/claude/rules/issue-workflow.md).
 #
-# Every write the clustering crawler makes goes through here, so the grant can
-# be allowlisted as `Bash(gh-issue-group *)` without handing out raw
-# `gh issue edit`: each subcommand does one fixed edit, there is no flag
+# Each subcommand does one fixed edit, so the grant can be allowlisted as
+# `Bash(gh-issue-group *)` without handing out raw `gh issue edit`: there is no flag
 # pass-through, and every target is read first and refused unless it was filed
 # by the repo owner and carries the label the operation is for. Anyone can open
 # an issue in a public repo; an issue someone else wrote never becomes part of
@@ -16,10 +15,9 @@ set -euo pipefail
 #   gh-issue-group create --title <title> --body-file <path>
 #       Open a group (labels agent-task, group). Prints its URL.
 #   gh-issue-group attach <group> <observation>...
-#       Add observations as sub-issues of <group>. A closed group is reopened
-#       and group/rejected is removed: a new observation is what lifts a
-#       rejection. An observation that already has a parent must be detached
-#       first.
+#       Add observations as sub-issues of <group>. A closed group is reopened.
+#       An observation that already has a parent is refused (detach it first);
+#       the check runs before any write. Labels on the group are not touched.
 #   gh-issue-group detach <observation>
 #       Remove the observation's parent.
 #   gh-issue-group set-body <group> <path>
@@ -85,21 +83,23 @@ gh_mise_use "$(gh_mise_repo_root)"
 
 owner=""
 # check <issue> <label>... -- refuse unless <issue> was filed by the owner and
-# carries one of the labels. Leaves its state in $state and labels in $labels.
+# carries one of the labels. Leaves its state in $state, its parent number (or
+# `none`) in $parent_of and its labels in $labels. The labels come last: a
+# trailing empty field survives `read`, an empty middle one would collapse.
+parent_of=""
 check() {
   local n="$1" line author l ok=0
   shift
   [ -n "$owner" ] || owner="$(gh_mise repo view --json owner --jq .owner.login)"
-  line="$(gh_mise issue view "$n" --json state,author,labels \
-    --jq '"\(.state)\t\(.author.login)\t\([.labels[].name] | join(","))"')"
-  IFS=$'\t' read -r state author labels <<<"$line"
+  line="$(gh_mise issue view "$n" --json state,author,parent,labels \
+    --jq '"\(.state)\t\(.author.login)\t\(.parent.number? // "none")\t\([.labels[].name] | join(","))"')"
+  IFS=$'\t' read -r state author parent_of labels <<<"$line"
   [ "$author" = "$owner" ] || die "#$n was not filed by $owner (author: $author)"  # owner-check@dotrc
   for l in "$@"; do
     case ",$labels," in *",$l,"*) ok=1 ;; esac
   done
   [ "$ok" = 1 ] || die "#$n carries none of: $* (labels: ${labels:-none})"
 }
-has_label() { case ",$labels," in *",$1,"*) return 0 ;; esac; return 1; }
 
 case "$cmd" in
   create)
@@ -110,10 +110,12 @@ case "$cmd" in
     group="$1"; shift
     # Check every observation before the first write, so a bad one leaves the
     # group untouched.
-    for o in "$@"; do check "$o" observation; done
+    for o in "$@"; do
+      check "$o" observation
+      [ "$parent_of" = none ] || die "#$o already has parent #$parent_of; detach it first"
+    done
     check "$group" group
     [ "$state" != CLOSED ] || gh_mise issue reopen "$group"
-    ! has_label group/rejected || gh_mise issue edit "$group" --remove-label group/rejected
     obs="$(IFS=,; printf '%s' "$*")"
     gh_mise issue edit "$group" --add-sub-issue "$obs" ;;
   detach)
