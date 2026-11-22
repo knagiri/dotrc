@@ -37,15 +37,20 @@
 #
 # Writes go through gh-issue-group only. The crawler never starts a claude
 # daemon: it delegates only when `claude-queue daemon-running` reports one, and
-# `claude -p` does not start one (measured). All reads happen before the first
-# write; a failed read ends the pass with exit 1 and no write.
+# `claude -p` does not start one (measured). Everything is read before the
+# first write, and a failed initial read ends the pass with exit 1 and no
+# write. When step 2 runs `claude -p`, groups, recent observations, PRs and
+# branches are read again before steps 3-4, since the cluster session may have
+# moved or closed groups; if that re-read fails, steps 3-4 are skipped and the
+# pass ends with exit 2.
 #
 # Usage: issue-crawl [--dry-run] [--now <ISO8601>]
 #   --dry-run  read and report what would be done; no write, no claude
 #   --now      evaluate the 30-day window from this instant (tests)
-# Exit: 0 pass done / 1 bad input or a failed read / 2 a write or the cluster
-#       step failed, or the daemon check could not tell (the pass still ran to
-#       the end)
+# Exit: 0 pass done / 1 bad input or a failed initial read / 2 a write or the
+#       cluster step failed, or the daemon check could not tell (the pass still
+#       ran to the end), or the re-read after clustering failed (steps 3-4
+#       skipped)
 #
 # With ISSUE_CRAWL_LIB=1 the file only defines count_group when sourced.
 
