@@ -55,6 +55,7 @@ jobs:
             bin/gh-issue-file \
             bin/gh-issue-group \
             bin/gh-issue-mark-delegated \
+            bin/issue-crawl \
             bin/gh-list-threads \
             bin/gh-pr-checks \
             bin/gh-pr-comments \
@@ -75,6 +76,7 @@ jobs:
             test/gh-issue-file.test.sh \
             test/gh-issue-group.test.sh \
             test/gh-wrappers.test.sh \
+            test/issue-crawl.test.sh \
             test/git-reap-gone.test.sh \
             test/lib/sandbox.sh \
             test/sandbox-usage.test.sh \
