@@ -274,7 +274,7 @@ if grep -qF "claude [-p] [--model] [sonnet] [--allowedTools] [Bash(gh-issue-grou
   && ! grep -q "$secret" "$tmp/stdin"; then
   echo "ok: unparented observations start claude -p with the fixed prompt, the owner, the window and the fixed tools"
 else echo "FAIL: cluster invocation calls=$(cat "$calls")"; fail=1; fi
-if grep -q '^mise .*-- nice -n 10 claude ' "$calls" && [ "$(cat "$tmp/stdin.configdir")" = unset ]; then
+if grep -q '^mise .*-- claude ' "$calls" && [ "$(cat "$tmp/stdin.configdir")" = unset ]; then
   echo "ok: claude -p runs through mise in the repo, with the timer's CLAUDE_CONFIG_DIR removed"
 else echo "FAIL: claude -p account selection calls=$(cat "$calls") dir=$(cat "$tmp/stdin.configdir")"; fail=1; fi
 

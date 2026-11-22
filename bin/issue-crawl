@@ -233,7 +233,7 @@ if [ "$unparented" -gt 0 ]; then
     # The owner, window start and work dir are the only things added to the
     # fixed prompt; issue text is read by the session itself, as untrusted input.
     { cat -- "$prompt"; printf '\nrepo owner: %s\nsince: %s\nwork dir: %s\n' "$owner" "${since%%T*}" "$workdir"; } \
-      | in_repo nice -n 10 claude -p --model sonnet \
+      | in_repo claude -p --model sonnet \
           --allowedTools "Bash(gh-issue-group *),Bash(gh issue view *),Bash(gh issue list *),Edit(/$workdir/**)" \
       || { echo "error: cluster: claude -p failed" >&2; failed=1; }
   fi

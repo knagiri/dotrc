@@ -89,7 +89,7 @@ agent が生む気づき（harness 改善案・不具合）を、人の手と目
   ときだけ行い、居なければ次回へ回す。振り分けの `claude -p` は daemon を起動しない（空の
   config dir で `claude -p` を走らせても `claude daemon run` は増えず、同じ dir の `claude --bg` は
   起動した）
-- **負荷**: crawler は `nice -n 10` で起動する（`shared-machine-load.md`）
+- **負荷**: nice は timer の service（`ExecStart`）側だけで掛ける。`claude -p` にも掛けると二重になり niceness が上限へ丸められる（`shared-machine-load.md`）
 - **勤務先由来の具体名を機械的に止める。** 観測は業務 repo のセッションからも `--global` で
   dotrc へ自動起票され、人の目を通らない。push した具体名は消せないので、起票ラッパーが title と
   本文を gitignore 済みの `.issue-denylist`（1 行 1 語、大文字小文字を無視した部分一致）と照合し、
@@ -137,7 +137,10 @@ form を正典にすると本文骨格をラッパーへ再実装することに
 - 振り分けの質は `claude -p` の判断に依存する。誤った束ね方は次回以降の振り分けで直るが、
   閾値に届いた時点の束ね方で委譲される
 - 最新の branch は、local・origin の ref と PR の head 名から引く。PR を出す前に branch が消えると
-  1 つ前の branch を最新と見なすので、委譲先の失敗は次の pass での再委譲に頼る
+  1 つ前の branch を最新と見なす
+- PR を出さずに終わった委譲先（`design-from-observations` が根本原因を絞れず止まった場合を含む）の
+  グループは `group/delegated` のまま残り、crawler は外さない。in-flight の枠を占め続けるので、
+  人が `gh-issue-group mark <N> clear` で外す
 - crawler の `gh issue list` は `--limit 1000`、振り分けの `claude -p` と `--list-groups` は
   `--limit 200` までしか読まない。超えた分は読まれない
 - 起票ラッパーの denylist は main working tree の `.issue-denylist` を読む。linked worktree の root には

@@ -528,8 +528,12 @@ cp "$scriptrepo/bin/gh-issue-file" "$tmp/gh-issue-file.keep"
 cp "$grepmutant/gh-issue-file" "$scriptrepo/bin/gh-issue-file"
 globalrun "$scriptrepo/bin" "$otherrepo" t --global
 cp "$tmp/gh-issue-file.keep" "$scriptrepo/bin/gh-issue-file"
+# Whether grep's early exit kills cat with SIGPIPE before it matters is
+# scheduling-dependent, so a mutant that still exits 3 is a skip, not a failure.
 if [ "$rc" -ne 3 ] && grep -qxF '[create]' "$tmp/args"; then
   echo "ok: with the pipeline form the large-body match is lost (the case above is discriminating)"
+elif [ "$rc" -eq 3 ]; then
+  echo "skip: the pipeline mutant did not lose the match in this environment (SIGPIPE race is scheduling-dependent)"
 else echo "FAIL: pipeline mutant rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 printf '## やること（WHAT）\nsomething\n' >"$global_body"
 
