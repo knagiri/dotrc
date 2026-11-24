@@ -105,9 +105,10 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 //     the PR will still say the same thing when they leave.
 //
 // The transcript must also be under the config dir the launched claude reads
-// (a resume elsewhere opens an empty session under the same id). The cwd and the transcript are checked before anything is stopped, because
-// a resume needs both (the picker's resume does the same check) and a session
-// stopped only to fail its resume would be left gone for nothing.
+// (a resume elsewhere opens an empty session under the same id). The cwd and
+// the transcript are checked before anything is stopped, because a resume
+// needs both (the picker's resume does the same check) and a session stopped
+// only to fail its resume would be left gone for nothing.
 //
 // The launch only ever goes into a tmux server or a claude daemon that is
 // already running, and is skipped when there is none. Either one, started by
