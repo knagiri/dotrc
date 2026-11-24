@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# claude-hook-git-guard -- Claude Code PreToolUse hook (matcher "Bash") that
+# inspects the git invocations in tool_input.command and returns a permission
+# decision for two cases:
+#
+#   git stash pop|apply|drop|branch|clear
+#     The stash stack lives in the common git dir, so the main checkout and
+#     every linked worktree share it: one session's `git stash pop` takes the
+#     entry another session pushed. An entry's owner is read from its message
+#     (`WIP on <branch>: ...` / `On <branch>: ...`), and since git never checks
+#     one branch out in two worktrees at once, the branch identifies the
+#     worktree. Touching an entry owned by another branch -> deny. When the
+#     owner cannot be told (the current HEAD or the entry is detached) -> deny.
+#     pop/apply/drop/branch look at the target entry (stash@{0} when omitted);
+#     clear looks at every entry. push/save/list/show/create/store and a bare
+#     `git stash` pass. An entry that does not resolve passes too: git fails on
+#     its own and nothing is taken.
+#
+#   git commit
+#     -> ask when all of these hold, otherwise nothing:
+#       1. the target dir is a main working tree (--git-common-dir equals
+#          --git-dir, and <toplevel>/.git is a directory -- a submodule's
+#          .git is a file even though the two dirs match)
+#       2. the current branch is the integration branch (the one
+#          refs/remotes/origin/HEAD points at; `main` when that is unset)
+#       3. a remote named origin exists
+#       4. HEAD exists (the first commit of a new repo has nowhere else to go)
+#
+# The command string is split into simple commands on ; & | ( ) and newlines,
+# honouring quotes, backslashes, comments and here-documents (a heredoc body is
+# data, e.g. a commit message, not commands). The target dir starts at the hook
+# input's cwd, follows a plain `cd <dir>` earlier in the same string, and is
+# then adjusted by git's own -C options. Global options before the subcommand
+# (-C, -c, --git-dir, --work-tree, --no-pager, -P, ...) are skipped. `sh -c`,
+# git aliases and wrappers such as make are not seen: the aim is catching
+# accidental calls, not an adversary.
+#
+# Output: a PreToolUse hookSpecificOutput JSON object on stdout when a decision
+# is made (deny wins over ask when one command line holds both), nothing
+# otherwise. Always exits 0; on any internal failure it stays silent so the
+# tool call proceeds as if the hook were absent.
+set -u
+# Byte semantics: in a multibyte locale every ${s:i:1} rescans the string from
+# the start, which makes parsing a long command (a heredoc commit message)
+# take seconds.
+export LC_ALL=C
+
+decision=""
+reasons=()
+
+add_decision() { # <ask|deny> <reason>
+  if [ "$1" = deny ]; then decision=deny; elif [ -z "$decision" ]; then decision=ask; fi
+  reasons+=("$2")
+}
+
+resolve_path() { # <base> <path>
+  case "$2" in
+    /*) printf '%s' "$2" ;;
+    "~") printf '%s' "$HOME" ;;
+    "~/"*) printf '%s/%s' "$HOME" "${2#\~/}" ;;
+    *) printf '%s/%s' "$1" "$2" ;;
+  esac
+}
+
+cur_branch() { # <dir> -> branch name, empty when detached
+  git -C "$1" symbolic-ref --short -q HEAD 2>/dev/null
+}
+
+# stash_owner <dir> <commit> -> the branch the entry was pushed on; empty when
+# it was pushed on a detached HEAD or the message does not say.
+stash_owner() {
+  local subj re='^(WIP on|On) ([^:]+): '
+  subj="$(git -C "$1" log -1 --format=%s "$2" 2>/dev/null)" || return 0
+  if [[ $subj =~ $re ]] && [ "${BASH_REMATCH[2]}" != "(no branch)" ]; then
+    printf '%s' "${BASH_REMATCH[2]}"
+  fi
+}
+
+stash_hint='stash は main checkout と全 linked worktree で共有されているので、別 session が積んだ entry を取ると、その session の変更が黙って消える。自分の entry なら `git stash list` で番号を確かめ、`stash@{N}` を明示して撃ち直す。作業の一時退避には stash ではなく一時的な WIP commit も使える。'
+
+check_stash() { # <dir> <stash args...>
+  local dir="$1"; shift
+  local sub="${1:-}"
+  [ $# -gt 0 ] && shift
+  local -a pos=()
+  local a ref sha owner cur
+  case "$sub" in
+    pop|apply|drop|branch) ;;
+    clear) check_stash_clear "$dir"; return ;;
+    *) return ;;
+  esac
+  for a in "$@"; do
+    case "$a" in -*) ;; *) pos+=("$a") ;; esac
+  done
+  if [ "$sub" = branch ]; then ref="${pos[1]:-stash@{0\}}"; else ref="${pos[0]:-stash@{0\}}"; fi
+  [[ $ref =~ ^[0-9]+$ ]] && ref="stash@{$ref}"
+  sha="$(git -C "$dir" rev-parse -q --verify "$ref^{commit}" 2>/dev/null)" || return
+  # Not stash-like (a stash commit has the index commit as its second
+  # parent): git refuses it on its own.
+  git -C "$dir" rev-parse -q --verify "$sha^2" >/dev/null 2>&1 || return
+  owner="$(stash_owner "$dir" "$sha")"
+  cur="$(cur_branch "$dir")"
+  if [ -z "$cur" ] || [ -z "$owner" ]; then
+    add_decision deny "git stash $sub を止めた: 対象 $ref の持ち主を判定できない（現在 HEAD か entry が detached HEAD）。$stash_hint"
+  elif [ "$owner" != "$cur" ]; then
+    add_decision deny "git stash $sub を止めた: 対象 $ref は branch '$owner' で積まれた entry で、この dir の現在 branch '$cur' のものではない。$stash_hint"
+  fi
+}
+
+check_stash_clear() { # <dir>
+  local dir="$1" cur sha owner others="" unknown=0
+  local -a shas
+  mapfile -t shas < <(git -C "$dir" stash list --format=%H 2>/dev/null)
+  [ ${#shas[@]} -gt 0 ] || return
+  cur="$(cur_branch "$dir")"
+  for sha in "${shas[@]}"; do
+    [ -n "$sha" ] || continue
+    owner="$(stash_owner "$dir" "$sha")"
+    if [ -z "$owner" ] || [ -z "$cur" ]; then
+      unknown=1
+    elif [ "$owner" != "$cur" ]; then
+      case " $others " in *" '$owner' "*) ;; *) others="${others:+$others }'$owner'" ;; esac
+    fi
+  done
+  if [ -n "$others" ]; then
+    add_decision deny "git stash clear を止めた: 他の branch（$others）で積まれた entry がある。$stash_hint"
+  elif [ "$unknown" = 1 ]; then
+    add_decision deny "git stash clear を止めた: 持ち主を判定できない entry がある（現在 HEAD か entry が detached HEAD）。$stash_hint"
+  fi
+}
+
+check_commit() { # <dir>
+  local dir="$1" common gitdir top branch target
+  common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return
+  gitdir="$(git -C "$dir" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return
+  [ "$common" = "$gitdir" ] || return
+  top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || return
+  [ -d "$top/.git" ] || return
+  branch="$(cur_branch "$dir")"
+  [ -n "$branch" ] || return
+  target="$(git -C "$dir" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null)"
+  target="${target#origin/}"
+  [ -n "$target" ] || target=main
+  [ "$branch" = "$target" ] || return
+  git -C "$dir" remote get-url origin >/dev/null 2>&1 || return
+  git -C "$dir" rev-parse -q --verify HEAD >/dev/null 2>&1 || return
+  add_decision ask "worktree-scope.md §5: main working tree での実装は delegate-to-worktree へ委譲するのが既定。この場で統合先 branch '$branch' に直接 commit するなら、ユーザーが承認する。"
+}
+
+base_dir=""
+
+handle_cmd() { # <words...>
+  [ $# -gt 0 ] || return 0
+  while [ $# -gt 0 ] && [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do shift; done
+  [ $# -gt 0 ] || return 0
+  if [ "$1" = cd ]; then
+    local to="${2:-$HOME}" nd
+    [ "$to" = - ] && return 0
+    nd="$(resolve_path "$base_dir" "$to")"
+    [ -d "$nd" ] && base_dir="$nd"
+    return 0
+  fi
+  case "$1" in git|*/git) ;; *) return 0 ;; esac
+  shift
+  local dir="$base_dir"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -C) [ $# -ge 2 ] || return 0
+          [ -n "$2" ] && dir="$(resolve_path "$dir" "$2")"
+          shift 2 ;;
+      -c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix)
+          shift; [ $# -gt 0 ] && shift ;;
+      -*) shift ;;
+      *) break ;;
+    esac
+  done
+  [ $# -gt 0 ] || return 0
+  local sub="$1"; shift
+  case "$sub" in
+    stash) check_stash "$dir" "$@" ;;
+    commit) check_commit "$dir" ;;
+  esac
+}
+
+# parse <command string>: split into simple commands and call handle_cmd on
+# each one's words.
+parse() {
+  local s="$1" n i=0 c nc q="" word="" inword=0 skipnext=0 strip d line j rest seg
+  local -a words=() heredocs=()
+  local special=$' \t\n;&|()<>#"\\'"\'"
+  n=${#s}
+  flush() {
+    if [ "$inword" = 1 ]; then
+      if [ "$skipnext" = 1 ]; then skipnext=0; else words+=("$word"); fi
+    fi
+    word=""; inword=0
+  }
+  end_cmd() { flush; handle_cmd "${words[@]}"; words=(); skipnext=0; }
+  while (( i < n )); do
+    c="${s:i:1}"
+    if [ -n "$q" ]; then
+      # Inside double quotes (single quotes are consumed in one jump below).
+      if [ "$c" = '"' ]; then
+        q=""
+      elif [ "$c" = '\' ] && (( i + 1 < n )); then
+        nc="${s:i+1:1}"
+        case "$nc" in
+          '"'|'\'|'$'|'`') word+="$nc"; ((i++)) ;;
+          $'\n') ((i++)) ;;
+          *) word+="$c" ;;
+        esac
+      else
+        rest="${s:i}"; seg="${rest%%[\"\\]*}"
+        word+="$seg"
+        ((i += ${#seg} - 1))
+      fi
+      ((i++)); continue
+    fi
+    case "$c" in
+      "'")
+        # Jump to the closing quote: everything up to it is literal.
+        rest="${s:i+1}"; seg="${rest%%\'*}"
+        word+="$seg"; inword=1
+        if [ "$seg" = "$rest" ]; then i=n; else ((i += ${#seg} + 1)); fi ;;
+      '"') q="$c"; inword=1 ;;
+      '\')
+        if (( i + 1 < n )); then
+          nc="${s:i+1:1}"
+          if [ "$nc" != $'\n' ]; then word+="$nc"; inword=1; fi
+          ((i++))
+        fi ;;
+      ' '|$'\t') flush ;;
+      ';'|'&'|'|'|'('|')') end_cmd ;;
+      $'\n')
+        end_cmd
+        # Skip the bodies of the here-documents opened on this line.
+        for d in "${heredocs[@]}"; do
+          strip=0
+          [ "${d:0:1}" = - ] && strip=1
+          d="${d:1}"
+          rest="${s:i+1}"
+          while [ -n "$rest" ]; do
+            line="${rest%%$'\n'*}"
+            if [ "$line" = "$rest" ]; then rest=""; else rest="${rest#*$'\n'}"; fi
+            if [ "$strip" = 1 ]; then line="${line#"${line%%[!$'\t']*}"}"; fi
+            [ "$line" = "$d" ] && break
+          done
+          # Leave i on the newline that ends the delimiter line (or at the end).
+          i=$((n - ${#rest} - 1))
+        done
+        heredocs=() ;;
+      '<'|'>')
+        if [ "$c" = '<' ] && [ "${s:i+1:1}" = '<' ] && [ "${s:i+2:1}" != '<' ]; then
+          flush
+          ((i += 2)); strip=" "
+          if [ "${s:i:1}" = - ]; then strip=-; ((i++)); fi
+          while [[ "${s:i:1}" == [$' \t'] ]]; do ((i++)); done
+          d=""
+          while (( i < n )); do
+            c="${s:i:1}"
+            case "$c" in
+              ' '|$'\t'|$'\n'|';'|'&'|'|'|'<'|'>'|'('|')') break ;;
+              "'"|'"'|'\') ;;
+              *) d+="$c" ;;
+            esac
+            ((i++))
+          done
+          heredocs+=("$strip$d")
+          continue
+        fi
+        # A redirection: drop a leading fd number and the target word.
+        if [ "$inword" = 1 ] && [[ $word =~ ^[0-9]+$ ]]; then word=""; inword=0; else flush; fi
+        while [[ "${s:i+1:1}" == [\<\>\&\|] ]]; do ((i++)); done
+        skipnext=1 ;;
+      '#')
+        if [ "$inword" = 0 ]; then
+          rest="${s:i}"; seg="${rest%%$'\n'*}"
+          ((i += ${#seg} - 1))
+        else
+          word+="$c"
+        fi ;;
+      *)
+        # Take the whole run of ordinary characters at once.
+        rest="${s:i}"; seg="${rest%%["$special"]*}"
+        word+="$seg"; inword=1
+        ((i += ${#seg} - 1)) ;;
+    esac
+    ((i++))
+  done
+  end_cmd
+}
+
+main() {
+  local input cmd
+  input="$(cat)"
+  [ "$(jq -r '.tool_name // empty' <<<"$input" 2>/dev/null)" = Bash ] || return 0
+  cmd="$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null)"
+  base_dir="$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null)"
+  [ -n "$base_dir" ] || base_dir="$PWD"
+  case "$cmd" in *git*) ;; *) return 0 ;; esac
+  parse "$cmd"
+  [ -n "$decision" ] || return 0
+  local reason
+  reason="$(printf '%s\n' "${reasons[@]}")"
+  jq -n --arg d "$decision" --arg r "${reason%$'\n'}" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'
+}
+
+main || true
+exit 0
