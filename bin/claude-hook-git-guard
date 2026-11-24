@@ -214,12 +214,12 @@ check_part() { # <cwd> <part>
   done
   [ -d "$dir" ] || dir_unknown=1
   if [ -z "$sub" ]; then check_commit "$dir"; return; fi
-  # Drop redirections (2>&1, >/dev/null, > file) and a trailing &.
+  # Drop redirections (2>&1, >/dev/null, > file, &>file) and a trailing &.
   read -ra r <<<"$rest"
   for a in "${r[@]}"; do
     if [ "$skip" = 1 ]; then skip=0; continue; fi
-    [[ $a =~ ^[0-9]*[\<\>]+\&?$ ]] && { skip=1; continue; }
-    [[ $a =~ ^[0-9]*[\<\>] || $a = '&' ]] && continue
+    [[ $a =~ ^(\&|[0-9]*)[\<\>]+\&?$ ]] && { skip=1; continue; }
+    [[ $a =~ ^(\&|[0-9]*)[\<\>] || $a = '&' ]] && continue
     args+=("${a//[\"\']/}")   # quotes are not read by git here: "stash@{0}" -> stash@{0}
   done
   check_stash "$dir" "$sub" "${args[@]}"

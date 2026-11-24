@@ -154,6 +154,8 @@ expect "stash: redirections around own pop -> none" none "$sm" "git stash pop st
 expect "stash: redirect target is not taken as the ref -> deny" deny "$sm" "git stash pop 2>/dev/null"
 expect "stash: fd number is not taken as the ref -> deny" deny "$sm" "git stash pop 2>&1"
 expect "stash: spaced redirect target is not taken as the ref -> deny" deny "$sm" "git stash pop 2> /dev/null"
+expect "stash: &>file redirect is not taken as the ref -> deny" deny "$sm" "git stash pop &>/dev/null"
+expect "stash: spaced &> redirect is not taken as the ref -> deny" deny "$sm" "git stash pop &> /dev/null"
 expect "stash: deny beats ask in one line" deny "$sm" "git stash pop; git commit -m x"
 expect "stash: quoted stash ref (other's) -> deny" deny "$sm" 'git stash pop "stash@{0}"'
 expect "stash: single-quoted stash ref (other's) drop -> deny" deny "$sm" "git stash drop 'stash@{0}'"
