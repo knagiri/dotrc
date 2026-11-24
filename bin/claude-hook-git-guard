@@ -11,9 +11,10 @@
 #     a `git stash store -m` entry can show a different message in `stash list`),
 #     and since git never checks one branch out in two worktrees at once, the
 #     branch identifies the worktree. Touching an entry owned by another branch
-#     -> deny. When the owner cannot be told (the current HEAD or the entry is
-#     detached, or git failed reading the entry) or the target dir cannot be
-#     resolved (a -C value with $ or a backquote, or a missing dir) -> deny.
+#     -> deny. When the owner cannot be told (the current HEAD is detached, or
+#     the entry is: git failed reading it, or its message does not name a
+#     branch) or the target dir cannot be resolved (a -C value with $ or a
+#     backquote, or a missing dir) -> deny.
 #     Known limit: sessions that share one worktree (a parent and its Agent-tool
 #     subagent, the main working tree's interactive session and a spun-off
 #     session) have the same branch, so they are not told apart.
@@ -31,6 +32,10 @@
 #          refs/remotes/origin/HEAD points at; `main` when that is unset)
 #       3. a remote named origin exists
 #       4. HEAD exists (the first commit of a new repo has nowhere else to go)
+#     When the -C value cannot be resolved (see above) the commit check uses
+#     the dir as it stands without that -C, usually the cwd; it does not fall
+#     to ask, so a delegated session's `git -C "$WT" commit` is not frozen on
+#     an approval prompt.
 #
 # Detection is deliberately naive: the aim is catching accidental calls, not an
 # adversary. The command string is cut into parts on ; && || | and newlines,
@@ -41,12 +46,19 @@
 # may come before the subcommand. A git that is not at the start of a part
 # (`rg "git commit" docs`, `echo git stash pop`) is not seen.
 # The target dir is the hook input's cwd, moved by the part's -C values in
-# order. `cd` is not followed. Also not seen: `sh -c`, git aliases, wrappers
-# such as make, shell keywords (if, !, {) before git.
+# order. `cd` is not followed. A -C value is read as one token, so a value with
+# a space in it (`-C "/a b"`) is not seen and the whole call passes. --git-dir
+# and --work-tree are skipped, not applied, and neither is the dir of a
+# wrapper's `env -C <dir>`: the target stays the cwd moved by git's own -C.
+# Also not seen: `sh -c`, git aliases, wrappers such as make, shell keywords
+# (if, !, {) before git, a git after a single & or |&, a git right after an
+# opening ( , an option between stash and its subcommand (`git stash --quiet
+# pop`), and a subcommand with a & glued to it (`pop&`).
 # Text inside quotes can be seen (a commit message line reading
-# `git stash pop`). That is accepted: a stash hit is denied only when git says
-# the target entry really belongs to another branch, and a commit hit costs one
-# extra approval prompt.
+# `git stash pop`). That is accepted: nothing is taken in that case, and a hit
+# is denied only when git says the target entry belongs to another branch or
+# cannot say who owns it (or the target dir cannot be resolved); a commit hit
+# costs one extra approval prompt.
 #
 # Output: a PreToolUse hookSpecificOutput JSON object on stdout when a decision
 # is made (deny wins over ask when one command line holds both), nothing
@@ -80,7 +92,8 @@ cur_branch() { # <dir> -> branch name, empty when detached
 }
 
 # stash_owner <dir> <commit> -> the branch the entry was pushed on; empty when
-# it was pushed on a detached HEAD or the message does not say.
+# git failed reading it, it was pushed on a detached HEAD, or the message does
+# not name a branch (`git stash store -m`).
 stash_owner() {
   local subj re='^(WIP on|On) ([^:]+): '
   subj="$(git -C "$1" log -1 --format=%s "$2" 2>/dev/null)" || return 0
@@ -91,8 +104,9 @@ stash_owner() {
 
 stash_why='stash は main checkout と全 linked worktree で共有されているので、別 session が積んだ entry を取ると、その session の変更が黙って消える。'
 hint_other="${stash_why}自分の entry なら、それを積んだ branch に戻ってから撃つ。自分が積んだ entry が先頭に無いだけなら \`git stash list\` で番号を確かめ、\`stash@{N}\` を明示して撃ち直す。他 branch の entry は明示しても止まる。作業の一時退避には stash ではなく一時的な WIP commit も使える。"
-hint_detached="${stash_why}detached HEAD では持ち主を判定できず、\`stash@{N}\` を明示しても止まる。branch を checkout してから撃つか、一時退避には stash ではなく一時的な WIP commit を使う。"
-hint_unknown="${stash_why}-C の対象 dir を変数・\$(...)・存在しないパスで書くと判定できない。パスをリテラルで書き直して撃つ。"
+hint_detached="${stash_why}現在 HEAD が detached HEAD だと持ち主を判定できず、\`stash@{N}\` を明示しても止まる。branch を checkout してから撃つか、一時退避には stash ではなく一時的な WIP commit を使う。"
+hint_entry="${stash_why}entry 側の持ち主が読めない（detached HEAD で積まれた、または message から branch を読めない）と、branch を checkout しても \`stash@{N}\` を明示しても止まる。この entry は人が確かめて扱い、一時退避には stash ではなく一時的な WIP commit を使う。"
+hint_unknown="${stash_why}-C の対象 dir を変数・\$(...)・バッククォート・存在しないパスで書くと判定できない。パスをリテラルで書き直して撃つ。"
 
 check_stash() { # <dir> <stash args...>
   local dir="$1"; shift
@@ -120,8 +134,10 @@ check_stash() { # <dir> <stash args...>
   git -C "$dir" rev-parse -q --verify "$sha^2" >/dev/null 2>&1 || return
   owner="$(stash_owner "$dir" "$sha")"
   cur="$(cur_branch "$dir")"
-  if [ -z "$cur" ] || [ -z "$owner" ]; then
-    add_decision deny "git stash $sub を止めた: 対象 $ref の持ち主を判定できない（現在 HEAD か entry が detached HEAD）。$hint_detached"
+  if [ -z "$cur" ]; then
+    add_decision deny "git stash $sub を止めた: 現在 HEAD が detached HEAD で、対象 $ref の持ち主と比べられない。$hint_detached"
+  elif [ -z "$owner" ]; then
+    add_decision deny "git stash $sub を止めた: 対象 $ref の持ち主を判定できない（detached HEAD で積まれた、または entry の message から branch を読めない）。$hint_entry"
   elif [ "$owner" != "$cur" ]; then
     add_decision deny "git stash $sub を止めた: 対象 $ref は branch '$owner' で積まれた entry で、この dir の現在 branch '$cur' のものではない。$hint_other"
   fi
@@ -145,7 +161,11 @@ check_stash_clear() { # <dir>
   if [ -n "$others" ]; then
     add_decision deny "git stash clear を止めた: 他の branch（$others）で積まれた entry がある。$hint_other"
   elif [ "$unknown" = 1 ]; then
-    add_decision deny "git stash clear を止めた: 持ち主を判定できない entry がある（現在 HEAD か entry が detached HEAD）。$hint_detached"
+    if [ -z "$cur" ]; then
+      add_decision deny "git stash clear を止めた: 現在 HEAD が detached HEAD で、entry の持ち主と比べられない。$hint_detached"
+    else
+      add_decision deny "git stash clear を止めた: 持ち主を判定できない entry がある（detached HEAD で積まれた、または message から branch を読めない）。$hint_entry"
+    fi
   fi
 }
 
@@ -199,7 +219,7 @@ check_part() { # <cwd> <part>
     if [ "$skip" = 1 ]; then skip=0; continue; fi
     [[ $a =~ ^[0-9]*[\<\>]+\&?$ ]] && { skip=1; continue; }
     [[ $a =~ ^[0-9]*[\<\>] || $a = '&' ]] && continue
-    args+=("$a")
+    args+=("${a//[\"\']/}")   # quotes are not read by git here: "stash@{0}" -> stash@{0}
   done
   check_stash "$dir" "$sub" "${args[@]}"
 }

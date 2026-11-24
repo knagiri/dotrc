@@ -155,6 +155,13 @@ expect "stash: redirect target is not taken as the ref -> deny" deny "$sm" "git 
 expect "stash: fd number is not taken as the ref -> deny" deny "$sm" "git stash pop 2>&1"
 expect "stash: spaced redirect target is not taken as the ref -> deny" deny "$sm" "git stash pop 2> /dev/null"
 expect "stash: deny beats ask in one line" deny "$sm" "git stash pop; git commit -m x"
+expect "stash: quoted stash ref (other's) -> deny" deny "$sm" 'git stash pop "stash@{0}"'
+expect "stash: single-quoted stash ref (other's) drop -> deny" deny "$sm" "git stash drop 'stash@{0}'"
+expect "stash: single-quoted stash ref (own) -> none" none "$sw" "git stash pop 'stash@{0}'"
+expect "stash: pop --index without ref (other's top) -> deny" deny "$sm" "git stash pop --index"
+expect "stash: drop -q without ref (other's top) -> deny" deny "$sm" "git stash drop -q"
+expect "stash: trailing & is not taken as the ref -> deny" deny "$sm" "git stash pop &"
+expect "stash: space-separated --git-dir skipped -> deny" deny "$sm" "git --git-dir .git stash pop"
 
 # Only a git at the start of a part counts.
 expect "commit: rg \"git commit\" docs -> none" none "$main" 'rg "git commit" docs'
@@ -213,7 +220,10 @@ expect "stash: -C \"\$PWD\" -> deny" deny "$m6" 'git -C "$PWD" stash pop'
 expect "stash: -C \$(pwd) -> deny" deny "$m6" 'git -C $(pwd) stash pop'
 expect "stash: -C missing dir -> deny" deny "$m6" "git -C $tmp/nonexistent stash pop"
 expect "stash: unresolved dir, push -> none" none "$m6" 'git -C "$PWD" stash push -m x'
-expect "commit: unresolved -C dir -> none" none "$tmp/elsewhere" 'git -C "$PWD" commit -m x'
+expect "commit: unresolved -C falls back to cwd (non-repo) -> none" none "$tmp/elsewhere" 'git -C "$PWD" commit -m x'
+expect "commit: unresolved -C falls back to cwd (main working tree on main) -> ask" ask "$main" 'git -C "$PWD" commit -m x'
+# A part that left dir_unknown set must not leak into the next part.
+expect "stash: dir_unknown resets per part" none "$sw" 'git -C "$PWD" commit -m x; git stash pop stash@{0}'
 
 # Branch names that collide with a tag name.
 clone_with_remote "$tmp/s7" main
@@ -231,8 +241,36 @@ expect "stash: /usr/bin/git -> deny" deny "$sm" "/usr/bin/git stash pop"
 expect "stash: --work-tree <dir> skipped -> deny" deny "$sm" "git --work-tree . stash pop"
 
 # cwd missing from the hook input: falls back to the process cwd.
-out="$(cd "$sm" && jq -n --arg c "git stash pop" '{tool_name:"Bash",tool_input:{command:$c}}' | "$src")"
-if [ -n "$out" ]; then echo "ok: stash: no cwd in input falls back to \$PWD"; else echo "FAIL: stash: no cwd fallback"; fail=1; fi
+out="$(cd "$sm" && jq -n --arg c "git stash pop" '{tool_name:"Bash",tool_input:{command:$c}}' | "$src" | jq -r '.hookSpecificOutput.permissionDecision')"
+if [ "$out" = deny ]; then echo "ok: stash: no cwd in input falls back to \$PWD"; else echo "FAIL: stash: no cwd fallback (got '$out')"; fail=1; fi
+
+# ~ in a -C value resolves against $HOME.
+out="$(jq -n --arg c "git -C ~/work commit -m x" --arg d "$tmp/elsewhere" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' \
+  | HOME="$tmp/c1" "$src" | jq -r '.hookSpecificOutput.permissionDecision')"
+if [ "$out" = ask ]; then echo "ok: commit: -C ~/<main> resolves HOME -> ask"; else echo "FAIL: commit: -C ~ (got '$out')"; fail=1; fi
+
+# Known limit: a -C value containing a space is not seen, so the call passes.
+clone_with_remote "$tmp/sp ace" main
+echo a >>"$tmp/sp ace/work/init.txt"; git -C "$tmp/sp ace/work" stash push -q -m other
+git -C "$tmp/sp ace/work" checkout -q -b other-branch
+expect "stash: -C value with a space is not detected (known limit) -> none" none "$tmp" "git -C \"$tmp/sp ace/work\" stash pop"
+
+# A missing jq or git: one stderr line, exit 1.
+bin_without() { # <tool-to-omit> -> a PATH dir holding the other one only
+  local d="$tmp/path-without-$1" t
+  mkdir -p "$d"
+  for t in jq git; do [ "$t" = "$1" ] || ln -sf "$(command -v "$t")" "$d/$t"; done
+  echo "$d"
+}
+for missing in jq git; do
+  pd="$(bin_without "$missing")"
+  err="$(PATH="$pd" "$(command -v bash)" "$src" </dev/null 2>&1 >/dev/null)"; rc=$?
+  if [ "$rc" = 1 ] && [ "$(wc -l <<<"$err")" = 1 ] && [[ $err == *"$missing not found"* ]]; then
+    echo "ok: missing $missing -> exit 1 with one stderr line"
+  else
+    echo "FAIL: missing $missing (rc=$rc, err=$err)"; fail=1
+  fi
+done
 
 # Typical commit heredoc.
 expect "commit: heredoc message via \$(cat <<EOF) -> ask" ask "$main" $'git commit -m "$(cat <<\'EOF\'\nfix thing\nEOF\n)"'
@@ -266,12 +304,23 @@ case "$reason" in
   *) echo "FAIL: stash: deny reason: $reason"; fail=1 ;;
 esac
 
-# The detached-HEAD hint must not send the agent to stash@{N}, which is still denied.
+# Entry side detached (the HEAD is a branch): checking out a branch does not help.
 reason="$(jq -n --arg c "git stash pop" --arg d "$d4" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' \
   | "$src" | jq -r '.hookSpecificOutput.permissionDecisionReason')"
 case "$reason" in
-  *"branch を checkout してから撃つ"*) echo "ok: stash: detached deny hint says to check out a branch" ;;
-  *) echo "FAIL: stash: detached hint: $reason"; fail=1 ;;
+  *"entry 側の持ち主が読めない"*"checkout しても"*) echo "ok: stash: detached-entry deny hint says checkout does not help" ;;
+  *) echo "FAIL: stash: detached-entry hint: $reason"; fail=1 ;;
+esac
+
+# Current HEAD detached: the hint says to check out a branch.
+clone_with_remote "$tmp/s9" main
+echo a >>"$tmp/s9/work/init.txt"; git -C "$tmp/s9/work" stash push -q -m own
+git -C "$tmp/s9/work" checkout -q --detach
+reason="$(jq -n --arg c "git stash pop" --arg d "$tmp/s9/work" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' \
+  | "$src" | jq -r '.hookSpecificOutput.permissionDecisionReason')"
+case "$reason" in
+  *"現在 HEAD が detached HEAD"*"branch を checkout してから撃つ"*) echo "ok: stash: detached-HEAD deny reason and hint" ;;
+  *) echo "FAIL: stash: detached-HEAD reason: $reason"; fail=1 ;;
 esac
 
 # The output carries the event name Claude Code expects.
