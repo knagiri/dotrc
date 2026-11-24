@@ -98,10 +98,8 @@ cd "${dir:-.}" && exec "$@"
 STUB
 chmod +x "$stubdir/mise"
 
-# The wrapper reads $root/.issue-denylist of the main working tree of the repo it
-# runs in. Running from this checkout would make every case below depend on
-# whether the person running the tests has created a real denylist, so the
-# cases run in a throwaway repo that carries copies of the templates and bin/.
+# The cases run in a throwaway repo that carries copies of the templates and
+# bin/, so they do not depend on the state of this checkout.
 isorepo="$tmp/isorepo"
 mkdir -p "$isorepo/.github"
 cp -a "$here/../.github/ISSUE_TEMPLATE" "$isorepo/.github/"
@@ -432,11 +430,6 @@ git init -q "$otherrepo"
 global_body="$tmp/global_body.md"
 printf '## やること（WHAT）\nsomething\n' >"$global_body"
 
-# The denylist below decides whether a filing from another repo is allowed at
-# all; these runs give it one with an unrelated term so they test --global.
-deny="$scriptrepo/.issue-denylist"
-printf 'unrelated-term\n' >"$deny"
-
 globalrun() {  # globalrun <bindir> <cwd> <title> [extra flags...]
   : >"$tmp/args"; : >"$tmp/pwd"
   ( cd "$2" && env -u CLAUDE_CODE_SESSION_ID GH_ARGS_FILE="$tmp/args" \
@@ -479,161 +472,22 @@ if [ "$rc" -eq 1 ] && grep -q 'no template at' "$tmp/err"; then
   echo "ok: resolving --global's root from cwd instead loses the template (the case above is discriminating)"
 else echo "FAIL: --global mutant rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 
-# --- denylist -----------------------------------------------------------------
-# Filings from other repos reach the public repo unattended, so title, body and
-# a --resolved-by URL are matched (case-insensitively, as fixed strings) against
-# the gitignored .issue-denylist and refused with exit 3 on a hit. The matched
-# term is never echoed.
-printf 'Example-Corp\n' >"$deny"
+# --- Case Q: no content gate on a filing from another repo ------------------
+# A --global filing from an unrelated repo is created whether or not a
+# .issue-denylist file exists in the script repo, and whatever that file lists:
+# the wrapper does not read it. Against a wrapper that does (refusing without a
+# usable list, or on a listed term), both runs below exit non-zero.
+rm -f "$scriptrepo/.issue-denylist"
 globalrun "$scriptrepo/bin" "$otherrepo" 'about example-corp things' --global
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args" && ! grep -qi 'example-corp' "$tmp/err"; then
-  echo "ok: a denylisted term in the title (any case) exits 3 before create, without echoing it"
-else echo "FAIL: denylist title rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
-
-printf '## やること（WHAT）\nseen at EXAMPLE-CORP\n' >"$tmp/deny_body.md"
-cp "$tmp/deny_body.md" "$global_body"
-globalrun "$scriptrepo/bin" "$otherrepo" t --global
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args" && ! grep -qi 'example-corp' "$tmp/err"; then
-  echo "ok: a denylisted term in the body exits 3 before create, without echoing it"
-else echo "FAIL: denylist body rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
-printf '## やること（WHAT）\nsomething\n' >"$global_body"
-
-globalrun "$scriptrepo/bin" "$otherrepo" t --global \
-  --resolved-by https://github.com/example-corp/app/pull/3
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args" && ! grep -qi 'example-corp' "$tmp/err"; then
-  echo "ok: a denylisted term in the --resolved-by URL exits 3 before create"
-else echo "FAIL: denylist URL rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
-
-# A body larger than a pipe buffer with the term on its first line. The match
-# must still refuse: with `{ title; cat body; } | grep -q`, grep exits at the
-# hit, cat dies of SIGPIPE, and pipefail turned the match into "no match".
-{ printf '## やること（WHAT）\nseen at EXAMPLE-CORP\n'; head -c 300000 /dev/zero | tr '\0' 'x'; echo; } >"$tmp/big_body.md"
-cp "$tmp/big_body.md" "$global_body"
-globalrun "$scriptrepo/bin" "$otherrepo" t --global
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: a denylisted term at the top of a body larger than a pipe buffer still exits 3"
-else echo "FAIL: large body denylist rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
-
-# Discrimination: with the pipeline form back, the same run slips through.
-grepmutant="$tmp/grepmutant"
-rm -rf "$grepmutant"; mkdir -p "$grepmutant"
-cp -a "$scriptrepo/bin/." "$grepmutant/"
-sed 's#^.*deny-grep@dotrc$#  if { printf "%s\\n" "$title"; cat -- "$body_file"; } | grep -qiF -f "$tmpdir/patterns"; then rc=0; else rc=1; fi#' \
-  "$bindir/gh-issue-file" >"$grepmutant/gh-issue-file"
-chmod +x "$grepmutant/gh-issue-file"
-if cmp -s "$bindir/gh-issue-file" "$grepmutant/gh-issue-file"; then
-  echo "FAIL: the pipeline mutant is identical to gh-issue-file; the check below is a no-op"; fail=1
-fi
-cp "$scriptrepo/bin/gh-issue-file" "$tmp/gh-issue-file.keep"
-cp "$grepmutant/gh-issue-file" "$scriptrepo/bin/gh-issue-file"
-globalrun "$scriptrepo/bin" "$otherrepo" t --global
-cp "$tmp/gh-issue-file.keep" "$scriptrepo/bin/gh-issue-file"
-# Whether grep's early exit kills cat with SIGPIPE before it matters is
-# scheduling-dependent, so a mutant that still exits 3 is a skip, not a failure.
-if [ "$rc" -ne 3 ] && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: with the pipeline form the large-body match is lost (the case above is discriminating)"
-elif [ "$rc" -eq 3 ]; then
-  echo "skip: the pipeline mutant did not lose the match in this environment (SIGPIPE race is scheduling-dependent)"
-else echo "FAIL: pipeline mutant rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
-printf '## やること（WHAT）\nsomething\n' >"$global_body"
-
-# A file with no pattern checks nothing, so it counts as no denylist: another
-# repo is refused and the root's own repo is not. Blank lines must also never
-# become an empty pattern, which grep -F matches against every line.
-printf '\n  \n' >"$deny"
-globalrun "$scriptrepo/bin" "$otherrepo" t --global
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: a denylist with no pattern refuses a filing from another repo"
-else echo "FAIL: blank denylist foreign rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
-
-globalrun "$scriptrepo/bin" "$scriptrepo" t --global
 if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: a denylist of blank lines matches nothing for the root's own repo"
-else echo "FAIL: blank denylist same repo rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+  echo "ok: --global from another repo files with no .issue-denylist present"
+else echo "FAIL: no-denylist foreign rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 
-# Discrimination: without the blank-line filter the same run is refused.
-blankmutant="$tmp/blankmutant"
-rm -rf "$blankmutant"; mkdir -p "$blankmutant"
-cp -a "$scriptrepo/bin/." "$blankmutant/"
-sed 's|^.*deny-blank@dotrc$|  cat -- "$deny_file"|' \
-  "$bindir/gh-issue-file" >"$blankmutant/gh-issue-file"
-chmod +x "$blankmutant/gh-issue-file"
-if cmp -s "$bindir/gh-issue-file" "$blankmutant/gh-issue-file"; then
-  echo "FAIL: the blank-line mutant is identical to gh-issue-file; the check below is a no-op"; fail=1
-fi
-# The mutant lives outside $scriptrepo, so run it with $scriptrepo as its
-# --global root by placing it there temporarily.
-cp "$scriptrepo/bin/gh-issue-file" "$tmp/gh-issue-file.keep"
-cp "$blankmutant/gh-issue-file" "$scriptrepo/bin/gh-issue-file"
-globalrun "$scriptrepo/bin" "$scriptrepo" t --global
-cp "$tmp/gh-issue-file.keep" "$scriptrepo/bin/gh-issue-file"
-if [ "$rc" -eq 3 ]; then
-  echo "ok: without the blank-line filter every filing is refused (the case above is discriminating)"
-else echo "FAIL: blank-line mutant rc=$rc (want 3)"; fail=1; fi
-
-# A denylist that exists but cannot be read refuses, even for the root's own
-# repo: treating it as absent would let that filing skip the check.
-printf 'unrelated-term\n' >"$deny"
-chmod 000 "$deny"
-if [ -r "$deny" ]; then
-  echo "ok: (skipped) the unreadable-denylist case needs a non-root user"
-else
-  globalrun "$scriptrepo/bin" "$scriptrepo" t --global
-  if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args" && grep -q 'cannot read' "$tmp/err"; then
-    echo "ok: an unreadable denylist exits 3 even from the root's own repo"
-  else echo "FAIL: unreadable denylist rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
-fi
-chmod 600 "$deny"
-
-# No denylist: a filing from another repo is refused (fail closed), while one
-# from the root's own repo still goes through.
-rm -f "$deny"
-globalrun "$scriptrepo/bin" "$otherrepo" t --global
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: no denylist and filing from another repo exits 3"
-else echo "FAIL: missing denylist foreign rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
-
-globalrun "$scriptrepo/bin" "$scriptrepo" t --global
+printf 'Example-Corp\n' >"$scriptrepo/.issue-denylist"
+globalrun "$scriptrepo/bin" "$otherrepo" 'about example-corp things' --global
 if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: no denylist and filing from the root's own repo is allowed"
-else echo "FAIL: missing denylist same repo rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
-
-# A linked worktree of the root's repo is the same repo, not a foreign one.
-git -C "$scriptrepo" -c user.name=t -c user.email=t@example.com add -A >/dev/null
-git -C "$scriptrepo" -c user.name=t -c user.email=t@example.com commit -qm init
-git -C "$scriptrepo" worktree add -q "$tmp/scriptwt" 2>/dev/null
-globalrun "$scriptrepo/bin" "$tmp/scriptwt" t --global
-if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: a linked worktree of the root's repo counts as the same repo"
-else echo "FAIL: worktree same repo rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
-
-# The denylist is gitignored, so it lives only in the main working tree. A run
-# whose root is a linked worktree (no --global) must still read it from there.
-printf 'Example-Corp\n' >"$deny"
-wtrun() {  # wtrun <bindir> <title>; cwd = the linked worktree, root = that worktree
-  : >"$tmp/args"
-  ( cd "$tmp/scriptwt" && env -u CLAUDE_CODE_SESSION_ID GH_ARGS_FILE="$tmp/args" \
-      PATH="$stubdir:$PATH" "$1/gh-issue-file" --kind harness --title "$2" \
-      --body-file "$global_body" ) >"$tmp/out" 2>"$tmp/err"
-  rc=$?
-}
-wtrun "$scriptrepo/bin" 'about example-corp things'
-if [ "$rc" -eq 3 ] && ! grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: a root that is a linked worktree reads the main working tree's denylist"
-else echo "FAIL: worktree-root denylist rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
-
-# Discrimination: reading it from the worktree root instead loses the match.
-rootmutant="$tmp/rootmutant"
-rm -rf "$rootmutant"; mkdir -p "$rootmutant"
-cp -a "$scriptrepo/bin/." "$rootmutant/"
-sed 's|^.*deny-root@dotrc$|  :|' "$bindir/gh-issue-file" >"$rootmutant/gh-issue-file"
-chmod +x "$rootmutant/gh-issue-file"
-if cmp -s "$bindir/gh-issue-file" "$rootmutant/gh-issue-file"; then
-  echo "FAIL: the deny-root mutant is identical to gh-issue-file; the check below is a no-op"; fail=1
-fi
-wtrun "$rootmutant" 'about example-corp things'
-if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: reading the denylist from the worktree root misses it (the case above is discriminating)"
-else echo "FAIL: deny-root mutant rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+  echo "ok: --global from another repo files even when .issue-denylist lists a word in the title"
+else echo "FAIL: denylist-present foreign rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+rm -f "$scriptrepo/.issue-denylist"
 
 exit "$fail"

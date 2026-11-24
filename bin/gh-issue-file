@@ -12,12 +12,6 @@ set -euo pipefail
 #   2. Fixed labels. harness and bug are observations (label `observation`, no
 #      status/*): duplicates are not refused. task keeps status/triage, the
 #      human gate.
-#   3. A denylist. Title, body and a --resolved-by URL are matched against the
-#      gitignored .issue-denylist of $root's main working tree (fixed strings,
-#      case-insensitive) and refused on a hit. Without a usable denylist (no
-#      file, or no pattern in it), a filing from a repo other than $root's is
-#      refused outright: it would reach a public repo with nobody reading it.
-#      A denylist that exists but cannot be read refuses every filing.
 #
 # Each body gets `<!-- observed-session: <id> -->` appended (from
 # $CLAUDE_CODE_SESSION_ID, omitted when unset) so repeated filings by one
@@ -43,8 +37,7 @@ set -euo pipefail
 # all: cwd's repo has no .github/ISSUE_TEMPLATE/<kind>.md and the wrapper stops
 # at exit 1. Same spelling, and the same intent, as claude-worktree --global.
 #
-# Exit:  0 created (or listed) / 1 bad input / 3 refused by the denylist, or no
-#          usable denylist while filing from another repo
+# Exit:  0 created (or listed) / 1 bad input
 #        / 4 the issue WAS created but the --resolved-by follow-up (reading the
 #          number, closing) failed: do not run again, it would file a duplicate
 #        / 128 called outside a git repo without --global (git itself fails
@@ -109,10 +102,9 @@ fi
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
 
 # One $root decides everything this wrapper does -- which template the body is
-# checked against, which denylist applies, and which repo the issue is filed
-# into -- so they can never drift apart. --global moves it to the repo holding
-# this script (resolving any PATH symlink first), the same anchor
-# claude-worktree --global uses.
+# checked against and which repo the issue is filed into -- so they can never
+# drift apart. --global moves it to the repo holding this script (resolving
+# any PATH symlink first), the same anchor claude-worktree --global uses.
 if [ "$file_global" = 1 ]; then
   root="$(gh_mise_repo_root "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"  # global-root@dotrc
 else
@@ -173,63 +165,6 @@ if [ -n "$missing" ]; then
   echo "gh-issue-file: body is missing required headings from $kind.md:" >&2
   printf '%s' "$missing" | sed 's/^/  /' >&2
   exit 1
-fi
-
-# --- denylist ---------------------------------------------------------------
-# Repos are told apart by their common git dir, so a linked worktree of $root's
-# repo counts as the same repo. Outside any checkout the caller is foreign.
-common_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true; }
-caller_common="$(common_dir "$PWD")"
-root_common="$(common_dir "$root")"
-
-# The denylist is gitignored, so it exists only in the main working tree. When
-# $root is a linked worktree, look there rather than in the worktree root.
-deny_root="$root"
-case "$root_common" in */.git) deny_root="${root_common%/.git}" ;; esac  # deny-root@dotrc
-deny_file="$deny_root/.issue-denylist"
-
-deny_active=0
-if [ -e "$deny_file" ]; then
-  # Present but unreadable is a refusal, not "no denylist": falling through
-  # would let a same-repo filing skip the check.
-  if [ ! -r "$deny_file" ]; then
-    echo "gh-issue-file: cannot read $deny_file; not filed." >&2
-    exit 3
-  fi
-  # Blank and whitespace-only lines are dropped, and surrounding whitespace is
-  # trimmed: an empty pattern makes grep -F match every line, which would stop
-  # every filing.
-  deny_patterns() {
-    sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -- "$deny_file"  # deny-blank@dotrc
-  }
-  deny_patterns >"$tmpdir/patterns" || { echo "gh-issue-file: cannot read $deny_file; not filed." >&2; exit 3; }
-  # A file with no pattern checks nothing, so it counts as no denylist.
-  [ ! -s "$tmpdir/patterns" ] || deny_active=1
-fi
-
-if [ "$deny_active" = 1 ]; then
-  # Everything that will be published, in one file and one grep process: with
-  # `{ ...; cat body; } | grep -q`, grep exits at its first hit, cat dies of
-  # SIGPIPE on a large body, and pipefail turns a match into a "no match".
-  { printf '%s\n' "$title"; cat -- "$body_file"; printf '\n%s\n' "$resolved_by"; } >"$tmpdir/subject"
-  rc=0
-  grep -qiF -f "$tmpdir/patterns" "$tmpdir/subject" || rc=$?  # deny-grep@dotrc
-  case "$rc" in
-    0)
-      # The matched term is not echoed: the denylist's contents stay out of
-      # transcripts and logs, same as they stay out of git.
-      echo "gh-issue-file: title, body or PR URL matches $deny_file; not filed. Rewrite it without the specific name." >&2
-      exit 3 ;;
-    1) ;;
-    *)
-      # grep failed (2 or more): the answer is unknown, so refuse.
-      echo "gh-issue-file: denylist check failed (grep exit $rc); not filed." >&2
-      exit 3 ;;
-  esac
-elif [ -z "$caller_common" ] || [ "$caller_common" != "$root_common" ]; then
-  echo "gh-issue-file: no usable $deny_file, and this filing comes from outside $root's repo; refusing." >&2
-  echo "  Create the denylist first (see docs/design/agent-issue-workflow.md)." >&2
-  exit 3
 fi
 
 # --- checks before create ---------------------------------------------------

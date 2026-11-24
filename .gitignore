@@ -3,4 +3,3 @@
 /mise.local.toml
 /mise.*.local.toml
 /tmux-client-*.log
-/.issue-denylist
