@@ -280,7 +280,7 @@ expect "stash: clear with a detached entry -> deny" deny "$d4" "git stash clear"
 reason="$(jq -n --arg c "git stash pop" --arg d "$sm" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' \
   | "$src" | jq -r '.hookSpecificOutput.permissionDecisionReason')"
 case "$reason" in
-  *"'feat'"*'stash@{N}'*) echo "ok: stash: deny reason names the owner and stash@{N}" ;;
+  *"'feat'"*'stash@{N}'*"他 branch の entry は明示しても止まる"*) echo "ok: stash: deny reason names the owner and stash@{N}" ;;
   *) echo "FAIL: stash: deny reason: $reason"; fail=1 ;;
 esac
 

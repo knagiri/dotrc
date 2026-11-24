@@ -91,7 +91,7 @@ stash_owner() {
 }
 
 stash_why='stash は main checkout と全 linked worktree で共有されているので、別 session が積んだ entry を取ると、その session の変更が黙って消える。'
-hint_other="${stash_why}自分の entry なら、それを積んだ branch に戻ってから撃つ。別に積んだ entry を意図して取るなら \`git stash list\` で番号を確かめ、\`stash@{N}\` を明示して撃ち直す。作業の一時退避には stash ではなく一時的な WIP commit も使える。"
+hint_other="${stash_why}自分の entry なら、それを積んだ branch に戻ってから撃つ。自分が積んだ entry が先頭に無いだけなら \`git stash list\` で番号を確かめ、\`stash@{N}\` を明示して撃ち直す。他 branch の entry は明示しても止まる。作業の一時退避には stash ではなく一時的な WIP commit も使える。"
 hint_detached="${stash_why}detached HEAD では持ち主を判定できず、\`stash@{N}\` を明示しても止まる。branch を checkout してから撃つか、一時退避には stash ではなく一時的な WIP commit を使う。"
 hint_unknown="${stash_why}-C や cd の対象 dir を変数・\$(...)・存在しないパスで書くと判定できない。パスをリテラルで書き直して撃つ。"
 
