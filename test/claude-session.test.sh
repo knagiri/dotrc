@@ -382,4 +382,76 @@ else ng "sidecar-only collision rc=$rc err=$err"; fi
 td_clean "after sidecar-only collision"
 reset_b
 
+# --- --repo: import into a repo cloned under another name ------------------
+# $root_b/$repo exists too, so an import that ignored --repo would succeed
+# there instead of failing.
+rrepo=github.com/example-org/renamed-repo
+mkdir -p "$root_b/$rrepo"
+rdest="$cfg_b/projects/$(enc "$root_b/$rrepo")"
+reset_b
+out="$(run_b import --repo "$rrepo" "$arch" 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && cmp -s "$src_dir/$id.jsonl" "$rdest/$id.jsonl" && [ ! -e "$dest/$id.jsonl" ] \
+   && diff -r "$src_dir/$id" "$rdest/$id" >/dev/null 2>&1; then
+  ok "--repo places a byte-identical jsonl under the overriding repo's <enc>"
+else ng "--repo round trip rc=$rc; ls: $(ls -R "$cfg_b" 2>&1)"; fi
+if [ "$out" = "cd $root_b/$rrepo && claude --resume $id" ]; then
+  ok "--repo: the resume command names the overriding repo"
+else ng "--repo resume hint: $out"; fi
+td_clean "after --repo import"
+
+# The archive's subpath is kept under the overriding repo.
+mkdir -p "$root_b/$rrepo/.worktrees/feature-foo"
+reset_b
+run_b import --repo "$rrepo" "$tmp/w.tar.gz" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ -f "$cfg_b/projects/$(enc "$root_b/$rrepo/.worktrees/feature-foo")/$wid.jsonl" ] \
+   && [ ! -e "$rdest/$wid.jsonl" ]; then
+  ok "--repo keeps meta.json's subpath"
+else ng "--repo with subpath rc=$rc; ls: $(ls -R "$cfg_b/projects" 2>&1)"; fi
+
+# Bad values. The first four would each resolve to an existing dir if they went
+# unchecked, so only the --repo checks can refuse them (and the message must say
+# so). The rest are refused by argument parsing.
+mkdir -p "$root_b/$rrepo/extra"
+bad_repo() { # <label> <stderr pattern> <import args>...
+  local label="$1" pat="$2" err rc
+  shift 2
+  reset_b
+  err="$(run_b import "$@" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && [ -z "$(find "$cfg_b" -name "$id*" 2>/dev/null)" ] && grep -q -- "$pat" <<<"$err"; then
+    ok "--repo rejected: $label"
+  else ng "--repo accepted ($label) rc=$rc err=$err"; fi
+  td_clean "after --repo rejection: $label"
+}
+bad_repo "two components" "--repo must have at least 3" --repo github.com/example-org "$arch"
+bad_repo "four components" "--repo must be" --repo "$rrepo/extra" "$arch"
+bad_repo "with .." "bad --repo component" --repo github.com/example-org/.. "$arch"
+bad_repo "absolute" "bad --repo (leading" --repo "/$rrepo" "$arch"
+bad_repo "empty" "--repo must have at least 3" --repo "" "$arch"
+bad_repo "no value" "--repo needs" "$arch" --repo
+bad_repo "unknown option" "unknown option" --rep "$rrepo" "$arch"
+bad_repo "two archives" "more than one archive" "$arch" "$tmp/w.tar.gz"
+
+# meta.json's repo is still checked when --repo overrides it.
+bad_repo "meta.json repo with .. under a valid --repo" "bad meta.json repo component" --repo "$rrepo" "$tmp/h-repoesc.tar.gz"
+
+# A missing destination names the repo actually used.
+reset_b
+err="$(run_b import --repo github.com/example-org/absent-repo "$arch" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -qF 'ghq get github.com/example-org/absent-repo)' <<<"$err" \
+   && ! grep -qF "$repo" <<<"$err" && [ ! -d "$cfg_b/projects" ]; then
+  ok "--repo: a missing destination names the overriding repo"
+else ng "--repo missing dest rc=$rc err=$err"; fi
+td_clean "after --repo missing destination"
+
+# A missing subpath under --repo names the overriding repo, not meta.json's.
+mkdir -p "$root_b/github.com/example-org/other-repo"
+reset_b
+err="$(run_b import --repo github.com/example-org/other-repo "$tmp/w.tar.gz" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -qF 'ghq get github.com/example-org/other-repo' <<<"$err" \
+   && ! grep -qF "$meta_repo" <<<"$err"; then
+  ok "--repo: a missing subpath names the overriding repo"
+else ng "--repo missing subpath rc=$rc err=$err"; fi
+td_clean "after --repo missing subpath"
+reset_b
+
 exit "$fail"
