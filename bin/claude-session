@@ -12,11 +12,15 @@ set -euo pipefail
 # (and the sibling <id>/ directory, if any) into a tar.gz together with a
 # meta.json. The default output is ./claude-session-<id>.tar.gz; an existing
 # file is never overwritten. The transcript holds tool output verbatim, so the
-# archive may contain secrets.
+# archive may contain secrets. Export a session only after it has ended: a
+# running session can be mid-write, leaving a truncated last line.
 #
 # import places those files under projects/<enc>/, where <enc> is derived from
 # the DESTINATION cwd: $(ghq root)/<repo>/<subpath>. The session's cwd must be
 # inside a ghq-managed repo on both hosts; $HOME (user name, OS) may differ.
+# "Inside a ghq-managed repo" means: the cwd's path relative to the ghq root
+# starts with <host>/<owner>/<repo> (its first 3 components) and the rest is
+# the subpath. Any other layout is unsupported.
 # The jsonl is copied byte for byte: the `cwd` recorded inside it is not
 # rewritten, since resume only needs the file to sit under the <enc> of the
 # directory claude is started from. import then prints the resume command.
@@ -34,15 +38,17 @@ set -euo pipefail
 # encodes other characters is unverified, so a cwd containing anything outside
 # [A-Za-z0-9/.-] is refused on both sides rather than guessed.
 #
-# Refused: a session id that is not a uuid, a transcript found in zero or
-# several projects/ dirs, a cwd outside $(ghq root), a destination cwd that
-# does not exist, and an id that already exists anywhere under projects/.
+# Notably refused: a session id that is not a uuid, a transcript found in zero
+# or several projects/ dirs, a cwd outside $(ghq root), a destination cwd that
+# does not exist, and a collision: an existing projects/*/<id>.jsonl, or an
+# existing <id>/ directly under the destination <enc>.
 #
-# Not carried: checkpoint data such as ~/.claude/file-history/ (rewind may not
-# work after import), and the repo's working tree, including uncommitted
+# Not carried: checkpoint data such as <config dir>/file-history/ (rewind may
+# not work after import), and the repo's working tree, including uncommitted
 # changes.
 
 usage() {
+  [ "${1:-1}" -eq 0 ] || exec >&2
   awk '/^#!/ {next} /^#/ {sub(/^# ?/, ""); print; seen=1; next} seen {exit}' "$0"
   exit "${1:-1}"
 }
@@ -52,8 +58,10 @@ die() { echo "claude-session: $*" >&2; exit 1; }
 format_version=1
 uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # One archive member component inside <id>/: no leading dot, so `.`, `..` and
-# hidden names are all excluded.
+# hidden names are all excluded. Export applies the same rule (as a find
+# -regex, `find_comp_re` below) so it never packs a name import would refuse.
 comp_re='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+find_comp_re='\./[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*'
 
 config_dir() { printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
 
@@ -74,17 +82,21 @@ encode_path() {
   printf '%s\n' "$p" | tr '/.' '--'
 }
 
-# check_rel <label> <relative path> <min components>: each component is
-# non-empty, made of [A-Za-z0-9._-], not `.` or `..`, and there are at least
-# <min> of them. Leading dots are allowed here (`.worktrees/foo`).
+# check_rel <label> <relative path> <min components>: the whole string is made
+# of [A-Za-z0-9._/-] (so no newline), has no leading or trailing `/` and no
+# `//`; each component is not `.` or `..`; and there are at least <min> of
+# them. Leading dots are allowed here (`.worktrees/foo`).
 check_rel() {
   local label="$1" rel="$2" min="$3" c n=0
   local -a parts
+  [[ "$rel" =~ ^[A-Za-z0-9._/-]*$ ]] || die "bad characters in $label: $rel"
+  case "$rel" in
+    /*|*/|*//*) die "bad $label (leading, trailing or doubled '/'): $rel" ;;
+  esac
   if [ -n "$rel" ]; then
     IFS=/ read -ra parts <<<"$rel"
     for c in "${parts[@]}"; do
-      [[ "$c" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$c" != . ] && [ "$c" != .. ] \
-        || die "bad $label component '$c' in: $rel"
+      [ "$c" != . ] && [ "$c" != .. ] || die "bad $label component '$c' in: $rel"
       n=$((n + 1))
     done
   fi
@@ -124,12 +136,18 @@ $found}"
   jsonl="$found"
 
   # <enc> cannot be decoded (`-` is ambiguous), so the cwd comes from the
-  # transcript itself.
-  local cwd
-  cwd="$(jq -rn 'first(inputs | objects | .cwd | strings)' <"$jsonl")" \
+  # transcript: the first string cwd whose encoding equals the name of the
+  # projects/<enc> dir the transcript actually sits in. A session that moved
+  # (`/cd`) records other cwds too, and only the matching one is where
+  # `claude --resume` looks for it.
+  local enc_dir cwd
+  enc_dir="$(basename "$(dirname "$jsonl")")"
+  cwd="$(jq -rn --arg enc "$enc_dir" \
+    'first(inputs | objects | .cwd | strings
+           | select(test("^/[A-Za-z0-9/.-]*$"))
+           | select(gsub("[/.]"; "-") == $enc))' <"$jsonl")" \
     || die "could not read a cwd from $jsonl"
-  [ -n "$cwd" ] && [ "$cwd" != null ] || die "no cwd recorded in $jsonl"
-  encode_path "$cwd" >/dev/null
+  [ -n "$cwd" ] || die "no cwd in $jsonl encodes to its projects dir $enc_dir (cwds with characters outside [A-Za-z0-9/.-] have an unverified encoding and are not matched)"
 
   local root rel repo subpath
   root="$(ghq_root)"
@@ -148,18 +166,30 @@ $found}"
   members=(meta.json "$id.jsonl")
   local side="${jsonl%.jsonl}"
   if [ -d "$side" ]; then
-    # import refuses links, so refuse them here too instead of producing an
-    # archive that cannot be imported.
-    if [ -n "$(find "$side" ! -type f ! -type d -print -quit)" ]; then
-      die "$side contains something other than regular files and directories"
-    fi
+    # Hold the sidecar to import's rules (regular files and directories only,
+    # every name matching comp_re) instead of producing an archive that cannot
+    # be imported. The find output goes through a variable so a failing find
+    # is not mistaken for a clean tree.
+    local bad
+    bad="$(cd "$side" && find . -mindepth 1 ! -type f ! -type d -print -quit)"
+    [ -z "$bad" ] || die "$side contains something other than regular files and directories: $bad"
+    bad="$(cd "$side" && find . -mindepth 1 -regextype posix-extended ! -regex "$find_comp_re" -print -quit)"
+    [ -z "$bad" ] || die "$side contains a name import would refuse (want $comp_re per component): $bad"
     cp -R "$side" "$stage/$id"
     members+=("$id")
   fi
   jq -n --argjson f "$format_version" --arg s "$id" --arg r "$repo" --arg p "$subpath" \
     '{format: $f, session_id: $s, repo: $r, subpath: $p}' >"$stage/meta.json"
 
-  tar -czf "$out" -C "$stage" "${members[@]}"
+  # Build in the stage dir, then publish without clobbering: a failed tar
+  # leaves nothing at $out, and a file created at $out in the meantime wins.
+  tar -czf "$stage/out.tar.gz" -C "$stage" "${members[@]}"
+  if ! ln "$stage/out.tar.gz" "$out" 2>/dev/null; then
+    # Not the same filesystem (or $out appeared): fall back to a no-clobber mv.
+    if [ -e "$out" ] || [ -L "$out" ]; then die "output already exists: $out"; fi
+    mv -n "$stage/out.tar.gz" "$out"
+    [ ! -e "$stage/out.tar.gz" ] || die "could not write $out"
+  fi
   echo "claude-session: note: the transcript holds tool output verbatim and may contain secrets; handle $out accordingly" >&2
   printf '%s\n' "$out"
 }
@@ -221,20 +251,29 @@ cmd_import() {
 
   stage="$(mktemp -d)"
   tar -xzf "$archive" -C "$stage" --no-same-owner --no-same-permissions
+  # --no-same-permissions only applies the umask, so a member archived as 0500
+  # or 0000 would keep that mode: make everything owner-usable (and private)
+  # before it is read, copied or removed.
+  chmod -R u+rwX,go-rwx "$stage"
   # Re-check what actually landed, independent of the listing parse.
-  if [ -n "$(find "$stage" -mindepth 1 ! -type f ! -type d -print -quit)" ]; then
-    die "archive extracted something other than regular files and directories"
-  fi
+  local bad
+  bad="$(find "$stage" -mindepth 1 ! -type f ! -type d -print -quit)"
+  [ -z "$bad" ] || die "archive extracted something other than regular files and directories"
+  [ -f "$stage/$id.jsonl" ] || die "archive's $id.jsonl is not a regular file"
+  [ ! -e "$stage/$id" ] || [ -d "$stage/$id" ] || die "archive's $id is not a directory"
 
-  local meta="$stage/meta.json" fmt sid repo subpath
-  jq -e 'type == "object"' "$meta" >/dev/null 2>&1 || die "meta.json is not a JSON object"
-  fmt="$(jq -r '.format' "$meta")"
-  [ "$fmt" = "$format_version" ] || die "unsupported archive format: $fmt (want $format_version)"
-  sid="$(jq -r '.session_id | strings' "$meta")"
+  local meta="$stage/meta.json" sid repo subpath jqerr
+  jqerr="$(jq -e 'type == "object"' "$meta" 2>&1 >/dev/null)" \
+    || die "meta.json is not a JSON object${jqerr:+ ($jqerr)}"
+  jq -e --argjson f "$format_version" \
+    '.format == $f and (.session_id | type == "string") and (.repo | type == "string") and (.subpath | type == "string")' \
+    "$meta" >/dev/null \
+    || die "meta.json: want format $format_version (a number) and string session_id, repo and subpath"
+  sid="$(jq -r '.session_id' "$meta")"
   [[ "$sid" =~ $uuid_re ]] || die "meta.json session_id is not a uuid: $sid"
   [ "$sid" = "$id" ] || die "meta.json session_id $sid does not match transcript $id.jsonl"
-  repo="$(jq -r '.repo | strings' "$meta")"
-  subpath="$(jq -r '.subpath | strings' "$meta")"
+  repo="$(jq -r '.repo' "$meta")"
+  subpath="$(jq -r '.subpath' "$meta")"
   check_rel "repo" "$repo" 3
   [ "$(printf '%s\n' "$repo" | tr -cd / | wc -c)" -eq 2 ] || die "repo must be <host>/<owner>/<repo>: $repo"
   check_rel "subpath" "$subpath" 0
@@ -258,18 +297,46 @@ cmd_import() {
   dest="$(config_dir)/projects/$enc"
   [ ! -e "$dest/$id" ] || die "already exists, not overwriting: $dest/$id"
   mkdir -p "$dest"
-  if [ -d "$stage/$id" ]; then cp -R "$stage/$id" "$dest/$id"; fi
-  cp "$stage/$id.jsonl" "$dest/$id.jsonl"
+  # Copy into a scratch dir on the same filesystem, then rename into place:
+  # sidecar first, transcript last. A failure before the final rename leaves
+  # nothing at the real names (the EXIT trap removes the scratch dir), and the
+  # transcript, which is what makes the session visible, appears only once
+  # everything else is in place.
+  scratch="$(mktemp -d "$dest/.claude-session-tmp.XXXXXX")"
+  local moved_side=0
+  # Every copy that can fail on its own (disk full, unreadable file) happens
+  # before the first rename, so a failure cannot strand a lone sidecar.
+  if [ -d "$stage/$id" ]; then cp -R "$stage/$id" "$scratch/$id"; fi
+  cp "$stage/$id.jsonl" "$scratch/$id.jsonl"
+  if [ -d "$scratch/$id" ]; then
+    mv -n "$scratch/$id" "$dest/$id"
+    [ ! -e "$scratch/$id" ] || die "already exists, not overwriting: $dest/$id"
+    moved_side=1
+  fi
+  if ! mv -n "$scratch/$id.jsonl" "$dest/$id.jsonl" || [ -e "$scratch/$id.jsonl" ]; then
+    [ "$moved_side" -eq 0 ] || rm -rf "${dest:?}/$id"
+    die "could not place $dest/$id.jsonl"
+  fi
 
   echo "claude-session: imported $id into $dest" >&2
   printf 'cd %q && claude --resume %s\n' "$cwd" "$id"
 }
 
+# The transcript can hold secrets: keep the archive, the stage dir and the
+# imported files readable by the owner only.
 umask 077
-# The stage dir is global so the EXIT trap can still see it after the
-# function that made it returns.
+# The stage and scratch dirs are global so the EXIT trap can still see them
+# after the function that made them returns. chmod first because a hostile
+# archive may have left a directory the owner cannot enter or remove.
 stage=""
-trap '[ -z "$stage" ] || rm -rf "$stage"' EXIT
+scratch=""
+cleanup() {
+  local d
+  for d in "$stage" "$scratch"; do
+    [ -z "$d" ] || { chmod -R u+rwX "$d" 2>/dev/null; rm -rf "$d"; }
+  done
+}
+trap cleanup EXIT
 [ $# -ge 1 ] || usage 1
 sub="$1"; shift
 case "$sub" in

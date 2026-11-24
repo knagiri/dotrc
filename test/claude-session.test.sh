@@ -9,6 +9,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=test/lib/sandbox.sh
 . "$here/lib/sandbox.sh"
 sandbox_assert
+# Loose on purpose: the mode assertions below only mean something if the
+# script's own umask is what tightens the files.
+umask 022
 src="$here/../bin/claude-session"
 fail=0
 
@@ -35,14 +38,22 @@ cfg_a="$tmp/a/home/.claude"; root_a="$tmp/a/home/ghq"
 cfg_b="$tmp/b/users/other/.claude"; root_b="$tmp/b/users/other/src"
 mkdir -p "$root_a/$repo/.worktrees/feature-foo" "$root_b/$repo"
 
-run_a() { PATH="$stubbin:$PATH" CLAUDE_CONFIG_DIR="$cfg_a" GHQ_STUB_ROOT="$root_a" "$src" "$@"; }
-run_b() { PATH="$stubbin:$PATH" CLAUDE_CONFIG_DIR="$cfg_b" GHQ_STUB_ROOT="$root_b" "$src" "$@"; }
+# TMPDIR is pinned so the script's staging dirs (and anything an archive
+# escapes to) land somewhere the tests can inspect.
+mkdir -p "$tmp/td"
+run_a() { TMPDIR="$tmp/td" PATH="$stubbin:$PATH" CLAUDE_CONFIG_DIR="$cfg_a" GHQ_STUB_ROOT="$root_a" "$src" "$@"; }
+run_b() { TMPDIR="$tmp/td" PATH="$stubbin:$PATH" CLAUDE_CONFIG_DIR="$cfg_b" GHQ_STUB_ROOT="$root_b" "$src" "$@"; }
+# No staging dir may outlive a run, whether it succeeded or failed.
+td_clean() { # <label>
+  if [ -z "$(ls -A "$tmp/td")" ]; then ok "staging dir removed: $1"
+  else ng "staging dir left behind ($1): $(ls -A "$tmp/td")"; rm -rf "${tmp:?}/td"; mkdir -p "$tmp/td"; fi
+}
 
 # Expected projects/ dir name, written independently of the script.
 enc() { local p="$1"; p="${p//\//-}"; printf '%s\n' "${p//./-}"; }
 
-# make_session <cfg> <cwd> <id>: a transcript whose first line has a null cwd
-# (as summary lines do), so the script must skip to the first real one.
+# make_session <cfg> <cwd> <id>: a transcript whose first line has no string
+# cwd, so the script must skip to the first real one.
 make_session() {
   local d
   d="$1/projects/$(enc "$2")"
@@ -50,7 +61,7 @@ make_session() {
   {
     printf '{"type":"summary","cwd":null,"sessionId":"%s"}\n' "$3"
     printf '{"type":"user","cwd":"%s","sessionId":"%s","message":"hello"}\n' "$2" "$3"
-    printf '{"type":"assistant","cwd":"%s","session_id":"%s","message":"hi"}\n' "$2" "$3"
+    printf '{"type":"assistant","cwd":"%s","sessionId":"%s","message":"hi"}\n' "$2" "$3"
   } >"$d/$3.jsonl"
   printf '%s\n' "$d"
 }
@@ -68,12 +79,19 @@ err="$(run_a export "$id" -o "$arch" 2>&1 >/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ] && [ -f "$arch" ] && grep -qi secret <<<"$err"; then
   ok "export writes the archive and warns about secrets"
 else ng "export rc=$rc err=$err"; fi
+td_clean "after export"
+if [ "$(stat -c %a "$arch")" = 600 ]; then ok "the archive is owner-only (umask 077)"
+else ng "archive mode $(stat -c %a "$arch")"; fi
 
 out="$(run_b import "$arch" 2>/dev/null)"; rc=$?
 dest="$cfg_b/projects/$(enc "$root_b/$repo")"
 if [ "$rc" -eq 0 ] && cmp -s "$src_dir/$id.jsonl" "$dest/$id.jsonl"; then
   ok "import places a byte-identical jsonl under the destination cwd's <enc>"
 else ng "round trip rc=$rc dest=$dest; ls: $(ls -R "$cfg_b" 2>&1)"; fi
+td_clean "after import"
+if [ -z "$(find "$dest/$id" "$dest/$id.jsonl" -perm /077)" ]; then
+  ok "imported files carry no group/other bits"
+else ng "imported modes: $(find "$dest/$id" "$dest/$id.jsonl" -perm /077)"; fi
 if diff -r "$src_dir/$id" "$dest/$id" >/dev/null 2>&1; then
   ok "the <id>/ side directory travels with the transcript"
 else ng "side dir not carried: $(diff -r "$src_dir/$id" "$dest/$id" 2>&1)"; fi
@@ -172,9 +190,76 @@ if [ "$rc" -ne 0 ] && [ ! -e "$tmp/d.tar.gz" ] && grep -q 'want exactly one' <<<
 else ng "duplicate rc=$rc err=$err"; fi
 rm -rf "$cfg_a/projects/-dup"
 
+# --- cwd selection ---------------------------------------------------------
+# A session that moved records several cwds. Only the one whose encoding names
+# the projects/ dir the transcript sits in is the session's place.
+make_raw() { # <cfg> <enc-source cwd> <id> <cwd>...: one line per cwd, in order
+  local d i="$3" c
+  d="$1/projects/$(enc "$2")"
+  shift 3
+  mkdir -p "$d"
+  : >"$d/$i.jsonl"
+  for c in "$@"; do printf '{"type":"user","cwd":"%s"}\n' "$c" >>"$d/$i.jsonl"; done
+}
+mid=77777777-8888-9999-aaaa-bbbbbbbbbbbb
+make_raw "$cfg_a" "$root_a/$repo" "$mid" "$root_a/github.com/example-org/moved-away" "$root_a/$repo"
+run_a export "$mid" -o "$tmp/mv.tar.gz" >/dev/null 2>&1; rc=$?
+mv_repo="$(tar -xzOf "$tmp/mv.tar.gz" meta.json 2>/dev/null | jq -r .repo)"
+if [ "$rc" -eq 0 ] && [ "$mv_repo" = "$repo" ]; then
+  ok "the cwd matching the projects/ dir is used, not the first one"
+else ng "moved session rc=$rc repo=$mv_repo"; fi
+nid=88888888-9999-aaaa-bbbb-cccccccccccc
+make_raw "$cfg_a" "$root_a/$repo" "$nid" "$root_a/github.com/example-org/moved-away"
+err="$(run_a export "$nid" -o "$tmp/nm.tar.gz" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$tmp/nm.tar.gz" ] && grep -q 'no cwd' <<<"$err"; then
+  ok "a transcript with no cwd matching its projects/ dir is refused"
+else ng "no matching cwd rc=$rc err=$err"; fi
+td_clean "after failed exports"
+
+# --- other export checks ---------------------------------------------------
+lid=99999999-aaaa-bbbb-cccc-dddddddddddd
+ldir="$(make_session "$cfg_a" "$root_a/$repo" "$lid")"
+mkdir -p "$ldir/$lid"; ln -s /etc/passwd "$ldir/$lid/l.txt"
+run_a export "$lid" -o "$tmp/l.tar.gz" >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$tmp/l.tar.gz" ]; then ok "a symlink in the sidecar makes export fail"
+else ng "sidecar symlink rc=$rc"; fi
+rm -f "$ldir/$lid/l.txt"; printf 'x\n' >"$ldir/$lid/.hidden"
+run_a export "$lid" -o "$tmp/hd.tar.gz" >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$tmp/hd.tar.gz" ]; then ok "a name import would refuse in the sidecar makes export fail"
+else ng "sidecar hidden file rc=$rc"; fi
+rm -rf "${ldir:?}/$lid"
+td_clean "after sidecar refusals"
+
+ln -s "$tmp/dangling-target" "$tmp/dangling.tar.gz"
+run_a export "$lid" -o "$tmp/dangling.tar.gz" >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$tmp/dangling-target" ]; then ok "-o naming a dangling symlink is refused, nothing written through it"
+else ng "dangling -o rc=$rc"; fi
+
+# --- CLI misuse ------------------------------------------------------------
+out="$(run_a 2>/dev/null)"; rc=$?
+if [ "$rc" -ne 0 ] && [ -z "$out" ]; then ok "no arguments: usage on stderr, non-zero"
+else ng "no args rc=$rc stdout=$out"; fi
+out="$(run_a --help 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'Usage:' <<<"$out"; then ok "--help prints usage on stdout"
+else ng "help rc=$rc"; fi
+err="$(run_a bogus 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q 'unknown subcommand' <<<"$err"; then ok "unknown subcommand is refused"
+else ng "unknown subcommand rc=$rc"; fi
+run_a export >/dev/null 2>&1; rc=$?
+if [ "$rc" -ne 0 ]; then ok "export without an id is refused"; else ng "export no id rc=$rc"; fi
+err="$(run_a export "$id" -o 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q -- '-o needs' <<<"$err"; then ok "-o without a value is refused"
+else ng "-o no value rc=$rc err=$err"; fi
+err="$(run_a export "$id" "$wid" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q 'more than one' <<<"$err"; then ok "two session ids are refused"
+else ng "two ids rc=$rc err=$err"; fi
+
 # --- hostile archives -----------------------------------------------------
 # Each is built by hand from a clean stage, then altered one way. The import
-# must fail, place nothing, and write nothing outside the extraction dir.
+# must fail and place nothing. Extraction happens in a dir directly under
+# $tmp/td, so a member escaping with `..` would land in $tmp/td/escaped;
+# the dotdot case also asserts the script's own member check is what refused
+# it (GNU tar would refuse `..` at extraction too).
 mkstage() {
   local s="$tmp/stage.$1"
   rm -rf "$s"; mkdir -p "$s/$id/tool-results"
@@ -183,14 +268,16 @@ mkstage() {
   jq -n --arg s "$id" --arg r "$repo" '{format:1, session_id:$s, repo:$r, subpath:""}' >"$s/meta.json"
   printf '%s\n' "$s"
 }
-expect_reject() { # <label> <archive>
+expect_reject() { # <label> <archive> [<stderr pattern>]
   local err rc
   reset_b
   err="$(run_b import "$2" 2>&1)"; rc=$?
-  if [ "$rc" -ne 0 ] && [ -z "$(find "$cfg_b" -name "$id*" 2>/dev/null)" ] && [ ! -e "$tmp/escaped" ]; then
+  if [ "$rc" -ne 0 ] && [ -z "$(find "$cfg_b" -name "$id*" 2>/dev/null)" ] \
+     && [ ! -e "$tmp/td/escaped" ] && { [ -z "${3:-}" ] || grep -q -- "$3" <<<"$err"; }; then
     ok "hostile archive rejected: $1"
   else ng "hostile archive accepted ($1) rc=$rc err=$err"; fi
-  rm -f "$tmp/escaped"
+  rm -f "$tmp/td/escaped"
+  td_clean "after rejecting: $1"
 }
 
 # The clean stage itself must import, or every rejection below proves nothing.
@@ -202,7 +289,7 @@ else ng "control: hand-built clean archive did not import"; fi
 
 s="$(mkstage dotdot)"; printf 'pwn\n' >"$s/escaped"
 tar -czf "$tmp/h-dotdot.tar.gz" -P -C "$s" --transform "s,^escaped\$,$id/../../escaped," meta.json "$id.jsonl" "$id" escaped
-expect_reject "member with .." "$tmp/h-dotdot.tar.gz"
+expect_reject "member with .." "$tmp/h-dotdot.tar.gz" "disallowed component"
 
 s="$(mkstage abs)"; printf 'pwn\n' >"$tmp/abs-src"
 tar -czf "$tmp/h-abs.tar.gz" -P -C "$s" meta.json "$id.jsonl" "$id" "$tmp/abs-src"
@@ -243,5 +330,56 @@ s="$(mkstage subesc)"
 jq -n --arg s "$id" --arg r "$repo" '{format:1, session_id:$s, repo:$r, subpath:"../../.."}' >"$s/meta.json"
 tar -czf "$tmp/h-subesc.tar.gz" -C "$s" meta.json "$id.jsonl" "$id"
 expect_reject "subpath with .." "$tmp/h-subesc.tar.gz"
+
+# The dirs exist, so only the shape checks (not a missing destination) can refuse these.
+mkdir -p "$root_b/$repo/extra" "$root_b/$repo/5" "$root_b/$repo/null"
+s="$(mkstage repo4)"
+jq -n --arg s "$id" '{format:1, session_id:$s, repo:"github.com/example-org/example-repo/extra", subpath:""}' >"$s/meta.json"
+tar -czf "$tmp/h-repo4.tar.gz" -C "$s" meta.json "$id.jsonl" "$id"
+expect_reject "repo with four components" "$tmp/h-repo4.tar.gz"
+
+# meta.json shape. Each subpath below would resolve to an existing dir if it
+# were silently normalised, so only the type/shape checks can refuse them.
+mkdir -p "$root_b/$repo/foo"
+meta_case() { # <label> <jq program producing meta.json>
+  s="$(mkstage "meta-$1")"
+  jq -n --arg s "$id" --arg r "$repo" "$2" >"$s/meta.json"
+  tar -czf "$tmp/h-meta-$1.tar.gz" -C "$s" meta.json "$id.jsonl" "$id"
+  expect_reject "meta.json: $1" "$tmp/h-meta-$1.tar.gz"
+}
+meta_case format-string '{format:"1", session_id:$s, repo:$r, subpath:""}'
+meta_case subpath-missing '{format:1, session_id:$s, repo:$r}'
+meta_case subpath-number '{format:1, session_id:$s, repo:$r, subpath:5}'
+meta_case not-an-object '[1]'
+meta_case subpath-trailing-slash '{format:1, session_id:$s, repo:$r, subpath:"foo/"}'
+meta_case subpath-double-slash '{format:1, session_id:$s, repo:$r, subpath:"foo//bar"}'
+meta_case subpath-newline '{format:1, session_id:$s, repo:$r, subpath:"foo\nbar"}'
+
+s="$(mkstage sidefile)"; rm -rf "${s:?}/$id"; printf 'x\n' >"$s/$id"
+tar -czf "$tmp/h-sidefile.tar.gz" -C "$s" meta.json "$id.jsonl" "$id"
+expect_reject "<id> member is a regular file" "$tmp/h-sidefile.tar.gz"
+
+# Hostile permissions must neither wedge the import nor leave a stage behind.
+s="$(mkstage perms)"
+tar -czf "$tmp/h-perms.tar.gz" --mode='a=' -C "$s" meta.json "$id.jsonl" "$id"
+reset_b
+run_b import "$tmp/h-perms.tar.gz" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && cmp -s "$src_dir/$id.jsonl" "$dest/$id.jsonl" && [ -f "$dest/$id/tool-results/t.txt" ] \
+   && [ -z "$(find "$dest" ! -perm -u+rw -type f)" ] && [ -z "$(find "$dest" -type d ! -perm -u+rwx)" ]; then
+  ok "members archived as mode 000 import cleanly into usable files"
+else ng "mode-000 archive rc=$rc; ls: $(ls -lR "$dest" 2>&1)"; fi
+td_clean "after mode-000 import"
+
+# A sidecar left at the destination (no transcript) is still a collision, and
+# nothing may be added next to it.
+s="$(mkstage collide)"; tar -czf "$tmp/h-collide.tar.gz" -C "$s" meta.json "$id.jsonl" "$id"
+reset_b; mkdir -p "$dest/$id"
+err="$(run_b import "$tmp/h-collide.tar.gz" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q 'already exists' <<<"$err" && [ ! -e "$dest/$id/$id" ] \
+   && [ ! -e "$dest/$id.jsonl" ] && [ -z "$(ls -A "$dest/$id")" ]; then
+  ok "a leftover <id>/ at the destination is a collision, nothing placed"
+else ng "sidecar-only collision rc=$rc err=$err"; fi
+td_clean "after sidecar-only collision"
+reset_b
 
 exit "$fail"
