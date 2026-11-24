@@ -15,12 +15,21 @@ DB コンテナに入る / repo 固有の task 等）なら、一般にそちら
 
 ```
 db-query -c 'select count(*) from users'
-db-query -f query.sql
+db-query -J -c "$(cat query.sql)"
 ```
 
-`db-query`（`bin/`）は `MISE_ENV=db mise exec -- usql "$DATABASE_URL" "$@"` 相当で、usql の引数は
-素通しする。`DATABASE_URL` が無ければエラーで exit 2 する。呼び出し側の env にある
-`DATABASE_URL` は捨て、mise config の値だけを使う。settings.json で allow 済み。
+`db-query`（`bin/`）は `MISE_ENV=db mise exec -- usql ... "$DATABASE_URL"` 相当で、`DATABASE_URL` が
+無ければエラーで exit 2 する。呼び出し側の env にある `DATABASE_URL` は捨て、mise config の値だけを
+使う。settings.json で allow 済み。
+
+受け付けるのは `-c <sql>` 1 つと出力形式の flag（`-J` / `-C` / `-t` / `-x` / `-q`）だけで、`\` を
+含む SQL は拒否する。usql は `\!`（shell コマンドの実行）・`\o` / `\w`（ファイルへの書き込み）の
+ような meta-command を `-c` の中・SQL の後ろ・`-f` のファイル・stdin のどこからでも実行するので、
+引数を素通しすると allow 済みの `db-query` が承認なしに任意のコマンドを実行する経路になるため。
+SQL の文字列リテラルに `\` が要るクエリは `db-query` では投げられないので、人の承認を経て usql を
+直接使う。
+
+実例: dotrc/docs/incidents/usql-meta-command-allowlist-escape.md
 
 ### 3. 値は repo の `mise.db.local.toml` に置く
 
@@ -48,10 +57,10 @@ background 委譲先にも配られる（[worktree-scope.md](./worktree-scope.md
 
 ### 4. agent に渡す接続は read-only な DB user に限る
 
-`mise.db.local.toml` に書く接続は、一般に read-only 権限の DB user にする。安全の境界は
-`db-query` ではなく DB の権限である。`db-query` は usql の引数を素通しするので、書き込み権限の
-ある user を渡せば `DELETE` も `DROP` も通る。allowlist で wrapper を許可していることは、
-クエリの中身を何も制限しない。
+`mise.db.local.toml` に書く接続は、一般に read-only 権限の DB user にする。DB に対して何が
+できるかの境界は `db-query` ではなく DB の権限である。`db-query` が縛るのは usql の meta-command
+だけで、SQL の中身は見ないので、書き込み権限のある user を渡せば `DELETE` も `DROP` も通る。
+allowlist で wrapper を許可していることは、クエリの中身を何も制限しない。
 
 password は URL に直書きせず、`~/.usqlpass`（権限 600）等に置くこともできる。`db-query` は
 URL を usql の引数として渡すので、URL に書いた password はプロセス一覧に出るため。

@@ -53,8 +53,12 @@ root で `MISE_ENV=db mise trust` を一度実行して与える。素の `mise 
 `MISE_ENV=db mise exec` は `Config files in .../mise.db.local.toml are not trusted.` で失敗する
 （実測）。
 
-DB 権限は wrapper では縛らない。`db-query` は usql の引数を素通しするので、agent に何を許すかは
-`DATABASE_URL` の DB user の権限で決まる。
+`db-query` は usql の引数を素通しせず、`-c <sql>` と出力形式の flag だけを受け、`\` を含む SQL と
+stdin を拒否する。usql の meta-command は shell の実行（`\!`）やファイルの読み書き（`\i` / `\o` /
+`\w`）ができ、`-c`・`-f`・stdin のどれからでも、SQL の後ろに続けても実行される（実測: `-c 'select 1;
+\! echo X'` で `X` が出る）。素通しすると `Bash(db-query *)` の allow が承認なしの任意コマンド実行に
+なる。一方 SQL の中身は wrapper では縛らず、DB に対して agent に何を許すかは `DATABASE_URL` の
+DB user の権限で決める。
 
 接続先が複数（dev / stg 等）ある場合は扱わない。`MISE_ENV` を接続ごとに分けるか、`db-query` に
 接続名の引数を持たせるかは、必要になった時点で決める。

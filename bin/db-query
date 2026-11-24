@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# db-query [usql args...] -- run usql against the DATABASE_URL of the current repo.
+# db-query [-J|-C|-t|-x|-q]... -c <sql> -- run one SQL command with usql against
+# the DATABASE_URL of the current repo.
 #
 # The connection URL is read only from the repo's `mise.db.local.toml`, which
 # mise loads only when MISE_ENV=db. Nothing sets that globally, so DATABASE_URL
@@ -15,14 +16,43 @@ set -euo pipefail
 # tool) never silently becomes the target. If the config does not set it, the
 # wrapper fails with exit 2 instead of letting usql fall back to its own default.
 #
-# usql runs in the caller's cwd, so relative paths in its args (-f query.sql)
-# resolve as the caller wrote them; mise finds the config by walking up from
-# there, which also reaches the main checkout's config from <repo>/.worktrees/<name>.
+# The arguments are fixed rather than passed through, because usql is also a
+# shell: a backslash meta-command (`\!` runs a shell command, `\o` / `\w` write
+# files, `\i` reads them) is honoured in -c, mid-line after SQL, from -f and from
+# stdin. Passing usql's args through would make an allowlisted db-query run any
+# command without approval. So the wrapper takes exactly one -c <sql> plus
+# output-format flags, refuses any SQL containing a backslash (meta-commands
+# start with one; backslashes inside SQL string literals are refused too),
+# closes stdin, and skips usql's init scripts (-X) and password prompt (-w).
 #
-# This wrapper is not a safety boundary: every usql arg is passed through. What
-# the connection may do is decided by the database user in DATABASE_URL.
+# What the SQL may do to the database is decided by the database user in
+# DATABASE_URL, not here.
 #
-# Exit: usql's code; 2 if DATABASE_URL is unset or empty; 127 if mise is missing.
+# Exit: usql's code; 1 for bad arguments; 2 if DATABASE_URL is unset or empty;
+# 127 if mise is missing.
+
+usage() {
+  echo "usage: db-query [-J|--json|-C|--csv|-t|--tuples-only|-x|--expanded|-q|--quiet]... -c <sql>" >&2
+  exit "${1:-1}"
+}
+
+fmt=() sql="" have_sql=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -J|--json|-C|--csv|-t|--tuples-only|-x|--expanded|-q|--quiet) fmt+=("$1"); shift ;;
+    -c|--command)
+      [ $# -ge 2 ] && [ "$have_sql" -eq 0 ] || usage 1
+      sql="$2"; have_sql=1; shift 2 ;;
+    -h|--help) usage 0 ;;
+    *) echo "db-query: unsupported argument: $1" >&2; usage 1 ;;
+  esac
+done
+[ "$have_sql" -eq 1 ] && [ -n "$sql" ] || usage 1
+case "$sql" in
+  *\\*)
+    echo "db-query: SQL must not contain a backslash (usql would run it as a meta-command, e.g. \\! runs a shell command)" >&2
+    exit 1 ;;
+esac
 
 if ! command -v mise >/dev/null 2>&1; then
   echo "db-query: mise not found on PATH; it is needed to read mise.db.local.toml" >&2
@@ -38,5 +68,5 @@ if [ -z "${DATABASE_URL:-}" ]; then
   echo "and trust it once with: MISE_ENV=db mise trust" >&2
   exit 2
 fi
-exec usql "$DATABASE_URL" "$@"
-' db-query "$@"
+exec usql -X -w "$@" "$DATABASE_URL" </dev/null
+' db-query ${fmt[@]+"${fmt[@]}"} -c "$sql"

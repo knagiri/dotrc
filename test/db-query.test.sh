@@ -21,6 +21,7 @@ args="$stubdir/args"
 cat >"$stubdir/usql" <<'STUB'
 #!/usr/bin/env bash
 printf '[%s]\n' "$@" >"$USQL_ARGS_FILE"
+[ -z "${USQL_STDIN_FILE:-}" ] || cat >"$USQL_STDIN_FILE"
 STUB
 cat >"$stubdir/mise" <<'STUB'
 #!/usr/bin/env bash
@@ -48,11 +49,13 @@ mk_mutant() {  # mk_mutant <name> <sed expression>
 mk_mutant nomiseenv 's|MISE_ENV=db ||'
 mk_mutant keepenv 's|env -u DATABASE_URL |env |'
 mk_mutant noemptycheck 's|if \[ -z "\${DATABASE_URL:-}" \]; then|if false; then|'
+mk_mutant nobackslash 's|^  \*\\\\\*)$|  __never__)|'
+mk_mutant keepstdin 's| </dev/null$||'
 
-# 1. The URL from the db config goes first, then every arg untouched.
-STUB_DB_URL="postgres://ro@localhost/example" run "$bindir/db-query" -c 'select 1' "a b"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(cat "$args")" = "$(printf '[%s]\n' "postgres://ro@localhost/example" -c 'select 1' "a b")" ]; then
-  echo "ok: db-query hands usql the MISE_ENV=db DATABASE_URL, then the args unchanged"
+# 1. Fixed flags, the format flags and -c <sql>, then the URL from the db config.
+STUB_DB_URL="postgres://ro@localhost/example" run "$bindir/db-query" -J -c 'select 1'; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$args")" = "$(printf '[%s]\n' -X -w -J -c 'select 1' "postgres://ro@localhost/example")" ]; then
+  echo "ok: db-query hands usql -X -w, the format flags, -c <sql> and the MISE_ENV=db DATABASE_URL"
 else echo "FAIL: db-query rc=$rc args=$(cat "$args")"; fail=1; fi
 
 STUB_DB_URL="postgres://ro@localhost/example" run "$stubdir/nomiseenv" -c 'select 1'; rc=$?
@@ -82,7 +85,42 @@ if grep -qxF '[postgres://rw@prod.example.invalid/db]' "$args"; then
   echo "ok: without env -u the inherited URL leaks through (the case above is discriminating)"
 else echo "FAIL: keepenv mutant rc=$rc args=$(cat "$args")"; fail=1; fi
 
-# 4. No mise on PATH: fail before anything else, with a message.
+# 4. Argument shape: usql runs shell commands and writes files through
+# backslash meta-commands, so only -c <sql> and format flags get through.
+STUB_DB_URL="postgres://ro@localhost/example" run "$bindir/db-query" -c 'select 1; \! touch /tmp/x'; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -s "$args" ] && grep -qF 'backslash' "$stubdir/err"; then
+  echo "ok: db-query refuses SQL containing a backslash meta-command"
+else echo "FAIL: backslash rc=$rc args=$(cat "$args") err=$(cat "$stubdir/err")"; fail=1; fi
+
+STUB_DB_URL="postgres://ro@localhost/example" run "$stubdir/nobackslash" -c 'select 1; \! touch /tmp/x'; rc=$?
+if [ -s "$args" ]; then
+  echo "ok: without the backslash check the meta-command reaches usql (the case above is discriminating)"
+else echo "FAIL: nobackslash mutant rc=$rc args=$(cat "$args")"; fail=1; fi
+
+for bad in "-f q.sql" "-o out.txt" "-c" "-J" "-c a -c b" "-c select --set=x"; do
+  # shellcheck disable=SC2086  # each case is a word list on purpose
+  STUB_DB_URL="postgres://ro@localhost/example" run "$bindir/db-query" $bad; rc=$?
+  if [ "$rc" -eq 1 ] && [ ! -s "$args" ]; then
+    echo "ok: db-query refuses '$bad'"
+  else echo "FAIL: '$bad' rc=$rc args=$(cat "$args")"; fail=1; fi
+done
+
+# stdin is another path for meta-commands, so usql gets none of the caller's.
+: >"$stubdir/stdin"
+printf '\\! touch /tmp/x\n' | STUB_DB_URL="postgres://ro@localhost/example" \
+  USQL_STDIN_FILE="$stubdir/stdin" run "$bindir/db-query" -c 'select 1'; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -s "$stubdir/stdin" ]; then
+  echo "ok: db-query gives usql an empty stdin"
+else echo "FAIL: stdin rc=$rc stdin=$(cat "$stubdir/stdin")"; fail=1; fi
+
+: >"$stubdir/stdin"
+printf '\\! touch /tmp/x\n' | STUB_DB_URL="postgres://ro@localhost/example" \
+  USQL_STDIN_FILE="$stubdir/stdin" run "$stubdir/keepstdin" -c 'select 1'; rc=$?
+if [ -s "$stubdir/stdin" ]; then
+  echo "ok: without </dev/null the caller's stdin reaches usql (the case above is discriminating)"
+else echo "FAIL: keepstdin mutant rc=$rc"; fail=1; fi
+
+# 5. No mise on PATH: fail before anything else, with a message.
 nomise="$stubdir/nomise"; mkdir -p "$nomise"
 ln -s "$(command -v bash)" "$nomise/bash"
 : >"$args"
@@ -91,7 +129,7 @@ if [ "$rc" -eq 127 ] && grep -qF 'mise not found' "$stubdir/err"; then
   echo "ok: db-query fails with 127 when mise is missing"
 else echo "FAIL: no mise rc=$rc err=$(cat "$stubdir/err")"; fail=1; fi
 
-# 5. Real mise: mise.db.local.toml at the main checkout's root is read from a
+# 6. Real mise: mise.db.local.toml at the main checkout's root is read from a
 # linked worktree under <repo>/.worktrees/<name>, and only with MISE_ENV=db.
 # Hermetic in the same way as the real-mise cases of gh-wrappers.test.sh.
 realmise="$(command -v mise 2>/dev/null || true)"
