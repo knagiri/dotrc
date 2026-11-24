@@ -51,6 +51,7 @@ jobs:
             bin/claude-spinoff \
             bin/claude-stop-bg \
             bin/claude-worktree \
+            bin/db-query \
             bin/gh-automerge \
             bin/gh-await-reviews \
             bin/gh-issue-file \
@@ -75,6 +76,7 @@ jobs:
             test/claude-spinoff.test.sh \
             test/claude-stop-bg.test.sh \
             test/claude-worktree.test.sh \
+            test/db-query.test.sh \
             test/deploy.test.sh \
             test/gh-issue-file.test.sh \
             test/gh-issue-group.test.sh \
