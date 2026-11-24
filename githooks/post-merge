@@ -6,10 +6,10 @@
 # source leaves the old binary in place. This hook runs `make build` in that
 # case. It assumes it sits in git's hooks dir under the name post-merge.
 #
-# git does not run post-merge for a rebase pull, for a merge that stopped on
-# conflicts (the later `git commit` does not fire it), or for `git merge
-# --squash` (HEAD does not move, so there is no diff to see). None of those is
-# covered.
+# git does not run post-merge for a rebase pull or for a merge that stopped on
+# conflicts (the later `git commit` does not fire it). It does run for `git
+# merge --squash`, but HEAD does not move, so the hook sees no diff and does
+# nothing. None of those is covered.
 #
 # Skips (exit 0) when nothing under src/claude-queue changed, or when
 # src/claude-queue no longer exists. When go is not on PATH it also exits 0 but
