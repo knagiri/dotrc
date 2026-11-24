@@ -41,9 +41,10 @@
 # -P, ...) are skipped. Env assignments, the process wrappers timeout / nice /
 # nohup / stdbuf / time / command / env / xargs and the reserved words if / then
 # / elif / else / while / until / do / ! / { are stripped before looking for git.
-# Not seen: `sh -c`, git aliases, wrappers such as make, `$(...)` or backticks
-# used as the command word: the aim is catching accidental calls, not an
-# adversary.
+# Not seen: `sh -c`, git aliases, wrappers such as make, anything inside
+# backticks, and a command word built by `$(...)` (e.g. `$(echo git) stash
+# pop`); a git call written inside `$(...)` is seen. The aim is catching
+# accidental calls, not an adversary.
 #
 # Output: a PreToolUse hookSpecificOutput JSON object on stdout when a decision
 # is made (deny wins over ask when one command line holds both), nothing
