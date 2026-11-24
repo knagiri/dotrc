@@ -34,10 +34,10 @@ repo に `.github/ISSUE_TEMPLATE/<kind>.md` が無くて exit 1 になり、起�
 - **固定 label**: 観測か task かで付く label が決まり、crawler はその label で対象を選ぶ
 - **session marker**: 本文末尾に起票した session の id を付け、同じ session の重複を 1 件と数えさせる
 
-title と本文には勤務先由来の具体名（組織名・repo 名・サービス名・ドメイン等）を一般に書かず、
+title と本文には勤務先由来の具体名（組織名・repo 名・サービス名など）を一般に書かず、
 何がどう壊れたかを機構で書く。業務 repo のセッションからの起票も public な dotrc へ人の目を
 通らずに入り、一度公開した具体名は消せない。ラッパーは中身を検査しないので、この縛りは書く
-側にしか無い。
+側にしか無い。対象の条件は dotrc の `CLAUDE.md`「勤務先由来の具体名を書かない」が正典である。
 
 [gh-commands.md](./gh-commands.md) §1 の表は issue 操作全般に `gh issue *` を挙げるが、**起票だけ**はこの rule が
 `gh-issue-file` に狭める。閲覧（`gh issue view` / `gh issue list`）は表のとおり高位コマンドを
@@ -54,7 +54,7 @@ title と本文には勤務先由来の具体名（組織名・repo 名・サー
 | 上記以外の非 0 | gh の失敗がそのまま伝播する（`set -e` は gh の実際の終了コードを返し、1 に丸めない。実測: 未認証の gh は exit 4） | stderr を読む。委譲 worktree では token 未供給を疑う（`worktree-scope.md` §6 の既知 gap） |
 
 code 1 は `bin/gh-issue-file` 自身の検証の失敗で、gh は起票前の呼び出しも含め呼ばれていても
-issue は作られていない。code 1 は stderr が欠落見出しや引数を名指ししていれば body・引数の不備なので
+issue は作られていない。stderr が欠落見出しや引数を名指ししていれば body・引数の不備なので
 直して再実行する。gh の失敗（label 未作成・認証エラー・ネットワークエラー等）は上表の「上記以外の
 非 0」で返り、起票前の失敗なので body を直さず原因を潰してから再実行する。code 4 だけは起票後の
 失敗で、再実行してはならない。
