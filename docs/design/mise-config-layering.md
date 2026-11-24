@@ -1,7 +1,7 @@
 # mise config の層分け
 
-dotrc は tracked な mise config を持たない。mise が読むのは checkout 直下の untracked な
-`mise.gh.local.toml` だけで、`bin/deploy.sh` が無ければ雛形を作る（gitignore 済み）。
+dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を作る mise config は checkout
+直下の untracked な `mise.gh.local.toml` だけで、無ければ作る（gitignore 済み）。
 
 | ファイル | 中身 | 読まれる条件 |
 |---|---|---|

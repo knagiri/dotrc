@@ -114,7 +114,7 @@ session="${session//:/_}"
 # pane opened later on the same server inherits, not just this one -- is this
 # script's, i.e. the calling claude session's Bash env. Measured: a claude started
 # that way inherits CLAUDE_CODE_CHILD_SESSION and turns transcript saving off
-# ("inherited CLAUDE_CODE_CHILD_SESSION marker"), sees the caller's
+# ("inherited CLAUDE_CODE_CHILD_SESSION marker"), and sees the caller's
 # CLAUDE_CODE_SESSION_ID as its own.
 # So every tmux call goes through strip_env; an already running server ignores
 # it harmlessly. The pane command is stripped as well (launch_env), so a server

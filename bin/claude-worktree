@@ -297,13 +297,18 @@ if [ -n "$seed_top" ] && [ "$seed_main_top" = "$main_top" ] && [ -f "$seed_top/.
   done <"$seed_top/.claude/worktree-seed"
 fi
 
-# The delegate gets the worktree's mise env (tools, env vars a repo sets in its
-# mise config) by reading it at call time with `mise exec -C`, the same shape as
-# bin/lib/gh-mise.sh: a non-interactive shell never fires `mise activate`, so
-# nothing else would load it. Both launch modes use the prefix -- the --tmux
-# pane runs claude directly, with no interactive shell either. A config the
-# worktree carries but mise does not trust makes `mise exec` fail, which
-# surfaces as a failed launch. Without mise on PATH the prefix is empty.
+# Both launch modes prefix claude with `mise exec -C <worktree> --`, which reads
+# the worktree's mise config (tools, env vars a repo sets) at call time, the
+# same call-time shape as bin/lib/gh-mise.sh. A non-interactive shell never
+# fires `mise activate`, so nothing else would load it. The reach differs per
+# mode: the --tmux pane's claude is the process the prefix launches, so it gets
+# the env. For a background launch the env reaches the delegate only when this
+# call starts the claude daemon on demand; a daemon that is already running
+# keeps the env of whichever `claude --bg` call started it (see the delegator
+# note below), and only the cwd crosses over. The prefix stays in both modes so
+# the launch is the same shape either way. A config the worktree carries but
+# mise does not trust makes `mise exec` fail, which surfaces as a failed
+# launch. Without mise on PATH the prefix is empty.
 launch_env=()
 if command -v mise >/dev/null 2>&1; then
   launch_env=(mise exec -C "$wt_path" --)

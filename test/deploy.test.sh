@@ -210,6 +210,9 @@ if command -v mise >/dev/null 2>&1; then
   run "$repo/bin/deploy.sh" "$home_g"
   check "two runs leave the checkout in trusted_config_paths exactly once" \
     "$(if [ "$(trusted_count "$home_g")" -eq 1 ]; then echo 0; else echo 1; fi)"
+  # A leftover untrusted parent mise.local.toml would make the control below
+  # fail for the wrong reason, so do not depend on Case H's cleanup.
+  rm -f "$repo/mise.local.toml"
   mkdir -p "$repo/.worktrees/wt"
   printf '[env]\nDEPLOY_TEST = "yes"\n' >"$repo/.worktrees/wt/mise.toml"
   check "the control: without deploy.sh, that worktree mise.toml is untrusted" \

@@ -436,10 +436,10 @@ EOF
 chmod +x "$stubbin/claude-queue"
 
 # Every launch goes through `mise exec -C <worktree> --` when mise is on PATH
-# (the delegate gets the worktree's mise env). The real mise would read the
+# (the --tmux pane's claude gets the worktree's mise env; a bg delegate only
+# when this call starts the daemon). The real mise would read the
 # host's global config and possibly install tools, so it is stubbed too: the
 # argv goes to $MISE_STUB_LOG, and the command runs in <dir>, as mise does.
-# Appended (`>>`), so a test asserting on the launch reads the leading lines.
 cat >"$stubbin/mise" <<'EOF'
 #!/usr/bin/env bash
 [ -z "${MISE_STUB_LOG:-}" ] || printf '%s\n' "$@" >>"$MISE_STUB_LOG"
@@ -1066,7 +1066,7 @@ log="$tmp/bg-busy"; : >"$log"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" CLAUDE_STUB_LOG="$log" CLAUDE_STUB_ROSTER="$busyroster"
   "$wt" bgbusy -- "$prompt"; } 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && [ ! -s "$log" ] && grep -q 'feedface' <<<"$out"; then
+if [ "$rc" -ne 0 ] && [ ! -s "$log" ] && grep -qF 'attach with: claude attach feedface' <<<"$out"; then
   echo "ok: an existing bg session in the same worktree blocks a second launch"
 else echo "FAIL: bg collision rc=$rc out=$out"; fail=1; fi
 
@@ -1323,8 +1323,10 @@ if [ "$rc" -eq 0 ] && grep -q 'claude-queue not on PATH' <<<"$out" \
 else echo "FAIL: absent claude-queue rc=$rc out=$out"; fail=1; fi
 
 # --- mise: the launch reads the worktree's mise config ------------------------
-# Non-interactive shells never fire `mise activate`, so the worktree's mise env
-# reaches the delegate only through the `mise exec -C <worktree> --` prefix.
+# Non-interactive shells never fire `mise activate`, so the `mise exec -C
+# <worktree> --` prefix is the only thing that loads the worktree's mise env for
+# the launched claude (for a bg delegate it reaches the session only when this
+# call starts the daemon).
 cat >"$stubbin/claude" <<'EOF'
 #!/usr/bin/env bash
 if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
@@ -1332,25 +1334,56 @@ printf 'backgrounded · %s\n' "${CLAUDE_STUB_ID:-abcd1234}"
 EOF
 chmod +x "$stubbin/claude"
 
-misel="$tmp/acct-mise"
+misel="$tmp/miseprefix-mise"
 out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
   export PATH="$stubbin:$PATH" MISE_STUB_LOG="$misel" CLAUDE_STUB_ROSTER="$emptyroster"
-  "$wt" acctbg -- "$prompt"; } 2>&1)"; rc=$?
+  "$wt" miseprefixbg -- "$prompt"; } 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && [ "$(head -n 4 "$misel" 2>/dev/null | tr '\n' ' ')" = "exec -C ${cwdrepo}/.worktrees/acctbg -- " ] \
+   && [ "$(head -n 4 "$misel" 2>/dev/null | tr '\n' ' ')" = "exec -C ${cwdrepo}/.worktrees/miseprefixbg -- " ] \
    && [ "$(sed -n 5p "$misel" 2>/dev/null)" = claude ]; then
   echo "ok: bg launch reads the worktree's mise config"
 else echo "FAIL: bg mise prefix rc=$rc mise=$(tr '\n' ' ' <"$misel" 2>/dev/null) out=$out"; fail=1; fi
 
+# Exactly one mise call per bg launch (the prefix itself, nothing else).
+if [ "$(grep -cx 'exec' "$misel" 2>/dev/null)" = 1 ]; then
+  echo "ok: bg launch calls mise once"
+else echo "FAIL: mise call count: $(tr '\n' ' ' <"$misel" 2>/dev/null)"; fail=1; fi
+
+# mise absent from PATH: the prefix is empty and claude still launches. The PATH
+# holds only a stub claude/claude-queue plus symlinks to the tools the script
+# needs, none of them mise.
+nomisebin="$tmp/nomisebin"; mkdir -p "$nomisebin"
+cp "$stubbin/claude-queue" "$nomisebin/"
+for c in git jq env bash awk dirname basename realpath mkdir cat sed grep tr head wc date sort uname id sleep rm cp ln readlink mktemp tee printf; do
+  p="$(command -v "$c" 2>/dev/null)" && [ -x "$p" ] && ln -sf "$p" "$nomisebin/$c"
+done
+nomiselog="$tmp/nomise-claude"; : >"$nomiselog"
+cat >"$nomisebin/claude" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = "agents" ]; then cat "$CLAUDE_STUB_ROSTER"; exit 0; fi
+printf '%s\n' "$@" >>"$CLAUDE_STUB_LOG"
+printf 'backgrounded · abcd1234\n'
+STUB
+chmod +x "$nomisebin/claude"
+if PATH="$nomisebin" command -v mise >/dev/null 2>&1; then
+  echo "FAIL: could not build a PATH without mise; the case below proves nothing"; fail=1
+fi
+out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
+  export PATH="$nomisebin" CLAUDE_STUB_LOG="$nomiselog" CLAUDE_STUB_ROSTER="$emptyroster"
+  "$wt" nomisebg -- "$prompt"; } 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -qxF -- '--bg' "$nomiselog"; then
+  echo "ok: without mise on PATH a bg launch still runs claude --bg"
+else echo "FAIL: no-mise bg rc=$rc log=$(tr '\n' ' ' <"$nomiselog") out=$out"; fail=1; fi
+
 # --tmux: the pane runs claude with no shell for `mise activate` to act in, so
 # the prefix has to be on the tmux command itself, ahead of both launch shapes.
 for mode in in out; do
-  log="$tmp/acct-tmux-$mode"
+  log="$tmp/miseprefix-tmux-$mode"
   out="$(cd "$cwdrepo" && { unset TMUX TMUX_PANE
     export PATH="$stubbin:$PATH" TMUX_STUB_LOG="$log"
     [ "$mode" = out ] || export TMUX=fake TMUX_PANE=%9
-    "$wt" --tmux "accttmux$mode" -- "$prompt"; } 2>&1)"; rc=$?
-  want="-c ${cwdrepo}/.worktrees/accttmux$mode mise exec -C ${cwdrepo}/.worktrees/accttmux$mode -- "
+    "$wt" --tmux "miseprefixtmux$mode" -- "$prompt"; } 2>&1)"; rc=$?
+  want="-c ${cwdrepo}/.worktrees/miseprefixtmux$mode mise exec -C ${cwdrepo}/.worktrees/miseprefixtmux$mode -- "
   [ "$mode" = out ] && want="${want}claude " || want="${want}bash -c "
   if [ "$rc" -eq 0 ] && grep -Fq -- "$want" <<<"$(tr '\n' ' ' <"$log" 2>/dev/null)"; then
     echo "ok: --tmux ($mode of tmux) launch carries the mise exec prefix"
