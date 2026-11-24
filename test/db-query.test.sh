@@ -59,7 +59,8 @@ mk_mutant() {  # mk_mutant <name> <sed expression>
 mk_mutant nooverride 's|^export MISE_OVERRIDE_CONFIG_FILENAMES=.*$|:|'
 mk_mutant misenv 's|^export MISE_OVERRIDE_CONFIG_FILENAMES=.*$|export MISE_ENV=db|'
 mk_mutant keepenv 's|env -u DATABASE_URL mise exec|env mise exec|'
-mk_mutant noemptycheck 's|if \[ -z "\${DATABASE_URL:-}" \]; then|if false; then|'
+mk_mutant noemptycheck 's|if \[ -z "\${DATABASE_URL:-}" \]; then|if false; then|;s|^    exit 5 ;;$|    : ;;|'
+# (the scheme check is also off, since it would otherwise refuse the empty URL)
 mk_mutant nobackslash 's|^  \*\\\\\*)$|  __never__)|'
 mk_mutant keepstdin 's| </dev/null$||'
 mk_mutant passthrough 's|^    \*) die_args .*$|    *) fmt+=("$1"); shift ;;|'
@@ -177,6 +178,27 @@ STUB_DB_URL="$URL" USQL_EXIT=3 run "$bindir/db-query" -c 'select 1'; rc=$?
 if [ "$rc" -eq 3 ] && [ -s "$args" ]; then
   echo "ok: db-query returns usql's exit code"
 else echo "FAIL: usql exit rc=$rc"; fail=1; fi
+
+# Embedded engines run in usql with the local user's rights (SQL alone can
+# write files), so only server-database schemes pass.
+mk_mutant noschemecheck 's|^    exit 5 ;;$|    : ;;|'
+for bad_url in "sq:/tmp/x.db" "sqlite:///tmp/x.db" "duckdb:/tmp/x.db" "dk:/tmp/x.db" \
+               "file:///tmp/x.db" "/tmp/x.db" "myconn" "SQLITE3:///tmp/x.db"; do
+  STUB_DB_URL="$bad_url" run "$bindir/db-query" -c 'select 1'; rc=$?
+  if [ "$rc" -eq 5 ] && [ ! -s "$args" ] && grep -qF 'server-database URL' "$stubdir/err"; then
+    echo "ok: db-query refuses DATABASE_URL '$bad_url' (exit 5)"
+  else echo "FAIL: '$bad_url' rc=$rc args=$(cat "$args")"; fail=1; fi
+done
+for good_url in "postgresql://ro@h/db" "MySQL://ro@h/db" "sqlserver://ro@h/db"; do
+  STUB_DB_URL="$good_url" run "$bindir/db-query" -c 'select 1'; rc=$?
+  if [ "$rc" -eq 0 ] && grep -qxF "[$good_url]" "$args"; then
+    echo "ok: db-query accepts server URL '$good_url'"
+  else echo "FAIL: '$good_url' rc=$rc args=$(cat "$args")"; fail=1; fi
+done
+STUB_DB_URL="sq:/tmp/x.db" run "$stubdir/noschemecheck" -c 'select 1'; rc=$?
+if grep -qxF '[sq:/tmp/x.db]' "$args"; then
+  echo "ok: without the scheme check an embedded URL reaches usql (the cases above are discriminating)"
+else echo "FAIL: noschemecheck mutant rc=$rc args=$(cat "$args")"; fail=1; fi
 
 # 5. Environment failures each get their own code and message.
 # 5a. No mise on PATH: fail before anything else.

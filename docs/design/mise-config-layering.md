@@ -66,7 +66,10 @@ stdin は `/dev/null` にして読まない。usql の meta-command は shell �
 `\w`）ができ、`-c`・`-f`・stdin のどれからでも、SQL の後ろに続けても実行される（実測: `-c 'select 1;
 \! echo X'` で `X` が出る）。素通しすると `Bash(db-query *)` の allow が承認なしの任意コマンド実行に
 なる。一方 SQL の中身は wrapper では縛らず、DB に対して agent に何を許すかは `DATABASE_URL` の
-DB user の権限で決める。
+DB user の権限で決める。これは network 越しの server 型 DB でだけ成り立つ。sqlite・duckdb 等の埋め込み型は
+usql のプロセス内でローカル user の権限のまま動き、SQL だけで任意のファイルを読み書きできる（`ATTACH`、
+`COPY ... TO`）ので、DB user という境界が無い。`db-query` は scheme を server 型の許可リストと照合し、
+外れれば exit 5 で止める。拒否リストにしないのは、usql の scheme alias が多く、漏れが素通りになるため。
 
 接続先が複数（dev / stg 等）ある場合は扱わない。override するファイル名を接続ごとに分けるか、`db-query` に
 接続名の引数を持たせるかは、必要になった時点で決める。

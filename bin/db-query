@@ -35,11 +35,20 @@ set -euo pipefail
 # password file such as USQLPASS is still read).
 #
 # What the SQL may do to the database is decided by the database user in
-# DATABASE_URL, not here.
+# DATABASE_URL, not here, and only for a server database reached over the
+# network. An embedded engine (sqlite, duckdb, ...) runs inside usql with the
+# local user's own rights, so SQL alone reads and writes arbitrary local files
+# (ATTACH, COPY ... TO, read_text); there is no database user to bound it.
+# The URL scheme must therefore be on an allowlist of server drivers. An
+# allowlist rather than a denylist of embedded drivers, because usql has many
+# scheme aliases (sq, sqlite, mq, dk, ddb, ql, csv, h2, ...) and a missed one
+# would pass silently; a new server scheme only needs one line added here.
+# A scheme-less URL (usql also takes a file path or a saved connection name)
+# is refused too. Source of the names: `usql` "Available Drivers" listing.
 #
 # Exit: 1 bad arguments; 2 DATABASE_URL unset or empty; 3 usql not found;
-# 4 mise could not load mise.db.local.toml (e.g. not trusted); 127 mise not
-# found. Otherwise usql's own code, which can coincide with 2-4; the stderr
+# 4 mise could not load mise.db.local.toml (e.g. not trusted); 5 DATABASE_URL
+# is not a server-database URL; 127 mise not found. Otherwise usql's own code, which can coincide with 2-4; the stderr
 # message tells them apart.
 
 usage() {
@@ -96,5 +105,15 @@ if ! command -v usql >/dev/null 2>&1; then
   echo "db-query: usql not found; add it to mise.db.local.toml ([tools] usql = \"...\") and run mise install" >&2
   exit 3
 fi
+scheme="${DATABASE_URL%%://*}"
+case "$DATABASE_URL" in *://*) ;; *) scheme="" ;; esac
+case "$(printf "%s" "$scheme" | tr "[:upper:]" "[:lower:]")" in
+  postgres|pg|pgsql|postgresql|pgx|px|cockroachdb|cr|cdb|crdb|cockroach|redshift|rs|\
+  mysql|my|maria|aurora|mariadb|percona|memsql|me|mymysql|zm|mymy|tidb|ti|vitess|vt|\
+  sqlserver|ms|mssql|azuresql|oracle|or|ora|oci|oci8|clickhouse|ch) ;;
+  *)
+    echo "db-query: DATABASE_URL must be a server-database URL (postgres://, mysql://, sqlserver://, oracle://, clickhouse://); embedded engines such as sqlite or duckdb can read and write local files from SQL" >&2
+    exit 5 ;;
+esac
 exec usql -X -w "$@" "$DATABASE_URL" </dev/null
 ' db-query ${fmt[@]+"${fmt[@]}"} -c "$sql"

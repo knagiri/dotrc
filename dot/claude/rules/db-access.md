@@ -20,7 +20,7 @@ db-query -J -c "$(cat query.sql)"
 
 `db-query`（`bin/`）は `mise.db.local.toml` だけを読む mise 経由で `usql ... "$DATABASE_URL"` を実行する。
 `DATABASE_URL` が無ければ exit 2、usql が無ければ exit 3、mise が config を読めなければ（未 trust 等）
-exit 4、mise 自体が無ければ exit 127 で、それ以外は usql の終了コードをそのまま返す。呼び出し側の env にある `DATABASE_URL` は捨て、mise config の値だけを
+exit 4、`DATABASE_URL` が server 型 DB の URL でなければ exit 5、mise 自体が無ければ exit 127 で、それ以外は usql の終了コードをそのまま返す。呼び出し側の env にある `DATABASE_URL` は捨て、mise config の値だけを
 使う。settings.json で allow 済み。
 
 受け付けるのは `-c <sql>` 1 つと出力形式の flag（`-J` / `-C` / `-t` / `-x` / `-q`）だけで、`\` を
@@ -65,6 +65,13 @@ background 委譲先にも配られる（[worktree-scope.md](./worktree-scope.md
 できるかの境界は `db-query` ではなく DB の権限である。`db-query` が縛るのは usql の meta-command
 だけで、SQL の中身は見ないので、書き込み権限のある user を渡せば `DELETE` も `DROP` も通る。
 allowlist で wrapper を許可していることは、クエリの中身を何も制限しない。
+
+この境界が成り立つのは network 越しの server 型 DB（postgres / mysql / sqlserver / oracle / clickhouse
+等）だけである。sqlite・duckdb のような埋め込み型は usql のプロセス内でローカル user の権限のまま
+動くので、SQL だけで任意のパスへのファイル作成・書き込み（`ATTACH`、`COPY ... TO`）や読み出しができ、
+境界になる DB user が無い（usql 0.21.6 で実測）。承認なしのファイル書き込みは任意コマンドの実行へ
+つながりうる。そのため `db-query` は URL の scheme を server 型の許可リストと照合し、外れれば exit 5 で
+止める。拒否リストでなく許可リストなのは、usql の scheme alias が多く、漏れた別名が黙って素通りするため。
 
 password は URL に直書きせず、usql の password file（権限 600）に置くことを勧める。`db-query` は
 URL を usql の引数として渡すので、URL に書いた password はプロセス一覧に出るため。`db-query` は
