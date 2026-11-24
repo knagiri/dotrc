@@ -47,6 +47,7 @@ jobs:
           shellcheck -S warning \
             bin/claude-digest \
             bin/claude-review \
+            bin/claude-session \
             bin/claude-spinoff \
             bin/claude-stop-bg \
             bin/claude-worktree \
@@ -68,6 +69,7 @@ jobs:
             githooks/post-merge \
             test/claude-digest.test.sh \
             test/claude-review.test.sh \
+            test/claude-session.test.sh \
             test/claude-spinoff.test.sh \
             test/claude-stop-bg.test.sh \
             test/claude-worktree.test.sh \

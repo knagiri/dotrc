@@ -55,6 +55,8 @@
       "Bash(claude-stop-bg *)",
       "Bash(claude-spinoff)",
       "Bash(claude-spinoff *)",
+      "Bash(claude-session)",
+      "Bash(claude-session *)",
       "Bash(claude-queue pin)",
       "Bash(claude-queue pin *)",
       "Bash(claude-queue memo)",
