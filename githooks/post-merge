@@ -4,30 +4,33 @@
 # bin/claude-queue is a gitignored build of src/claude-queue, so a merge (and so
 # a `git pull` with pull.rebase=false, fast-forward included) that brings in new
 # source leaves the old binary in place. This hook runs `make build` in that
-# case. A rebase pull does not run post-merge and is not covered.
+# case. It assumes it sits in git's hooks dir under the name post-merge.
 #
-# Skips (exit 0) when nothing under src/claude-queue changed, when go is not on
-# PATH, or when src/claude-queue no longer exists. A failed build cannot undo
-# the merge, which has already completed; the hook says so on stderr and exits
-# non-zero, leaving the old binary in bin/.
+# git does not run post-merge for a rebase pull, for a merge that stopped on
+# conflicts (the later `git commit` does not fire it), or for `git merge
+# --squash` (HEAD does not move, so there is no diff to see). None of those is
+# covered.
 #
-# Installed by bin/deploy.sh as a symlink named post-merge in `git rev-parse
-# --git-path hooks`.
+# Skips (exit 0) when nothing under src/claude-queue changed, or when
+# src/claude-queue no longer exists. When go is not on PATH it also exits 0 but
+# says so on stderr, since that leaves the binary stale. A failed build cannot
+# undo the merge, which has already completed; the hook says so on stderr and
+# exits non-zero (git ignores the status of post-merge).
 set -u
 
-# git runs a hook from the root of the working tree (githooks(5)).
 top="$(git rev-parse --show-toplevel)" || exit 0
 
 # A merge records the pre-merge HEAD in ORIG_HEAD. If it is missing anyway,
 # rebuilding is the safe side: an unneeded build costs time, a skipped one
 # leaves a stale binary.
+# The ":/" pathspec is relative to the top of the working tree, not the cwd.
 if git rev-parse -q --verify ORIG_HEAD >/dev/null; then
-    git diff --quiet ORIG_HEAD HEAD -- src/claude-queue && exit 0
+    git diff --quiet ORIG_HEAD HEAD -- ":/src/claude-queue" && exit 0
 else
     echo "post-merge: ORIG_HEAD not found; rebuilding claude-queue anyway" >&2
 fi
 
-command -v go >/dev/null 2>&1 || exit 0
+command -v go >/dev/null 2>&1 || { echo "post-merge: go not on PATH; $top/bin/claude-queue was not rebuilt. Run: make -C $top/src/claude-queue build" >&2; exit 0; }
 [ -d "$top/src/claude-queue" ] || exit 0
 
 # In a linked worktree git exports GIT_DIR to the hook. Left set, the
@@ -36,7 +39,7 @@ command -v go >/dev/null 2>&1 || exit 0
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 
 if ! make -C "$top/src/claude-queue" build; then
-    echo "post-merge: claude-queue build failed; $top/bin/claude-queue is still the old binary." >&2
-    echo "post-merge: the merge itself completed. Fix and rerun: make -C src/claude-queue build" >&2
+    echo "post-merge: claude-queue build failed; $top/bin/claude-queue was not rebuilt (old or missing)." >&2
+    echo "post-merge: the merge itself completed. Fix and rerun: make -C $top/src/claude-queue build" >&2
     exit 1
 fi

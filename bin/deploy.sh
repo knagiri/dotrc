@@ -138,22 +138,43 @@ fi
 
 # git hook: githooks/post-merge rebuilds bin/claude-queue after a pull that
 # changes src/claude-queue. Linked as a symlink so later edits to the hook take
-# effect without a re-run. `--git-path` resolves to the common dir's hooks/ even
-# from a linked worktree (hooks are shared across worktrees), and to
+# effect without a re-run. `--git-path` resolves to the common dir's hooks/
+# even from a linked worktree (hooks are shared across worktrees), and to
 # core.hooksPath when that is set, i.e. wherever git actually reads hooks from.
-# An existing hook that is not a symlink is someone's own and is left alone; a
-# symlink is ours (or a stale link to another checkout) and is replaced.
-# Outside a git checkout rev-parse fails and the block does nothing.
+# If core.hooksPath is a dir shared by several repos, the hook runs in all of
+# them; it exits at once where src/claude-queue did not change.
+# Existing hooks are left alone unless they are our own link: a regular file
+# and a symlink that does not end in githooks/post-merge (a hook manager's,
+# say) are reported on stderr and skipped. A link to another checkout's
+# githooks/post-merge is re-pointed here, with a note on stderr.
+# The block does nothing, silently, when REPO_DIR has no .git (not a
+# checkout; this also assumes GIT_DIR is not exported, since git would then
+# look at that repo instead). If .git exists but rev-parse fails (dubious
+# ownership, an old git), it warns and skips.
 # The directory is resolved, not hooks/post-merge itself: --path-format=absolute
 # resolves symlinks, so on a re-run it would return the link's target (this
 # checkout's githooks/post-merge, a regular file) instead of the link.
-if __hook_dir="$(git -C "${REPO_DIR}" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)"; then
-    __hook_dst="${__hook_dir}/post-merge"
-    if [ -e "${__hook_dst}" ] && [ ! -L "${__hook_dst}" ]; then
-        echo "deploy.sh: ${__hook_dst} exists and is not a symlink; skipped installing githooks/post-merge" >&2
+if [ -e "${REPO_DIR}/.git" ]; then
+    if __hook_dir="$(git -C "${REPO_DIR}" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)"; then
+        __hook_dst="${__hook_dir}/post-merge"
+        if [ -e "${__hook_dst}" ] && [ ! -L "${__hook_dst}" ]; then
+            echo "deploy.sh: ${__hook_dst} exists and is not a symlink; skipped installing githooks/post-merge" >&2
+        else
+            __hook_install=1
+            if [ -L "${__hook_dst}" ]; then
+                case "$(readlink "${__hook_dst}")" in
+                    "${REPO_DIR}/githooks/post-merge") ;;
+                    */githooks/post-merge) echo "deploy.sh: re-pointing ${__hook_dst} from $(readlink "${__hook_dst}") to ${REPO_DIR}/githooks/post-merge" >&2 ;;
+                    *) echo "deploy.sh: ${__hook_dst} is a symlink to $(readlink "${__hook_dst}"), not a githooks/post-merge; skipped installing githooks/post-merge" >&2; __hook_install=0 ;;
+                esac
+            fi
+            if [ "${__hook_install}" = 1 ]; then
+                mkdir -p "${__hook_dir}"
+                ln -snf "${REPO_DIR}/githooks/post-merge" "${__hook_dst}"
+            fi
+        fi
     else
-        mkdir -p "${__hook_dir}"
-        ln -snf "${REPO_DIR}/githooks/post-merge" "${__hook_dst}"
+        echo "deploy.sh: git rev-parse --git-path hooks failed in ${REPO_DIR}; skipped installing githooks/post-merge" >&2
     fi
 fi
 

@@ -49,12 +49,16 @@ ln -s "$git_bin" "$nogo/git"
 
 # Mutants, one guard removed each.
 mut="$tmp/mutants"; mkdir -p "$mut"
-sed 's|^    git diff --quiet ORIG_HEAD HEAD -- src/claude-queue && exit 0$|    :|' \
+sed 's|^    git diff --quiet ORIG_HEAD HEAD -- ":/src/claude-queue" && exit 0$|    :|' \
   "$hook" >"$mut/nodiff"
 grep -v '^command -v go ' "$hook" >"$mut/nogo"
 grep -v '^unset GIT_DIR ' "$hook" >"$mut/nounset"
+grep -v '^\[ -d "\$top/src/claude-queue" \] || exit 0$' "$hook" >"$mut/nosrcdir"
+# Range mutants: only the last commit, and the wrong merge parent.
+sed 's|git diff --quiet ORIG_HEAD HEAD |git diff --quiet HEAD~1 HEAD |' "$hook" >"$mut/lastcommit"
+sed 's|git diff --quiet ORIG_HEAD HEAD |git diff --quiet HEAD^2 HEAD |' "$hook" >"$mut/wrongparent"
 chmod +x "$mut"/*
-for m in nodiff nogo nounset; do
+for m in nodiff nogo nounset nosrcdir lastcommit wrongparent; do
   check "mutant '$m' really differs from the hook" \
     "$(if ! cmp -s "$hook" "$mut/$m"; then echo 0; else echo 1; fi)"
 done
@@ -89,8 +93,9 @@ push_change() {  # push_change <seed> <path>
   git -C "$1" push -q origin HEAD:main
 }
 
-# pull_in <work> <path-dir> [env...]: git pull with PATH=<path-dir>:$PATH (or
-# exactly <path-dir> for nogo). Leaves the make log at <work>.make.log.
+# pull_in <work> <path-dir> [env...]: git pull with PATH set to exactly
+# <path-dir> (the caller prepends :$PATH where it wants the host's tools).
+# Leaves the make log at <work>.make.log.
 pull_in() {
   local w="$1" p="$2"; shift 2
   env MAKE_LOG="$w.make.log" "$@" PATH="$p" "$git_bin" -C "$w" pull -q --no-edit \
@@ -128,12 +133,47 @@ s_src_merge() {
   [ "$parents" = 3 ] && [ "$(calls "$work")" = 1 ] && echo yes || echo "no: parents=$parents"
 }
 
-# src change but no go on PATH: make must not run.
+# src change but no go on PATH: make must not run, and stderr says the binary
+# was not rebuilt (prints 0 only when both hold).
 s_no_go() {
   read -r seed work < <(new_case "nogo-$1" "$2")
   push_change "$seed" src/claude-queue/main.go
   pull_in "$work" "$nogo"
+  local n; n="$(calls "$work")"
+  if [ "$n" = 0 ] && grep -qF "go not on PATH; $work/bin/claude-queue was not rebuilt. Run: make -C $work/src/claude-queue build" "$work.err"
+  then echo 0; else echo "no: calls=$n"; fi
+}
+
+# The merge deletes src/claude-queue: the diff is non-empty but there is
+# nothing to build, so make must not run.
+s_src_removed() {
+  read -r seed work < <(new_case "rm-$1" "$2")
+  git -C "$seed" rm -q -r src/claude-queue
+  git -C "$seed" commit -q -m rm-src
+  git -C "$seed" push -q origin HEAD:main
+  pull_in "$work" "$stubs:$PATH"
   calls "$work"
+}
+
+# Upstream pushes a src commit then a docs commit; one ff pull covers both.
+# The range is ORIG_HEAD..HEAD, so the earlier src commit must still count.
+s_range_ff() {
+  read -r seed work < <(new_case "range-$1" "$2")
+  push_change "$seed" src/claude-queue/main.go
+  push_change "$seed" docs/readme.md
+  pull_in "$work" "$stubs:$PATH"
+  calls "$work"
+}
+
+# The local commit touches src, upstream only docs: a non-ff merge whose own
+# side changed src must not trigger a build (only what the merge brought in).
+s_local_src_upstream_docs() {
+  read -r seed work < <(new_case "localsrc-$1" "$2")
+  commit_in "$work" src/claude-queue/local.go local >/dev/null
+  push_change "$seed" docs/readme.md
+  pull_in "$work" "$stubs:$PATH"
+  local parents; parents="$(git -C "$work" rev-list --parents -n1 HEAD | wc -w)"
+  [ "$parents" = 3 ] && echo "$(calls "$work")" || echo "no: parents=$parents"
 }
 
 # A merge inside a linked worktree: git exports GIT_DIR to the hook there, and
@@ -159,8 +199,14 @@ check "fast-forward pull with a src/claude-queue change runs make build there ($
 r="$(s_src_merge real "$hook")"
 check "non-ff merge pull with a src/claude-queue change runs make once ($r)" \
   "$(if [ "$r" = yes ]; then echo 0; else echo 1; fi)"
-check "without go on PATH, make is not called" \
+check "without go on PATH, make is not called and stderr says the binary was not rebuilt" \
   "$(if [ "$(s_no_go real "$hook")" = 0 ]; then echo 0; else echo 1; fi)"
+check "a merge that deletes src/claude-queue does not call make" \
+  "$(if [ "$(s_src_removed real "$hook")" = 0 ]; then echo 0; else echo 1; fi)"
+check "an ff pull of a src commit then a docs commit calls make once" \
+  "$(if [ "$(s_range_ff real "$hook")" = 1 ]; then echo 0; else echo 1; fi)"
+check "a non-ff merge where only the local side touched src does not call make" \
+  "$(if [ "$(s_local_src_upstream_docs real "$hook")" = 0 ]; then echo 0; else echo 1; fi)"
 r="$(s_worktree real "$hook")"
 check "in a linked worktree the build sees the worktree as top level ($r)" \
   "$(if [ "$r" = yes ]; then echo 0; else echo 1; fi)"
@@ -170,10 +216,27 @@ read -r seed work < <(new_case fail "$hook")
 before="$(git -C "$work" rev-parse HEAD)"
 push_change "$seed" src/claude-queue/main.go
 pull_in "$work" "$stubs:$PATH" MAKE_RC=2
-check "a failed build leaves the merge in place and reports the old binary on stderr" \
+check "a failed build leaves the merge in place and reports the build failure on stderr" \
   "$(if [ "$(git -C "$work" rev-parse HEAD)" != "$before" ] \
        && [ "$(git -C "$work" rev-parse HEAD)" = "$(git -C "$seed" rev-parse HEAD)" ] \
-       && grep -qF 'still the old binary' "$work.err"
+       && grep -qF 'build failed' "$work.err" \
+       && grep -qF "$work/bin/claude-queue was not rebuilt (old or missing)" "$work.err" \
+       && grep -qF "make -C $work/src/claude-queue build" "$work.err"
+     then echo 0; else echo 1; fi)"
+
+# git ignores post-merge's exit status, so the status is only visible when the
+# hook is run directly. After the pull above, ORIG_HEAD and the src diff are in
+# place: a failing make must make the hook exit non-zero.
+(cd "$work" && env MAKE_LOG="$work.direct.make.log" MAKE_RC=2 PATH="$stubs:$PATH" sh "$hook" >/dev/null 2>&1)
+rc=$?
+check "a failed build makes the hook itself exit non-zero (rc=$rc)" \
+  "$(if [ "$rc" != 0 ] && [ "$(calls "$work.direct")" = 1 ]; then echo 0; else echo 1; fi)"
+
+# No ORIG_HEAD: the hook says so and rebuilds anyway.
+git -C "$work" update-ref -d ORIG_HEAD
+(cd "$work" && env MAKE_LOG="$work.noorig.make.log" PATH="$stubs:$PATH" sh "$hook" >/dev/null 2>"$work.noorig.err")
+check "without ORIG_HEAD the hook reports it and still calls make" \
+  "$(if grep -qF 'ORIG_HEAD not found' "$work.noorig.err" && [ "$(calls "$work.noorig")" = 1 ]
      then echo 0; else echo 1; fi)"
 
 # --- discrimination: each mutant must fail the scenario its guard covers ----
@@ -181,6 +244,12 @@ check "control: without the diff check, a docs-only pull calls make" \
   "$(if [ "$(s_docs_only nodiff "$mut/nodiff")" != 0 ]; then echo 0; else echo 1; fi)"
 check "control: without the go check, make is called with no go on PATH" \
   "$(if [ "$(s_no_go nogo "$mut/nogo")" != 0 ]; then echo 0; else echo 1; fi)"
+check "control: without the src dir check, a merge deleting it calls make" \
+  "$(if [ "$(s_src_removed nosrcdir "$mut/nosrcdir")" != 0 ]; then echo 0; else echo 1; fi)"
+check "control: diffing only the last commit misses the earlier src commit" \
+  "$(if [ "$(s_range_ff lastcommit "$mut/lastcommit")" != 1 ]; then echo 0; else echo 1; fi)"
+check "control: diffing against the wrong merge parent calls make for a local-only src change" \
+  "$(if [ "$(s_local_src_upstream_docs wrongparent "$mut/wrongparent")" != 0 ]; then echo 0; else echo 1; fi)"
 check "control: without unsetting GIT_DIR, the worktree build sees the wrong top" \
   "$(if [ "$(s_worktree nounset "$mut/nounset")" = "no: top=$tmp/wt-nounset/linked/src/claude-queue" ]
      then echo 0; else echo 1; fi)"

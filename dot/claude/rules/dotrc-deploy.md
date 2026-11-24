@@ -90,18 +90,20 @@ claude-queue の `make install` は再実行のたびに走る。
 PATH を追加するだけで symlink は張らない `bin/` のスクリプトとも、反映経路がそもそも違う
 （`bin/deploy.sh` 冒頭を参照）。
 
-`src/claude-queue` を触ったら、merge 後に再ビルドする。ビルド先は実行した checkout の `bin/`
+`src/claude-queue` を触ったら、merge 後に再ビルドする。通常は `githooks/post-merge` が行う。
+`bin/deploy.sh` がこれを repo 共通の hooks dir（全 worktree で共有。`git rev-parse --git-path hooks`）へ
+symlink し、merge（`pull.rebase=false` の pull を含む）で `src/claude-queue` に差分が入れば、その
+checkout で `make build` が走る。hook が走らない場合は下の手順で手動で再ビルドする。走らないのは、
+rebase pull・衝突を解決して commit した merge・`git merge --squash`・hook 未導入の checkout、
+そして go が PATH に無い環境（mise 未 activate の非対話 shell を含む。この場合 hook は stderr に通知を出す）。
+
+ビルド先は実行した checkout の `bin/`
 （`Makefile` の `BIN` は `git rev-parse --show-toplevel` で解決する）で、ホームの PATH に
 乗るのは `bin/deploy.sh` を走らせた checkout の `bin/`（§3 と同じ理屈）。委譲先 agent は既定で
 linked worktree で作業するため、worktree 側で `make install` してもホームから叩かれる
 バイナリは更新されない。ホーム側へ反映したいなら、`bin/deploy.sh` を走らせた checkout（通常
 main の working tree）側で再ビルドするか、worktree の変更をそちらへ merge / pull してから
 再ビルドする。
-
-`bin/deploy.sh` は `githooks/post-merge` を checkout の hooks dir（`git rev-parse --git-path hooks`）へ
-symlink し、merge（`pull.rebase=false` の pull を含む）で `src/claude-queue` に差分が入れば
-その checkout で `make build` が走る。rebase pull・Go の無い環境・hook 未導入の checkout では
-走らないので、そこでは下の手順で再ビルドする。
 
 **linked worktree で作業している agent は、この再ビルドを checkout を跨いで自分で行わない。**
 別 checkout の `bin/` への書き込みは worktree のスコープ外であり（`worktree-scope.md` §2）、

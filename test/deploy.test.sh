@@ -261,8 +261,9 @@ else
 fi
 
 # --- Case I: githooks/post-merge is linked into the checkout's hooks/ --------
-# Only in a git checkout (the minimal one above is not, so the block is a no-op
-# there). The link goes where `git rev-parse --git-path` says, which from a
+# Only in a git checkout (the minimal one above has no .git, so the block is a
+# no-op there; that holds because sandbox.sh unsets GIT_DIR, which would
+# otherwise make git look at another repo). The link goes where `git rev-parse --git-path` says, which from a
 # linked worktree is the common dir's hooks/. A hand-written hook that is not a
 # symlink is kept and reported; the control drops that check and clobbers it.
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -293,9 +294,27 @@ check "deploy.sh links githooks/post-merge into .git/hooks, idempotently and qui
   "$(if links_to "$ghook" "$grepo/githooks/post-merge" && ! grep -qF 'post-merge' "$stderr_i0"
      then echo 0; else echo 1; fi)"
 
-ln -snf "$sandbox/elsewhere/post-merge" "$ghook"
-run "$grepo/bin/deploy.sh" "$home_i"
-check "a stale symlink (another checkout) is replaced" \
+ln -snf "$sandbox/elsewhere/githooks/post-merge" "$ghook"
+stderr_i1="$sandbox/stderr_i1"
+run_capture_stderr "$grepo/bin/deploy.sh" "$home_i" "$stderr_i1"
+check "a stale symlink (another checkout's githooks/post-merge) is replaced, with a note" \
+  "$(if links_to "$ghook" "$grepo/githooks/post-merge" && grep -qF 're-pointing' "$stderr_i1"
+     then echo 0; else echo 1; fi)"
+
+# A symlink to something that is not a githooks/post-merge (a hook manager's)
+# is not ours: kept, and the skip is reported.
+ln -snf "$sandbox/manager/dispatch" "$ghook"
+stderr_i2="$sandbox/stderr_i2"
+run_capture_stderr "$grepo/bin/deploy.sh" "$home_i" "$stderr_i2"
+check "a symlink to a foreign target is kept and the skip is reported" \
+  "$(if links_to "$ghook" "$sandbox/manager/dispatch" && grep -qF 'skipped installing' "$stderr_i2"
+     then echo 0; else echo 1; fi)"
+sed 's|; __hook_install=0 ;;$| ;;|' "$grepo/bin/deploy.sh" >"$grepo/bin/deploy-clobber-link.sh"
+chmod +x "$grepo/bin/deploy-clobber-link.sh"
+check "the foreign-symlink control really differs from the script under test" \
+  "$(if ! cmp -s "$grepo/bin/deploy.sh" "$grepo/bin/deploy-clobber-link.sh"; then echo 0; else echo 1; fi)"
+run "$grepo/bin/deploy-clobber-link.sh" "$home_i"
+check "without the foreign-symlink skip, the manager's link would be replaced" \
   "$(if links_to "$ghook" "$grepo/githooks/post-merge"; then echo 0; else echo 1; fi)"
 
 rm -f "$ghook"; printf '# hand-written hook\n' >"$ghook"
@@ -305,7 +324,7 @@ check "an existing non-symlink post-merge is kept and the skip is reported" \
   "$(if [ ! -L "$ghook" ] && [ "$(cat "$ghook")" = '# hand-written hook' ] \
        && grep -qF 'is not a symlink; skipped' "$stderr_i"
      then echo 0; else echo 1; fi)"
-sed 's|^    if \[ -e "${__hook_dst}" \] && \[ ! -L "${__hook_dst}" \]; then$|    if false; then|' \
+sed 's|^        if \[ -e "${__hook_dst}" \] && \[ ! -L "${__hook_dst}" \]; then$|        if false; then|' \
   "$grepo/bin/deploy.sh" >"$grepo/bin/deploy-clobber-hook.sh"
 chmod +x "$grepo/bin/deploy-clobber-hook.sh"
 check "the clobber control really differs from the script under test" \
@@ -313,6 +332,16 @@ check "the clobber control really differs from the script under test" \
 run "$grepo/bin/deploy-clobber-hook.sh" "$home_i"
 check "without the non-symlink check, the hand-written hook would be replaced" \
   "$(if [ -L "$ghook" ]; then echo 0; else echo 1; fi)"
+
+# core.hooksPath wins over .git/hooks, and a missing dir is created (mkdir -p).
+chooks="$sandbox/custom-hooks/sub"
+git -C "$grepo" config core.hooksPath "$chooks"
+rm -f "$ghook"
+run "$grepo/bin/deploy.sh" "$home_i"
+check "with core.hooksPath set, the missing dir is created and holds the link" \
+  "$(if [ -d "$chooks" ] && links_to "$chooks/post-merge" "$grepo/githooks/post-merge" && [ ! -e "$ghook" ]
+     then echo 0; else echo 1; fi)"
+git -C "$grepo" config --unset core.hooksPath
 
 # From a linked worktree checkout: the link lands in the common dir's hooks/
 # (where git reads hooks for every worktree), pointing at that checkout.
