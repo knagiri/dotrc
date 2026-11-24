@@ -28,9 +28,12 @@ main working tree 上での `git commit` がヒットした。同じ transcript 
 - remote・PR フロー・CI が欠けた repo に気づいたら、baseline の適用を提案する
 - baseline（GitHub の設定・CI・doc の配置）を当てる手順を skill にまとめ、repo ごとの手作業を無くす
 
-main への commit を機械的に止める hook は別 issue（#182）で扱う。
+加えて、main working tree の統合先 branch 上での `git commit` を PreToolUse hook で検出し、承認
+プロンプト（ask）を出して委譲を促す。remote が無い・commit が 0 件の repo では委譲先が成り立たない
+ので対象外にする。§5 の例外（ユーザーが「ここでやって」と明示した場合）は承認でそのまま通る。
 
 ## 反映先
 
 - `dot/claude/rules/repo-docs.md`「baseline の欠けた repo」
 - `dot/claude/skills/repo-baseline/SKILL.md`
+- `bin/claude-hook-git-guard`（commit の判定）と `dot/claude/settings.json` の `hooks.PreToolUse`

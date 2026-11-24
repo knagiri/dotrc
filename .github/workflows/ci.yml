@@ -46,6 +46,7 @@ jobs:
         run: |
           shellcheck -S warning \
             bin/claude-digest \
+            bin/claude-hook-git-guard \
             bin/claude-review \
             bin/claude-session \
             bin/claude-spinoff \
@@ -71,6 +72,7 @@ jobs:
             bin/lib/gh-mise.sh \
             githooks/post-merge \
             test/claude-digest.test.sh \
+            test/claude-hook-git-guard.test.sh \
             test/claude-review.test.sh \
             test/claude-session.test.sh \
             test/claude-spinoff.test.sh \
