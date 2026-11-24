@@ -30,8 +30,11 @@ else
     echo "post-merge: ORIG_HEAD not found; rebuilding claude-queue anyway" >&2
 fi
 
-command -v go >/dev/null 2>&1 || { echo "post-merge: go not on PATH; $top/bin/claude-queue was not rebuilt. Run: make -C $top/src/claude-queue build" >&2; exit 0; }
+# Checked before go: a merge that deletes src/claude-queue has nothing to build,
+# so it must not tell a go-less environment to run make there.
 [ -d "$top/src/claude-queue" ] || exit 0
+
+command -v go >/dev/null 2>&1 || { echo "post-merge: go not on PATH; $top/bin/claude-queue was not rebuilt. Run: make -C $top/src/claude-queue build" >&2; exit 0; }
 
 # In a linked worktree git exports GIT_DIR to the hook. Left set, the
 # Makefile's `git rev-parse --show-toplevel` (run from src/claude-queue) takes
