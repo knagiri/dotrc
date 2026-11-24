@@ -35,6 +35,7 @@ type world struct {
 	runErr   error
 	noTmux   bool
 	noDaemon bool
+	foreign  bool // the transcript is outside the current config dir
 	// noRepoSession: the repo's own tmux session is not there, and the
 	// window goes to the last attached session, "main". noSessions: there is
 	// none of that either.
@@ -81,6 +82,7 @@ func (w *world) deps() Deps {
 		},
 		RunningDelegates: func() (map[string]int, error) { return map[string]int{sid: w.children}, nil },
 		IsFile:           func(p string) bool { _, err := os.Stat(p); return err == nil },
+		InConfigDir:      func(string) bool { return !w.foreign },
 		IsDir:            func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() },
 		SessionName:      func(string) string { return "example-repo_feature" },
 		WindowName:       func(string, string) string { return "fix the thing" },
@@ -222,9 +224,30 @@ func TestDeliver_GoneBackground(t *testing.T) {
 	}
 }
 
+// A transcript outside the current config dir blocks the resume: the launched
+// claude would not find it and would open an empty session under the same id.
+func TestDeliver_TranscriptOutsideConfigDirSkips(t *testing.T) {
+	for _, kind := range []string{db.KindBackground, db.KindInteractive} {
+		w := &world{foreign: true}
+		p := pin(t)
+		p.Kind = kind
+		err := Deliver(p, "m", w.deps())
+		var skip *hibernate.SkipError
+		if !errors.As(err, &skip) || !strings.Contains(skip.Reason, "outside the current config dir") {
+			t.Fatalf("%s: err = %v, want a SkipError about the config dir", kind, err)
+		}
+		if len(w.ran) != 0 {
+			t.Errorf("%s: launched anyway: %q", kind, w.ran)
+		}
+	}
+}
+
 // A resume runs under the environment the pass inherited: a CLAUDE_CONFIG_DIR
 // it carries reaches the launch unchanged, and the launch neither drops it nor
-// sets another one in its place.
+// sets another one in its place. For a background session the pass's env goes
+// to `claude --bg` as is (the ranEnv assertion). An interactive one puts no
+// CLAUDE_CONFIG_DIR in the tmux argv (the argv assertion), so its window takes
+// the tmux server's global environment.
 func TestDeliver_InheritsConfigDir(t *testing.T) {
 	const inherited = "/home/x/.claude-inherited"
 	t.Setenv("CLAUDE_CONFIG_DIR", inherited)

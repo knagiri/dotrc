@@ -21,8 +21,8 @@ func TestRun_ExitCodes(t *testing.T) {
 		{"not running", nil, func() (bool, error) { return false, nil }, 1, ""},
 		{"cannot tell", nil, func() (bool, error) { return false, errors.New("boom") }, 2, "boom"},
 		{"bad flag", []string{"--nope"}, func() (bool, error) { return true, nil }, 2, "nope"},
-		// The flag is gone: a caller still passing it gets "cannot tell"
-		// rather than an answer about some other dir.
+		// --config-dir is not accepted (exit 2, "cannot tell"), so a caller
+		// passing it never gets an answer about some other dir.
 		{"removed --config-dir", []string{"--config-dir", "/x"}, func() (bool, error) { return true, nil }, 2, "config-dir"},
 	} {
 		var errBuf bytes.Buffer

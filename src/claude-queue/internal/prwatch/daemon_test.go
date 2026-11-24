@@ -88,16 +88,25 @@ func TestDaemonRunning_RealProc(t *testing.T) {
 }
 
 // The lock is looked up where claude itself keeps it: $CLAUDE_CONFIG_DIR, or
-// ~/.claude when that is unset or empty.
+// ~/.claude when that is unset or empty. With no home to resolve it from the
+// answer is an error (cannot tell), not "no daemon".
 func TestConfigDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "/from-env")
-	if got := configDir(); got != "/from-env" {
-		t.Errorf("env: configDir = %q", got)
+	if got, err := configDir(); err != nil || got != "/from-env" {
+		t.Errorf("env: configDir = %q, %v", got, err)
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	if got, want := configDir(), filepath.Join(home, ".claude"); got != want {
-		t.Errorf("default: configDir = %q, want %q", got, want)
+	if got, err := configDir(); err != nil || got != filepath.Join(home, ".claude") {
+		t.Errorf("default: configDir = %q, %v", got, err)
+	}
+}
+
+func TestDaemonRunning_NoHomeIsAnError(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("HOME", "")
+	if up, err := DaemonRunning(); err == nil || up {
+		t.Errorf("DaemonRunning with no resolvable config dir = %v, %v; want an error", up, err)
 	}
 }

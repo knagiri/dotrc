@@ -28,7 +28,10 @@ type Deps struct {
 	// open work (db.RunningDelegateCounts).
 	RunningDelegates func() (map[string]int, error)
 	IsFile           func(path string) bool
-	IsDir            func(path string) bool
+	// InConfigDir reports whether a transcript path is under the config dir
+	// this process's claude resumes from (roster.TranscriptInConfigDir).
+	InConfigDir func(path string) bool
+	IsDir       func(path string) bool
 	// SessionName and WindowName place an interactive session's window the
 	// way the picker's resume does (picker.SessionName, ResumeWindowName).
 	SessionName func(cwd string) string
@@ -57,6 +60,7 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 		Hibernate:           hd,
 		RunningDelegates:    runningDelegates,
 		IsFile:              func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.Mode().IsRegular() },
+		InConfigDir:         roster.TranscriptInConfigDir,
 		IsDir:               isDir,
 		SessionName:         picker.SessionName,
 		WindowName:          picker.ResumeWindowName,
@@ -100,7 +104,8 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 //   - its window is on screen in an attached client: the person is there, and
 //     the PR will still say the same thing when they leave.
 //
-// The cwd and the transcript are checked before anything is stopped, because
+// The transcript must also be under the config dir the launched claude reads
+// (a resume elsewhere opens an empty session under the same id). The cwd and the transcript are checked before anything is stopped, because
 // a resume needs both (the picker's resume does the same check) and a session
 // stopped only to fail its resume would be left gone for nothing.
 //
@@ -129,6 +134,9 @@ func Deliver(p db.PRWatch, msg string, deps Deps) error {
 	}
 	if p.TranscriptPath == "" || !deps.IsFile(p.TranscriptPath) {
 		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot resume: transcript %q is not on disk", p.TranscriptPath)}
+	}
+	if !deps.InConfigDir(p.TranscriptPath) {
+		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot resume: transcript %q is outside the current config dir", p.TranscriptPath)}
 	}
 	if p.Cwd == "" || !deps.IsDir(p.Cwd) {
 		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot resume: working directory %q no longer exists", p.Cwd)}

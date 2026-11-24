@@ -41,6 +41,11 @@ const StatusIdle = "idle"
 // List runs `claude agents --json` with the inherited environment and returns
 // the agents it reports.
 //
+// The roster covers only the config dir the inherited environment points at.
+// It assumes every session of the ledger runs under that same dir: with a
+// different CLAUDE_CONFIG_DIR in the tmux server or the systemd unit, a
+// session living elsewhere is absent from the roster and so is judged gone.
+//
 // An error is always a failure to read the roster, never "nothing is running":
 // reconcile relies on that distinction to avoid terminating every tracked
 // session when the command itself breaks.

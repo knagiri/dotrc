@@ -222,3 +222,28 @@ func TestSweep_StopFailureIsReported(t *testing.T) {
 		t.Errorf("result = %+v, want one stop error", res)
 	}
 }
+
+// The roster costs a subprocess, so it is read only when something is tracked
+// (and then exactly once).
+func TestSweep_ReadsTheRosterOnlyWhenSomethingIsTracked(t *testing.T) {
+	conn, err := db.Open(filepath.Join(t.TempDir(), "empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	reads := 0
+	list := func() ([]string, error) { reads++; return nil, errors.New("must not be read") }
+	if res, err := sweep(conn, list, func(string) error { return nil }); err != nil || !reflect.DeepEqual(res, Result{}) || reads != 0 {
+		t.Errorf("nothing tracked: res=%+v err=%v reads=%d; want zero Result, no error, no read", res, err, reads)
+	}
+
+	conn = sweepFixture(t)
+	reads = 0
+	list = func() ([]string, error) { reads++; return nil, nil }
+	if _, err := sweep(conn, list, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 {
+		t.Errorf("tracked sessions: roster read %d times, want once", reads)
+	}
+}

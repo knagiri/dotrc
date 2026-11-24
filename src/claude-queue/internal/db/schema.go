@@ -13,10 +13,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   transcript_path TEXT,
   started_at      INTEGER NOT NULL DEFAULT (unixepoch()),
   terminated_at   INTEGER,
-  -- Unused: nothing reads or writes it. Kept so existing databases, whose rows
-  -- may carry a value, keep the shape they were created with. Added by
-  -- migrate() as well, because CREATE TABLE IF NOT EXISTS is a no-op on an
-  -- existing database.
+  -- Unused: nothing reads or writes it. The column stays, in CREATE TABLE and
+  -- in migrate()'s ALTER, so that new and existing databases have the same
+  -- columns and the values existing rows carry are kept; it is never dropped
+  -- (SQLite's DROP COLUMN is restricted, and dropping would discard those
+  -- values). migrate() adds it as well because CREATE TABLE IF NOT EXISTS is a
+  -- no-op on an existing database.
   config_dir      TEXT,
   -- The events.id the session was manually marked "waiting" at (claude-queue
   -- mark, Tab in the picker). Non-NULL is marked, until it is toggled off;

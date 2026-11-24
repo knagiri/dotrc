@@ -2,6 +2,7 @@ package picker
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -207,5 +208,38 @@ func TestRecordJumpPushesOrigin(t *testing.T) {
 	pane, at := f.walk(t, -1, "D")
 	if pane != paneOf("B") || at != "B" {
 		t.Errorf("back after the first pick switched to %q, cursor on %q; want %q, B", pane, at, paneOf("B"))
+	}
+}
+
+// With the roster unreadable the ledger's pane is used if it still exists: a
+// failed read is not evidence the session ended.
+func TestWalkHistoryRosterUnreadableUsesLedgerPane(t *testing.T) {
+	f := newNavFixture(t)
+	f.mux.panes = map[string]bool{paneOf("D"): true}
+	var switched []string
+	moved, err := walkHistory(f.conn, -1, paneOf("E"), navDeps{
+		Mux:    f.mux,
+		List:   func() ([]roster.Agent, error) { return nil, errors.New("claude agents: boom") },
+		Switch: func(p string) error { switched = append(switched, p); return nil },
+	})
+	if err != nil || !moved || !slices.Equal(switched, []string{paneOf("D")}) {
+		t.Errorf("moved=%v err=%v switched=%v; want a switch to the ledger pane %s", moved, err, switched, paneOf("D"))
+	}
+}
+
+// The roster is read once per walk, however many entries it passes over.
+func TestWalkHistoryReadsTheRosterOnce(t *testing.T) {
+	f := newNavFixture(t, "D", "C", "B")
+	reads := 0
+	moved, err := walkHistory(f.conn, -1, paneOf("E"), navDeps{
+		Mux:    f.mux,
+		List:   func() ([]roster.Agent, error) { reads++; return f.agents, nil },
+		Switch: func(string) error { return nil },
+	})
+	if err != nil || !moved {
+		t.Fatalf("moved=%v err=%v; want a move to A", moved, err)
+	}
+	if reads != 1 {
+		t.Errorf("roster read %d times over 4 entries, want once", reads)
 	}
 }

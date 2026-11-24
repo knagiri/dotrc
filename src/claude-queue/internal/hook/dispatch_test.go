@@ -407,9 +407,9 @@ func TestDispatch_SessionEnd_TriggersGC(t *testing.T) {
 	}
 }
 
-// sessions.config_dir is no longer written, but rows recorded before carry a
-// value. The hook's upsert must leave it as it is rather than null it out, on
-// the first event and on every later one.
+// The hook does not write sessions.config_dir and keeps any value the row
+// already carries: its upsert must not null it out, on the first event or on
+// any later one.
 func TestDispatch_KeepsARecordedConfigDir(t *testing.T) {
 	conn := openTestDB(t).DB
 	if _, err := conn.Exec(

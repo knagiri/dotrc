@@ -9,11 +9,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
 // DaemonRunning reports whether the claude daemon is running, without starting
 // one. The daemon is the one of the config dir claude itself resolves for this
-// process's environment (configDir).
+// process's environment (see configDir). It is an error, not "not running",
+// when that dir cannot be resolved.
 //
 // The daemon writes <config dir>/daemon.lock with its pid and procStart, the
 // start time /proc/<pid>/stat gives in field 22 (measured against Claude Code
@@ -26,21 +29,17 @@ import (
 // starts no daemon, but with none running it prints [] and exits 0 (measured
 // for hibernation), so an empty answer does not say whether one is running.
 func DaemonRunning() (bool, error) {
-	return daemonRunning(configDir(), "/proc")
+	dir, err := configDir()
+	if err != nil {
+		return false, fmt.Errorf("resolve the config dir: %w", err)
+	}
+	return daemonRunning(dir, "/proc")
 }
 
-// configDir is the config dir claude resolves from the environment:
-// $CLAUDE_CONFIG_DIR when set and non-empty, ~/.claude otherwise.
-func configDir() string {
-	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".claude"
-	}
-	return filepath.Join(home, ".claude")
-}
+// configDir is the config dir claude resolves from the environment
+// (roster.ConfigDir): $CLAUDE_CONFIG_DIR when set and non-empty, ~/.claude
+// otherwise, and an error when there is no home to resolve it from.
+func configDir() (string, error) { return roster.ConfigDir() }
 
 func daemonRunning(configDir, proc string) (bool, error) {
 	data, err := os.ReadFile(filepath.Join(configDir, "daemon.lock"))

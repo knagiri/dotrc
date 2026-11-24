@@ -444,6 +444,13 @@ func TestOpenKeepsAnExistingConfigDir(t *testing.T) {
 	if len(rows) != 1 || rows[0].SessionID != "s1" {
 		t.Fatalf("rows = %+v, want s1", rows)
 	}
+	var viewSQL string
+	if err := conn.QueryRow("SELECT sql FROM sqlite_master WHERE type='view' AND name='queue'").Scan(&viewSQL); err != nil {
+		t.Fatalf("read the queue view: %v", err)
+	}
+	if viewSQL != View {
+		t.Errorf("Open did not replace the earlier queue view with View:\n%s", viewSQL)
+	}
 	var dir string
 	if err := conn.QueryRow("SELECT config_dir FROM sessions WHERE session_id = 's1'").Scan(&dir); err != nil {
 		t.Fatalf("read config_dir: %v", err)

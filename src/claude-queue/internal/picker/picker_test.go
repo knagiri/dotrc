@@ -593,6 +593,12 @@ func TestDecideAction(t *testing.T) {
 		target: withPane(func(tg *Target) { tg.TranscriptExists = false }),
 		kind:   "none",
 	}, {
+		// The file can exist and still be invisible to the launched claude,
+		// which only reads its own config dir's projects/.
+		name:   "transcript outside the current config dir blocks the resume",
+		target: withPane(func(tg *Target) { tg.TranscriptForeign = true }),
+		kind:   "none",
+	}, {
 		name:   "no recorded cwd blocks the resume",
 		target: withPane(func(tg *Target) { tg.Cwd, tg.CwdExists = "", false }),
 		kind:   "none",
@@ -875,5 +881,25 @@ func TestDescribeTarget_ReadsTheRosterOnce(t *testing.T) {
 	}
 	if act := DecideAction(got); act.Kind != "attach" {
 		t.Errorf("action = %+v, want attach", act)
+	}
+}
+
+// A transcript recorded outside the config dir the launched claude reads is
+// flagged, and the resume is refused with that reason.
+func TestDescribeTarget_TranscriptOutsideConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/cfg/a")
+	list := func() ([]roster.Agent, error) { return nil, nil }
+	for tr, foreign := range map[string]bool{
+		"/cfg/a/projects/-w/s.jsonl": false,
+		"/cfg/b/projects/-w/s.jsonl": true,
+	} {
+		got := describeTarget(&fakeMux{}, selection{SessionID: testUUID, Cwd: "/w/a", Transcript: tr}, list)
+		if got.TranscriptForeign != foreign {
+			t.Errorf("%s: TranscriptForeign = %v, want %v", tr, got.TranscriptForeign, foreign)
+		}
+	}
+	tg := Target{SessionID: testUUID, RosterOK: true, Cwd: "/w", CwdExists: true, TranscriptPath: "/cfg/b/projects/s.jsonl", TranscriptExists: true, TranscriptForeign: true}
+	if act := DecideAction(tg); act.Kind != "none" || !strings.Contains(act.Reason, "outside the current config dir") {
+		t.Errorf("action = %+v, want none with the config dir reason", act)
 	}
 }

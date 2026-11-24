@@ -327,7 +327,10 @@ type Target struct {
 	DuplicatePIDs []int
 
 	TranscriptExists bool
-	CwdExists        bool
+	// TranscriptForeign: the recorded transcript is outside the config dir the
+	// launched claude reads, so a resume would not find it.
+	TranscriptForeign bool
+	CwdExists         bool
 }
 
 // Action is what selecting a picker row should do.
@@ -417,6 +420,8 @@ func resumeBlocked(t Target) string {
 		return "cannot resume: the ledger recorded no transcript path for this session"
 	case !t.TranscriptExists:
 		return "cannot resume: transcript " + t.TranscriptPath + " is not on disk (the session ended before writing one)"
+	case t.TranscriptForeign:
+		return "cannot resume: transcript " + t.TranscriptPath + " is outside the current config dir"
 	case t.Cwd == "":
 		return "cannot resume: the ledger recorded no working directory for this session"
 	case !t.CwdExists:
@@ -863,8 +868,9 @@ func describeTarget(mux multiplexer.Multiplexer, sel selection, list func() ([]r
 		TranscriptPath: transcript,
 		RosterOK:       err == nil,
 
-		TranscriptExists: isFile(transcript),
-		CwdExists:        isDir(cwd),
+		TranscriptExists:  isFile(transcript),
+		TranscriptForeign: transcript != "" && !roster.TranscriptInConfigDir(transcript),
+		CwdExists:         isDir(cwd),
 	}
 	matches := sessionproc.AgentsFor(agents, sessionID)
 	t.RosterMatches = len(matches)

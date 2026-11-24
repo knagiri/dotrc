@@ -17,6 +17,12 @@
 // authoritative roster of live sessions, so a tracked id the roster does not
 // list is gone. There is no heuristic and no threshold, which is what makes it
 // safe to run unattended on every picker invocation.
+//
+// The roster holds only the sessions of the config dir the caller's inherited
+// environment points at. It assumes every session in the ledger runs under
+// that same dir: with a different CLAUDE_CONFIG_DIR in the tmux server or the
+// systemd unit, a session living elsewhere is not in the roster and is judged
+// gone.
 package reconcile
 
 import (
@@ -124,6 +130,13 @@ func sweep(conn *sql.DB, list func() ([]string, error), stop func(sessionID stri
 	tracked, err := db.LiveSessions(conn)
 	if err != nil {
 		return Result{}, err
+	}
+	// Every DoneButRunning row has terminated_at IS NULL, so it is in tracked:
+	// with nothing tracked there is nothing to close and nothing to stop, and
+	// reading the roster would only cost a subprocess (and a skip message
+	// where claude is not installed).
+	if len(tracked) == 0 {
+		return Result{}, nil
 	}
 	live, err := list()
 	if err != nil {

@@ -196,6 +196,7 @@ resume が恒常的に失敗すると約 9 分ごとに window が増え続け�
 GitHub への問い合わせは既存の `gh-*` wrapper と同じ token 経路を使う（`bin/lib/gh-mise.sh`）。
 
 systemd user unit は shell の環境を引き継がないので、PATH は `claude-digest.service` と同じく明示する。
+unit は `CLAUDE_CONFIG_DIR` を持たないので、`claude` と `claude agents` は `~/.claude` を使う。
 配送は既に動いている tmux server（interactive）か claude daemon（background）へだけ行い、
 居なければ次の tick に回す。監視コマンドが起動すると、それらは service の env（SSH agent が無く、PATH は unit が
 固定した値）を持ち、引き継がせる。daemon はそれを on-demand で起動した呼び出し元の env を、生きている間に起動する
