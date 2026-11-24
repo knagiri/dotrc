@@ -297,93 +297,32 @@ if [ -n "$seed_top" ] && [ "$seed_main_top" = "$main_top" ] && [ -f "$seed_top/.
   done <"$seed_top/.claude/worktree-seed"
 fi
 
-# Which Claude Code account the delegate runs under follows the worktree, never
-# the caller. CLAUDE_CONFIG_DIR selects the account (credentials, transcripts,
-# the bg daemon and its roster), and a repo that wants a non-default one says so
-# in its mise config (dotrc's mise.local.toml). So the launch reads the worktree's
-# config at call time with `mise exec -C`, the same shape as bin/lib/gh-mise.sh.
-#
-# `env -u` is what makes a repo WITHOUT that setting land on the default: mise
-# only adds what the config names and passes an inherited value straight
-# through (measured: `mise exec -C <repo with no mise.toml>` kept the caller's
-# CLAUDE_CONFIG_DIR; prefixed with `env -u` it arrived unset). Without it, a
-# delegation from a dotrc session to any other repo would silently run under
-# dotrc's account. With no mise on PATH the prefix is `env -u` alone, i.e. the
-# default dir.
-#
-# Both launch modes use the prefix. --tmux needs it too: its pane runs claude
-# directly, with no interactive shell for `mise activate` to set anything in.
-# A config the worktree carries but mise does not trust makes `mise exec` fail;
-# that surfaces as a failed launch rather than a launch under the wrong account.
-#
-# Built here, ahead of the duplicate-session guard below, because that guard
-# needs it too: a live session under the WORKTREE's account is invisible to a
-# bare `claude agents --json`, which only ever sees the CALLER's own roster.
-# Two accounts can differ in either direction -- a company-dir session
-# delegating with --global into dotrc (whose mise config selects the personal
-# dir), or a personal-dir dotrc session delegating into a repo with no such
-# config (landing back on the default dir) -- so without this, the guard has
-# the same account blind spot the launch itself used to have before this
-# prefix was introduced.
-launch_env=(env -u CLAUDE_CONFIG_DIR)
+# The delegate gets the worktree's mise env (tools, env vars a repo sets in its
+# mise config) by reading it at call time with `mise exec -C`, the same shape as
+# bin/lib/gh-mise.sh: a non-interactive shell never fires `mise activate`, so
+# nothing else would load it. Both launch modes use the prefix -- the --tmux
+# pane runs claude directly, with no interactive shell either. A config the
+# worktree carries but mise does not trust makes `mise exec` fail, which
+# surfaces as a failed launch. Without mise on PATH the prefix is empty.
+launch_env=()
 if command -v mise >/dev/null 2>&1; then
-  launch_env+=(mise exec -C "$wt_path" --)
+  launch_env=(mise exec -C "$wt_path" --)
 fi
-
-# Prints the `claude attach <id>` hint under whichever CLAUDE_CONFIG_DIR the
-# DELEGATE actually runs under (see launch_env just above), not the caller's:
-# `claude attach` reads that variable from its OWN shell to pick which daemon's
-# roster to query, so a hint copied verbatim from a caller whose account
-# differs from the worktree's would attach to the wrong daemon, or find
-# nothing. Falls back to a plain, unprefixed hint whenever $wt_path does not
-# exist yet: launch_env's `mise exec -C` has no directory to resolve against
-# then, and (at the guard below) a collision found via the caller's own BARE
-# roster query is, by construction, already under the caller's own account.
-#
-# A delegate whose dir is the default (~/.claude, spelled out or not) is hinted
-# with the variable unset, never as CLAUDE_CONFIG_DIR=~/.claude: claude reads a
-# different global config file under the explicit form (see
-# bin/lib/claude-configdir.sh, cq_in_config_dir), so a caller that carries an
-# explicit ~/.claude gets the `env -u` form too.
-attach_hint() {  # attach_hint <short-id> -> command text, printed on stdout
-  local id="$1" dir=""
-  if [ -d "$wt_path" ]; then
-    dir="$("${launch_env[@]}" printenv CLAUDE_CONFIG_DIR 2>/dev/null)" || dir=""
-  fi
-  dir="${dir%/}"
-  [ "$dir" != "$HOME/.claude" ] || dir=""
-  if [ "$dir" = "${CLAUDE_CONFIG_DIR:-}" ]; then
-    printf 'claude attach %s' "$id"
-  elif [ -n "$dir" ]; then
-    printf 'CLAUDE_CONFIG_DIR=%s claude attach %s' "$dir" "$id"
-  else
-    printf 'env -u CLAUDE_CONFIG_DIR claude attach %s' "$id"
-  fi
-}
 
 # A background session already living in this worktree means a second delegation
 # would race the first on the same files. Refuse before creating anything, and
 # name the existing session so the caller can reach it. Skipped when jq is
 # absent: the guard is a convenience, not a correctness boundary.
 if [ -n "$prompt" ] && [ "$use_tmux" = 0 ] && command -v jq >/dev/null 2>&1; then
-  # Query through launch_env -- the WORKTREE's own account -- whenever the
-  # worktree dir already exists (the "reused existing worktree dir" branch
-  # below takes the same fork on the same condition): only then could a live
-  # session actually carry that cwd. A worktree that does not exist yet cannot
-  # host one either way, and launch_env's `mise exec -C` has nothing to change
-  # into, so the pre-existing bare query is kept for that case rather than
-  # failing outright.
-  agents_cmd=(claude)
-  if [ -d "$wt_path" ]; then agents_cmd=("${launch_env[@]}" claude); fi
   # `|| existing=""`: a jq parse failure (roster entry isn't the JSON we
   # expect) must not abort the launch under `set -euo pipefail` -- this guard
   # is a convenience per the comment above, so treat a failure the same as "no
   # collision found" rather than taking the whole script down with it.
-  existing="$("${agents_cmd[@]}" agents --json 2>/dev/null | jq -r --arg d "$wt_path" \
+  existing="$(claude agents --json 2>/dev/null | jq -r --arg d "$wt_path" \
     'first(.[] | select(.kind == "background" and .cwd == $d) | .sessionId[0:8]) // empty')" || existing=""
   if [ -n "$existing" ]; then
     echo "claude-worktree: a background session is already running in $wt_path" >&2
-    echo "  attach with: $(attach_hint "$existing")" >&2
+    echo "  attach with: claude attach $existing" >&2
     exit 1
   fi
 fi
@@ -676,7 +615,7 @@ if [ "$use_tmux" = 0 ]; then
   # would read back 0 even though claude failed. Falling through to `else`
   # keeps `$?` as claude's real exit code.
   if [ -n "$model" ]; then
-    if launch_out="$(cd "$wt_path" && "${launch_env[@]}" claude --bg --permission-mode auto --model "$model" "$prompt" 2>&1)"; then
+    if launch_out="$(cd "$wt_path" && ${launch_env[@]+"${launch_env[@]}"} claude --bg --permission-mode auto --model "$model" "$prompt" 2>&1)"; then
       :
     else
       rc=$?
@@ -685,7 +624,7 @@ if [ "$use_tmux" = 0 ]; then
       exit "$rc"
     fi
   else
-    if launch_out="$(cd "$wt_path" && "${launch_env[@]}" claude --bg --permission-mode auto "$prompt" 2>&1)"; then
+    if launch_out="$(cd "$wt_path" && ${launch_env[@]+"${launch_env[@]}"} claude --bg --permission-mode auto "$prompt" 2>&1)"; then
       :
     else
       rc=$?
@@ -747,7 +686,7 @@ if [ "$use_tmux" = 0 ]; then
   fi
   [ -z "$model" ] || echo "model    : $model"
   [ -z "$delegator" ] || echo "report-to: $delegator"
-  [ -z "$short" ] || echo "attach   : $(attach_hint "$short")"
+  [ -z "$short" ] || echo "attach   : claude attach $short"
   exit 0
 fi
 
@@ -801,14 +740,14 @@ fi
 # launch shape branches on it and omits the flag entirely when it is unset.
 if [ -n "${TMUX:-}" ]; then
   tmux new-session -d -s "$session" -c "$wt_path" \
-    "${launch_env[@]}" bash -c 'if [ -n "$3" ]; then claude --permission-mode acceptEdits --model "$3" "$1"; else claude --permission-mode acceptEdits "$1"; fi; w=$(tmux display-message -p -t "$TMUX_PANE" "#{window_id}" 2>/dev/null) && tmux list-clients -F "#{client_name} #{window_id}" 2>/dev/null | while read -r c cw; do if [ "$cw" = "$w" ]; then tmux switch-client -c "$c" -t "$2" 2>/dev/null; fi; done' \
+    ${launch_env[@]+"${launch_env[@]}"} bash -c 'if [ -n "$3" ]; then claude --permission-mode acceptEdits --model "$3" "$1"; else claude --permission-mode acceptEdits "$1"; fi; w=$(tmux display-message -p -t "$TMUX_PANE" "#{window_id}" 2>/dev/null) && tmux list-clients -F "#{client_name} #{window_id}" 2>/dev/null | while read -r c cw; do if [ "$cw" = "$w" ]; then tmux switch-client -c "$c" -t "$2" 2>/dev/null; fi; done' \
     bash "$prompt" "$TMUX_PANE" "$model"
 elif [ -n "$model" ]; then
   tmux new-session -d -s "$session" -c "$wt_path" \
-    "${launch_env[@]}" claude --permission-mode acceptEdits --model "$model" "$prompt"
+    ${launch_env[@]+"${launch_env[@]}"} claude --permission-mode acceptEdits --model "$model" "$prompt"
 else
   tmux new-session -d -s "$session" -c "$wt_path" \
-    "${launch_env[@]}" claude --permission-mode acceptEdits "$prompt"
+    ${launch_env[@]+"${launch_env[@]}"} claude --permission-mode acceptEdits "$prompt"
 fi
 
 attach="gts $session"
