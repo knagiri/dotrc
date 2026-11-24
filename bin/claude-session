@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage:
 #   claude-session export <session-id> [-o <path>]
-#   claude-session import <archive>
+#   claude-session import [--repo <host>/<owner>/<repo>] <archive>
 #
 # export packs ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<enc>/<id>.jsonl
 # (and the sibling <id>/ directory, if any) into a tar.gz together with a
@@ -24,6 +24,11 @@ set -euo pipefail
 # The jsonl is copied byte for byte: the `cwd` recorded inside it is not
 # rewritten, since resume only needs the file to sit under the <enc> of the
 # directory claude is started from. import then prints the resume command.
+#
+# --repo replaces meta.json's repo as the destination, for a repo cloned under
+# a different name on this host. subpath still comes from meta.json, and the
+# archive and transcript are not modified. The value gets the same checks as
+# meta.json's repo, which is itself still checked.
 #
 # The archive is untrusted input. Before anything is extracted its members are
 # checked: only meta.json, <id>.jsonl and <id>/... are accepted, as regular
@@ -239,10 +244,24 @@ check_members() {
   printf '%s\n' "$id"
 }
 
+# check_repo <label> <value>: <value> is exactly <host>/<owner>/<repo>.
+check_repo() {
+  check_rel "$1" "$2" 3
+  [ "$(printf '%s\n' "$2" | tr -cd / | wc -c)" -eq 2 ] || die "$1 must be <host>/<owner>/<repo>: $2"
+}
+
 cmd_import() {
-  [ $# -eq 1 ] || usage 1
-  case "$1" in -h|--help) usage 0 ;; esac
-  local archive="$1"
+  local archive="" repo_override="" have_override=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) [ $# -ge 2 ] || die "--repo needs <host>/<owner>/<repo>"; repo_override="$2"; have_override=1; shift 2 ;;
+      -h|--help) usage 0 ;;
+      -*) die "unknown option: $1" ;;
+      *) [ -z "$archive" ] || die "more than one archive"; archive="$1"; shift ;;
+    esac
+  done
+  [ -n "$archive" ] || usage 1
+  [ "$have_override" -eq 0 ] || check_repo "--repo" "$repo_override"
   [ -f "$archive" ] || die "no such archive: $archive"
   command -v jq >/dev/null 2>&1 || die "jq is required"
 
@@ -274,9 +293,9 @@ cmd_import() {
   [ "$sid" = "$id" ] || die "meta.json session_id $sid does not match transcript $id.jsonl"
   repo="$(jq -r '.repo' "$meta")"
   subpath="$(jq -r '.subpath' "$meta")"
-  check_rel "repo" "$repo" 3
-  [ "$(printf '%s\n' "$repo" | tr -cd / | wc -c)" -eq 2 ] || die "repo must be <host>/<owner>/<repo>: $repo"
+  check_repo "repo" "$repo"
   check_rel "subpath" "$subpath" 0
+  [ "$have_override" -eq 0 ] || repo="$repo_override"
 
   local root cwd enc
   root="$(ghq_root)"
