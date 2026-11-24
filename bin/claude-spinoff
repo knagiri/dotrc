@@ -105,23 +105,21 @@ session="$(basename "$main_top")"
 session="${session//./_}"
 session="${session//:/_}"
 
-# The account follows the main checkout's mise config, not the caller -- same as
-# claude-worktree's launch_env (see its comment, and dotrc-deploy.md §6).
+# The pane gets the main checkout's mise env through `mise exec -C`, the same
+# as claude-worktree's launch_env (see its comment).
 #
-# The caller's session markers are stripped too, and not only from the pane
+# The caller's session markers are stripped, and not only from the pane
 # command but from tmux itself. When no tmux server is running, `tmux
 # new-session` STARTS one, and that server's global environment -- which every
 # pane opened later on the same server inherits, not just this one -- is this
 # script's, i.e. the calling claude session's Bash env. Measured: a claude started
 # that way inherits CLAUDE_CODE_CHILD_SESSION and turns transcript saving off
-# ("inherited CLAUDE_CODE_CHILD_SESSION marker"), sees the caller's
-# CLAUDE_CODE_SESSION_ID as its own, and keeps the caller's CLAUDE_CONFIG_DIR.
+# ("inherited CLAUDE_CODE_CHILD_SESSION marker"), and sees the caller's
+# CLAUDE_CODE_SESSION_ID as its own.
 # So every tmux call goes through strip_env; an already running server ignores
 # it harmlessly. The pane command is stripped as well (launch_env), so a server
-# that an earlier caller already polluted does not reach this claude either, and
-# mise sees no inherited CLAUDE_CONFIG_DIR when it picks the account from the
-# main checkout's config.
-strip_env=(env -u CLAUDE_CONFIG_DIR -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_JOB_DIR)
+# that an earlier caller already polluted does not reach this claude either.
+strip_env=(env -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_JOB_DIR)
 while IFS= read -r var; do
   strip_env+=(-u "$var")
 done < <(compgen -e | grep '^CLAUDE_CODE_' || true)

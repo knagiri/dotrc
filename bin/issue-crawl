@@ -93,16 +93,16 @@ here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 . "$here/lib/gh-mise.sh"
 root="$(gh_mise_repo_root "$here")"
 gh_mise_use "$root"
-# claude-worktree and claude -p resolve their repo and account from cwd.
+# claude-worktree and claude -p resolve their repo from cwd.
 cd "$root" || die "cannot cd to $root"
 
-# in_repo <cmd...> -- run with the repo's mise env, so CLAUDE_CONFIG_DIR is the
-# repo's account rather than whatever the timer's environment carries.
+# in_repo <cmd...> -- run with the repo's mise env, which a non-interactive
+# shell (the timer's) never loads on its own.
 in_repo() {
   if command -v mise >/dev/null 2>&1; then
-    env -u CLAUDE_CONFIG_DIR mise exec -C "$root" -- "$@"
+    mise exec -C "$root" -- "$@"
   else
-    echo "issue-crawl: warning: mise not found; $1 runs with the caller's CLAUDE_CONFIG_DIR" >&2
+    echo "issue-crawl: warning: mise not found; $1 runs without the repo's mise env" >&2
     "$@"
   fi
 }

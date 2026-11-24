@@ -139,33 +139,21 @@ check "a subdirectory under bin/ leaves deploy.sh's block and dot/ expansion int
        && [ -L "$home_d/.example" ] && [ ! -e "$home_d/.lib" ] && [ ! -e "$home_d/.bin" ]
      then echo 0; else echo 1; fi)"
 
-# --- Case E: dot/claude goes to both config dirs ----------------------------
-# ~/.claude is the default account's config dir and ~/.claude-personal the one
-# dotrc's mise.local.toml selects. Each reads its own rules/skills/settings, so
-# both must get the links, and a re-run must leave them links (not a nested
-# rules/rules, which is what `ln -snvf` onto an existing real dir would make).
-# The control is the same script with the personal destination removed.
-sed 's|^MergeLinkMap\["claude"\]=.*$|MergeLinkMap["claude"]="${HOME}/.claude"|' \
-  "$repo/bin/deploy.sh" >"$repo/bin/deploy-onedir.sh"
-chmod +x "$repo/bin/deploy-onedir.sh"
-check "the one-dir control really differs from the script under test" \
-  "$(if ! cmp -s "$repo/bin/deploy.sh" "$repo/bin/deploy-onedir.sh"; then echo 0; else echo 1; fi)"
-
+# --- Case E: dot/claude goes to ~/.claude only ----------------------------
+# A re-run must leave the links links (not a nested rules/rules, which is what
+# `ln -snvf` onto an existing real dir would make), and no second config dir
+# is created next to ~/.claude.
 linked_to_rules() {  # linked_to_rules <path>
   [ -L "$1" ] && [ "$(readlink "$1")" = "$repo/dot/claude/rules" ]
 }
 home_e="$sandbox/home_e"; mkdir -p "$home_e"
 run "$repo/bin/deploy.sh" "$home_e"
 run "$repo/bin/deploy.sh" "$home_e"
-check "dot/claude entries are linked into ~/.claude and ~/.claude-personal, idempotently" \
-  "$(if linked_to_rules "$home_e/.claude/rules" && linked_to_rules "$home_e/.claude-personal/rules" \
-       && [ ! -e "$repo/dot/claude/rules/rules" ]
+check "dot/claude entries are linked into ~/.claude, idempotently" \
+  "$(if linked_to_rules "$home_e/.claude/rules" && [ ! -e "$repo/dot/claude/rules/rules" ]
      then echo 0; else echo 1; fi)"
-home_e2="$sandbox/home_e2"; mkdir -p "$home_e2"
-run "$repo/bin/deploy-onedir.sh" "$home_e2"
-check "without the personal destination, ~/.claude-personal gets nothing" \
-  "$(if linked_to_rules "$home_e2/.claude/rules" && [ ! -e "$home_e2/.claude-personal/rules" ]
-     then echo 0; else echo 1; fi)"
+check "deploy.sh creates no ~/.claude-personal" \
+  "$(if [ ! -e "$home_e/.claude-personal" ]; then echo 0; else echo 1; fi)"
 
 # --- Case F: personal.env and mise.gh.local.toml templates -------------------
 # Created when absent, owner-only; never overwritten, since by the second run
@@ -193,27 +181,18 @@ run "$repo/bin/deploy-clobber.sh" "$home_f"
 check "without the absence check, the filled-in token would be overwritten" \
   "$(if ! grep -qx 'GH_TOKEN=filled' "$penv"; then echo 0; else echo 1; fi)"
 
-# --- Case H: mise.local.toml template ---------------------------------------
-# Selects the personal config dir for claude runs under the checkout. Created
-# when absent; never overwritten, since the file may have been edited or
-# deliberately emptied on a machine that needs no account split. The control
-# drops the absence check.
+# --- Case H: mise.local.toml is not deploy.sh's ----------------------------
+# deploy.sh neither creates it nor touches one that already exists (a checkout
+# may still carry a hand-written one).
 home_h="$sandbox/home_h"; mkdir -p "$home_h"
 rm -f "$repo/mise.local.toml"
 run "$repo/bin/deploy.sh" "$home_h"
-check "a missing mise.local.toml is created selecting ~/.claude-personal" \
-  "$(if grep -qxF 'CLAUDE_CONFIG_DIR = "{{env.HOME}}/.claude-personal"' "$repo/mise.local.toml" 2>/dev/null
-     then echo 0; else echo 1; fi)"
+check "a fresh deploy does not create mise.local.toml" \
+  "$(if [ ! -e "$repo/mise.local.toml" ]; then echo 0; else echo 1; fi)"
 printf '# hand-edited\n' >"$repo/mise.local.toml"
 run "$repo/bin/deploy.sh" "$home_h"
-check "a re-run leaves an existing mise.local.toml alone" \
+check "an existing mise.local.toml is left alone" \
   "$(if [ "$(cat "$repo/mise.local.toml")" = '# hand-edited' ]; then echo 0; else echo 1; fi)"
-sed 's|^if \[ ! -e "${REPO_DIR}/mise.local.toml" \]; then$|if true; then|' \
-  "$repo/bin/deploy.sh" >"$repo/bin/deploy-clobber-local.sh"
-chmod +x "$repo/bin/deploy-clobber-local.sh"
-run "$repo/bin/deploy-clobber-local.sh" "$home_h"
-check "without the absence check, an existing mise.local.toml would be overwritten" \
-  "$(if [ "$(cat "$repo/mise.local.toml")" != '# hand-edited' ]; then echo 0; else echo 1; fi)"
 rm -f "$repo/mise.local.toml"
 
 # --- Case G: the checkout is trusted by path prefix, once --------------------
@@ -231,16 +210,11 @@ if command -v mise >/dev/null 2>&1; then
   run "$repo/bin/deploy.sh" "$home_g"
   check "two runs leave the checkout in trusted_config_paths exactly once" \
     "$(if [ "$(trusted_count "$home_g")" -eq 1 ]; then echo 0; else echo 1; fi)"
+  # A leftover untrusted parent mise.local.toml would make the control below
+  # fail for the wrong reason, so do not depend on Case H's cleanup.
+  rm -f "$repo/mise.local.toml"
   mkdir -p "$repo/.worktrees/wt"
   printf '[env]\nDEPLOY_TEST = "yes"\n' >"$repo/.worktrees/wt/mise.toml"
-  # The two deploy.sh runs above already created $repo/mise.local.toml on
-  # disk (that file lives under REPO_DIR, not under $HOME, so it survives
-  # across sandboxes). Left in place, the control below would fail even if
-  # the worktree's own mise.toml were trusted, because mise also walks up
-  # to this untrusted parent config -- the control would no longer isolate
-  # what it claims to isolate (evidence-over-guesswork #5). Remove it so the
-  # control's only remaining untrusted config is the worktree's own.
-  rm -f "$repo/mise.local.toml"
   check "the control: without deploy.sh, that worktree mise.toml is untrusted" \
     "$(home_g0="$sandbox/home_g0"; mkdir -p "$home_g0"
        if ! sandboxed "$home_g0" mise env -C "$repo/.worktrees/wt" >/dev/null 2>&1

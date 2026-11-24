@@ -58,7 +58,6 @@ cat >"$stubdir/claude" <<'STUB'
 #!/usr/bin/env bash
 printf 'claude' >>"$CALLS"; printf ' [%s]' "$@" >>"$CALLS"; echo >>"$CALLS"
 : >"$FIX/claude_ran"
-printf '%s' "${CLAUDE_CONFIG_DIR-unset}" >"$CLAUDE_STDIN.configdir"
 cat >"$CLAUDE_STDIN"
 STUB
 cat >"$stubdir/claude-queue" <<'STUB'
@@ -95,7 +94,6 @@ now=2026-06-30T00:00:00Z
 run() {  # run issue-crawl against the fixtures; sets $rc
   : >"$calls"; : >"$tmp/stdin"; rm -f "$fix/claude_ran"
   env CALLS="$calls" FIX="$fix" CLAUDE_STDIN="$tmp/stdin" PATH="$stubdir:$PATH" \
-    CLAUDE_CONFIG_DIR=/leaked-from-the-timer-env \
     "$crawl" --now "$now" "$@" >"$tmp/out" 2>"$tmp/err"
   rc=$?
 }
@@ -282,9 +280,9 @@ if grep -qF "claude [-p] [--model] [sonnet] [--allowedTools] [Bash(gh-issue-grou
   && ! grep -q "$secret" "$tmp/stdin"; then
   echo "ok: unparented observations start claude -p with the fixed prompt, the owner, the window and the fixed tools"
 else echo "FAIL: cluster invocation calls=$(cat "$calls")"; fail=1; fi
-if grep -q '^mise .*-- claude ' "$calls" && [ "$(cat "$tmp/stdin.configdir")" = unset ]; then
-  echo "ok: claude -p runs through mise in the repo, with the timer's CLAUDE_CONFIG_DIR removed"
-else echo "FAIL: claude -p account selection calls=$(cat "$calls") dir=$(cat "$tmp/stdin.configdir")"; fail=1; fi
+if grep -q '^mise .*-- claude ' "$calls"; then
+  echo "ok: claude -p runs through mise in the repo"
+else echo "FAIL: claude -p mise prefix calls=$(cat "$calls")"; fail=1; fi
 
 # --- no daemon ------------------------------------------------------------------
 DAEMON_RC=1 run
