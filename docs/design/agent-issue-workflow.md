@@ -90,11 +90,9 @@ agent が生む気づき（harness 改善案・不具合）を、人の手と目
   config dir で `claude -p` を走らせても `claude daemon run` は増えず、同じ dir の `claude --bg` は
   起動した）
 - **負荷**: nice は timer の service（`ExecStart`）側だけで掛ける。`claude -p` にも掛けると二重になり niceness が上限へ丸められる（`shared-machine-load.md`）
-- **勤務先由来の具体名を機械的に止める。** 観測は業務 repo のセッションからも `--global` で
-  dotrc へ自動起票され、人の目を通らない。push した具体名は消せないので、起票ラッパーが title と
-  本文を gitignore 済みの `.issue-denylist`（1 行 1 語、大文字小文字を無視した部分一致）と照合し、
-  当たれば exit 3 で拒否する。denylist の中身は tracked にしない（それ自体が具体名の列挙になる）。
-  denylist が無い環境では、dotrc 以外の repo からの起票を拒否する
+- **勤務先由来の具体名は規約で防ぐ。** 観測は業務 repo のセッションからも `--global` で
+  dotrc へ自動起票され、人の目を通らない。push した具体名は消せないので、起票する agent は
+  title と本文に具体名を書かず機構で書く（`issue-workflow.md` §1）。起票ラッパーは中身を検査しない
 
 ## 一次情報 — 非対話起票に issue template は効かない
 
@@ -143,8 +141,8 @@ form を正典にすると本文骨格をラッパーへ再実装することに
   人が `gh-issue-group mark <N> clear` で外す
 - crawler の `gh issue list` は `--limit 1000`、振り分けの `claude -p` と `--list-groups` は
   `--limit 200` までしか読まない。超えた分は読まれない
-- 起票ラッパーの denylist は main working tree の `.issue-denylist` を読む。linked worktree の root には
-  置かない
+- 具体名の混入は規約頼みで、機械的な歯止めが無い。書く側が見落とせば、そのまま public な
+  issue に載る
 
 ## setup（人間が 1 回実行する）
 
@@ -169,13 +167,6 @@ gh label create auto/structural  --description "グループから自動で作�
 `status/*` と `group/*` の description は `issue-workflow.md` §3・§7 の label 表（正典）と同じ語で
 揃える。GitHub の label description は GitHub 上に独立して表示される文言なので、意味の再掲
 そのものは避けられない。ズレたら rule 側に合わせて直す。
-
-denylist を main checkout の root に作る（gitignore 済み）。業務で使う組織名・repo 名・サービス名・
-拠点名などを 1 行 1 語で書く。
-
-```bash
-$EDITOR .issue-denylist
-```
 
 timer を有効にする。
 

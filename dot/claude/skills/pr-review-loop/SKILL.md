@@ -750,7 +750,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >      `gh-issue-file --kind task --title <title> --body-file <path>` で issue を起票する（本文は template の
 >      見出しに沿って書き、`detail` の内容を入れる。起票してよい粒度は `issue-workflow.md` §5 に従い、
 >      その PR 限り・一過性で §5 を満たさないと見えたら起票せず `dispositions_failed` に理由を残す）。exit code の扱いは `dot/claude/rules/issue-workflow.md`
->      §2 に従う。exit 3 なら具体名を除いて書き直して再実行する。起票したらそれで完了で、issue の
+>      §2 に従う。起票したらそれで完了で、issue の
 >      消化はしない（同 §6.1）。template が無ければ、`detail` が示す箇所に TODO コメント（何を・なぜ後回しにしたか）を
 >      置き、手順 2 と同じ要領で commit / push する。記録先は issue の URL か `<ファイル>:<行>` になる。
 >    - **thread 由来**（`origin` が `thread`）: reply の本文を一時ファイルに書き、`gh-reply-thread <thread_id> <file>` →
