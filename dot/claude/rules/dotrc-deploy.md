@@ -25,7 +25,7 @@ paths:
 
 | 対象 | 挙動 | 結果 |
 |---|---|---|
-| `MergeLinkMap` に載るもの（現状 `claude` / `systemd-user`） | ディレクトリ丸ごとではなく、**配下の各エントリを個別に** link。展開先は `:` 区切りで複数持てる | `dot/claude/<entry>` → `~/.claude/<entry>` と `~/.claude-personal/<entry>`（§6）。`dot/systemd-user/<entry>` → `~/.config/systemd/user/<entry>` |
+| `MergeLinkMap` に載るもの（現状 `claude` / `systemd-user`） | ディレクトリ丸ごとではなく、**配下の各エントリを個別に** link。展開先は `:` 区切りで複数持てる | `dot/claude/<entry>` → `~/.claude/<entry>`。`dot/systemd-user/<entry>` → `~/.config/systemd/user/<entry>` |
 | `CustomLocationMap` に載るもの（現状 `git` / `nvim`） | ディレクトリ丸ごとを指定先へ link | `dot/git` → `~/.config/git` |
 | それ以外 | ディレクトリ／ファイル丸ごとを link | `dot/<name>` → `~/.<name>` |
 
@@ -119,51 +119,7 @@ find src/claude-queue -name '*.go' -newer bin/claude-queue   # 出力が空な�
 ソースは直っているのにバイナリは古い、という乖離は「直したはずの挙動が直っていない」として
 現れる。修正内容そのものを疑う方向へ切り分けが向かうので、原因に辿り着くまでが遠い。
 
-### 6. 個人 config dir（`~/.claude-personal`）— dotrc だけ別 account で動かす
-
-dotrc の `mise.local.toml`（gitignore 済み）が `CLAUDE_CONFIG_DIR=~/.claude-personal` を置くので、
-dotrc 配下（`.worktrees/*` を含む。mise が親方向へ辿って拾う）で起動した claude は個人 account の
-config dir を使い、他 repo は既定の `~/.claude` のままになる。tracked な `mise.toml` に置かない
-理由は `docs/design/mise-config-layering.md`。認証・transcript・background daemon と roster はこの dir ごとに分かれる。
-
-`bin/deploy.sh` が担うもの:
-
-- `dot/claude/*` を `~/.claude` と `~/.claude-personal` の両方へ link する（§2）。plugins は対象外で、
-  個人 dir へは手で入れ直す
-- `mise.local.toml` を、無ければ上記の `CLAUDE_CONFIG_DIR` を置く雛形として作る。既にあれば触らない
-- checkout を mise の `trusted_config_paths` に登録する。`mise.local.toml` と、worktree が
-  ローカルに持つ config を path prefix でまとめて覆う（`mise trust` は subdirectory の config を覆わない）
-- `~/.config/gh/personal.env`（権限 600、`GH_TOKEN=` のみ）と `mise.gh.local.toml` を、
-  無ければ雛形として作る。既にあれば触らない
-
-`mise.local.toml` は gitignore 済みなので、`bin/deploy.sh` を（再）実行していない checkout には
-存在しない。その checkout では `CLAUDE_CONFIG_DIR` が付かず、dotrc 配下の claude はエラーも出さず
-既定の `~/.claude`（別 account）で動く。account を分けたいマシンでは `bin/deploy.sh` を実行する
-（symlink 張りと同じく冪等なので、既に実行済みでも再実行して害は無い）。
-
-新しい環境の手順:
-
-```
-bin/deploy.sh
-$EDITOR ~/.config/gh/personal.env   # GH_TOKEN に個人 PAT を入れる
-claude auth login                   # dotrc 内で。個人 account でログインする
-```
-
-account が cwd ではなく起動元で決まってしまう経路は 2 つあり、それぞれ手当て済み。
-
-- `claude-worktree` は `env -u CLAUDE_CONFIG_DIR mise exec -C <worktree> --` を前置して起動する
-  （[worktree-scope.md](./worktree-scope.md) §6）
-- `dot/tmux.conf` が server の global env から `CLAUDE_CONFIG_DIR` を落とす。変更前から動いている
-  server には `tmux source-file ~/.tmux.conf` するまで効かない
-
-既定 dir（`~/.claude`）を指して claude を起動するときは、`CLAUDE_CONFIG_DIR=~/.claude` を
-明示せず変数を unset する（継承した値も消す）。claude は両者を区別し、明示すると global config
-ファイルが `~/.claude.json` から `~/.claude/.claude.json` へ替わる。後者には workspace trust も
-オンボーディング完了状態も無く、`claude --bg` が "Workspace not trusted" で拒否された（実測）。
-claude-queue（`internal/configdir` の `Env` / `IsDefault`）と `bin/lib/claude-configdir.sh`
-（`cq_in_config_dir`）がこの判定を持つので、row の config dir で claude を呼ぶ箇所はそこを通す。
-
-### 7. claude-queue を実データで確かめるときは DB のコピーを指す
+### 6. claude-queue を実データで確かめるときは DB のコピーを指す
 
 claude-queue の DB を開くサブコマンドは（status や picker のような読むだけのものも含めて）
 どれも、開いた時点で `queue` view の作り直し（定義が変わっているとき）・未適用の移行・WAL への
