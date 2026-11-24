@@ -6,9 +6,13 @@
 #     mise's ~/.local/state, ...) lands there. That holds only if nothing
 #     overrides the HOME-derived default, so the variables that do are unset:
 #     CLAUDE_CONFIG_DIR, XDG_{CONFIG,DATA,STATE,CACHE}_HOME, GIT_CONFIG_GLOBAL,
-#     and the MISE_* path/config/env overrides (see sandbox_unset_vars). Left
-#     set, they would point a script at the real dirs no matter what HOME is
-#     (mise would keep writing ~/.local/state/mise/tracked-configs/ symlinks).
+#     the MISE_* path/config/env overrides, and git's repo selectors GIT_DIR,
+#     GIT_WORK_TREE, GIT_COMMON_DIR, GIT_INDEX_FILE, GIT_PREFIX (see
+#     sandbox_unset_vars). Left set, they would point a script at the real dirs
+#     no matter what HOME is (mise would keep writing
+#     ~/.local/state/mise/tracked-configs/ symlinks; a `git -C <dir>` would
+#     still act on the repo GIT_DIR names, e.g. when the suite runs inside a
+#     git hook).
 #   - CLAUDE_QUEUE_DB points into the same dir. It is what
 #     src/claude-queue/internal/db/path.go reads before falling back to
 #     ~/.claude/session-queue.db, so a test that reaches a real claude-queue
@@ -38,6 +42,7 @@ sandbox_unset_vars=(
   CLAUDE_CONFIG_DIR
   XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
   GIT_CONFIG_GLOBAL
+  GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_PREFIX
   MISE_GLOBAL_CONFIG_FILE MISE_CONFIG_DIR MISE_DATA_DIR MISE_STATE_DIR
   MISE_CACHE_DIR MISE_TRUSTED_CONFIG_PATHS MISE_ENV
 )
