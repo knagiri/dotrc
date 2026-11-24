@@ -70,7 +70,7 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 
 ### picker の行
 
-行は tab 区切りで、fzf に見せるのは 1〜5 列と 11 列・14 列だけ（`--with-nth`）。検索するのは 2・3・11・14 列で（`--nth`）、summary（5 列）は表示のみ。summary はほぼ検索に使われず、誤ヒットの元になるため。
+行は tab 区切りで、fzf に見せるのは 1〜5 列と 10 列・13 列だけ（`--with-nth`）。検索するのは 2・3・10・13 列で（`--nth`）、summary（5 列）は表示のみ。summary はほぼ検索に使われず、誤ヒットの元になるため。
 
 | 列 | 中身 | 幅 |
 |---|---|---|
@@ -79,10 +79,10 @@ session に書こうとしたときは exit 1 で、理由を stderr に出す�
 | 3 | worktree 名（`<main-repo-basename>_<name>`。メイン checkout は `<repo>` のみ） | 56 桁 padding + truncate |
 | 4 | age | 可変（短い） |
 | 5 | summary（何で止まっているか） | padding なし。payload 由来は 150 桁で truncate |
-| 6〜10 | session_id / tmux_pane / cwd / transcript_path / config_dir | 非表示 |
-| 11 | 注記（`📌 <pin のコメント>`、監視中の PR ごとの `👀 <PR> <監視のコメント>`、`📝 <メモ>`）。監視の有無で並び順は変わらない。配送が止まったことのある監視はコメントの先頭に印が付く（再開後も残る。後述の「PR 監視」） | padding なし |
-| 12〜13 | メモ / pin のコメント（編集キーの初期値） | 非表示 |
-| 14 | 委譲 tree の PR / branch（`#<pr> <branch>`、PR 未解決なら `<branch>`） | padding なし。link を持つ行（委譲先）では薄い色 |
+| 6〜9 | session_id / tmux_pane / cwd / transcript_path | 非表示 |
+| 10 | 注記（`📌 <pin のコメント>`、監視中の PR ごとの `👀 <PR> <監視のコメント>`、`📝 <メモ>`）。監視の有無で並び順は変わらない。配送が止まったことのある監視はコメントの先頭に印が付く（再開後も残る。後述の「PR 監視」） | padding なし |
+| 11〜12 | メモ / pin のコメント（編集キーの初期値） | 非表示 |
+| 13 | 委譲 tree の PR / branch（`#<pr> <branch>`、PR 未解決なら `<branch>`） | padding なし。link を持つ行（委譲先）では薄い色 |
 
 3 列目は cwd の git toplevel basename そのままではなく、`--git-common-dir`（絶対）の親を
 メイン toplevel として `<main-repo-basename>_<name>` を合成する。worktree は
@@ -115,9 +115,9 @@ pane と一致するかだけで、background session や `claude attach` で入
 state アイコンは置き換えないので、現在の session の state も 1 列目で読める。pane は
 interactive 起動時に 1 度だけ取り、Tab の再描画（`--list`）へは `--current-pane` で渡す。
 
-11 列目と 14 列目が 6〜10 列目より後ろにあるのは、後から足した列で既存の隠し列の位置を動かさないため。
+10 列目と 13 列目が 6〜9 列目より後ろにあるのは、後から足した列で既存の隠し列の位置を動かさないため。
 
-14 列目は tree の根（最上位の委譲元）から辿れる全 link（done の委譲先・孫以下を含む）を集めた値で、
+13 列目は tree の根（最上位の委譲元）から辿れる全 link（done の委譲先・孫以下を含む）を集めた値で、
 tree に属する全行に同じものを入れる。PR 番号や branch を打つと tree の全行が残り、委譲元へ飛べる。
 fzf は表示していない列を検索できないので委譲先の行にも出し、繰り返しが見づらくならないよう ANSI の
 dim で薄くする（`--ansi`）。同じ (repo, branch) が複数の link にあれば（review 対応で起こし直した委譲先）1 つに
@@ -127,7 +127,7 @@ dim で薄くする（`--ansi`）。同じ (repo, branch) が複数の link に�
 ### pin とメモ
 
 pin は「何かを待っていて session を進められない」印で、明示的に付け外しする。PR の review や merge を待ちながら作業を続けられる session には付けず、PR の監視は `follow` で行う。メモはどの session にも
-付けられる 1 行の自由文。どちらも 11 列目に出るので、fzf の曖昧検索で引ける。
+付けられる 1 行の自由文。どちらも 10 列目に出るので、fzf の曖昧検索で引ける。
 
 | キー | 操作 |
 |---|---|
@@ -305,7 +305,7 @@ session は休眠にも reconcile にも当たらず ⚙️ のまま残る（`q
 
 常駐する claude プロセスのメモリを返すため、しばらく動いていない session のプロセスを止める。
 作業は done にせず gone として一覧に残るので、選べば resume できる。止める条件はすべて満たすこと:
-最新 state が `idle_done` でそこから閾値以上経っている、その config dir の `claude agents` の一覧で
+最新 state が `idle_done` でそこから閾値以上経っている、`claude agents` の一覧で
 `status` が `idle`、transcript の最後の assistant ターンに `SendMessage` が無い（委譲元が done または
 台帳に居ない孤児はこの検査を省く）、running かつ open な委譲先を持たない。pin は妨げない。完了報告も
 `SendMessage` なので、閉じ忘れた委譲先は委譲元が done になるまで休眠しない。
@@ -338,10 +338,10 @@ review / comment の種別・時刻・author が bot か（`__typename`）を読
 （その session が無ければ最後に attach された既存の session に。service から session を作ると `update-environment` で
 SSH agent 等が消えた env になるので作らない）
 `claude --resume <id> "<指示文>"` の window を detached で開き（client は動かさない。同名の window があっても `-S` は付けず、常に新しい window を作る。`-S` と `-d` の併用は同名 window があると何もせず成功を返すため）、background は
-`claude --bg --resume <id> "<指示文>"`。どちらも台帳に記録された config dir で起動する。running な session には入力欄へ
+`claude --bg --resume <id> "<指示文>"`。running な session には入力欄へ
 打ち込まず、休眠と同じ手順で止めてから resume する。次のときは配送せず次の pass に回す: running かつ open な委譲先がいる、
-running で `idle_done` にいない、window が表示中、cwd か transcript が無い、tmux server が居ない（interactive）、その
-config dir の claude daemon が居ない（background。`<config dir>/daemon.lock` の pid と `/proc/<pid>/stat` の起動時刻で判定する）。
+running で `idle_done` にいない、window が表示中、cwd か transcript が無い、tmux server が居ない（interactive）、
+claude daemon が居ない（background。`${CLAUDE_CONFIG_DIR:-~/.claude}/daemon.lock` の pid と `/proc/<pid>/stat` の起動時刻で判定する）。
 この pass で起こした session は同じ pass の休眠で止めない。
 
 指示文は PR 番号と、review（state ごと）/ comment の件数を bot か人か別に並べ、本文は `gh-pr-comments <N>` で読むこと、
@@ -482,7 +482,7 @@ make -C src/claude-queue test vet fmt-check
 - [ ] Ctrl-C / `/exit` で閉じた session は一覧から消える
 - [ ] 同 pane で `/clear` 後、旧 session が一覧から消える（L3）
 - [ ] picker の `ctrl-x` で確認が出て、`y` で行が消え、その委譲先の行も消える。`n` では残る
-- [ ] picker の `ctrl-e` で付けたメモが 11 列目に 📝 付きで出て、メモの語で絞り込める
+- [ ] picker の `ctrl-e` で付けたメモが 10 列目に 📝 付きで出て、メモの語で絞り込める
 - [ ] agent の Bash tool から `claude-queue pin --note "<待っているもの>"` を叩くと、その session に 📌 とコメントが出る
 - [ ] `CLAUDE_QUEUE_ASCII=1` で `[!]1` 等に切替
 - [ ] 2 pane 並行で approve 連打、busy_timeout 超過しない

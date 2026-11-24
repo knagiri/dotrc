@@ -14,11 +14,6 @@ import (
 type Deps struct {
 	DB   *sql.DB
 	Pane string // tmux pane id, may be empty
-	// ConfigDir is the CLAUDE_CONFIG_DIR this session runs under, resolved by
-	// Run (see configdir.Resolve). Empty leaves the column as it was, which is
-	// what keeps a caller that cannot tell from overwriting a recorded dir with
-	// a guess.
-	ConfigDir string
 	// Kind is how the session was started (db.KindInteractive / KindBackground
 	// / KindPrint), resolved by Run from the environment (see KindFromEnv).
 	// Empty leaves the column as it was.
@@ -54,7 +49,7 @@ func Dispatch(d *Deps, event string, in *Input) error {
 	// /resume, hook registered mid-session) later events still need to
 	// populate tmux_pane so the picker can switch to the live pane.
 	now := time.Now().Unix()
-	if err := upsertSession(tx, in, d.Pane, d.ConfigDir, d.Kind); err != nil {
+	if err := upsertSession(tx, in, d.Pane, d.Kind); err != nil {
 		return err
 	}
 	if event == "SessionStart" && d.Pane != "" {
@@ -117,22 +112,24 @@ func Dispatch(d *Deps, event string, in *Input) error {
 //
 // Dispatch relies on running this BEFORE it re-sets terminated_at for SessionEnd
 // -- both happen in the same transaction, so a genuine end still lands closed.
-func upsertSession(tx *sql.Tx, in *Input, pane, cfgDir, kind string) error {
+//
+// config_dir is left out of both the insert and the update, so a value an
+// existing row carries is kept as it is.
+func upsertSession(tx *sql.Tx, in *Input, pane, kind string) error {
 	var paneVal interface{}
 	if pane != "" {
 		paneVal = pane
 	}
 	_, err := tx.Exec(`
-		INSERT INTO sessions(session_id, tmux_pane, cwd, transcript_path, config_dir, kind)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO sessions(session_id, tmux_pane, cwd, transcript_path, kind)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			tmux_pane       = COALESCE(excluded.tmux_pane, sessions.tmux_pane),
 			cwd             = COALESCE(excluded.cwd, sessions.cwd),
 			transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path),
-			config_dir      = COALESCE(excluded.config_dir, sessions.config_dir),
 			kind            = COALESCE(excluded.kind, sessions.kind),
 			terminated_at   = NULL
-	`, in.SessionID, paneVal, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath), nullIfEmpty(cfgDir), nullIfEmpty(kind))
+	`, in.SessionID, paneVal, nullIfEmpty(in.Cwd), nullIfEmpty(in.TranscriptPath), nullIfEmpty(kind))
 	if err != nil {
 		return fmt.Errorf("upsert session: %w", err)
 	}

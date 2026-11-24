@@ -51,7 +51,6 @@ func TestFormatLine_AnnotationColumn(t *testing.T) {
 				TmuxPane:       ns("%4"),
 				Cwd:            ns("/w/a"),
 				TranscriptPath: ns("/t/a.jsonl"),
-				ConfigDir:      ns("/cfg/a"),
 				EffectiveState: "working",
 				CreatedAt:      nowMinus(60),
 				Marked:         c.marked,
@@ -71,7 +70,7 @@ func TestFormatLine_AnnotationColumn(t *testing.T) {
 				t.Errorf("raw memo, note = %q, %q; want %q, %q", fields[colMemo], fields[colPinNote], c.wantMemo, c.wantPN)
 			}
 			sel, ok := parseSelection(line)
-			want := selection{SessionID: "sid", Pane: "%4", Cwd: "/w/a", Transcript: "/t/a.jsonl", ConfigDir: "/cfg/a"}
+			want := selection{SessionID: "sid", Pane: "%4", Cwd: "/w/a", Transcript: "/t/a.jsonl"}
 			if !ok || sel != want {
 				t.Errorf("parseSelection = %+v, %v; want %+v", sel, ok, want)
 			}

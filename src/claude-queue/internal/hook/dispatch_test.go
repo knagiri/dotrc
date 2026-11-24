@@ -407,52 +407,29 @@ func TestDispatch_SessionEnd_TriggersGC(t *testing.T) {
 	}
 }
 
-// The config dir is what every other tool matches a row against, so it has to
-// land on the row -- and keep landing on it, since a session that resumes under
-// a different dir is a session the old value would send its callers to the wrong
-// daemon for.
-func TestDispatch_RecordsConfigDir(t *testing.T) {
+// The hook does not write sessions.config_dir and keeps any value the row
+// already carries: its upsert must not null it out, on the first event or on
+// any later one.
+func TestDispatch_KeepsARecordedConfigDir(t *testing.T) {
 	conn := openTestDB(t).DB
-	d := &Deps{DB: conn, Pane: "%1", ConfigDir: "/home/x/.claude-personal"}
-
+	if _, err := conn.Exec(
+		"INSERT INTO sessions(session_id, cwd, config_dir) VALUES ('s1', '/w/a', '/home/x/.claude-other')",
+	); err != nil {
+		t.Fatal(err)
+	}
 	in := &Input{
 		SessionID:      "s1",
 		Cwd:            "/w/a",
-		TranscriptPath: "/home/x/.claude-personal/projects/-w-a/s1.jsonl",
+		TranscriptPath: "/home/x/.claude/projects/-w-a/s1.jsonl",
 	}
-	if err := Dispatch(d, "SessionStart", in); err != nil {
-		t.Fatalf("Dispatch: %v", err)
-	}
-	if got := configDirOf(t, conn, "s1"); got != "/home/x/.claude-personal" {
-		t.Errorf("config_dir = %q, want /home/x/.claude-personal", got)
-	}
-
-	// A later event under a different dir moves the row: the dir a session is
-	// running under now is the one its roster lookup has to use.
-	d2 := &Deps{DB: conn, Pane: "%1", ConfigDir: "/home/x/.claude"}
-	if err := Dispatch(d2, "Stop", in); err != nil {
-		t.Fatalf("Dispatch Stop: %v", err)
-	}
-	if got := configDirOf(t, conn, "s1"); got != "/home/x/.claude" {
-		t.Errorf("config_dir after a second dir = %q, want /home/x/.claude", got)
-	}
-}
-
-// A caller that cannot tell must not overwrite what is already recorded with a
-// blank: "I don't know" is not the same claim as "the default", and the row
-// already holds a better answer.
-func TestDispatch_EmptyConfigDirKeepsTheRecordedOne(t *testing.T) {
-	conn := openTestDB(t).DB
-	in := &Input{SessionID: "s1", Cwd: "/w/a"}
-
-	if err := Dispatch(&Deps{DB: conn, Pane: "%1", ConfigDir: "/home/x/.claude-personal"}, "SessionStart", in); err != nil {
-		t.Fatalf("Dispatch: %v", err)
-	}
-	if err := Dispatch(&Deps{DB: conn, Pane: "%1"}, "Stop", in); err != nil {
-		t.Fatalf("Dispatch Stop: %v", err)
-	}
-	if got := configDirOf(t, conn, "s1"); got != "/home/x/.claude-personal" {
-		t.Errorf("config_dir = %q, want the recorded /home/x/.claude-personal to survive", got)
+	d := &Deps{DB: conn, Pane: "%1", Kind: "interactive"}
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"} {
+		if err := Dispatch(d, event, in); err != nil {
+			t.Fatalf("Dispatch %s: %v", event, err)
+		}
+		if got := configDirOf(t, conn, "s1"); got != "/home/x/.claude-other" {
+			t.Fatalf("config_dir after %s = %q, want the recorded /home/x/.claude-other", event, got)
+		}
 	}
 }
 

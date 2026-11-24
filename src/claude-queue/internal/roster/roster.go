@@ -1,5 +1,4 @@
-// Package roster reads the live agent roster from `claude agents --json`,
-// for one CLAUDE_CONFIG_DIR at a time.
+// Package roster reads the live agent roster from `claude agents --json`.
 //
 // It exists because two callers need the same list for different reasons:
 // reconcile treats the roster as the authoritative set of live session ids, and
@@ -11,10 +10,7 @@ package roster
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-
-	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 )
 
 // The two values Agent.Kind takes. They are named because the distinction
@@ -42,32 +38,20 @@ type Agent struct {
 // StatusIdle is the Agent.Status of a session sitting between turns.
 const StatusIdle = "idle"
 
-// ListIn reads the roster of one config dir, by running `claude agents --json`
-// with CLAUDE_CONFIG_DIR set to it (or unset, for the default dir -- see
-// configdir.Env). "" inherits the environment instead, which
-// no caller here wants -- see below -- but is what a bare read would do.
+// List runs `claude agents --json` with the inherited environment and returns
+// the agents it reports.
 //
-// The roster is per config dir because the daemon that answers for it is: each
-// dir has its own, and asking one about another dir's sessions returns nothing
-// -- indistinguishable, to a caller matching ids, from those sessions having
-// ended. Every caller that acts on a session's absence therefore has to ask the
-// dir that session actually belongs to, which is why there is no dir-less
-// variant of this: the environment a picker popup or a systemd unit carries is
-// the tmux server's or the unit's, never the selected session's.
+// The roster covers only the config dir the inherited environment points at.
+// It assumes every session of the ledger runs under that same dir: with a
+// different CLAUDE_CONFIG_DIR in the tmux server or the systemd unit, a
+// session living elsewhere is absent from the roster and so is judged gone.
 //
 // An error is always a failure to read the roster, never "nothing is running":
 // reconcile relies on that distinction to avoid terminating every tracked
 // session when the command itself breaks.
-func ListIn(dir string) ([]Agent, error) {
-	cmd := exec.Command("claude", "agents", "--json")
-	if dir != "" {
-		cmd.Env = configdir.Env(os.Environ(), dir)
-	}
-	out, err := cmd.Output()
+func List() ([]Agent, error) {
+	out, err := exec.Command("claude", "agents", "--json").Output()
 	if err != nil {
-		if dir != "" {
-			return nil, fmt.Errorf("claude agents --json (%s=%s): %w", configdir.EnvVar, dir, err)
-		}
 		return nil, fmt.Errorf("claude agents --json: %w", err)
 	}
 	return parse(out)

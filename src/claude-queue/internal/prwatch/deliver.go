@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hibernate"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
@@ -29,7 +28,10 @@ type Deps struct {
 	// open work (db.RunningDelegateCounts).
 	RunningDelegates func() (map[string]int, error)
 	IsFile           func(path string) bool
-	IsDir            func(path string) bool
+	// InConfigDir reports whether a transcript path is under the config dir
+	// this process's claude resumes from (roster.TranscriptInConfigDir).
+	InConfigDir func(path string) bool
+	IsDir       func(path string) bool
 	// SessionName and WindowName place an interactive session's window the
 	// way the picker's resume does (picker.SessionName, ResumeWindowName).
 	SessionName func(cwd string) string
@@ -42,9 +44,8 @@ type Deps struct {
 	LastAttachedSession func() (string, error)
 	// TmuxServerRunning reports whether a tmux server is up.
 	TmuxServerRunning func() bool
-	// DaemonRunning reports whether the claude daemon of a config dir is up
-	// (DaemonRunning).
-	DaemonRunning func(configDir string) (bool, error)
+	// DaemonRunning reports whether the claude daemon is up (DaemonRunning).
+	DaemonRunning func() (bool, error)
 	// Run starts argv in dir with env (the full environment) and waits for it
 	// to return: tmux and `claude --bg` both return once the long-lived part
 	// is running.
@@ -59,6 +60,7 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 		Hibernate:           hd,
 		RunningDelegates:    runningDelegates,
 		IsFile:              func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.Mode().IsRegular() },
+		InConfigDir:         roster.TranscriptInConfigDir,
 		IsDir:               isDir,
 		SessionName:         picker.SessionName,
 		WindowName:          picker.ResumeWindowName,
@@ -102,9 +104,11 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 //   - its window is on screen in an attached client: the person is there, and
 //     the PR will still say the same thing when they leave.
 //
-// The cwd and the transcript are checked before anything is stopped, because
-// a resume needs both (the picker's resume does the same check) and a session
-// stopped only to fail its resume would be left gone for nothing.
+// The transcript must also be under the config dir the launched claude reads
+// (a resume elsewhere opens an empty session under the same id). The cwd and
+// the transcript are checked before anything is stopped, because a resume
+// needs both (the picker's resume does the same check) and a session stopped
+// only to fail its resume would be left gone for nothing.
 //
 // The launch only ever goes into a tmux server or a claude daemon that is
 // already running, and is skipped when there is none. Either one, started by
@@ -113,7 +117,7 @@ func RealDeps(hd hibernate.Deps, runningDelegates func() (map[string]int, error)
 // session it later runs -- every delegate claude-worktree starts while it
 // lives -- the environment of whoever started it, and a tmux server gives its
 // windows its global environment. So an interactive session waits for a tmux
-// server, and a background one for its config dir's daemon, which `claude
+// server, and a background one for the claude daemon, which `claude
 // --bg` starts on demand and which exits a few seconds after its last client.
 // That also leaves the launch nothing long-lived to start inside the
 // service's cgroup, which systemd kills when the pass exits.
@@ -131,6 +135,9 @@ func Deliver(p db.PRWatch, msg string, deps Deps) error {
 	}
 	if p.TranscriptPath == "" || !deps.IsFile(p.TranscriptPath) {
 		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot resume: transcript %q is not on disk", p.TranscriptPath)}
+	}
+	if !deps.InConfigDir(p.TranscriptPath) {
+		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot resume: transcript %q is outside the current config dir", p.TranscriptPath)}
 	}
 	if p.Cwd == "" || !deps.IsDir(p.Cwd) {
 		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot resume: working directory %q no longer exists", p.Cwd)}
@@ -167,7 +174,7 @@ func Deliver(p db.PRWatch, msg string, deps Deps) error {
 
 	if background {
 		argv := []string{"claude", "--bg", "--resume", p.SessionID, msg}
-		return deps.Run(argv, configdir.Env(os.Environ(), p.ConfigDir), p.Cwd)
+		return deps.Run(argv, os.Environ(), p.Cwd)
 	}
 	name := deps.SessionName(p.Cwd)
 	if name == "" || !deps.SessionExists(name) {
@@ -177,13 +184,13 @@ func Deliver(p db.PRWatch, msg string, deps Deps) error {
 		}
 		name = last
 	}
-	env, launch := picker.LaunchIn(p.ConfigDir, []string{"claude", "--resume", p.SessionID, msg})
-	tmux := append([]string{"tmux"}, multiplexer.DetachedOpenArgs(name, deps.WindowName(p.TranscriptPath, p.SessionID), p.Cwd, env, launch)...)
+	launch := []string{"claude", "--resume", p.SessionID, msg}
+	tmux := append([]string{"tmux"}, multiplexer.DetachedOpenArgs(name, deps.WindowName(p.TranscriptPath, p.SessionID), p.Cwd, launch)...)
 	return deps.Run(tmux, os.Environ(), p.Cwd)
 }
 
 // hostUp returns a SkipError unless what the launch goes into -- the tmux
-// server, or the config dir's claude daemon -- is already running.
+// server, or the claude daemon -- is already running.
 func hostUp(p db.PRWatch, background bool, deps Deps) error {
 	if !background {
 		if !deps.TmuxServerRunning() {
@@ -191,12 +198,12 @@ func hostUp(p db.PRWatch, background bool, deps Deps) error {
 		}
 		return nil
 	}
-	up, err := deps.DaemonRunning(p.ConfigDir)
+	up, err := deps.DaemonRunning()
 	if err != nil {
-		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot tell whether the claude daemon of %s is running: %v", p.ConfigDir, err)}
+		return &hibernate.SkipError{Reason: fmt.Sprintf("cannot tell whether the claude daemon is running: %v", err)}
 	}
 	if !up {
-		return &hibernate.SkipError{Reason: fmt.Sprintf("no claude daemon is running for %s (starting one here would give later delegates the service's environment)", p.ConfigDir)}
+		return &hibernate.SkipError{Reason: "no claude daemon is running (starting one here would give later delegates the service's environment)"}
 	}
 	return nil
 }
@@ -205,9 +212,9 @@ func hostUp(p db.PRWatch, background bool, deps Deps) error {
 // process from the `claude agents` listing, and its latest idle_done event,
 // which hibernation re-checks before it stops anything.
 func candidate(p db.PRWatch, hd hibernate.Deps) (hibernate.Candidate, error) {
-	agents, err := hd.List(p.ConfigDir)
+	agents, err := hd.List()
 	if err != nil {
-		return hibernate.Candidate{}, &hibernate.SkipError{Reason: fmt.Sprintf("cannot read the listing of %s: %v", p.ConfigDir, err)}
+		return hibernate.Candidate{}, &hibernate.SkipError{Reason: fmt.Sprintf("cannot read the listing: %v", err)}
 	}
 	var found []roster.Agent
 	for _, a := range agents {
@@ -216,7 +223,7 @@ func candidate(p db.PRWatch, hd hibernate.Deps) (hibernate.Candidate, error) {
 		}
 	}
 	if len(found) != 1 {
-		return hibernate.Candidate{}, &hibernate.SkipError{Reason: fmt.Sprintf("running, but listed %d times in %s", len(found), p.ConfigDir)}
+		return hibernate.Candidate{}, &hibernate.SkipError{Reason: fmt.Sprintf("running, but listed %d times", len(found))}
 	}
 	state, at, ok, err := hd.LatestEvent(p.SessionID)
 	if err != nil {
@@ -227,7 +234,6 @@ func candidate(p db.PRWatch, hd hibernate.Deps) (hibernate.Candidate, error) {
 	}
 	return hibernate.Candidate{
 		SessionID:      p.SessionID,
-		ConfigDir:      p.ConfigDir,
 		Kind:           found[0].Kind,
 		Cwd:            p.Cwd,
 		TranscriptPath: p.TranscriptPath,

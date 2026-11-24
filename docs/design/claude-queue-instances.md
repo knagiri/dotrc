@@ -65,10 +65,10 @@ pid にする。
 
 ### reconcile
 
-`internal/reconcile` は、開いている instance を、その session の config dir の `claude agents` の一覧と
+`internal/reconcile` は、開いている instance を、`claude agents` の一覧と
 instance 単位で突き合わせ、一覧に対応するプロセスが居ない instance を閉じる。background は pid の
 一致で、interactive は一覧の各 pid を pane に引いて、instance の key と比べる
-（`PaneForSession` は session ごとに最初の 1 つを返すだけなので、instance 単位の照合には使えない）。一覧が読めない config dir の instance は閉じない、という現在の保守側の規則は
+（`PaneForSession` は session ごとに最初の 1 つを返すだけなので、instance 単位の照合には使えない）。一覧が読めないときは instance を閉じない、という現在の保守側の規則は
 instance 単位でも同じで、interactive の pane が引けない（tmux server に届かない）場合も読めない側に
 倒す。仮の key の instance は key では突き合わせられないので、session id が一覧にあるかだけで
 判定する（tmux 外の interactive や background で、生きているのに閉じる／閉じられない、を避ける）。休眠・`claude-stop-bg` がプロセスを止めた結果も、`SessionEnd` か reconcile で該当 instance が

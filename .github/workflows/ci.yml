@@ -68,7 +68,7 @@ jobs:
             bin/gh-resolve-thread \
             bin/git-reap-gone \
             bin/git-set-commit-sign \
-            bin/lib/claude-configdir.sh \
+            bin/lib/claude-queue-db.sh \
             bin/lib/gh-mise.sh \
             githooks/post-merge \
             test/claude-digest.test.sh \

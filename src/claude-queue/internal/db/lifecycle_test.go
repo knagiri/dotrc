@@ -279,7 +279,7 @@ func TestDoneButRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].SessionID != "bg-done" {
+	if len(got) != 1 || got[0] != "bg-done" {
 		t.Errorf("DoneButRunning = %+v, want only bg-done", got)
 	}
 }

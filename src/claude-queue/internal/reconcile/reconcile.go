@@ -18,14 +18,11 @@
 // list is gone. There is no heuristic and no threshold, which is what makes it
 // safe to run unattended on every picker invocation.
 //
-// It is authoritative only about ITS OWN config dir, though. The ledger is one
-// file per host, while the roster is one per CLAUDE_CONFIG_DIR, so a row is only
-// ever compared against the roster of the dir it was recorded under -- reading
-// one dir's roster as the full list of live sessions would close every row
-// belonging to the others. That is not hypothetical: the picker runs from a tmux
-// popup, a non-interactive shell that carries whatever CLAUDE_CONFIG_DIR the
-// tmux server was started with, so without this every session under another dir
-// would be terminated each time the picker was opened.
+// The roster holds only the sessions of the config dir the caller's inherited
+// environment points at. It assumes every session in the ledger runs under
+// that same dir: with a different CLAUDE_CONFIG_DIR in the tmux server or the
+// systemd unit, a session living elsewhere is not in the roster and is judged
+// gone.
 package reconcile
 
 import (
@@ -34,69 +31,36 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 
-	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
-// ToClose returns the tracked session ids that their own config dir's roster
-// does not list, preserving the order of tracked. Split out from the exec and
-// SQL around it because this set difference is the entire decision, and it is
-// the part worth testing directly.
-//
-// live maps a config dir to the session ids its roster reported. A dir ABSENT
-// from that map is one whose roster could not be read, and its rows are left
-// open: an unreadable roster is not evidence that anything ended. A dir present
-// with an empty list is the opposite -- a roster that really did report nothing
-// running -- and closes every row under it.
-func ToClose(tracked []db.LiveSession, live map[string][]string) []string {
-	liveSet := make(map[string]map[string]struct{}, len(live))
-	for dir, ids := range live {
-		set := make(map[string]struct{}, len(ids))
-		for _, id := range ids {
-			set[id] = struct{}{}
-		}
-		liveSet[dir] = set
+// ToClose returns the tracked session ids that the live roster does not list,
+// preserving the order of tracked. Split out from the exec and SQL around it
+// because this set difference is the entire decision, and it is the part worth
+// testing directly.
+func ToClose(tracked, live []string) []string {
+	liveSet := make(map[string]struct{}, len(live))
+	for _, id := range live {
+		liveSet[id] = struct{}{}
 	}
 	var out []string
-	for _, t := range tracked {
-		set, readable := liveSet[t.ConfigDir]
-		if !readable {
+	for _, id := range tracked {
+		if _, ok := liveSet[id]; ok {
 			continue
 		}
-		if _, ok := set[t.SessionID]; ok {
-			continue
-		}
-		out = append(out, t.SessionID)
+		out = append(out, id)
 	}
 	return out
 }
 
-// dirsOf returns the config dirs the tracked rows name, deduplicated and in
-// first-seen order, which is the set of rosters a sweep has to read. Only the
-// dirs that actually carry a live row: a sweep can never close a row under a dir
-// it is not tracking anything in, so asking that dir would cost a subprocess for
-// an answer nothing reads.
-func dirsOf(tracked []db.LiveSession) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	for _, t := range tracked {
-		if _, ok := seen[t.ConfigDir]; ok {
-			continue
-		}
-		seen[t.ConfigDir] = struct{}{}
-		out = append(out, t.ConfigDir)
-	}
-	return out
-}
-
-// liveIDsIn returns the session ids the roster of one config dir reports. The
-// error from roster.ListIn is passed through untouched: Sweep's contract turns
-// on being able to tell "the roster is empty" from "the roster could not be
-// read", and that distinction is now per dir.
-func liveIDsIn(dir string) ([]string, error) {
-	agents, err := roster.ListIn(dir)
+// liveIDs returns the session ids of the live agent roster. The error from
+// roster.List is passed through untouched: Sweep's contract turns on being able
+// to tell "the roster is empty" from "the roster could not be read".
+func liveIDs() ([]string, error) {
+	agents, err := roster.List()
 	if err != nil {
 		return nil, err
 	}
@@ -116,53 +80,42 @@ func sessionIDs(agents []roster.Agent) []string {
 	return ids
 }
 
-// Result is what one sweep did: how many rows it closed, how many done-but-
-// running background sessions it stopped, and which config dirs it could not
-// read -- whose rows it therefore left open, and which a caller can report so
-// the omission is visible rather than silent.
+// Result is what one sweep did: how many rows it closed and how many done-but-
+// running background sessions it stopped.
 type Result struct {
-	Closed     int
-	Stopped    int
-	Unreadable []string
+	Closed  int
+	Stopped int
 	// StopErrors are the stops that failed, one message each. They do not fail
 	// the sweep: the session stays done, and the next sweep tries again.
 	StopErrors []string
 }
 
-// Sweep matches the ledger against each config dir's live roster and terminates
-// every tracked session its own dir's roster does not list, returning what it
-// did.
+// Sweep matches the ledger against the live roster and terminates every tracked
+// session the roster does not list, returning what it did.
 //
-// A roster that cannot be read is never treated as an empty one: "claude agents
-// failed" is not evidence that anything died, and treating it as one would
-// terminate every tracked session under that dir at once. When EVERY dir fails
-// the sweep is an error with a zero count, which is what callers already skip
-// the pass on; when only some do, the rest are still swept and the failures come
-// back in Result.Unreadable.
+// A roster that cannot be read is returned as an error with a zero Result,
+// never as an empty roster: "claude agents failed" is not evidence that
+// anything died, and treating it as one would terminate every tracked session
+// at once. Callers skip the pass on error.
 //
 // It then stops every background session whose work is done while its process
 // is still running (db.DoneButRunning) -- what a cascade leaves behind when it
-// marks a running delegate done. Only a session its own dir's roster lists is
-// stopped: an unreadable roster is no evidence it is running, and one the
-// roster does not list has just been closed above.
+// marks a running delegate done. Only a session the roster lists is stopped:
+// one the roster does not list has just been closed above.
 func Sweep(conn *sql.DB) (Result, error) {
-	return sweep(conn, liveIDsIn, StopIn)
+	return sweep(conn, liveIDs, Stop)
 }
 
-// StopIn stops one background session with `claude stop <short id>` under its
-// own config dir, the same way roster.ListIn reads it. It moves the process
-// axis only: the stop ends in SessionEnd(reason=other), which the hook records
-// as gone, so hibernation uses it too without marking any work done.
-func StopIn(dir, sessionID string) error {
+// Stop stops one background session with `claude stop <short id>`, under the
+// inherited environment like roster.List. It moves the process axis only: the
+// stop ends in SessionEnd(reason=other), which the hook records as gone, so
+// hibernation uses it too without marking any work done.
+func Stop(sessionID string) error {
 	short := sessionID
 	if len(short) > 8 {
 		short = short[:8]
 	}
-	cmd := exec.Command("claude", "stop", short)
-	if dir != "" {
-		cmd.Env = configdir.Env(os.Environ(), dir)
-	}
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := exec.Command("claude", "stop", short).CombinedOutput(); err != nil {
 		return fmt.Errorf("claude stop %s: %w: %s", short, err, out)
 	}
 	return nil
@@ -170,31 +123,27 @@ func StopIn(dir, sessionID string) error {
 
 // sweep is Sweep with the roster read and the stop injected, so the decisions
 // can be tested without a claude binary.
-func sweep(conn *sql.DB, list func(dir string) ([]string, error), stop func(dir, sessionID string) error) (Result, error) {
+func sweep(conn *sql.DB, list func() ([]string, error), stop func(sessionID string) error) (Result, error) {
+	// The ledger is read before the roster, so every tracked row predates the
+	// roster snapshot it is judged against. The roster is read once: every
+	// decision below is made against that one snapshot.
 	tracked, err := db.LiveSessions(conn)
 	if err != nil {
 		return Result{}, err
 	}
-	dirs := dirsOf(tracked)
+	// Every DoneButRunning row has terminated_at IS NULL, so it is in tracked:
+	// with nothing tracked there is nothing to close and nothing to stop, and
+	// reading the roster would only cost a subprocess (and a skip message
+	// where claude is not installed).
+	if len(tracked) == 0 {
+		return Result{}, nil
+	}
+	live, err := list()
+	if err != nil {
+		return Result{}, err
+	}
 
-	live := make(map[string][]string, len(dirs))
 	var res Result
-	var firstErr error
-	for _, dir := range dirs {
-		ids, err := list(dir)
-		if err != nil {
-			res.Unreadable = append(res.Unreadable, dir)
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		live[dir] = ids
-	}
-	if len(dirs) > 0 && len(live) == 0 {
-		return Result{}, firstErr
-	}
-
 	for _, id := range ToClose(tracked, live) {
 		if err := db.TerminateSession(conn, id); err != nil {
 			return res, err
@@ -206,28 +155,17 @@ func sweep(conn *sql.DB, list func(dir string) ([]string, error), stop func(dir,
 	if err != nil {
 		return res, err
 	}
-	for _, s := range leftovers {
-		if !listed(live, s) {
+	for _, id := range leftovers {
+		if !slices.Contains(live, id) {
 			continue
 		}
-		if err := stop(s.ConfigDir, s.SessionID); err != nil {
+		if err := stop(id); err != nil {
 			res.StopErrors = append(res.StopErrors, err.Error())
 			continue
 		}
 		res.Stopped++
 	}
 	return res, nil
-}
-
-// listed reports whether s's own config dir's roster, as read this sweep,
-// lists it.
-func listed(live map[string][]string, s db.LiveSession) bool {
-	for _, id := range live[s.ConfigDir] {
-		if id == s.SessionID {
-			return true
-		}
-	}
-	return false
 }
 
 // Run is the CLI entrypoint for `claude-queue reconcile`.
@@ -246,9 +184,6 @@ func Run(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "reconcile: skipped:", err)
 		return
-	}
-	for _, dir := range res.Unreadable {
-		fmt.Fprintf(os.Stderr, "reconcile: roster unreadable for %s: its rows were left open\n", dir)
 	}
 	for _, e := range res.StopErrors {
 		fmt.Fprintln(os.Stderr, "reconcile: stop failed:", e)

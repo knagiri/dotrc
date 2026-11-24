@@ -19,7 +19,6 @@ import (
 const (
 	sid   = "pinnedaa-1111-2222"
 	pr    = "example-org/example-repo#12"
-	cfg   = "/home/x/.claude-other"
 	stray = 1 << 30 // a pid nothing runs as
 )
 
@@ -36,6 +35,7 @@ type world struct {
 	runErr   error
 	noTmux   bool
 	noDaemon bool
+	foreign  bool // the transcript is outside the current config dir
 	// noRepoSession: the repo's own tmux session is not there, and the
 	// window goes to the last attached session, "main". noSessions: there is
 	// none of that either.
@@ -62,7 +62,7 @@ func (w *world) deps() Deps {
 			FindPane:       func(int) (string, bool) { return "%7", true },
 			WindowOf:       func(string) (string, error) { return "@3", nil },
 			VisibleWindows: func() (map[string]bool, error) { return map[string]bool{"@3": w.visible}, nil },
-			End: func(pid int, _, _ string) error {
+			End: func(pid int, _ string) error {
 				w.ended = append(w.ended, pid)
 				return nil
 			},
@@ -71,17 +71,18 @@ func (w *world) deps() Deps {
 				w.killed = append(w.killed, p)
 				return nil
 			},
-			Stop: func(_, id string) error {
+			Stop: func(id string) error {
 				w.stopped = append(w.stopped, id)
 				return nil
 			},
-			List: func(string) ([]roster.Agent, error) { return w.agents, nil },
+			List: func() ([]roster.Agent, error) { return w.agents, nil },
 			LatestEvent: func(string) (string, int64, bool, error) {
 				return w.latest, now.Unix() - 600, w.latest != "", nil
 			},
 		},
 		RunningDelegates: func() (map[string]int, error) { return map[string]int{sid: w.children}, nil },
 		IsFile:           func(p string) bool { _, err := os.Stat(p); return err == nil },
+		InConfigDir:      func(string) bool { return !w.foreign },
 		IsDir:            func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() },
 		SessionName:      func(string) string { return "example-repo_feature" },
 		WindowName:       func(string, string) string { return "fix the thing" },
@@ -97,7 +98,7 @@ func (w *world) deps() Deps {
 			return "main", nil
 		},
 		TmuxServerRunning: func() bool { return !w.noTmux },
-		DaemonRunning:     func(string) (bool, error) { return !w.noDaemon, nil },
+		DaemonRunning:     func() (bool, error) { return !w.noDaemon, nil },
 		Run: func(argv, env []string, _ string) error {
 			w.ran = append(w.ran, argv)
 			w.ranEnv = append(w.ranEnv, env)
@@ -115,7 +116,7 @@ func pin(t *testing.T) db.PRWatch {
 	if err := os.WriteFile(tr, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return db.PRWatch{SessionID: sid, PR: pr, Cwd: dir, TranscriptPath: tr, ConfigDir: cfg, Kind: db.KindInteractive, Gone: true}
+	return db.PRWatch{SessionID: sid, PR: pr, Cwd: dir, TranscriptPath: tr, Kind: db.KindInteractive, Gone: true}
 }
 
 // Every effect of a delivery -- stopping a running session and launching the
@@ -151,9 +152,6 @@ func TestDeliver_GoneInteractiveOpensWindow(t *testing.T) {
 	}
 	if slices.Contains(w.asked, "last") {
 		t.Errorf("looked past the repo's own session: %v", w.asked)
-	}
-	if !slices.Contains(argv, "CLAUDE_CONFIG_DIR="+cfg) {
-		t.Errorf("the window does not run under the recorded config dir: %q", argv)
 	}
 	cmd := argv[len(argv)-1]
 	if !strings.Contains(cmd, "'claude' '--resume' '"+sid+"' 'PR has news'") {
@@ -224,8 +222,60 @@ func TestDeliver_GoneBackground(t *testing.T) {
 	if want := []string{"claude", "--bg", "--resume", sid, "m"}; !slices.Equal(w.ran[0], want) {
 		t.Errorf("argv = %q", w.ran[0])
 	}
-	if !slices.Contains(w.ranEnv[0], "CLAUDE_CONFIG_DIR="+cfg) {
-		t.Errorf("env lacks the config dir")
+}
+
+// A transcript outside the current config dir blocks the resume: the launched
+// claude would not find it and would open an empty session under the same id.
+func TestDeliver_TranscriptOutsideConfigDirSkips(t *testing.T) {
+	for _, kind := range []string{db.KindBackground, db.KindInteractive} {
+		w := &world{foreign: true}
+		p := pin(t)
+		p.Kind = kind
+		err := Deliver(p, "m", w.deps())
+		var skip *hibernate.SkipError
+		if !errors.As(err, &skip) || !strings.Contains(skip.Reason, "outside the current config dir") {
+			t.Fatalf("%s: err = %v, want a SkipError about the config dir", kind, err)
+		}
+		if len(w.ran) != 0 {
+			t.Errorf("%s: launched anyway: %q", kind, w.ran)
+		}
+	}
+}
+
+// A resume runs under the environment the pass inherited: a CLAUDE_CONFIG_DIR
+// it carries reaches the launch unchanged, and the launch neither drops it nor
+// sets another one in its place. For a background session the pass's env goes
+// to `claude --bg` as is (the ranEnv assertion). An interactive one puts no
+// CLAUDE_CONFIG_DIR in the tmux argv (the argv assertion), so its window takes
+// the tmux server's global environment.
+func TestDeliver_InheritsConfigDir(t *testing.T) {
+	const inherited = "/home/x/.claude-inherited"
+	t.Setenv("CLAUDE_CONFIG_DIR", inherited)
+	for _, kind := range []string{db.KindBackground, db.KindInteractive} {
+		w := &world{}
+		p := pin(t)
+		p.Kind = kind
+		if err := Deliver(p, "m", w.deps()); err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if len(w.ran) != 1 {
+			t.Fatalf("%s: ran %q", kind, w.ran)
+		}
+		var got []string
+		for _, kv := range w.ranEnv[0] {
+			if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+				got = append(got, kv)
+			}
+		}
+		if want := []string{"CLAUDE_CONFIG_DIR=" + inherited}; !slices.Equal(got, want) {
+			t.Errorf("%s: env CLAUDE_CONFIG_DIR entries = %q, want %q", kind, got, want)
+		}
+		for _, a := range w.ran[0] {
+			if strings.Contains(a, "CLAUDE_CONFIG_DIR") {
+				t.Errorf("%s: the launch overrides the inherited config dir: %q", kind, w.ran[0])
+				break
+			}
+		}
 	}
 }
 
@@ -236,7 +286,7 @@ func TestDeliver_RunningInteractiveStoppedThenResumed(t *testing.T) {
 	var order []string
 	d := w.deps()
 	end, kill, run := d.Hibernate.End, d.Hibernate.KillPane, d.Run
-	d.Hibernate.End = func(pid int, a, b string) error { order = append(order, "end"); return end(pid, a, b) }
+	d.Hibernate.End = func(pid int, a string) error { order = append(order, "end"); return end(pid, a) }
 	d.Hibernate.KillPane = func(pn string) error { order = append(order, "kill"); return kill(pn) }
 	d.Run = func(a, e []string, dir string) error { order = append(order, "run"); return run(a, e, dir) }
 	p := pin(t)
@@ -391,8 +441,8 @@ func ledger(t *testing.T, id string) *sql.DB {
 	}
 	t.Cleanup(func() { conn.Close() })
 	p := pin(t)
-	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, config_dir, kind, terminated_at) VALUES (?, ?, ?, ?, 'interactive', 1)",
-		id, p.Cwd, p.TranscriptPath, cfg); err != nil {
+	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, kind, terminated_at) VALUES (?, ?, ?, 'interactive', 1)",
+		id, p.Cwd, p.TranscriptPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state) VALUES (?, 'Stop', 'idle_done')", id); err != nil {
@@ -708,8 +758,8 @@ func TestPass_DoneSessionIgnored(t *testing.T) {
 func addWatcher(t *testing.T, conn *sql.DB, id, watched string) {
 	t.Helper()
 	p := pin(t)
-	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, config_dir, kind, terminated_at) VALUES (?, ?, ?, ?, 'interactive', 1)",
-		id, p.Cwd, p.TranscriptPath, cfg); err != nil {
+	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, kind, terminated_at) VALUES (?, ?, ?, 'interactive', 1)",
+		id, p.Cwd, p.TranscriptPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state) VALUES (?, 'Stop', 'idle_done')", id); err != nil {
@@ -779,7 +829,7 @@ func TestDeliver_NoHostSkipped(t *testing.T) {
 func TestDeliver_DaemonGoneAfterStop(t *testing.T) {
 	w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindBackground, Status: roster.StatusIdle}}}
 	d := w.deps()
-	d.DaemonRunning = func(string) (bool, error) { return len(w.stopped) == 0, nil }
+	d.DaemonRunning = func() (bool, error) { return len(w.stopped) == 0, nil }
 	p := pin(t)
 	p.Gone = false
 	err := Deliver(p, "m", d)

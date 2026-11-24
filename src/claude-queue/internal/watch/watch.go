@@ -44,7 +44,7 @@ type Options struct {
 // claude binary nor tmux.
 type Deps struct {
 	Sweep                func(*sql.DB) (reconcile.Result, error)
-	List                 func(dir string) ([]roster.Agent, error)
+	List                 func() ([]roster.Agent, error)
 	LastTurnSendsMessage func(transcriptPath string) (bool, error)
 	Hibernate            func(hibernate.Candidate) error
 	// Check is Hibernate's read-only half, which a dry run asks instead.
@@ -61,7 +61,7 @@ func RealDeps(conn *sql.DB) Deps {
 	hd := hibernate.RealDeps(conn)
 	return Deps{
 		Sweep:                reconcile.Sweep,
-		List:                 roster.ListIn,
+		List:                 roster.List,
 		LastTurnSendsMessage: hibernate.LastTurnSendsMessage,
 		Hibernate:            func(c hibernate.Candidate) error { return hibernate.Hibernate(c, hd) },
 		Check:                func(c hibernate.Candidate) error { return hibernate.Check(c, hd) },
@@ -85,9 +85,6 @@ func Pass(conn *sql.DB, opts Options, deps Deps, out io.Writer) {
 		if err != nil {
 			fmt.Fprintln(out, "reconcile: failed:", err)
 		} else {
-			for _, dir := range res.Unreadable {
-				fmt.Fprintf(out, "reconcile: roster unreadable for %s: its sessions were left as they are\n", dir)
-			}
 			for _, e := range res.StopErrors {
 				fmt.Fprintln(out, "reconcile: stop failed:", e)
 			}

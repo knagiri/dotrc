@@ -15,7 +15,6 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
-	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/label"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
@@ -62,7 +61,7 @@ var ascii = map[string]string{
 }
 
 // Column positions in a rendered row, in the order FormatLine writes them.
-// The first five are shown (see fzfArgs); the five after them ride along
+// The first five are shown (see fzfArgs); the four after them ride along
 // hidden because the pick needs them and the eye does not.
 //
 // The annotation column is shown too, after the summary, but sits behind the
@@ -78,7 +77,7 @@ var ascii = map[string]string{
 // FormatLine writes these positions and parseSelection reads them back off the
 // line fzf returns, so the two have to agree: the hidden columns are addressed
 // by index, and an off-by-one there hands the pick another session's id, pane,
-// cwd, transcript path or config dir rather than failing.
+// cwd or transcript path rather than failing.
 const (
 	colIcon = iota
 	colTitle
@@ -89,7 +88,6 @@ const (
 	colPane
 	colCwd
 	colTranscript
-	colConfigDir
 	colAnnotation
 	colMemo
 	colPinNote
@@ -132,15 +130,12 @@ const (
 // i.e. a delegate). Every row of a tree carries the same value; dimming keeps
 // the repeat quiet.
 //
-// Hidden columns: session_id, tmux_pane, full cwd, transcript_path, config_dir,
-// and after the annotation the raw memo and pin note.
+// Hidden columns: session_id, tmux_pane, full cwd, transcript_path, and after
+// the annotation the raw memo and pin note.
 // The full cwd is carried separately from the worktree name because a background
 // session is opened in a window that needs a real working directory; the
 // transcript path rides along because the resume path must not run without
-// confirming the conversation file is actually on disk; the config dir because
-// every command a pick runs -- the roster lookup, `claude attach`, `claude
-// --resume` -- has to be pointed at the dir that session belongs to, and the
-// popup's own environment is no guide to which that is.
+// confirming the conversation file is actually on disk.
 //
 // title and worktree are passed in rather than derived here: one needs the
 // transcript off disk and the other needs git (see worktreeName), and keeping
@@ -182,7 +177,6 @@ func FormatLine(row db.Row, title, worktree, refs string, dimRefs bool, nowSec i
 	fields[colPane] = pane
 	fields[colCwd] = rowCwd(row)
 	fields[colTranscript] = rowTranscript(row)
-	fields[colConfigDir] = rowConfigDir(row)
 	fields[colAnnotation] = annotation(row, icons)
 	fields[colMemo] = row.Memo.String
 	if row.Marked {
@@ -241,7 +235,6 @@ type selection struct {
 	Pane       string
 	Cwd        string
 	Transcript string
-	ConfigDir  string
 }
 
 // parseSelection reads the hidden columns back off the line fzf printed, or
@@ -262,7 +255,6 @@ func parseSelection(line string) (selection, bool) {
 		Pane:       strings.TrimSpace(fields[colPane]),
 		Cwd:        strings.TrimSpace(fields[colCwd]),
 		Transcript: strings.TrimSpace(fields[colTranscript]),
-		ConfigDir:  strings.TrimSpace(fields[colConfigDir]),
 	}, true
 }
 
@@ -282,16 +274,6 @@ func rowTranscript(row db.Row) string {
 		return row.TranscriptPath.String
 	}
 	return ""
-}
-
-// rowConfigDir unwraps config_dir, falling back to the default rather than to
-// "". Unlike the two above there is no "no answer" branch for a caller to take:
-// a pick has to name SOME dir to run its commands under, and a row written
-// before the column existed ran under the default. Never "" so the value stays
-// safe to splice into a column the parser trims -- an empty one there would be
-// read back as a missing field rather than as a deliberate blank.
-func rowConfigDir(row db.Row) string {
-	return db.ConfigDirOf(row.ConfigDir)
 }
 
 func formatAge(sec int64) string {
@@ -345,12 +327,10 @@ type Target struct {
 	DuplicatePIDs []int
 
 	TranscriptExists bool
-	CwdExists        bool
-
-	// ConfigDir is the CLAUDE_CONFIG_DIR the row belongs to, which decides both
-	// which roster the fields above were read from and which dir the action
-	// below is run under.
-	ConfigDir string
+	// TranscriptForeign: the recorded transcript is outside the config dir the
+	// launched claude reads, so a resume would not find it.
+	TranscriptForeign bool
+	CwdExists         bool
 }
 
 // Action is what selecting a picker row should do.
@@ -362,12 +342,6 @@ type Action struct {
 	Resume  string // resume: full UUID, the form `claude --resume` needs
 	KillPID int    // resume: pid to SIGTERM first; 0 when no process is left
 	Reason  string // none: message for stderr
-	// ConfigDir is exported to the window the action opens, so `claude attach`
-	// and `claude --resume` talk to the daemon and read the transcripts of the
-	// row's own config dir rather than the picker's. Without it an attach asks
-	// the wrong daemon and gets "No job matching <id>", and a resume finds no
-	// transcript and quietly opens an empty session under that id.
-	ConfigDir string
 }
 
 // DecideAction routes a selected row, in the order the four reachable states
@@ -416,7 +390,7 @@ func DecideAction(t Target) Action {
 	}
 	if t.InRoster {
 		if t.Kind == roster.KindBackground {
-			return Action{Kind: "attach", Short: shortID(t.SessionID), Cwd: t.Cwd, ConfigDir: t.ConfigDir}
+			return Action{Kind: "attach", Short: shortID(t.SessionID), Cwd: t.Cwd}
 		}
 		if t.Origin != originOrphan {
 			return Action{Kind: "none", Reason: fmt.Sprintf(
@@ -430,7 +404,7 @@ func DecideAction(t Target) Action {
 	if reason := resumeBlocked(t); reason != "" {
 		return Action{Kind: "none", Reason: reason}
 	}
-	act := Action{Kind: "resume", Resume: t.SessionID, Cwd: t.Cwd, ConfigDir: t.ConfigDir}
+	act := Action{Kind: "resume", Resume: t.SessionID, Cwd: t.Cwd}
 	if t.InRoster {
 		act.KillPID = t.PID
 	}
@@ -446,6 +420,8 @@ func resumeBlocked(t Target) string {
 		return "cannot resume: the ledger recorded no transcript path for this session"
 	case !t.TranscriptExists:
 		return "cannot resume: transcript " + t.TranscriptPath + " is not on disk (the session ended before writing one)"
+	case t.TranscriptForeign:
+		return "cannot resume: transcript " + t.TranscriptPath + " is outside the current config dir"
 	case t.Cwd == "":
 		return "cannot resume: the ledger recorded no working directory for this session"
 	case !t.CwdExists:
@@ -467,42 +443,6 @@ func windowNameFor(transcript, sessionID, kind string) string {
 		return name
 	}
 	return kind + "-" + shortID(sessionID)
-}
-
-// actionLaunch is how the window an action opens gets the row's config dir:
-// the -e env to pass to the multiplexer, and the argv to run there.
-//
-// Nothing is ever left to be inherited, because the popup's own environment is
-// not a safe thing to fall through to -- a tmux server started under one config
-// dir hands that value to every popup and window it runs, so an omitted
-// variable is not "use the default", it is "use whatever the server had".
-//
-// For the default dir that rules out setting CLAUDE_CONFIG_DIR=~/.claude (claude
-// then reads a different global config file; see configdir.Env), and tmux's -e
-// cannot unset a variable. So the default dir runs argv under `env -u
-// CLAUDE_CONFIG_DIR` with no -e at all, which removes whatever the server env
-// supplied. Any other dir is set with -e as before. A row with no dir recorded
-// is left as it was: no env, argv untouched.
-func actionLaunch(act Action, argv []string) (map[string]string, []string) {
-	switch {
-	case act.ConfigDir == "":
-		return nil, argv
-	case configdir.IsDefault(act.ConfigDir):
-		return nil, append([]string{"env", "-u", configdir.EnvVar}, argv...)
-	default:
-		return map[string]string{configdir.EnvVar: act.ConfigDir}, argv
-	}
-}
-
-// runHint is the command line to print when opening the window failed, built
-// by the same rule as actionLaunch so the manual fallback launches the same way.
-func runHint(act Action, argv []string) string {
-	env, argv := actionLaunch(act, argv)
-	line := strings.Join(argv, " ")
-	if dir, ok := env[configdir.EnvVar]; ok {
-		line = configdir.EnvVar + "=" + dir + " " + line
-	}
-	return line
 }
 
 // shortID truncates a session id to the 8 chars `claude attach` takes, and the
@@ -599,9 +539,6 @@ func reconcileSweep(conn *sql.DB) {
 		fmt.Fprintln(os.Stderr, "reconcile skipped:", err)
 		return
 	}
-	for _, dir := range res.Unreadable {
-		fmt.Fprintf(os.Stderr, "reconcile: roster unreadable for %s: its rows were left open\n", dir)
-	}
 	for _, e := range res.StopErrors {
 		fmt.Fprintln(os.Stderr, "reconcile: stop failed:", e)
 	}
@@ -653,7 +590,7 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 	//
 	// Not on --list: that is the reload behind every Tab press, it runs inside
 	// a picker that reconciled moments ago, and a sweep costs a roster
-	// subprocess per config dir.
+	// subprocess.
 	if !*listOnly {
 		sweep(conn)
 	}
@@ -715,7 +652,7 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		return
 	}
 
-	switch act := DecideAction(describeTarget(mux, sel, roster.ListIn)); act.Kind {
+	switch act := DecideAction(describeTarget(mux, sel, roster.List)); act.Kind {
 	case "switch":
 		// A failed switch does not terminate the row. Every pane that reaches
 		// here was confirmed present in this server's pane table moments ago
@@ -739,9 +676,8 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		// a failed window open says nothing about whether the session is alive,
 		// and the manual command still works.
 		argv := []string{"claude", "attach", act.Short}
-		env, launch := actionLaunch(act, argv)
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), originPane, env, launch); err != nil {
-			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: %s\n", err, runHint(act, argv))
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), originPane, argv); err != nil {
+			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: %s\n", err, strings.Join(argv, " "))
 			return
 		}
 		recordJump(conn, originPane, sessionID)
@@ -751,15 +687,14 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		// being replaced by a second one. The full UUID is required: the short
 		// form is what `claude attach` takes, not this.
 		if act.KillPID != 0 {
-			if err := sessionproc.End(act.KillPID, act.Resume, act.ConfigDir); err != nil {
+			if err := sessionproc.End(act.KillPID, act.Resume); err != nil {
 				fmt.Fprintf(os.Stderr, "not resuming: %v\n", err)
 				return
 			}
 		}
 		argv := []string{"claude", "--resume", act.Resume}
-		env, launch := actionLaunch(act, argv)
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), originPane, env, launch); err != nil {
-			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && %s\n", err, act.Cwd, runHint(act, argv))
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), originPane, argv); err != nil {
+			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && %s\n", err, act.Cwd, strings.Join(argv, " "))
 			return
 		}
 		recordJump(conn, originPane, sessionID)
@@ -915,19 +850,12 @@ func isDone(conn *sql.DB, sessionID string) bool {
 // each read costs a subprocess. It is read for the single picked row only: the
 // panes of rows the user did not select are never needed.
 //
-// list is injected -- Run passes roster.ListIn -- for the same reason findPane
-// and sessionproc.WaitGone take their dependency as an argument: it is the only way to
-// assert WHICH config dir the roster was asked about without a claude binary in
-// the loop, and asking the wrong one is a silent failure rather than an error
-// (an absent session routes to the resume path, which opens an empty session
-// under its id).
-func describeTarget(mux multiplexer.Multiplexer, sel selection, list func(string) ([]roster.Agent, error)) Target {
+// list is injected -- Run passes roster.List -- for the same reason findPane
+// and sessionproc.WaitGone take their dependency as an argument: so the routing
+// can be asserted without a claude binary in the loop.
+func describeTarget(mux multiplexer.Multiplexer, sel selection, list func() ([]roster.Agent, error)) Target {
 	sessionID, ledgerPane, cwd, transcript := sel.SessionID, sel.Pane, sel.Cwd, sel.Transcript
-	// The row's own config dir, never the picker's: the popup is a
-	// non-interactive shell carrying whatever CLAUDE_CONFIG_DIR the tmux server
-	// was started with, so asking the roster under it would report every session
-	// of every other dir as absent.
-	agents, err := list(sel.ConfigDir)
+	agents, err := list()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "roster lookup skipped:", err)
 	}
@@ -940,9 +868,9 @@ func describeTarget(mux multiplexer.Multiplexer, sel selection, list func(string
 		TranscriptPath: transcript,
 		RosterOK:       err == nil,
 
-		TranscriptExists: isFile(transcript),
-		CwdExists:        isDir(cwd),
-		ConfigDir:        sel.ConfigDir,
+		TranscriptExists:  isFile(transcript),
+		TranscriptForeign: transcript != "" && !roster.TranscriptInConfigDir(transcript),
+		CwdExists:         isDir(cwd),
 	}
 	matches := sessionproc.AgentsFor(agents, sessionID)
 	t.RosterMatches = len(matches)

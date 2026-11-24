@@ -222,20 +222,19 @@ func SessionInPane(conn *sql.DB, pane string) (string, error) {
 }
 
 // NavTarget is what walking to a history entry needs to know about its
-// session: the ledger pane, withheld once the process is gone (see View), and
-// the config dir whose roster can locate it. found is false for a session the
-// ledger no longer has.
-func NavTarget(conn *sql.DB, sessionID string) (pane, configDir string, found bool, err error) {
-	var p, dir sql.NullString
+// session: the ledger pane, withheld once the process is gone (see View).
+// found is false for a session the ledger no longer has.
+func NavTarget(conn *sql.DB, sessionID string) (pane string, found bool, err error) {
+	var p sql.NullString
 	err = conn.QueryRow(
-		"SELECT CASE WHEN terminated_at IS NULL THEN tmux_pane END, config_dir FROM sessions WHERE session_id = ?",
+		"SELECT CASE WHEN terminated_at IS NULL THEN tmux_pane END FROM sessions WHERE session_id = ?",
 		sessionID,
-	).Scan(&p, &dir)
+	).Scan(&p)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", false, nil
+		return "", false, nil
 	}
 	if err != nil {
-		return "", "", false, fmt.Errorf("nav target: %w", err)
+		return "", false, fmt.Errorf("nav target: %w", err)
 	}
-	return p.String, ConfigDirOf(dir), true, nil
+	return p.String, true, nil
 }

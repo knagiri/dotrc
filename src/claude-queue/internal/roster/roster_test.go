@@ -1,6 +1,9 @@
 package roster
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // The fixture is trimmed real output of `claude agents --json`: the field names
 // here are the only thing standing between the picker and a zero pid.
@@ -61,5 +64,44 @@ func TestParse_Empty(t *testing.T) {
 func TestParse_Invalid(t *testing.T) {
 	if _, err := parse([]byte(`not json`)); err == nil {
 		t.Error("parse err = nil, want non-nil")
+	}
+}
+
+func TestConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/from-env")
+	if got, err := ConfigDir(); err != nil || got != "/from-env" {
+		t.Errorf("env: ConfigDir = %q, %v", got, err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if got, err := ConfigDir(); err != nil || got != filepath.Join(home, ".claude") {
+		t.Errorf("default: ConfigDir = %q, %v", got, err)
+	}
+	t.Setenv("HOME", "")
+	if got, err := ConfigDir(); err == nil {
+		t.Errorf("no home: ConfigDir = %q, want an error", got)
+	}
+}
+
+func TestTranscriptInConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/cfg/a")
+	for path, want := range map[string]bool{
+		"/cfg/a/projects/-x/s.jsonl": true,
+		"/cfg/b/projects/-x/s.jsonl": false,
+		"/cfg/a/other/s.jsonl":       false,
+		"/cfg/a/projects":            false,
+		"/cfg/a/projects/../x.jsonl": false,
+		"/cfg/a/projects2/s.jsonl":   false,
+		"":                           false,
+	} {
+		if got := TranscriptInConfigDir(path); got != want {
+			t.Errorf("TranscriptInConfigDir(%q) = %v, want %v", path, got, want)
+		}
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("HOME", "")
+	if TranscriptInConfigDir("/cfg/a/projects/-x/s.jsonl") {
+		t.Error("with no resolvable config dir the transcript was accepted")
 	}
 }

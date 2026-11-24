@@ -41,7 +41,7 @@ const idleAt = 1000
 
 func (r *recorder) deps() Deps {
 	return Deps{
-		List: func(dir string) ([]roster.Agent, error) {
+		List: func() ([]roster.Agent, error) {
 			r.calls = append(r.calls, "list")
 			if r.listErr != nil {
 				return nil, r.listErr
@@ -73,7 +73,7 @@ func (r *recorder) deps() Deps {
 			r.calls = append(r.calls, "visible")
 			return r.visible, nil
 		},
-		End: func(pid int, sessionID, cfgDir string) error {
+		End: func(pid int, sessionID string) error {
 			r.calls = append(r.calls, "end "+sessionID)
 			return r.endErr
 		},
@@ -85,7 +85,7 @@ func (r *recorder) deps() Deps {
 			r.calls = append(r.calls, "kill-pane "+pane)
 			return nil
 		},
-		Stop: func(dir, sessionID string) error {
+		Stop: func(sessionID string) error {
 			r.calls = append(r.calls, "stop "+sessionID)
 			return nil
 		},
@@ -93,7 +93,7 @@ func (r *recorder) deps() Deps {
 }
 
 func interactive() Candidate {
-	return Candidate{SessionID: "aaaaaaaa-1", ConfigDir: dirA, Kind: roster.KindInteractive, PID: fakePID, IdleSince: idleAt}
+	return Candidate{SessionID: "aaaaaaaa-1", Kind: roster.KindInteractive, PID: fakePID, IdleSince: idleAt}
 }
 
 // The destructive ends -- tmux, `claude stop` -- are blocked before any test
@@ -106,7 +106,7 @@ func TestHibernate_StubsCatchEveryEffect(t *testing.T) {
 	if err := real.KillPane("%1"); err == nil {
 		t.Fatal("real KillPane ran with an empty PATH")
 	}
-	if err := real.Stop(dirA, "aaaaaaaa-1"); err == nil {
+	if err := real.Stop("aaaaaaaa-1"); err == nil {
 		t.Fatal("real Stop ran with an empty PATH")
 	}
 	if _, err := real.VisibleWindows(); err == nil {
@@ -183,7 +183,7 @@ func TestHibernate_PaneAlreadyClosed(t *testing.T) {
 
 func TestHibernate_BackgroundUsesStop(t *testing.T) {
 	r := &recorder{}
-	c := Candidate{SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt}
+	c := Candidate{SessionID: "bbbbbbbb-1", Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt}
 	if err := Hibernate(c, r.deps()); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestCheck_ReadsOnly(t *testing.T) {
 func TestHibernate_BusyOnRecheckSkipped(t *testing.T) {
 	cases := map[string]Candidate{
 		"interactive": interactive(),
-		"background":  {SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt},
+		"background":  {SessionID: "bbbbbbbb-1", Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -265,7 +265,7 @@ func TestHibernate_LatestEventChangedSkipped(t *testing.T) {
 	}
 	kinds := map[string]Candidate{
 		"interactive": interactive(),
-		"background":  {SessionID: "bbbbbbbb-1", ConfigDir: dirB, Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt},
+		"background":  {SessionID: "bbbbbbbb-1", Kind: roster.KindBackground, PID: fakePID, IdleSince: idleAt},
 	}
 	for name, l := range cases {
 		for kname, c := range kinds {
