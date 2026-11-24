@@ -3,8 +3,8 @@ package db
 // Tables is the table + index DDL applied at Open. Idempotent (IF NOT EXISTS).
 //
 // Split from View because migrate() has to run between the two: the view selects
-// sessions.config_dir, which on a database created before that column existed is
-// only there once the ALTER in migrate() has run.
+// columns (kind, memo, ...) that on a database created before they existed are
+// only there once the ALTERs in migrate() have run.
 const Tables = `
 CREATE TABLE IF NOT EXISTS sessions (
   session_id      TEXT PRIMARY KEY,
@@ -13,15 +13,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   transcript_path TEXT,
   started_at      INTEGER NOT NULL DEFAULT (unixepoch()),
   terminated_at   INTEGER,
-  -- Which CLAUDE_CONFIG_DIR this session runs under. This one ledger records
-  -- every session on the host (its path is keyed off $HOME), but the agent
-  -- roster, the daemon behind it and the transcripts are all per config dir, so
-  -- a row that does not say which dir it belongs to cannot be matched against
-  -- any of them. NULL is every row written before the column existed, and reads
-  -- as configdir.Default().
-  --
-  -- Added by migrate() as well, because CREATE TABLE IF NOT EXISTS is a no-op on
-  -- an existing database and would leave the column off it forever.
+  -- Unused: nothing reads or writes it. Kept so existing databases, whose rows
+  -- may carry a value, keep the shape they were created with. Added by
+  -- migrate() as well, because CREATE TABLE IF NOT EXISTS is a no-op on an
+  -- existing database.
   config_dir      TEXT,
   -- The events.id the session was manually marked "waiting" at (claude-queue
   -- mark, Tab in the picker). Non-NULL is marked, until it is toggled off;
@@ -175,7 +170,6 @@ SELECT
   CASE WHEN s.terminated_at IS NULL THEN s.tmux_pane END AS tmux_pane,
   s.cwd,
   s.transcript_path,
-  s.config_dir,
   s.kind,
   e.event_type,
   e.state AS raw_state,

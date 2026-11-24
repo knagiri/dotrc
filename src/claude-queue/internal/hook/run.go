@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/knagiri/dotrc/src/claude-queue/internal/configdir"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/db"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/multiplexer"
 )
@@ -35,14 +34,10 @@ func Run(event string) {
 
 	mux := multiplexer.Detect()
 	pane := mux.PaneID()
-	// Resolved here rather than in Dispatch so the decision -- and the one
-	// environment read it makes -- stays out of the transition logic. The
-	// transcript path is claude's own answer and wins; see configdir.Resolve.
 	d := &Deps{
-		DB:        conn,
-		Pane:      pane,
-		ConfigDir: configdir.Resolve(in.TranscriptPath, os.Getenv(configdir.EnvVar)),
-		Kind:      KindFromEnv(os.Getenv),
+		DB:   conn,
+		Pane: pane,
+		Kind: KindFromEnv(os.Getenv),
 	}
 	if err := Dispatch(d, event, in); err != nil {
 		logDebug("dispatch %s: %v", event, err)

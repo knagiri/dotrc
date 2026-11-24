@@ -35,17 +35,17 @@ import (
 // preserving the order of tracked. Split out from the exec and SQL around it
 // because this set difference is the entire decision, and it is the part worth
 // testing directly.
-func ToClose(tracked []db.LiveSession, live []string) []string {
+func ToClose(tracked, live []string) []string {
 	liveSet := make(map[string]struct{}, len(live))
 	for _, id := range live {
 		liveSet[id] = struct{}{}
 	}
 	var out []string
-	for _, t := range tracked {
-		if _, ok := liveSet[t.SessionID]; ok {
+	for _, id := range tracked {
+		if _, ok := liveSet[id]; ok {
 			continue
 		}
-		out = append(out, t.SessionID)
+		out = append(out, id)
 	}
 	return out
 }
@@ -142,11 +142,11 @@ func sweep(conn *sql.DB, list func() ([]string, error), stop func(sessionID stri
 	if err != nil {
 		return res, err
 	}
-	for _, s := range leftovers {
-		if !slices.Contains(live, s.SessionID) {
+	for _, id := range leftovers {
+		if !slices.Contains(live, id) {
 			continue
 		}
-		if err := stop(s.SessionID); err != nil {
+		if err := stop(id); err != nil {
 			res.StopErrors = append(res.StopErrors, err.Error())
 			continue
 		}

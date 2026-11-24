@@ -98,7 +98,6 @@ type PRWatch struct {
 	HaltedUpTo     time.Time
 	Cwd            string
 	TranscriptPath string
-	ConfigDir      string
 	// Kind is sessions.kind; "" is unknown and reads as interactive.
 	Kind string
 	// Gone is the process axis: the session's process has ended.
@@ -113,7 +112,7 @@ func PRWatches(conn *sql.DB) ([]PRWatch, error) {
 		SELECT w.session_id, w.pr, COALESCE(w.cursor, ''), COALESCE(w.seen_at, 0),
 		       COALESCE(w.delivered_at, 0), COALESCE(w.delivered_upto, ''),
 		       COALESCE(w.failures, 0), COALESCE(w.halted_upto, ''),
-		       COALESCE(s.cwd, ''), COALESCE(s.transcript_path, ''), s.config_dir, COALESCE(s.kind, ''),
+		       COALESCE(s.cwd, ''), COALESCE(s.transcript_path, ''), COALESCE(s.kind, ''),
 		       s.terminated_at IS NOT NULL
 		FROM pr_watches w
 		JOIN sessions s ON s.session_id = w.session_id
@@ -127,11 +126,9 @@ func PRWatches(conn *sql.DB) ([]PRWatch, error) {
 	for rows.Next() {
 		var p PRWatch
 		var cursor, upTo, halted string
-		var dir sql.NullString
-		if err := rows.Scan(&p.SessionID, &p.PR, &cursor, &p.SeenAt, &p.DeliveredAt, &upTo, &p.Failures, &halted, &p.Cwd, &p.TranscriptPath, &dir, &p.Kind, &p.Gone); err != nil {
+		if err := rows.Scan(&p.SessionID, &p.PR, &cursor, &p.SeenAt, &p.DeliveredAt, &upTo, &p.Failures, &halted, &p.Cwd, &p.TranscriptPath, &p.Kind, &p.Gone); err != nil {
 			return nil, err
 		}
-		p.ConfigDir = ConfigDirOf(dir)
 		if cursor != "" {
 			t, err := time.Parse(time.RFC3339, cursor)
 			if err != nil {

@@ -69,7 +69,7 @@ func walkHistory(conn *sql.DB, step int, curPane string, d navDeps) (bool, error
 	)
 	for ; i >= 0 && i < len(hist); i += step {
 		sessionID := hist[i].SessionID
-		ledgerPane, _, found, err := db.NavTarget(conn, sessionID)
+		ledgerPane, found, err := db.NavTarget(conn, sessionID)
 		if err != nil {
 			return false, err
 		}

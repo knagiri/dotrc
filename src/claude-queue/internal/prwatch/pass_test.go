@@ -19,7 +19,6 @@ import (
 const (
 	sid   = "pinnedaa-1111-2222"
 	pr    = "example-org/example-repo#12"
-	cfg   = "/home/x/.claude-other"
 	stray = 1 << 30 // a pid nothing runs as
 )
 
@@ -115,7 +114,7 @@ func pin(t *testing.T) db.PRWatch {
 	if err := os.WriteFile(tr, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return db.PRWatch{SessionID: sid, PR: pr, Cwd: dir, TranscriptPath: tr, ConfigDir: cfg, Kind: db.KindInteractive, Gone: true}
+	return db.PRWatch{SessionID: sid, PR: pr, Cwd: dir, TranscriptPath: tr, Kind: db.KindInteractive, Gone: true}
 }
 
 // Every effect of a delivery -- stopping a running session and launching the
@@ -229,38 +228,29 @@ func TestDeliver_GoneBackground(t *testing.T) {
 func TestDeliver_InheritsConfigDir(t *testing.T) {
 	const inherited = "/home/x/.claude-inherited"
 	t.Setenv("CLAUDE_CONFIG_DIR", inherited)
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The ledger rows the pass reads may still carry a config dir from before;
-	// none of them may decide the launch's environment.
-	for _, recorded := range []string{cfg, filepath.Join(home, ".claude")} {
-		for _, kind := range []string{db.KindBackground, db.KindInteractive} {
-			w := &world{}
-			p := pin(t)
-			p.Kind = kind
-			p.ConfigDir = recorded
-			if err := Deliver(p, "m", w.deps()); err != nil {
-				t.Fatalf("%s/%s: %v", recorded, kind, err)
+	for _, kind := range []string{db.KindBackground, db.KindInteractive} {
+		w := &world{}
+		p := pin(t)
+		p.Kind = kind
+		if err := Deliver(p, "m", w.deps()); err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if len(w.ran) != 1 {
+			t.Fatalf("%s: ran %q", kind, w.ran)
+		}
+		var got []string
+		for _, kv := range w.ranEnv[0] {
+			if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+				got = append(got, kv)
 			}
-			if len(w.ran) != 1 {
-				t.Fatalf("%s/%s: ran %q", recorded, kind, w.ran)
-			}
-			var got []string
-			for _, kv := range w.ranEnv[0] {
-				if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
-					got = append(got, kv)
-				}
-			}
-			if want := []string{"CLAUDE_CONFIG_DIR=" + inherited}; !slices.Equal(got, want) {
-				t.Errorf("%s/%s: env CLAUDE_CONFIG_DIR entries = %q, want %q", recorded, kind, got, want)
-			}
-			for _, a := range w.ran[0] {
-				if strings.Contains(a, "CLAUDE_CONFIG_DIR") {
-					t.Errorf("%s/%s: the launch overrides the inherited config dir: %q", recorded, kind, w.ran[0])
-					break
-				}
+		}
+		if want := []string{"CLAUDE_CONFIG_DIR=" + inherited}; !slices.Equal(got, want) {
+			t.Errorf("%s: env CLAUDE_CONFIG_DIR entries = %q, want %q", kind, got, want)
+		}
+		for _, a := range w.ran[0] {
+			if strings.Contains(a, "CLAUDE_CONFIG_DIR") {
+				t.Errorf("%s: the launch overrides the inherited config dir: %q", kind, w.ran[0])
+				break
 			}
 		}
 	}
@@ -428,8 +418,8 @@ func ledger(t *testing.T, id string) *sql.DB {
 	}
 	t.Cleanup(func() { conn.Close() })
 	p := pin(t)
-	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, config_dir, kind, terminated_at) VALUES (?, ?, ?, ?, 'interactive', 1)",
-		id, p.Cwd, p.TranscriptPath, cfg); err != nil {
+	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, kind, terminated_at) VALUES (?, ?, ?, 'interactive', 1)",
+		id, p.Cwd, p.TranscriptPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state) VALUES (?, 'Stop', 'idle_done')", id); err != nil {
@@ -745,8 +735,8 @@ func TestPass_DoneSessionIgnored(t *testing.T) {
 func addWatcher(t *testing.T, conn *sql.DB, id, watched string) {
 	t.Helper()
 	p := pin(t)
-	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, config_dir, kind, terminated_at) VALUES (?, ?, ?, ?, 'interactive', 1)",
-		id, p.Cwd, p.TranscriptPath, cfg); err != nil {
+	if _, err := conn.Exec("INSERT INTO sessions(session_id, cwd, transcript_path, kind, terminated_at) VALUES (?, ?, ?, 'interactive', 1)",
+		id, p.Cwd, p.TranscriptPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state) VALUES (?, 'Stop', 'idle_done')", id); err != nil {

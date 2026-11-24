@@ -16,8 +16,6 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
-const dir = "/home/x/.claude"
-
 var now = time.Unix(1_800_000_000, 0)
 
 // ledger holds two running sessions idle for 3h: one the roster reports idle,
@@ -30,7 +28,7 @@ func ledger(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { conn.Close() })
 	for _, id := range []string{"idleidle-1", "busybusy-1"} {
-		if _, err := conn.Exec("INSERT INTO sessions(session_id, config_dir, transcript_path) VALUES (?, ?, '/t.jsonl')", id, dir); err != nil {
+		if _, err := conn.Exec("INSERT INTO sessions(session_id, transcript_path) VALUES (?, '/t.jsonl')", id); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := conn.Exec("INSERT INTO events(session_id, event_type, state, created_at) VALUES (?, 'Stop', 'idle_done', ?)", id, now.Unix()-3*3600); err != nil {

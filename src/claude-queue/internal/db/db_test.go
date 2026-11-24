@@ -344,8 +344,7 @@ func TestListOptsIncludes(t *testing.T) {
 
 // The migration exists because CREATE TABLE IF NOT EXISTS is a no-op on an
 // existing database: without it, every ledger already on disk would stay one
-// column short forever and every row in it would keep being matched against the
-// wrong config dir's roster.
+// column short forever.
 //
 // The fixture is a sessions table in its pre-migration shape, which is why the
 // DDL is written out here rather than derived from Tables -- deriving it would
@@ -378,17 +377,14 @@ func TestOpenMigratesAnExistingDatabase(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// The column is there, the pre-existing row survived, and its config_dir is
-	// NULL -- which ConfigDirOf reads as the default.
+	// The column is there and the pre-existing row survived with it NULL. Nothing
+	// reads config_dir any more, but the column stays for databases that have it.
 	var dir sql.NullString
 	if err := conn.QueryRow("SELECT config_dir FROM sessions WHERE session_id = 'legacy'").Scan(&dir); err != nil {
 		t.Fatalf("read migrated column: %v", err)
 	}
 	if dir.Valid {
 		t.Errorf("config_dir = %q, want NULL on a row written before the column existed", dir.String)
-	}
-	if got := ConfigDirOf(dir); got == "" {
-		t.Error("ConfigDirOf(NULL) = \"\", want the default dir")
 	}
 
 	// waiting_event_id came in the same way, and the queue view that selects it
@@ -410,43 +406,50 @@ func TestOpenMigratesAnExistingDatabase(t *testing.T) {
 	conn2.Close()
 }
 
-// The view has to select the column too, or the picker reads every row as the
-// default dir no matter what the hook recorded.
-func TestQueueViewCarriesConfigDir(t *testing.T) {
-	conn, err := Open(filepath.Join(t.TempDir(), "test.db"))
+// A database written by an earlier version has config_dir values on its rows
+// and a queue view that selects s.config_dir. It has to open, list and keep
+// those values: Open replaces the view, and nothing touches the column.
+func TestOpenKeepsAnExistingConfigDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing.db")
+	conn, err := Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer conn.Close()
-
-	if _, err := conn.Exec(
-		"INSERT INTO sessions(session_id, config_dir) VALUES ('s1', '/home/x/.claude-personal')",
-	); err != nil {
-		t.Fatalf("insert session: %v", err)
+	oldView := strings.Replace(View, "  s.transcript_path,\n", "  s.transcript_path,\n  s.config_dir,\n", 1)
+	if oldView == View {
+		t.Fatal("could not build the earlier view definition from View")
 	}
-	if _, err := conn.Exec(
+	for _, q := range []string{
+		"DROP VIEW queue",
+		oldView,
+		"INSERT INTO sessions(session_id, config_dir) VALUES ('s1', '/home/x/.claude-other')",
 		"INSERT INTO events(session_id, event_type, state) VALUES ('s1', 'Stop', 'idle_done')",
-	); err != nil {
-		t.Fatalf("insert event: %v", err)
+	} {
+		if _, err := conn.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
 	}
+	conn.Close()
+
+	conn, err = Open(path)
+	if err != nil {
+		t.Fatalf("Open on an existing database: %v", err)
+	}
+	defer conn.Close()
 
 	rows, err := ListRows(conn, ListOpts{})
 	if err != nil {
 		t.Fatalf("ListRows: %v", err)
 	}
-	if len(rows) != 1 {
-		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	if len(rows) != 1 || rows[0].SessionID != "s1" {
+		t.Fatalf("rows = %+v, want s1", rows)
 	}
-	if got := ConfigDirOf(rows[0].ConfigDir); got != "/home/x/.claude-personal" {
-		t.Errorf("row config dir = %q, want /home/x/.claude-personal", got)
+	var dir string
+	if err := conn.QueryRow("SELECT config_dir FROM sessions WHERE session_id = 's1'").Scan(&dir); err != nil {
+		t.Fatalf("read config_dir: %v", err)
 	}
-
-	dirs, err := RecordedConfigDirs(conn)
-	if err != nil {
-		t.Fatalf("RecordedConfigDirs: %v", err)
-	}
-	if len(dirs) != 1 || dirs[0] != "/home/x/.claude-personal" {
-		t.Errorf("RecordedConfigDirs = %v, want [/home/x/.claude-personal]", dirs)
+	if dir != "/home/x/.claude-other" {
+		t.Errorf("config_dir = %q, want the recorded /home/x/.claude-other", dir)
 	}
 }
 

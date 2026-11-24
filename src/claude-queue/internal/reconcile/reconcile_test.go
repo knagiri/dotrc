@@ -11,30 +11,22 @@ import (
 	"github.com/knagiri/dotrc/src/claude-queue/internal/roster"
 )
 
-func tracked(ids ...string) []db.LiveSession {
-	out := make([]db.LiveSession, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, db.LiveSession{SessionID: id})
-	}
-	return out
-}
-
 func TestToClose(t *testing.T) {
 	cases := []struct {
 		name    string
-		tracked []db.LiveSession
+		tracked []string
 		live    []string
 		want    []string
 	}{
 		{
 			name:    "roster lists every tracked session",
-			tracked: tracked("a", "b"),
+			tracked: []string{"a", "b"},
 			live:    []string{"b", "a", "c"},
 			want:    nil,
 		},
 		{
 			name:    "sessions missing from the roster are closed, in tracked order",
-			tracked: tracked("a", "b", "c"),
+			tracked: []string{"a", "b", "c"},
 			live:    []string{"b"},
 			want:    []string{"a", "c"},
 		},
@@ -44,7 +36,7 @@ func TestToClose(t *testing.T) {
 			// closes. It is only an UNREADABLE roster that must not reach
 			// here -- Sweep returns before calling ToClose in that case.
 			name:    "an empty roster closes everything tracked",
-			tracked: tracked("a", "b"),
+			tracked: []string{"a", "b"},
 			live:    []string{},
 			want:    []string{"a", "b"},
 		},

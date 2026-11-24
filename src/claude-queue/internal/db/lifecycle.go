@@ -88,7 +88,7 @@ const DoneRetentionSec = 7 * 24 * 3600
 // done row is reopened, never switched to.
 func ListDoneRows(conn *sql.DB, maxAgeSec int64) ([]Row, error) {
 	rows, err := conn.Query(`
-		SELECT session_id, cwd, transcript_path, config_dir, kind, memo, done_at
+		SELECT session_id, cwd, transcript_path, kind, memo, done_at
 		FROM sessions
 		WHERE done_at IS NOT NULL AND done_at >= unixepoch() - ?
 		ORDER BY done_at DESC, session_id
@@ -100,7 +100,7 @@ func ListDoneRows(conn *sql.DB, maxAgeSec int64) ([]Row, error) {
 	var out []Row
 	for rows.Next() {
 		r := Row{EffectiveState: StateDone, RawState: StateDone}
-		if err := rows.Scan(&r.SessionID, &r.Cwd, &r.TranscriptPath, &r.ConfigDir, &r.Kind, &r.Memo, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.SessionID, &r.Cwd, &r.TranscriptPath, &r.Kind, &r.Memo, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		r.ActivityAt = r.CreatedAt
@@ -154,26 +154,16 @@ func ResolveSessionID(conn *sql.DB, prefix string) (string, error) {
 // it is open again, so it drops out of this list and keeps running.
 // Interactive sessions are not returned: their process is a REPL a human may
 // be looking at, and ending it is theirs to do.
-func DoneButRunning(conn *sql.DB) ([]LiveSession, error) {
-	rows, err := conn.Query(`
-		SELECT session_id, config_dir FROM sessions
+func DoneButRunning(conn *sql.DB) ([]string, error) {
+	ids, err := sessionIDs(conn, `
+		SELECT session_id FROM sessions
 		WHERE done_at IS NOT NULL AND terminated_at IS NULL AND kind = ?
 		ORDER BY started_at, session_id
 	`, KindBackground)
 	if err != nil {
 		return nil, fmt.Errorf("done but running: %w", err)
 	}
-	defer rows.Close()
-	var out []LiveSession
-	for rows.Next() {
-		var id string
-		var dir sql.NullString
-		if err := rows.Scan(&id, &dir); err != nil {
-			return nil, err
-		}
-		out = append(out, LiveSession{SessionID: id, ConfigDir: ConfigDirOf(dir)})
-	}
-	return out, rows.Err()
+	return ids, nil
 }
 
 // GC deletes the sessions (and their events and PR watches) whose work has been done for
