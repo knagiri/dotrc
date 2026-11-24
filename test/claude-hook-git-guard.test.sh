@@ -167,6 +167,94 @@ expect "stash: pop after a heredoc ends -> deny" deny "$so" $'cat <<-EOF\n\tgit 
 expect "stash: pop in a comment -> none" none "$so" "echo hi # x; git stash pop"
 expect "stash: deny beats ask in one line" deny "$sm" "git stash pop; git commit -m x"
 
+# Entries pushed without -m ("WIP on <branch>: ...").
+clone_with_remote "$tmp/s5" main
+wip_m="$tmp/s5/work"
+git -C "$wip_m" worktree add -q -b wipb "$tmp/s5/wt"
+echo a >>"$wip_m/init.txt"; git -C "$wip_m" stash -q
+expect "stash: WIP-on entry, own -> none" none "$wip_m" "git stash pop"
+expect "stash: WIP-on entry, other -> deny" deny "$tmp/s5/wt" "git stash pop"
+
+# Env assignments, wrappers, reserved words and pushd before git.
+expect "stash: env assignment before git -> deny" deny "$sm" "GIT_PAGER=cat git stash pop"
+expect "commit: env assignment before git -> ask" ask "$main" "FOO=1 git commit -m x"
+expect "stash: timeout wrapper -> deny" deny "$sm" "timeout 30 git stash pop"
+expect "stash: timeout -k wrapper -> deny" deny "$sm" "timeout -k 5 30 git stash pop"
+expect "stash: nice -n wrapper -> deny" deny "$sm" "nice -n 10 git stash pop"
+expect "stash: nice -10 wrapper -> deny" deny "$sm" "nice -10 git stash pop"
+expect "stash: nohup wrapper -> deny" deny "$sm" "nohup git stash pop"
+expect "stash: stdbuf wrapper -> deny" deny "$sm" "stdbuf -oL git stash pop"
+expect "stash: time wrapper -> deny" deny "$sm" "time git stash pop"
+expect "stash: command wrapper -> deny" deny "$sm" "command git stash pop"
+expect "stash: env wrapper -> deny" deny "$sm" "env X=1 git stash pop"
+expect "stash: env -u wrapper -> deny" deny "$sm" "env -u X git stash pop"
+expect "stash: xargs wrapper -> deny" deny "$sm" "echo x | xargs -n 1 git stash pop"
+expect "stash: if/then -> deny" deny "$sm" "if git stash pop; then :; fi"
+expect "stash: ! negation -> deny" deny "$sm" "! git stash pop"
+expect "stash: brace group -> deny" deny "$sm" "{ git stash pop; }"
+expect "stash: wrapper around own pop -> none" none "$sw" "timeout 30 git stash pop"
+expect "stash: pushd <wt> && pop (owner matches) -> none" none "$sm" "pushd $sw && git stash pop"
+expect "stash: pushd <main> && pop -> deny" deny "$sw" "pushd $sm && git stash pop"
+expect "stash: wrapped non-git command -> none" none "$sm" "timeout 30 ls"
+
+# deny wins even when the ask comes first.
+expect "stash: commit then pop -> deny" deny "$sm" "git commit -m x; git stash pop"
+
+# cd scoping: ( ) and $( ) restore the dir.
+clone_with_remote "$tmp/s6" main
+m6="$tmp/s6/work"
+git -C "$m6" worktree add -q -b feat6 "$tmp/s6/wt"
+w6="$tmp/s6/wt"
+echo a >>"$m6/init.txt"; git -C "$m6" stash push -q -m m6-entry
+expect "stash: subshell cd does not leak (own after) -> none" none "$m6" "(cd $w6); git stash pop"
+expect "stash: subshell cd does not leak (other after) -> deny" deny "$w6" "(cd $m6); git stash pop"
+expect "stash: \$(cd ...) does not leak -> deny" deny "$w6" "x=\$(cd $m6; pwd); git stash pop"
+expect "stash: cd inside subshell applies there -> none" none "$w6" "(cd $m6 && git stash pop)"
+expect "stash: cd -P <dir> follows the dir -> none" none "$w6" "cd -P $m6 && git stash pop"
+expect "stash: cd -- <dir> follows the dir -> none" none "$w6" "cd -- $m6 && git stash pop"
+expect "stash: -C given twice resolves both -> deny" deny "$tmp" "git -C $tmp/s6 -C wt stash pop"
+
+# A target dir that cannot be resolved fails closed.
+expect "stash: -C \"\$PWD\" -> deny" deny "$m6" 'git -C "$PWD" stash pop'
+expect "stash: -C \$(pwd) -> deny" deny "$m6" 'git -C $(pwd) stash pop'
+expect "stash: -C missing dir -> deny" deny "$m6" "git -C $tmp/nonexistent stash pop"
+expect "stash: cd \"\$X\" then pop (own) -> deny" deny "$m6" 'cd "$X" && git stash pop'
+expect "stash: cd missing dir then pop -> deny" deny "$m6" "cd $tmp/nonexistent && git stash pop"
+expect "stash: cd - then pop -> deny" deny "$m6" "cd - && git stash pop"
+expect "stash: unresolved dir, push -> none" none "$m6" 'git -C "$PWD" stash push -m x'
+expect "commit: unresolved -C dir -> none" none "$tmp/elsewhere" 'git -C "$PWD" commit -m x'
+
+# Branch names that collide with a tag name.
+clone_with_remote "$tmp/s7" main
+git -C "$tmp/s7/work" worktree add -q -b feat7 "$tmp/s7/wt"
+git -C "$tmp/s7/work" tag feat7 2>/dev/null
+echo a >>"$tmp/s7/wt/init.txt"; git -C "$tmp/s7/wt" stash push -q -m own
+expect "stash: branch with a same-named tag, own entry -> none" none "$tmp/s7/wt" "git stash pop"
+clone_with_remote "$tmp/s8" main
+git -C "$tmp/s8/work" tag main 2>/dev/null
+expect "commit: tag named like the integration branch -> ask" ask "$tmp/s8/work" "git commit -m x"
+
+# Arithmetic << is not a here-document.
+expect "stash: \$((1<<3)) then pop on the next line -> deny" deny "$sm" $'echo $((1<<3))\ngit stash pop'
+expect "stash: (( x<<3 )) then pop on the next line -> deny" deny "$sm" $'(( x<<3 ))\ngit stash pop'
+
+expect "stash: << with no delimiter is not a here-document -> deny" deny "$sm" $'echo a << \ngit stash pop'
+
+# Not stash-like / path forms / options with an argument.
+expect "stash: apply HEAD (not a stash entry) -> none" none "$sm" "git stash apply HEAD"
+expect "stash: /usr/bin/git -> deny" deny "$sm" "/usr/bin/git stash pop"
+expect "stash: --work-tree <dir> skipped -> deny" deny "$sm" "git --work-tree . stash pop"
+
+# cwd missing from the hook input: falls back to the process cwd.
+out="$(cd "$sm" && jq -n --arg c "git stash pop" '{tool_name:"Bash",tool_input:{command:$c}}' | "$src")"
+if [ -n "$out" ]; then echo "ok: stash: no cwd in input falls back to \$PWD"; else echo "FAIL: stash: no cwd fallback"; fail=1; fi
+
+# Typical commit heredoc; an odd number of double quotes in the body must not
+# swallow what follows.
+expect "commit: heredoc message via \$(cat <<EOF) -> ask" ask "$main" $'git commit -m "$(cat <<\'EOF\'\nfix thing\nEOF\n)"'
+expect "commit: heredoc with an unbalanced quote, then pop -> deny" deny "$sm" $'git commit -m "$(cat <<\'EOF\'\nsay "hi\nEOF\n)" && git stash pop'
+expect "commit: pop inside the heredoc body is data -> ask" ask "$main" $'git commit -m "$(cat <<\'EOF\'\ngit stash pop\nEOF\n)"'
+
 # clear with only own entries / with none.
 clone_with_remote "$tmp/s2" main
 echo a >>"$tmp/s2/work/init.txt"; git -C "$tmp/s2/work" stash push -q -m own
@@ -195,6 +283,19 @@ case "$reason" in
   *"'feat'"*'stash@{N}'*) echo "ok: stash: deny reason names the owner and stash@{N}" ;;
   *) echo "FAIL: stash: deny reason: $reason"; fail=1 ;;
 esac
+
+# The detached-HEAD hint must not send the agent to stash@{N}, which is still denied.
+reason="$(jq -n --arg c "git stash pop" --arg d "$d4" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' \
+  | "$src" | jq -r '.hookSpecificOutput.permissionDecisionReason')"
+case "$reason" in
+  *"branch を checkout してから撃つ"*) echo "ok: stash: detached deny hint says to check out a branch" ;;
+  *) echo "FAIL: stash: detached hint: $reason"; fail=1 ;;
+esac
+
+# The output carries the event name Claude Code expects.
+ev="$(jq -n --arg c "git stash pop" --arg d "$sm" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' \
+  | "$src" | jq -r '.hookSpecificOutput.hookEventName')"
+if [ "$ev" = PreToolUse ]; then echo "ok: output hookEventName is PreToolUse"; else echo "FAIL: hookEventName: $ev"; fail=1; fi
 
 # Not a Bash tool call -> nothing.
 out="$(jq -n --arg d "$sm" '{tool_name:"Edit",tool_input:{command:"git stash pop"},cwd:$d}' | "$src")"

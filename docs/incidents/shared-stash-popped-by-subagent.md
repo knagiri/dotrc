@@ -39,9 +39,19 @@ entry の message には積んだときの branch が `On <branch>: …` / `WIP 
 
 PreToolUse hook（matcher `Bash`）で、Bash tool のコマンド中の `git stash pop|apply|drop|branch|clear`
 を見て、対象 entry の branch が対象 dir の現在 branch と違えば deny する。git は同一 branch を
-2 つの worktree で同時に checkout させないので、branch が worktree（session）の識別子になる。
-持ち主が判定できない（detached HEAD）ときも deny に倒す。積む操作と閲覧は通す。hook は settings
-から読まれるので、subagent の tool call にも同じく効く。
+2 つの worktree で同時に checkout させないので、branch が worktree の識別子になる。
+持ち主が判定できない（detached HEAD）ときや、対象 dir を判定できない（`-C` / `cd` の引数が変数・
+`$(...)`・存在しないパス）ときも deny に倒す。積む操作と閲覧は通す。
+
+hooks docs（https://code.claude.com/docs/en/hooks）には、settings 由来の hook は subagent の中でも
+動き、subagent が tool を呼ぶと PreToolUse が main conversation と同じ設定で発火するとある。
+実機での確認は未了で、PR の人間確認項目に入れている。
+
+## 既知の限界
+
+識別子になるのは worktree であって session ではない。同じ worktree を共有する複数の session
+（main working tree の interactive session と spin-off した session、親と Agent tool の subagent）
+は同じ branch を持つので、互いの entry を区別せず通す。
 
 ## 反映先
 
