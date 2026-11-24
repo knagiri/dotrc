@@ -252,5 +252,6 @@ claude-queue watch [--idle-minutes <n>] [--dry-run]
 - 同じ timer の pass は、委譲先の branch から PR 番号を引いて記録もする（picker で PR 番号・branch 名から委譲 tree を引くため）。休眠とは独立で、gh が失敗してもその組を次の pass に回すだけ。
 - 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile・PR 監視・PR 番号の解決・停止をせず、pane の解決と表示中の判定までを行って対象を report する。ただし DB を開くことによる書き込みは止めないので、実データで確かめるときは [dotrc-deploy.md](./dotrc-deploy.md) §7 に従う。
 - 判定は推測を含むが、外れても失うのはプロセスだけで作業は残る。だから無人の timer で回してよい。逆に、作業を done にする判定は無人で回さない。
+- `systemd-user` の timer はもう 1 本、日次で観測 issue を束ねて委譲する `issue-crawl.timer` がある。こちらも claude の daemon を自分では起動せず、既に動いている daemon があるときだけ委譲する（詳細は `docs/design/agent-issue-workflow.md`）。
 
 実例: dotrc/docs/incidents/claude-queue-reboot-closes-wip.md

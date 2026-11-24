@@ -1,6 +1,6 @@
 ---
 name: implement-and-review
-description: worktree に委譲されたタスクを実装→merge で完遂する。HOW は委譲元で確定済みなので brainstorm せず、必要に応じて難度別の実装 subagent へ dispatch しつつ実装し、verification を経て pr-review-loop で review し、pr-automerge で自律 merge する。最後に（委譲プロンプトが内省スキップを明示しない限り）harness-from-retrospective で自己内省し、恒久ハーネスの候補を方針として提示する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
+description: worktree に委譲されたタスクを実装→merge で完遂する。HOW は委譲元で確定済みなので brainstorm せず、必要に応じて難度別の実装 subagent へ dispatch しつつ実装し、verification を経て pr-review-loop で review し、pr-automerge で自律 merge する。最後に（委譲プロンプトが内省スキップを明示しない限り）harness-from-retrospective で自己内省し、恒久ハーネスの候補を観測として起票する。delegate-to-worktree から渡されたプロンプト先頭の明示命令で起動される。
 ---
 
 # implement-and-review
@@ -216,14 +216,14 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    merge を見送った場合、`pr-automerge` が auto-merge 有効化に至らず停止した場合も、停止理由を問わず含む）、委譲プロンプトに
    自己内省をスキップする明示（例: 「harness-from-retrospective はスキップ」）が**無い限り**、
    `harness-from-retrospective` を呼ぶ。自分の作業を振り返り、恒久ハーネスに値する改善点を
-   方針として提示する（**提案のみ・無ければ no-op**）。承認・実装はしない — 人間が承認した
-   項目だけ後で `harness-from-feedback` が実装する。
+   観測 issue として起票する（**起票まで・無ければ no-op**）。実装はしない — 観測の消化は
+   `dot/claude/rules/issue-workflow.md` の経路に乗る。
 6. **委譲元への報告**: プロンプト末尾に `## 委譲元` 節（`報告先 name: <name>`）があるときは、
    次の 3 つの事象で SendMessage を送る。**送信に失敗しても無視して自分の終了処理を続ける**
    （委譲元の session が既に消えていることがある）。
 
-   - **完了**: PR URL と、review が収束したか・auto-merge を有効化できたか（見送ったならその理由）を 1〜3 行で。手順 5 の自己内省に提案が
-     あればその要点も添える（既定の background 委譲先は人間不在で走り、最終メッセージは
+   - **完了**: PR URL と、review が収束したか・auto-merge を有効化できたか（見送ったならその理由）を 1〜3 行で。手順 5 の自己内省で起票した
+     観測があればその URL も添える（既定の background 委譲先は人間不在で走り、最終メッセージは
      誰にも読まれないまま委譲元に閉じられるため、この報告が唯一の到達経路）。
    - **不足**: 手順 1 のとおり。質問を送って待機する。
    - **中断**: `pr-review-loop` が収束せず停止したとき、または `pr-automerge` が auto-merge に至らず
@@ -239,7 +239,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 - WHAT を勝手に広げない。委譲されたタスクの範囲で完遂する。
 - HOW を勝手に作り直さない。確定済みの設計に従う。
 - worktree ディレクトリ外への書き込みはしない（read-only 参照は可）。
-- 末尾の自己内省は**提案まで**。承認・実装・grant 記述はしない（実装は人間承認後の harness-from-feedback）。
+- 末尾の自己内省は**観測の起票まで**。実装・grant 記述はしない。
 - 承認の代行を委譲元に求めない。ブロックしたまま待つのが正しい振る舞い。
 - merge を見送る理由は、一般に review を見送る理由にならない。merge を見送るときも
   `pr-review-loop` は回し、見送った理由を報告する。review と merge を別 skill に分けたのは

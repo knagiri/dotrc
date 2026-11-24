@@ -96,8 +96,16 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    3. PR を出し、pr-review-loop で review、merge してよければ pr-automerge で merge
       （allowlist（grant）を含む場合はここを「PR を出し、pr-review-loop で review する。
       pr-automerge は呼ばない。人間の approve を待つ」に差し替える）
-   4. これはハーネスタスクなので、末尾の自己内省（harness-from-retrospective）はスキップする
+   4. PR を出したら、この指摘を観測として残す。本文を harness template の見出し
+      （やること（WHAT）/ 設計（HOW）/ 受け入れ確認 / 由来）で書き、
+      `gh-issue-file --global --kind harness --title <title> --body-file <path> --resolved-by <PR-URL>`
+      で起票する（close 済みで入る）。exit 3 なら具体名を除いて書き直す
+   5. これはハーネスタスクなので、末尾の自己内省（harness-from-retrospective）はスキップする
    ```
+
+   手順 4 の観測は、その場で直した指摘も直近 30 日の件数に数えさせるためにある。局所修正の後も
+   同じ系統の観測が増えるなら、それ自体が構造的な改善が要る信号になり、日次の crawler が
+   グループとして委譲する（`dot/claude/rules/issue-workflow.md`）。
 
 5. **起動**: `claude-worktree` を直接呼ぶ。branch は `harness/<slug>`、name は `harness-<slug>`
    （`[A-Za-z0-9_-]+`、pre-fetch した worktree 一覧と衝突しない名に）。
@@ -106,8 +114,9 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - グローバル（dotrc）: `claude-worktree --global --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
 
    **issue 起点で起こす場合**は branch / name を `issue-<N>-<slug>` にし、委譲プロンプトへ
-   「PR 本文に `Closes #<N>` を入れること」を明記する。起票そのものは `gh-issue-file` 経由で
-   行い、生の `gh issue create` は使わない（`dot/claude/rules/issue-workflow.md`）。
+   「PR 本文に `Closes #<N>` を入れること」を明記する（手順 4 の観測の起票は、issue 起点でも
+   行う）。起票は `gh-issue-file` 経由で行い、生の `gh issue create` は使わない
+   （`dot/claude/rules/issue-workflow.md`）。
 
 6. **報告して終了**（fire-and-forget）: `claude-worktree` の出力（worktree / branch / session /
    model / report-to / attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:

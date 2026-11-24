@@ -1,0 +1,23 @@
+# Run issue-crawl once a day. Each run is one pass and exits; nothing stays
+# resident.
+#
+# Persistent=true runs a pass at the next boot or login if the machine was off
+# at 05:00, so a missed day is made up rather than skipped.
+#
+# Passes do not overlap because systemd does not start a oneshot service
+# again while it is still activating.
+#
+# Enable with:
+#   loginctl enable-linger "$USER"
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now issue-crawl.timer
+
+[Unit]
+Description=issue-crawl daily
+
+[Timer]
+OnCalendar=*-*-* 05:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/knagiri/dotrc/src/claude-queue/internal/annotate"
+	"github.com/knagiri/dotrc/src/claude-queue/internal/daemonrunning"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/done"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/hook"
 	"github.com/knagiri/dotrc/src/claude-queue/internal/link"
@@ -23,6 +24,7 @@ var version = "dev"
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: claude-queue {hook <event>|status|picker|reconcile|watch|reset} [flags]")
 	fmt.Fprintln(os.Stderr, "       claude-queue link --parent <session-id> --child <short-id> [--repo <owner/repo>] [--branch <name>]")
+	fmt.Fprintln(os.Stderr, "       claude-queue daemon-running [--config-dir <dir>]  (exit 0 running, 1 not, 2 cannot tell)")
 	fmt.Fprintln(os.Stderr, "       claude-queue mark <session-id>")
 	fmt.Fprintln(os.Stderr, "       claude-queue done <session-id-or-prefix>")
 	fmt.Fprintln(os.Stderr, "       claude-queue reopen <session-id-or-prefix>")
@@ -59,6 +61,8 @@ func main() {
 		reconcile.Run(os.Args[2:])
 	case "watch":
 		watch.Run(os.Args[2:])
+	case "daemon-running":
+		os.Exit(daemonrunning.Run(os.Args[2:]))
 	case "reset":
 		reset.Run(os.Args[2:])
 	case "link":

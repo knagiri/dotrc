@@ -2,7 +2,7 @@
 name: harness
 about: 恒久ハーネス（rule / CLAUDE.md / lint / test / hook）の追加・修正
 title: ''
-labels: agent-task, kind/harness, status/triage
+labels: agent-task, kind/harness, observation
 assignees: ''
 ---
 

@@ -121,6 +121,7 @@ prompt injection / 権限バイパスの経路になる。
 | PR 作成 | `gh-pr-create [flags]` | `gh pr create`（フラグは素通し） | `Bash(gh-pr-create *)` |
 | PR 本文の更新 | `gh-pr-edit-body <PR> <body-file>` | `gh pr edit <PR> --body-file <body-file>` のみ。本文を置き換える（追記は `gh pr view <PR> --json body` で現本文を取って編集したファイルを渡す） | `Bash(gh-pr-edit-body *)` |
 | issue の `status/ready → status/delegated` | `gh-issue-mark-delegated <issue>` | `gh issue view <issue> --json labels` で `status/*` がちょうど `status/ready` 1 個であることを確かめてから `gh issue edit <issue> --remove-label status/ready --add-label status/delegated`。それ以外の遷移は拒否する | `Bash(gh-issue-mark-delegated *)` |
+| 観測グループの操作（作成・sub-issue の付け外し・本文更新・close / reopen・`group/*` の付け替え） | `gh-issue-group <subcommand> ...` | 対象を `gh issue view --json state,author,parent,labels` で読み、author が repo owner で操作に合う label（`observation` / `group`）を持つときだけ（attach は既に親を持つ観測を拒否する）、操作ごとに固定した `gh issue create` / `edit` / `close` / `reopen` を撃つ | `Bash(gh-issue-group *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>`、clean 拒否のときだけ `gh pr merge --merge <PR>` へ fallback | `Bash(gh-automerge *)` |
 | auto-merge の一時停止（既存 PR へ修正を積む間。`implement-and-review` 手順 4） | `gh-automerge --disable <PR>` | `gh pr view --json state,autoMergeRequest` で読み、merge 済み / close 済みなら exit 3、既に無効なら何もせず exit 0、有効なら `gh pr merge --disable-auto <PR>` を撃って無効になったことを読み直して確かめる | `Bash(gh-automerge *)`（同上） |
 
