@@ -23,18 +23,18 @@ type Deps struct {
 	WindowOf func(pane string) (string, error)
 	// VisibleWindows returns the window ids attached clients are showing.
 	VisibleWindows func() (map[string]bool, error)
-	// End SIGTERMs pid and waits for cfgDir's roster to drop sessionID; an
-	// error means it is still listed, or the signal failed.
-	End func(pid int, sessionID, cfgDir string) error
+	// End SIGTERMs pid and waits for the roster to drop sessionID; an error
+	// means it is still listed, or the signal failed.
+	End func(pid int, sessionID string) error
 	// PaneExists reports whether a pane is still there.
 	PaneExists func(pane string) bool
 	// KillPane closes a pane (and its window, when it is the last pane).
 	KillPane func(pane string) error
-	// Stop stops a background session (`claude stop`) under its config dir.
-	Stop func(dir, sessionID string) error
-	// List reads the config dir's `claude agents` listing. check calls it again
-	// right before acting, because Candidates' read can be minutes old.
-	List func(dir string) ([]roster.Agent, error)
+	// Stop stops a background session (`claude stop`).
+	Stop func(sessionID string) error
+	// List reads the `claude agents` listing. check calls it again right
+	// before acting, because Candidates' read can be minutes old.
+	List func() ([]roster.Agent, error)
 	// LatestEvent reads the session's latest ledger event (state, unix time;
 	// found false when there is none). check compares it with the idle_done
 	// Candidates saw, because a session that ran a whole turn since then is
@@ -53,8 +53,8 @@ func RealDeps(conn *sql.DB) Deps {
 		End:            sessionproc.End,
 		PaneExists:     mux.PaneExists,
 		KillPane:       multiplexer.KillPane,
-		Stop:           reconcile.StopIn,
-		List:           roster.ListIn,
+		Stop:           reconcile.Stop,
+		List:           roster.List,
 		LatestEvent: func(id string) (string, int64, bool, error) {
 			return db.LatestEvent(conn, id)
 		},
@@ -76,7 +76,7 @@ func IsSkip(err error) bool {
 // Hibernate stops c's process, leaving its work open.
 //
 // A background session is stopped with `claude stop`. An interactive one is
-// SIGTERM'd and, once its config dir's roster no longer lists it, its pane is
+// SIGTERM'd and, once the roster no longer lists it, its pane is
 // closed: a resume opens a fresh window, so the shell the pane falls back to
 // would only be clutter. The pane is resolved from the process, never from the
 // ledger, whose recorded id can belong to a since-replaced tmux server.
@@ -86,8 +86,8 @@ func IsSkip(err error) bool {
 //     another tmux server): closing it would leave nothing for the person to
 //     find, and stopping it without the pane would leave an empty shell
 //     behind in some unknown place;
-//   - the session is no longer listed exactly once by its config dir with
-//     status idle. Candidates judged that some time ago, and each interactive
+//   - the session is no longer listed exactly once in the roster with status
+//     idle. Candidates judged that some time ago, and each interactive
 //     stop before this one can wait up to 10s, so the session may have started
 //     a turn since; a listing that cannot be read is a skip too;
 //   - the session's latest ledger event is no longer the idle_done Candidates
@@ -106,9 +106,9 @@ func Hibernate(c Candidate, deps Deps) error {
 		return err
 	}
 	if c.Kind == roster.KindBackground {
-		return deps.Stop(c.ConfigDir, c.SessionID)
+		return deps.Stop(c.SessionID)
 	}
-	if err := deps.End(c.PID, c.SessionID, c.ConfigDir); err != nil {
+	if err := deps.End(c.PID, c.SessionID); err != nil {
 		return fmt.Errorf("%w; pane %s left open", err, pane)
 	}
 	if deps.PaneExists(pane) {
@@ -132,13 +132,13 @@ func Check(c Candidate, deps Deps) error {
 func check(c Candidate, deps Deps) (string, error) {
 	// Re-read the status: Candidates' read is older by every earlier stop in
 	// the same pass. Applies to both kinds, ahead of the kind switch.
-	agents, err := deps.List(c.ConfigDir)
+	agents, err := deps.List()
 	if err != nil {
-		return "", &SkipError{Reason: fmt.Sprintf("cannot re-read %s to confirm the session is idle: %v", c.ConfigDir, err)}
+		return "", &SkipError{Reason: fmt.Sprintf("cannot re-read the roster to confirm the session is idle: %v", err)}
 	}
 	a, n := agentFor(agents, c.SessionID)
 	if n != 1 {
-		return "", &SkipError{Reason: fmt.Sprintf("session is listed %d times in %s on re-check, not once", n, c.ConfigDir)}
+		return "", &SkipError{Reason: fmt.Sprintf("session is listed %d times in the roster on re-check, not once", n)}
 	}
 	if a.Status != roster.StatusIdle {
 		return "", &SkipError{Reason: fmt.Sprintf("status is %q on re-check, not idle", a.Status)}

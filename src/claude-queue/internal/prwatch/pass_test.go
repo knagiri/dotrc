@@ -62,7 +62,7 @@ func (w *world) deps() Deps {
 			FindPane:       func(int) (string, bool) { return "%7", true },
 			WindowOf:       func(string) (string, error) { return "@3", nil },
 			VisibleWindows: func() (map[string]bool, error) { return map[string]bool{"@3": w.visible}, nil },
-			End: func(pid int, _, _ string) error {
+			End: func(pid int, _ string) error {
 				w.ended = append(w.ended, pid)
 				return nil
 			},
@@ -71,11 +71,11 @@ func (w *world) deps() Deps {
 				w.killed = append(w.killed, p)
 				return nil
 			},
-			Stop: func(_, id string) error {
+			Stop: func(id string) error {
 				w.stopped = append(w.stopped, id)
 				return nil
 			},
-			List: func(string) ([]roster.Agent, error) { return w.agents, nil },
+			List: func() ([]roster.Agent, error) { return w.agents, nil },
 			LatestEvent: func(string) (string, int64, bool, error) {
 				return w.latest, now.Unix() - 600, w.latest != "", nil
 			},
@@ -97,7 +97,7 @@ func (w *world) deps() Deps {
 			return "main", nil
 		},
 		TmuxServerRunning: func() bool { return !w.noTmux },
-		DaemonRunning:     func(string) (bool, error) { return !w.noDaemon, nil },
+		DaemonRunning:     func() (bool, error) { return !w.noDaemon, nil },
 		Run: func(argv, env []string, _ string) error {
 			w.ran = append(w.ran, argv)
 			w.ranEnv = append(w.ranEnv, env)
@@ -151,9 +151,6 @@ func TestDeliver_GoneInteractiveOpensWindow(t *testing.T) {
 	}
 	if slices.Contains(w.asked, "last") {
 		t.Errorf("looked past the repo's own session: %v", w.asked)
-	}
-	if !slices.Contains(argv, "CLAUDE_CONFIG_DIR="+cfg) {
-		t.Errorf("the window does not run under the recorded config dir: %q", argv)
 	}
 	cmd := argv[len(argv)-1]
 	if !strings.Contains(cmd, "'claude' '--resume' '"+sid+"' 'PR has news'") {
@@ -224,8 +221,48 @@ func TestDeliver_GoneBackground(t *testing.T) {
 	if want := []string{"claude", "--bg", "--resume", sid, "m"}; !slices.Equal(w.ran[0], want) {
 		t.Errorf("argv = %q", w.ran[0])
 	}
-	if !slices.Contains(w.ranEnv[0], "CLAUDE_CONFIG_DIR="+cfg) {
-		t.Errorf("env lacks the config dir")
+}
+
+// A resume runs under the environment the pass inherited: a CLAUDE_CONFIG_DIR
+// it carries reaches the launch unchanged, and the launch neither drops it nor
+// sets another one in its place.
+func TestDeliver_InheritsConfigDir(t *testing.T) {
+	const inherited = "/home/x/.claude-inherited"
+	t.Setenv("CLAUDE_CONFIG_DIR", inherited)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The ledger rows the pass reads may still carry a config dir from before;
+	// none of them may decide the launch's environment.
+	for _, recorded := range []string{cfg, filepath.Join(home, ".claude")} {
+		for _, kind := range []string{db.KindBackground, db.KindInteractive} {
+			w := &world{}
+			p := pin(t)
+			p.Kind = kind
+			p.ConfigDir = recorded
+			if err := Deliver(p, "m", w.deps()); err != nil {
+				t.Fatalf("%s/%s: %v", recorded, kind, err)
+			}
+			if len(w.ran) != 1 {
+				t.Fatalf("%s/%s: ran %q", recorded, kind, w.ran)
+			}
+			var got []string
+			for _, kv := range w.ranEnv[0] {
+				if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+					got = append(got, kv)
+				}
+			}
+			if want := []string{"CLAUDE_CONFIG_DIR=" + inherited}; !slices.Equal(got, want) {
+				t.Errorf("%s/%s: env CLAUDE_CONFIG_DIR entries = %q, want %q", recorded, kind, got, want)
+			}
+			for _, a := range w.ran[0] {
+				if strings.Contains(a, "CLAUDE_CONFIG_DIR") {
+					t.Errorf("%s/%s: the launch overrides the inherited config dir: %q", recorded, kind, w.ran[0])
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -236,7 +273,7 @@ func TestDeliver_RunningInteractiveStoppedThenResumed(t *testing.T) {
 	var order []string
 	d := w.deps()
 	end, kill, run := d.Hibernate.End, d.Hibernate.KillPane, d.Run
-	d.Hibernate.End = func(pid int, a, b string) error { order = append(order, "end"); return end(pid, a, b) }
+	d.Hibernate.End = func(pid int, a string) error { order = append(order, "end"); return end(pid, a) }
 	d.Hibernate.KillPane = func(pn string) error { order = append(order, "kill"); return kill(pn) }
 	d.Run = func(a, e []string, dir string) error { order = append(order, "run"); return run(a, e, dir) }
 	p := pin(t)
@@ -779,7 +816,7 @@ func TestDeliver_NoHostSkipped(t *testing.T) {
 func TestDeliver_DaemonGoneAfterStop(t *testing.T) {
 	w := &world{latest: "idle_done", agents: []roster.Agent{{SessionID: sid, PID: stray, Kind: roster.KindBackground, Status: roster.StatusIdle}}}
 	d := w.deps()
-	d.DaemonRunning = func(string) (bool, error) { return len(w.stopped) == 0, nil }
+	d.DaemonRunning = func() (bool, error) { return len(w.stopped) == 0, nil }
 	p := pin(t)
 	p.Gone = false
 	err := Deliver(p, "m", d)

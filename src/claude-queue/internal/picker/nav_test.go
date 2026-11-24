@@ -64,7 +64,7 @@ func (f *navFixture) walk(t *testing.T, step int, at string) (string, string) {
 	f.switched = nil
 	moved, err := walkHistory(f.conn, step, paneOf(at), navDeps{
 		Mux:    f.mux,
-		List:   func(string) ([]roster.Agent, error) { return f.agents, nil },
+		List:   func() ([]roster.Agent, error) { return f.agents, nil },
 		Switch: func(p string) error { f.switched = append(f.switched, p); return nil },
 	})
 	if err != nil {
@@ -168,7 +168,7 @@ func TestWalkHistoryEmpty(t *testing.T) {
 		var switched []string
 		moved, err := walkHistory(f.conn, step, paneOf("A"), navDeps{
 			Mux:    f.mux,
-			List:   func(string) ([]roster.Agent, error) { return f.agents, nil },
+			List:   func() ([]roster.Agent, error) { return f.agents, nil },
 			Switch: func(p string) error { switched = append(switched, p); return nil },
 		})
 		if moved || err != nil || len(switched) != 0 {

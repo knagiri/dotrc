@@ -76,12 +76,28 @@ func TestDaemonRunning_RealProc(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
 	write(start)
-	if got, err := DaemonRunning(cfg); err != nil || !got {
+	if got, err := DaemonRunning(); err != nil || !got {
 		t.Errorf("own start time: %v, %v", got, err)
 	}
 	write(start + "0")
-	if got, err := DaemonRunning(cfg); err != nil || got {
+	if got, err := DaemonRunning(); err != nil || got {
 		t.Errorf("wrong start time: %v, %v", got, err)
+	}
+}
+
+// The lock is looked up where claude itself keeps it: $CLAUDE_CONFIG_DIR, or
+// ~/.claude when that is unset or empty.
+func TestConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/from-env")
+	if got := configDir(); got != "/from-env" {
+		t.Errorf("env: configDir = %q", got)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if got, want := configDir(), filepath.Join(home, ".claude"); got != want {
+		t.Errorf("default: configDir = %q, want %q", got, want)
 	}
 }

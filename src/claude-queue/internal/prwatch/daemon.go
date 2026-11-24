@@ -11,10 +11,11 @@ import (
 	"strings"
 )
 
-// DaemonRunning reports whether the claude daemon of configDir is running,
-// without starting one.
+// DaemonRunning reports whether the claude daemon is running, without starting
+// one. The daemon is the one of the config dir claude itself resolves for this
+// process's environment (configDir).
 //
-// The daemon writes <configDir>/daemon.lock with its pid and procStart, the
+// The daemon writes <config dir>/daemon.lock with its pid and procStart, the
 // start time /proc/<pid>/stat gives in field 22 (measured against Claude Code
 // 2.1.310: the two agree for a live supervisor). Neither the file nor the pid
 // is trusted on its own: a lock a daemon left behind could name a pid since
@@ -24,8 +25,21 @@ import (
 // Asking claude instead does not answer the question: `claude agents --json`
 // starts no daemon, but with none running it prints [] and exits 0 (measured
 // for hibernation), so an empty answer does not say whether one is running.
-func DaemonRunning(configDir string) (bool, error) {
-	return daemonRunning(configDir, "/proc")
+func DaemonRunning() (bool, error) {
+	return daemonRunning(configDir(), "/proc")
+}
+
+// configDir is the config dir claude resolves from the environment:
+// $CLAUDE_CONFIG_DIR when set and non-empty, ~/.claude otherwise.
+func configDir() string {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".claude"
+	}
+	return filepath.Join(home, ".claude")
 }
 
 func daemonRunning(configDir, proc string) (bool, error) {

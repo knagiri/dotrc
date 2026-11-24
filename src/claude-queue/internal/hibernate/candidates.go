@@ -44,7 +44,6 @@ func Minutes(d time.Duration) string {
 // Candidate is a session that passed every gate and may be stopped.
 type Candidate struct {
 	SessionID string
-	ConfigDir string
 	// Kind is the roster's kind (roster.KindInteractive / KindBackground): it
 	// decides how the session is stopped.
 	Kind string
@@ -78,9 +77,9 @@ type Skip struct {
 //   - its latest event is idle_done, at least idle old. The ledger is the only
 //     record of WHEN the turn ended; the roster has no timestamp for it.
 //
-//   - its own config dir's roster lists it with status idle. A dir whose roster
-//     cannot be read leaves its sessions alone: an unreadable roster is no
-//     evidence of anything.
+//   - the roster lists it once, with status idle. A roster that cannot be read
+//     leaves every session alone: an unreadable roster is no evidence of
+//     anything.
 //
 //   - the last assistant turn of its transcript sent no SendMessage. A delegate
 //     that asked its delegator a question also sits at idle, and stopping it
@@ -101,7 +100,7 @@ type Skip struct {
 //
 // A pin does not hold a session back. A session waiting on something external
 // is exactly the one whose process has nothing to do until that resolves.
-func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir string) ([]roster.Agent, error), lastTurnSendsMessage func(transcriptPath string) (bool, error)) ([]Candidate, []Skip, error) {
+func Candidates(conn *sql.DB, now int64, idle time.Duration, list func() ([]roster.Agent, error), lastTurnSendsMessage func(transcriptPath string) (bool, error)) ([]Candidate, []Skip, error) {
 	rows, err := db.ListRows(conn, db.ListOpts{ShowWorking: true})
 	if err != nil {
 		return nil, nil, err
@@ -119,22 +118,19 @@ func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir strin
 		return nil, nil, err
 	}
 
-	rosters := map[string][]roster.Agent{}
-	unreadable := map[string]error{}
-	read := func(dir string) ([]roster.Agent, error) {
-		if err, ok := unreadable[dir]; ok {
-			return nil, err
+	// The roster is read at most once per call, and only when some session
+	// gets as far as needing it.
+	var (
+		rosterRead bool
+		agents     []roster.Agent
+		rosterErr  error
+	)
+	read := func() ([]roster.Agent, error) {
+		if !rosterRead {
+			agents, rosterErr = list()
+			rosterRead = true
 		}
-		if agents, ok := rosters[dir]; ok {
-			return agents, nil
-		}
-		agents, err := list(dir)
-		if err != nil {
-			unreadable[dir] = err
-			return nil, err
-		}
-		rosters[dir] = agents
-		return agents, nil
+		return agents, rosterErr
 	}
 
 	var cands []Candidate
@@ -160,22 +156,21 @@ func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir strin
 			skip(id, "%d delegate(s) still running with open work (their reports would have no one to land on)", n)
 			continue
 		}
-		dir := db.ConfigDirOf(r.ConfigDir)
-		agents, err := read(dir)
+		agents, err := read()
 		if err != nil {
-			skip(id, "roster of %s unreadable: %v", dir, err)
+			skip(id, "roster unreadable: %v", err)
 			continue
 		}
 		a, n := agentFor(agents, id)
 		switch {
 		case n == 0:
 			// reconcile closes these; nothing is running to stop.
-			skip(id, "not in the roster of %s", dir)
+			skip(id, "not in the roster")
 			continue
 		case n > 1:
 			// Which pid to stop would be a guess, and reconcile does not
 			// close it: the session is running.
-			skip(id, "listed %d times in the roster of %s", n, dir)
+			skip(id, "listed %d times in the roster", n)
 			continue
 		}
 		if a.Status != roster.StatusIdle {
@@ -204,7 +199,6 @@ func Candidates(conn *sql.DB, now int64, idle time.Duration, list func(dir strin
 		}
 		cands = append(cands, Candidate{
 			SessionID:      id,
-			ConfigDir:      dir,
 			Kind:           a.Kind,
 			Pane:           r.TmuxPane.String,
 			Cwd:            r.Cwd.String,

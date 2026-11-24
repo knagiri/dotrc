@@ -73,20 +73,18 @@ const (
 	pollInterval = 500 * time.Millisecond
 )
 
-// End asks pid to exit and waits for cfgDir's roster to stop listing
-// sessionID.
+// End asks pid to exit and waits for the roster to stop listing sessionID.
 //
 // SIGTERM only, never SIGKILL: a session that ignores the signal is a session
 // still holding its transcript, and forcing it out risks losing the very
 // conversation a later resume would recover. Giving up is the conservative
 // answer -- the process and the transcript stay intact for a person to decide
 // about.
-func End(pid int, sessionID, cfgDir string) error {
+func End(pid int, sessionID string) error {
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		return fmt.Errorf("SIGTERM to pid %d: %w", pid, err)
 	}
-	list := func() ([]roster.Agent, error) { return roster.ListIn(cfgDir) }
-	if !WaitGone(sessionID, list, func() { time.Sleep(pollInterval) }, pollAttempts) {
+	if !WaitGone(sessionID, roster.List, func() { time.Sleep(pollInterval) }, pollAttempts) {
 		return fmt.Errorf("session %s is still in the roster after SIGTERM to pid %d", short(sessionID), pid)
 	}
 	return nil

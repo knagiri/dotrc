@@ -30,8 +30,8 @@ func recordJump(conn *sql.DB, originPane, sessionID string) {
 type navDeps struct {
 	// Mux answers the pane lookups reachablePane makes.
 	Mux multiplexer.Multiplexer
-	// List reads the roster of a config dir (roster.ListIn).
-	List func(dir string) ([]roster.Agent, error)
+	// List reads the roster (roster.List).
+	List func() ([]roster.Agent, error)
 	// Switch moves the client to pane.
 	Switch func(pane string) error
 }
@@ -60,23 +60,27 @@ func walkHistory(conn *sql.DB, step int, curPane string, d navDeps) (bool, error
 	if step < 0 && cur != hist[idx].SessionID {
 		i = idx
 	}
-	rosters := map[string][]roster.Agent{}
-	rosterErr := map[string]error{}
+	// The roster is read at most once per walk, and only when some entry gets
+	// as far as needing it.
+	var (
+		agents     []roster.Agent
+		rosterErr  error
+		rosterRead bool
+	)
 	for ; i >= 0 && i < len(hist); i += step {
 		sessionID := hist[i].SessionID
-		ledgerPane, dir, found, err := db.NavTarget(conn, sessionID)
+		ledgerPane, _, found, err := db.NavTarget(conn, sessionID)
 		if err != nil {
 			return false, err
 		}
 		if !found {
 			continue
 		}
-		agents, seen := rosters[dir]
-		if !seen {
-			agents, rosterErr[dir] = d.List(dir)
-			rosters[dir] = agents
+		if !rosterRead {
+			agents, rosterErr = d.List()
+			rosterRead = true
 		}
-		pane := reachablePane(d.Mux, agents, sessionID, ledgerPane, rosterErr[dir] == nil)
+		pane := reachablePane(d.Mux, agents, sessionID, ledgerPane, rosterErr == nil)
 		if pane == "" || pane == curPane {
 			continue
 		}
@@ -127,7 +131,7 @@ func RunNav(args []string) {
 	}
 	moved, err := walkHistory(conn, step, curPane, navDeps{
 		Mux:    mux,
-		List:   roster.ListIn,
+		List:   roster.List,
 		Switch: func(p string) error { return multiplexer.SwitchClient(*client, p) },
 	})
 	switch {

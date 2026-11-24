@@ -55,7 +55,7 @@ func (c *calls) deps(hibernateErr error) Deps {
 			c.sweeps++
 			return reconcile.Result{Closed: 1}, nil
 		},
-		List: func(string) ([]roster.Agent, error) {
+		List: func() ([]roster.Agent, error) {
 			return []roster.Agent{
 				{SessionID: "idleidle-1", PID: 1 << 30, Kind: roster.KindBackground, Status: roster.StatusIdle},
 				{SessionID: "busybusy-1", PID: 1 << 30, Kind: roster.KindBackground, Status: "busy"},
