@@ -40,7 +40,7 @@ entry の message には積んだときの branch が `On <branch>: …` / `WIP 
 PreToolUse hook（matcher `Bash`）で、Bash tool のコマンド中の `git stash pop|apply|drop|branch|clear`
 を見て、対象 entry の branch が対象 dir の現在 branch と違えば deny する。git は同一 branch を
 2 つの worktree で同時に checkout させないので、branch が worktree の識別子になる。
-持ち主が判定できない（detached HEAD）ときや、対象 dir を判定できない（`-C` の引数が変数・
+持ち主が判定できない（detached HEAD、または entry の message から branch を読めない）ときや、対象 dir を判定できない（`-C` の引数が変数・
 `$(...)`・バッククォート・存在しないパス）ときも deny に倒す。積む操作と閲覧は通す。コマンド文字列の検出は
 `;` `&&` `||` `|` 改行で素朴に分割して各部分の先頭の git を見るだけで、quote や `cd` は
 解釈しない。誤検知（quote 内の文字列を拾う等）でも何も取られず、deny になるのは git が持ち主を他 branch と

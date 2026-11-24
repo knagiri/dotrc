@@ -32,10 +32,11 @@
 #          refs/remotes/origin/HEAD points at; `main` when that is unset)
 #       3. a remote named origin exists
 #       4. HEAD exists (the first commit of a new repo has nowhere else to go)
-#     When the -C value cannot be resolved (see above) the commit check uses
-#     the dir as it stands without that -C, usually the cwd; it does not fall
-#     to ask, so a delegated session's `git -C "$WT" commit` is not frozen on
-#     an approval prompt.
+#     When the -C value contains $ or a backquote the commit check uses the
+#     dir as it stands without that -C, usually the cwd. When it names a dir
+#     that does not exist the commit is not checked and passes (git itself
+#     fails there). Neither falls to ask, so a delegated session's
+#     `git -C "$WT" commit` is not frozen on an approval prompt.
 #
 # Detection is deliberately naive: the aim is catching accidental calls, not an
 # adversary. The command string is cut into parts on ; && || | and newlines,
