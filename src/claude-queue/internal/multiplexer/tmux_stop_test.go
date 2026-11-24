@@ -8,7 +8,7 @@ import (
 // A session created from the watch pass would get the service's environment
 // through update-environment, so the detached open only ever adds a window.
 func TestDetachedOpenArgs_NeverCreatesSession(t *testing.T) {
-	got := DetachedOpenArgs("s", "w", "/c", map[string]string{"K": "v"}, []string{"claude"})
+	got := DetachedOpenArgs("s", "w", "/c", []string{"claude"})
 	if slices.Contains(got, "new-session") || got[0] != "new-window" {
 		t.Errorf("got %v, want a new-window and no new-session", got)
 	}
@@ -37,7 +37,7 @@ func TestLastAttached(t *testing.T) {
 // exists, so the delivery would "succeed" without starting claude. The
 // detached open for an existing session must therefore never carry -S.
 func TestDetachedOpenArgs_ExistingSessionHasNoS(t *testing.T) {
-	got := DetachedOpenArgs("s", "w", "/c", nil, []string{"claude"})
+	got := DetachedOpenArgs("s", "w", "/c", []string{"claude"})
 	if got[0] != "new-window" || got[1] != "-d" {
 		t.Errorf("got %v, want new-window -d ...", got)
 	}

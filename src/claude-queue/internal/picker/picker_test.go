@@ -656,7 +656,7 @@ func (f *fakeMux) CurrentPane() string        { return "" }
 func (f *fakeMux) RefreshStatus()             {}
 func (f *fakeMux) Switch(target string) error { return nil }
 
-func (f *fakeMux) OpenSession(name, cwd, window, originPane string, env map[string]string, a []string) error {
+func (f *fakeMux) OpenSession(name, cwd, window, originPane string, a []string) error {
 	return nil
 }
 

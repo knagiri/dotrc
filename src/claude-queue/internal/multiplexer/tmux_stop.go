@@ -124,9 +124,9 @@ func lastAttached(out string) (string, error) {
 //
 // The names are sanitized here for the same reason OpenSession does it: every
 // tmux target built from them has to agree on one spelling.
-func DetachedOpenArgs(name, window, cwd string, env map[string]string, argv []string) []string {
+func DetachedOpenArgs(name, window, cwd string, argv []string) []string {
 	name, window = sanitizeSessionName(name), sanitizeWindowName(window)
-	args := newWindowArgs(name, window, cwd, "", env, argv)
+	args := newWindowArgs(name, window, cwd, "", argv)
 	i := slices.Index(args, "-S")
 	return slices.Concat([]string{args[0], "-d"}, args[1:i], args[i+1:])
 }

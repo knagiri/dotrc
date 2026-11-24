@@ -176,7 +176,7 @@ func Deliver(p db.PRWatch, msg string, deps Deps) error {
 		name = last
 	}
 	launch := []string{"claude", "--resume", p.SessionID, msg}
-	tmux := append([]string{"tmux"}, multiplexer.DetachedOpenArgs(name, deps.WindowName(p.TranscriptPath, p.SessionID), p.Cwd, nil, launch)...)
+	tmux := append([]string{"tmux"}, multiplexer.DetachedOpenArgs(name, deps.WindowName(p.TranscriptPath, p.SessionID), p.Cwd, launch)...)
 	return deps.Run(tmux, os.Environ(), p.Cwd)
 }
 

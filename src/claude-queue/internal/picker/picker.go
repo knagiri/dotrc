@@ -671,7 +671,7 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 		// a failed window open says nothing about whether the session is alive,
 		// and the manual command still works.
 		argv := []string{"claude", "attach", act.Short}
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), originPane, nil, argv); err != nil {
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "attach"), originPane, argv); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: %s\n", err, strings.Join(argv, " "))
 			return
 		}
@@ -688,7 +688,7 @@ func run(args []string, stdout io.Writer, sweep func(*sql.DB), fzf func(input st
 			}
 		}
 		argv := []string{"claude", "--resume", act.Resume}
-		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), originPane, nil, argv); err != nil {
+		if err := mux.OpenSession(names.name(act.Cwd), act.Cwd, windowNameFor(transcript, sessionID, "resume"), originPane, argv); err != nil {
 			fmt.Fprintf(os.Stderr, "open session failed: %v\nrun: cd %s && %s\n", err, act.Cwd, strings.Join(argv, " "))
 			return
 		}
