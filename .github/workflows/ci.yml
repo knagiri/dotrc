@@ -65,6 +65,7 @@ jobs:
             bin/git-set-commit-sign \
             bin/lib/claude-configdir.sh \
             bin/lib/gh-mise.sh \
+            githooks/post-merge \
             test/claude-digest.test.sh \
             test/claude-review.test.sh \
             test/claude-spinoff.test.sh \
@@ -74,6 +75,7 @@ jobs:
             test/gh-issue-file.test.sh \
             test/gh-wrappers.test.sh \
             test/git-reap-gone.test.sh \
+            test/post-merge-hook.test.sh \
             test/lib/sandbox.sh \
             test/sandbox-usage.test.sh \
             test/skill-permissions.test.sh

@@ -98,6 +98,11 @@ linked worktree で作業するため、worktree 側で `make install` しても
 main の working tree）側で再ビルドするか、worktree の変更をそちらへ merge / pull してから
 再ビルドする。
 
+`bin/deploy.sh` は `githooks/post-merge` を checkout の hooks dir（`git rev-parse --git-path hooks`）へ
+symlink し、merge（`pull.rebase=false` の pull を含む）で `src/claude-queue` に差分が入れば
+その checkout で `make build` が走る。rebase pull・Go の無い環境・hook 未導入の checkout では
+走らないので、そこでは下の手順で再ビルドする。
+
 **linked worktree で作業している agent は、この再ビルドを checkout を跨いで自分で行わない。**
 別 checkout の `bin/` への書き込みは worktree のスコープ外であり（`worktree-scope.md` §2）、
 `cd` / `git -C` で checkout を渡り歩いて回避するのも承認プロンプトで詰まる
