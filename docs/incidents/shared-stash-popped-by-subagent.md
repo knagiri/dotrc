@@ -40,8 +40,11 @@ entry の message には積んだときの branch が `On <branch>: …` / `WIP 
 PreToolUse hook（matcher `Bash`）で、Bash tool のコマンド中の `git stash pop|apply|drop|branch|clear`
 を見て、対象 entry の branch が対象 dir の現在 branch と違えば deny する。git は同一 branch を
 2 つの worktree で同時に checkout させないので、branch が worktree の識別子になる。
-持ち主が判定できない（detached HEAD）ときや、対象 dir を判定できない（`-C` / `cd` の引数が変数・
-`$(...)`・存在しないパス）ときも deny に倒す。積む操作と閲覧は通す。
+持ち主が判定できない（detached HEAD）ときや、対象 dir を判定できない（`-C` の引数が変数・
+`$(...)`・存在しないパス）ときも deny に倒す。積む操作と閲覧は通す。コマンド文字列の検出は
+`;` `&&` `||` `|` 改行で素朴に分割して各部分の先頭の git を見るだけで、quote や `cd` は
+解釈しない。誤検知しても stash は git に持ち主を問うてから判定するので、deny になるのは
+本当に他 branch の entry を取るときだけである。
 
 hooks docs（https://code.claude.com/docs/en/hooks）には、settings 由来の hook は subagent の中でも
 動き、subagent が tool を呼ぶと PreToolUse が main conversation と同じ設定で発火するとある。

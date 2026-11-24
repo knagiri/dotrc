@@ -13,7 +13,7 @@
 #     branch identifies the worktree. Touching an entry owned by another branch
 #     -> deny. When the owner cannot be told (the current HEAD or the entry is
 #     detached, or git failed reading the entry) or the target dir cannot be
-#     resolved (-C / cd with a variable, a substitution or a missing dir) -> deny.
+#     resolved (a -C value with $ or a backquote, or a missing dir) -> deny.
 #     Known limit: sessions that share one worktree (a parent and its Agent-tool
 #     subagent, the main working tree's interactive session and a spun-off
 #     session) have the same branch, so they are not told apart.
@@ -32,19 +32,21 @@
 #       3. a remote named origin exists
 #       4. HEAD exists (the first commit of a new repo has nowhere else to go)
 #
-# The command string is split into simple commands on ; & | ( ) and newlines,
-# honouring quotes, backslashes, comments and here-documents (a heredoc body is
-# data, e.g. a commit message, not commands). The target dir starts at the hook
-# input's cwd, follows `cd` / `pushd` earlier in the same string (scoped to the
-# enclosing ( ) / $( )), and is then adjusted by git's own -C options. Global
-# options before the subcommand (-C, -c, --git-dir, --work-tree, --no-pager,
-# -P, ...) are skipped. Env assignments, the process wrappers timeout / nice /
-# nohup / stdbuf / time / command / env / xargs and the reserved words if / then
-# / elif / else / while / until / do / ! / { are stripped before looking for git.
-# Not seen: `sh -c`, git aliases, wrappers such as make, anything inside
-# backticks, and a command word built by `$(...)` (e.g. `$(echo git) stash
-# pop`); a git call written inside `$(...)` is seen. The aim is catching
-# accidental calls, not an adversary.
+# Detection is deliberately naive: the aim is catching accidental calls, not an
+# adversary. The command string is cut into parts on ; && || | and newlines,
+# without reading quotes, here-documents, comments, ( ) or $( ). A part counts
+# when, after leading env assignments and the wrappers timeout / nice / nohup /
+# stdbuf / time / command / env / xargs, it starts with git (or a path ending
+# in /git); global options (-C, -c, --git-dir, --work-tree, --no-pager, -P, ...)
+# may come before the subcommand. A git that is not at the start of a part
+# (`rg "git commit" docs`, `echo git stash pop`) is not seen.
+# The target dir is the hook input's cwd, moved by the part's -C values in
+# order. `cd` is not followed. Also not seen: `sh -c`, git aliases, wrappers
+# such as make, shell keywords (if, !, {) before git.
+# Text inside quotes can be seen (a commit message line reading
+# `git stash pop`). That is accepted: a stash hit is denied only when git says
+# the target entry really belongs to another branch, and a commit hit costs one
+# extra approval prompt.
 #
 # Output: a PreToolUse hookSpecificOutput JSON object on stdout when a decision
 # is made (deny wins over ask when one command line holds both), nothing
@@ -53,10 +55,6 @@
 # transcript shows it). An unreadable input or a case that cannot be judged
 # otherwise passes silently; set -u aborts exit non-zero.
 set -u
-# Byte semantics: in a multibyte locale every ${s:i:1} rescans the string from
-# the start, which makes parsing a long command (a heredoc commit message)
-# take seconds.
-export LC_ALL=C
 
 decision=""
 reasons=()
@@ -94,7 +92,7 @@ stash_owner() {
 stash_why='stash は main checkout と全 linked worktree で共有されているので、別 session が積んだ entry を取ると、その session の変更が黙って消える。'
 hint_other="${stash_why}自分の entry なら、それを積んだ branch に戻ってから撃つ。自分が積んだ entry が先頭に無いだけなら \`git stash list\` で番号を確かめ、\`stash@{N}\` を明示して撃ち直す。他 branch の entry は明示しても止まる。作業の一時退避には stash ではなく一時的な WIP commit も使える。"
 hint_detached="${stash_why}detached HEAD では持ち主を判定できず、\`stash@{N}\` を明示しても止まる。branch を checkout してから撃つか、一時退避には stash ではなく一時的な WIP commit を使う。"
-hint_unknown="${stash_why}-C や cd の対象 dir を変数・\$(...)・存在しないパスで書くと判定できない。パスをリテラルで書き直して撃つ。"
+hint_unknown="${stash_why}-C の対象 dir を変数・\$(...)・存在しないパスで書くと判定できない。パスをリテラルで書き直して撃つ。"
 
 check_stash() { # <dir> <stash args...>
   local dir="$1"; shift
@@ -169,271 +167,59 @@ check_commit() { # <dir>
   add_decision ask "worktree-scope.md §5: main working tree での実装は delegate-to-worktree へ委譲するのが既定。この場で統合先 branch '$branch' に直接 commit するなら、ユーザーが承認する。"
 }
 
-base_dir=""
-cd_unresolved=0   # a cd whose target could not be followed happened earlier
-dir_unknown=0     # the target dir of the git call being checked is unknown
+dir_unknown=0   # the target dir of the git call being checked is unknown
 
-handle_cmd() { # <words...>
-  [ $# -gt 0 ] || return 0
-  local to nd
-  while [ $# -gt 0 ]; do
-    if [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then shift; continue; fi
-    case "$1" in
-      if|then|elif|else|while|until|do|'!'|'{'|nohup) shift ;;
-      time|command)
-        shift
-        while [ "${1:-}" = -p ] || [ "${1:-}" = -- ]; do shift; done ;;
-      nice)
-        shift
-        if [ "${1:-}" = -n ]; then shift; [ $# -gt 0 ] && shift
-        elif [[ ${1:-} == -n?* || ${1:-} =~ ^-[0-9]+$ || ${1:-} == --adjustment=* ]]; then shift; fi ;;
-      stdbuf)
-        shift
-        while [[ ${1:-} == -* ]]; do
-          if [[ $1 =~ ^-[ioe]$ ]] && [ $# -ge 2 ]; then shift 2; else shift; fi
-        done ;;
-      timeout)
-        shift
-        while [[ ${1:-} == -* ]]; do
-          case "$1" in
-            -k|-s) if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
-            *) shift ;;
-          esac
-        done
-        [ $# -gt 0 ] && shift ;;
-      env)
-        shift
-        while [ $# -gt 0 ]; do
-          case "$1" in
-            -u|-C|-S) if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
-            -*|*=*) shift ;;
-            *) break ;;
-          esac
-        done ;;
-      xargs)
-        shift
-        while [[ ${1:-} == -* ]]; do
-          case "$1" in
-            -n|-P|-I|-L|-s|-d|-E|-a) if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
-            *) shift ;;
-          esac
-        done ;;
-      cd|pushd)
-        shift
-        while [[ ${1:-} == -* && ${1:-} != - ]]; do
-          [ "$1" = -- ] && { shift; break; }
-          shift
-        done
-        to="${1:-$HOME}"
-        if [ "$to" = - ] || [[ $to == *'$'* || $to == *'`'* ]]; then cd_unresolved=1; return 0; fi
-        nd="$(resolve_path "$base_dir" "$to")"
-        if [ -d "$nd" ]; then base_dir="$nd"; else cd_unresolved=1; fi
-        return 0 ;;
-      popd) cd_unresolved=1; return 0 ;;
-      git|*/git) break ;;
-      *) return 0 ;;
-    esac
-  done
-  [ $# -gt 0 ] || return 0
-  shift
-  local dir="$base_dir"
-  dir_unknown="$cd_unresolved"
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      -C) [ $# -ge 2 ] || return 0
-          if [ -n "$2" ]; then
-            if [[ $2 == *'$'* || $2 == *'`'* ]]; then
-              dir_unknown=1
-            else
-              dir="$(resolve_path "$dir" "$2")"
-              [ -d "$dir" ] || dir_unknown=1
-            fi
-          fi
-          shift 2 ;;
-      -c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix)
-          shift; [ $# -gt 0 ] && shift ;;
-      -*) shift ;;
-      *) break ;;
-    esac
-  done
-  [ $# -gt 0 ] || return 0
-  local sub="$1"; shift
-  case "$sub" in
-    stash) check_stash "$dir" "$@" ;;
-    commit) check_commit "$dir" ;;
-  esac
-}
+# git_re captures: 11 = the global options, 16 = the stash subcommand (empty
+# for commit), 18 = the arguments after the subcommand. Renumber when a group
+# is added before them.
+ws='[[:space:]]+'
+arg='[^[:space:]]+'
+name='[A-Za-z_][A-Za-z0-9_]*'
+wrapper="($name=$arg|timeout($ws-[ks]$ws$arg|$ws-$arg)*$ws$arg|nice($ws-n$ws$arg|$ws-$arg)?|nohup|stdbuf($ws-$arg)*|time($ws-p)?|command($ws-p)?|env($ws-[uCS]$ws$arg|$ws-$arg|$ws$name=$arg)*|xargs($ws-[nPILsdEa]$ws$arg|$ws-$arg)*)$ws"
+gopt="(-[Cc]$ws$arg|--(git-dir|work-tree|namespace|config-env|super-prefix)$ws$arg|-$arg)$ws"
+git_re="^[[:space:]]*($wrapper)*([^[:space:]]*/)?git$ws(($gopt)*)(stash$ws(pop|apply|drop|branch|clear)|commit)([[:space:]]+(.*))?$"
 
-# parse <command string>: split into simple commands and call handle_cmd on
-# each one's words.
-parse() {
-  local s="$1" n i=0 c nc q="" word="" inword=0 skipnext=0 strip d line j rest seg depth
-  local -a words=() heredocs=() st_dir=() st_unres=() st_q=() st_kind=() st_wn=() st_word=() st_skip=() saved_words=()
-  local special=$' \t\n;&|()<>#"\\'"\'"
-  n=${#s}
-  flush() {
-    if [ "$inword" = 1 ]; then
-      if [ "$skipnext" = 1 ]; then skipnext=0; else words+=("$word"); fi
-    fi
-    word=""; inword=0
-  }
-  end_cmd() { flush; handle_cmd "${words[@]}"; words=(); skipnext=0; }
-  # Scopes: ( ) subshells and $( ) substitutions. The cd state is restored at
-  # the close. A substitution also saves the enclosing command's words, so the
-  # command that holds it (git -C $(pwd) stash pop) stays in one piece.
-  push_scope() { # <p|s>
-    st_dir+=("$base_dir"); st_unres+=("$cd_unresolved"); st_q+=("$q"); st_kind+=("$1")
-    if [ "$1" = s ]; then
-      saved_words+=("${words[@]}"); st_wn+=("${#words[@]}"); st_word+=("$word"); st_skip+=("$skipnext")
-      words=(); word=""; inword=0; skipnext=0
-    fi
-  }
-  pop_scope() {
-    local k=$(( ${#st_dir[@]} - 1 )) m wn
-    (( k >= 0 )) || return 0
-    base_dir="${st_dir[k]}"; cd_unresolved="${st_unres[k]}"; q="${st_q[k]}"
-    if [ "${st_kind[k]}" = s ]; then
-      m=$(( ${#st_wn[@]} - 1 )); wn="${st_wn[m]}"
-      words=()
-      (( wn > 0 )) && words=("${saved_words[@]: -wn}")
-      saved_words=("${saved_words[@]:0:${#saved_words[@]}-wn}")
-      word="${st_word[m]}"; skipnext="${st_skip[m]}"; inword=1
-      unset "st_wn[m]" "st_word[m]" "st_skip[m]"
-    fi
-    unset "st_dir[k]" "st_unres[k]" "st_q[k]" "st_kind[k]"
-  }
-  while (( i < n )); do
-    c="${s:i:1}"
-    if [ -n "$q" ]; then
-      # Inside double quotes (single quotes are consumed in one jump below).
-      if [ "$c" = '"' ]; then
-        q=""
-      elif [ "$c" = '\' ] && (( i + 1 < n )); then
-        nc="${s:i+1:1}"
-        case "$nc" in
-          '"'|'\'|'$'|'`') word+="$nc"; ((i++)) ;;
-          $'\n') ((i++)) ;;
-          *) word+="$c" ;;
-        esac
-      elif [ "$c" = '$' ]; then
-        if [ "${s:i+1:1}" = '(' ] && [ "${s:i+2:1}" != '(' ]; then
-          # $( inside double quotes opens a fresh quoting context.
-          word+='$'; push_scope s; q=""
-          ((i++))
-        else
-          word+='$'
-        fi
-      else
-        rest="${s:i}"; seg="${rest%%[\"\\\$]*}"
-        word+="$seg"
-        ((i += ${#seg} - 1))
-      fi
-      ((i++)); continue
-    fi
-    case "$c" in
-      "'")
-        # Jump to the closing quote: everything up to it is literal.
-        rest="${s:i+1}"; seg="${rest%%\'*}"
-        word+="$seg"; inword=1
-        if [ "$seg" = "$rest" ]; then i=n; else ((i += ${#seg} + 1)); fi ;;
-      '"') q="$c"; inword=1 ;;
-      '\')
-        if (( i + 1 < n )); then
-          nc="${s:i+1:1}"
-          if [ "$nc" != $'\n' ]; then word+="$nc"; inword=1; fi
-          ((i++))
-        fi ;;
-      ' '|$'\t') flush ;;
-      '(')
-        if [ "${s:i+1:1}" = '(' ] && { [ "${word}" = '$' ] || { [ "$inword" = 0 ] && [ ${#words[@]} -eq 0 ]; }; }; then
-          # Arithmetic $(( ... )) or (( ... )): skip to the matching )) so a
-          # `<<` shift is not read as a here-document.
-          depth=2; j=$((i + 2))
-          while (( j < n && depth > 0 )); do
-            case "${s:j:1}" in '(') ((depth++)) ;; ')') ((depth--)) ;; esac
-            ((j++))
-          done
-          if [ "$word" = '$' ]; then word="0"; else words=("0"); fi
-          inword=1
-          i=$((j - 1))
-        elif [ "$inword" = 1 ] && [ "${word: -1}" = '$' ]; then
-          push_scope s
-        else
-          end_cmd; push_scope p
-        fi ;;
-      ')') end_cmd; pop_scope ;;
-      ';'|'&'|'|') end_cmd ;;
-      $'\n')
-        end_cmd
-        # Skip the bodies of the here-documents opened on this line.
-        for d in "${heredocs[@]}"; do
-          strip=0
-          [ "${d:0:1}" = - ] && strip=1
-          d="${d:1}"
-          rest="${s:i+1}"
-          while [ -n "$rest" ]; do
-            line="${rest%%$'\n'*}"
-            if [ "$line" = "$rest" ]; then rest=""; else rest="${rest#*$'\n'}"; fi
-            if [ "$strip" = 1 ]; then line="${line#"${line%%[!$'\t']*}"}"; fi
-            [ "$line" = "$d" ] && break
-          done
-          # Leave i on the newline that ends the delimiter line (or at the end).
-          i=$((n - ${#rest} - 1))
-        done
-        heredocs=() ;;
-      '<'|'>')
-        if [ "$c" = '<' ] && [ "${s:i+1:1}" = '<' ] && [ "${s:i+2:1}" != '<' ]; then
-          flush
-          ((i += 2)); strip=" "
-          if [ "${s:i:1}" = - ]; then strip=-; ((i++)); fi
-          while [[ "${s:i:1}" == [$' \t'] ]]; do ((i++)); done
-          d=""
-          while (( i < n )); do
-            c="${s:i:1}"
-            case "$c" in
-              ' '|$'\t'|$'\n'|';'|'&'|'|'|'<'|'>'|'('|')') break ;;
-              "'"|'"'|'\') ;;
-              *) d+="$c" ;;
-            esac
-            ((i++))
-          done
-          [ -n "$d" ] && heredocs+=("$strip$d")
-          continue
-        fi
-        # A redirection: drop a leading fd number and the target word.
-        if [ "$inword" = 1 ] && [[ $word =~ ^[0-9]+$ ]]; then word=""; inword=0; else flush; fi
-        while [[ "${s:i+1:1}" == [\<\>\&\|] ]]; do ((i++)); done
-        skipnext=1 ;;
-      '#')
-        if [ "$inword" = 0 ]; then
-          rest="${s:i}"; seg="${rest%%$'\n'*}"
-          ((i += ${#seg} - 1))
-        else
-          word+="$c"
-        fi ;;
-      *)
-        # Take the whole run of ordinary characters at once.
-        rest="${s:i}"; seg="${rest%%["$special"]*}"
-        word+="$seg"; inword=1
-        ((i += ${#seg} - 1)) ;;
-    esac
-    ((i++))
+check_part() { # <cwd> <part>
+  [[ $2 =~ $git_re ]] || return 0
+  local opts="${BASH_REMATCH[11]}" sub="${BASH_REMATCH[16]}" rest="${BASH_REMATCH[18]}"
+  local dir="$1" i skip=0 a
+  local -a o r args=()
+  dir_unknown=0
+  read -ra o <<<"$opts"
+  for ((i = 0; i < ${#o[@]}; i++)); do
+    [ "${o[i]}" = -C ] || continue
+    a="${o[i+1]-}"; a="${a//[\"\']/}"
+    if [[ $a == *[\$\`]* ]]; then dir_unknown=1; else dir="$(resolve_path "$dir" "$a")"; fi
   done
-  end_cmd
+  [ -d "$dir" ] || dir_unknown=1
+  if [ -z "$sub" ]; then check_commit "$dir"; return; fi
+  # Drop redirections (2>&1, >/dev/null, > file) and a trailing &.
+  read -ra r <<<"$rest"
+  for a in "${r[@]}"; do
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    [[ $a =~ ^[0-9]*[\<\>]+\&?$ ]] && { skip=1; continue; }
+    [[ $a =~ ^[0-9]*[\<\>] || $a = '&' ]] && continue
+    args+=("$a")
+  done
+  check_stash "$dir" "$sub" "${args[@]}"
 }
 
 main() {
-  local input cmd t
+  local input cmd cwd t part
   for t in jq git; do
     command -v "$t" >/dev/null 2>&1 || { echo "claude-hook-git-guard: $t not found; the git guard is not running" >&2; exit 1; }
   done
   input="$(cat)"
   [ "$(jq -r '.tool_name // empty' <<<"$input" 2>/dev/null)" = Bash ] || return 0
   cmd="$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null)"
-  base_dir="$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null)"
-  [ -n "$base_dir" ] || base_dir="$PWD"
+  cwd="$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null)"
+  [ -n "$cwd" ] || cwd="$PWD"
   case "$cmd" in *git*) ;; *) return 0 ;; esac
-  parse "$cmd"
+  cmd="${cmd//&&/$'\n'}"
+  cmd="${cmd//[;|]/$'\n'}"
+  while IFS= read -r part; do
+    check_part "$cwd" "$part"
+  done <<<"$cmd"
   [ -n "$decision" ] || return 0
   local reason
   reason="$(printf '%s\n' "${reasons[@]}")"
