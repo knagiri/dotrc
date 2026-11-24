@@ -136,6 +136,27 @@ if [ ! -e "${REPO_DIR}/mise.local.toml" ]; then
         '[env]' 'CLAUDE_CONFIG_DIR = "{{env.HOME}}/.claude-personal"' >"${REPO_DIR}/mise.local.toml"
 fi
 
+# git hook: githooks/post-merge rebuilds bin/claude-queue after a pull that
+# changes src/claude-queue. Linked as a symlink so later edits to the hook take
+# effect without a re-run. `--git-path` resolves to the common dir's hooks/ even
+# from a linked worktree (hooks are shared across worktrees), and to
+# core.hooksPath when that is set, i.e. wherever git actually reads hooks from.
+# An existing hook that is not a symlink is someone's own and is left alone; a
+# symlink is ours (or a stale link to another checkout) and is replaced.
+# Outside a git checkout rev-parse fails and the block does nothing.
+# The directory is resolved, not hooks/post-merge itself: --path-format=absolute
+# resolves symlinks, so on a re-run it would return the link's target (this
+# checkout's githooks/post-merge, a regular file) instead of the link.
+if __hook_dir="$(git -C "${REPO_DIR}" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)"; then
+    __hook_dst="${__hook_dir}/post-merge"
+    if [ -e "${__hook_dst}" ] && [ ! -L "${__hook_dst}" ]; then
+        echo "deploy.sh: ${__hook_dst} exists and is not a symlink; skipped installing githooks/post-merge" >&2
+    else
+        mkdir -p "${__hook_dir}"
+        ln -snf "${REPO_DIR}/githooks/post-merge" "${__hook_dst}"
+    fi
+fi
+
 # Build claude-queue if Go is available
 if command -v go >/dev/null 2>&1 && [ -d "${REPO_DIR}/src/claude-queue" ]; then
     (cd "${REPO_DIR}/src/claude-queue" && make install)

@@ -260,4 +260,68 @@ else
   echo "skip: mise not available; trusted_config_paths not exercised"
 fi
 
+# --- Case I: githooks/post-merge is linked into the checkout's hooks/ --------
+# Only in a git checkout (the minimal one above is not, so the block is a no-op
+# there). The link goes where `git rev-parse --git-path` says, which from a
+# linked worktree is the common dir's hooks/. A hand-written hook that is not a
+# symlink is kept and reported; the control drops that check and clobbers it.
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+grepo="$sandbox/grepo"
+mkdir -p "$grepo/bin" "$grepo/rc" "$grepo/dot/example" "$grepo/githooks"
+: >"$grepo/rc/bashrc"
+: >"$grepo/dot/example/file"
+printf '#!/bin/sh\n' >"$grepo/githooks/post-merge"
+cp "$src" "$grepo/bin/deploy.sh"
+chmod +x "$grepo/bin/deploy.sh" "$grepo/githooks/post-merge"
+grepo="$(cd "$grepo" && pwd -P)"
+git -C "$grepo" init -q -b main
+git -C "$grepo" add -A
+git -C "$grepo" commit -q -m init
+ghook="$grepo/.git/hooks/post-merge"
+links_to() {  # links_to <link> <target>
+  [ -L "$1" ] && [ "$(readlink "$1")" = "$2" ]
+}
+
+home_i="$sandbox/home_i"; mkdir -p "$home_i"
+rm -f "$ghook"
+run "$grepo/bin/deploy.sh" "$home_i"
+# The re-run must see its own link as a symlink, not resolve it to the target
+# (a regular file) and report a hand-written hook it does not have.
+stderr_i0="$sandbox/stderr_i0"
+run_capture_stderr "$grepo/bin/deploy.sh" "$home_i" "$stderr_i0"
+check "deploy.sh links githooks/post-merge into .git/hooks, idempotently and quietly" \
+  "$(if links_to "$ghook" "$grepo/githooks/post-merge" && ! grep -qF 'post-merge' "$stderr_i0"
+     then echo 0; else echo 1; fi)"
+
+ln -snf "$sandbox/elsewhere/post-merge" "$ghook"
+run "$grepo/bin/deploy.sh" "$home_i"
+check "a stale symlink (another checkout) is replaced" \
+  "$(if links_to "$ghook" "$grepo/githooks/post-merge"; then echo 0; else echo 1; fi)"
+
+rm -f "$ghook"; printf '# hand-written hook\n' >"$ghook"
+stderr_i="$sandbox/stderr_i"
+run_capture_stderr "$grepo/bin/deploy.sh" "$home_i" "$stderr_i"
+check "an existing non-symlink post-merge is kept and the skip is reported" \
+  "$(if [ ! -L "$ghook" ] && [ "$(cat "$ghook")" = '# hand-written hook' ] \
+       && grep -qF 'is not a symlink; skipped' "$stderr_i"
+     then echo 0; else echo 1; fi)"
+sed 's|^    if \[ -e "${__hook_dst}" \] && \[ ! -L "${__hook_dst}" \]; then$|    if false; then|' \
+  "$grepo/bin/deploy.sh" >"$grepo/bin/deploy-clobber-hook.sh"
+chmod +x "$grepo/bin/deploy-clobber-hook.sh"
+check "the clobber control really differs from the script under test" \
+  "$(if ! cmp -s "$grepo/bin/deploy.sh" "$grepo/bin/deploy-clobber-hook.sh"; then echo 0; else echo 1; fi)"
+run "$grepo/bin/deploy-clobber-hook.sh" "$home_i"
+check "without the non-symlink check, the hand-written hook would be replaced" \
+  "$(if [ -L "$ghook" ]; then echo 0; else echo 1; fi)"
+
+# From a linked worktree checkout: the link lands in the common dir's hooks/
+# (where git reads hooks for every worktree), pointing at that checkout.
+rm -f "$ghook"
+gwt="$sandbox/grepo-wt"
+git -C "$grepo" worktree add -q -b wt "$gwt"
+gwt="$(cd "$gwt" && pwd -P)"
+run "$gwt/bin/deploy.sh" "$home_i"
+check "from a linked worktree, the hook is linked into the common dir's hooks/" \
+  "$(if links_to "$ghook" "$gwt/githooks/post-merge"; then echo 0; else echo 1; fi)"
+
 exit "$fail"
