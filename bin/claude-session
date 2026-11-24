@@ -28,7 +28,8 @@ set -euo pipefail
 # --repo replaces meta.json's repo as the destination, for a repo cloned under
 # a different name on this host. subpath still comes from meta.json, and the
 # archive and transcript are not modified. The value gets the same checks as
-# meta.json's repo, which is itself still checked.
+# meta.json's repo, which is itself still checked: an archive with a malformed
+# repo is rejected whatever the destination.
 #
 # The archive is untrusted input. Before anything is extracted its members are
 # checked: only meta.json, <id>.jsonl and <id>/... are accepted, as regular
@@ -244,7 +245,7 @@ check_members() {
   printf '%s\n' "$id"
 }
 
-# check_repo <label> <value>: <value> is exactly <host>/<owner>/<repo>.
+# check_repo <label> <value>: die unless <value> is exactly <host>/<owner>/<repo>.
 check_repo() {
   check_rel "$1" "$2" 3
   [ "$(printf '%s\n' "$2" | tr -cd / | wc -c)" -eq 2 ] || die "$1 must be <host>/<owner>/<repo>: $2"
@@ -293,7 +294,7 @@ cmd_import() {
   [ "$sid" = "$id" ] || die "meta.json session_id $sid does not match transcript $id.jsonl"
   repo="$(jq -r '.repo' "$meta")"
   subpath="$(jq -r '.subpath' "$meta")"
-  check_repo "repo" "$repo"
+  check_repo "meta.json repo" "$repo"
   check_rel "subpath" "$subpath" 0
   [ "$have_override" -eq 0 ] || repo="$repo_override"
 
