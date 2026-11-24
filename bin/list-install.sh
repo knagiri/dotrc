@@ -12,7 +12,7 @@ commands=( \
     "go" \
     "eza" "bat" "fd" "rg" "fzf" "jq" "sqlite3" \
     "nvim" "tree-sitter" "tmux" \
-    "lazygit" "lazysql" \
+    "lazygit" "lazysql" "usql" \
     "claude" \
 )
 

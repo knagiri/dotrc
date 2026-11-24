@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# db-query [-J|-C|-t|-x|-q]... -c <sql> -- run one SQL command with usql against
+# the DATABASE_URL of the current repo.
+#
+# The connection URL is read from the repo's `mise.db.local.toml`. The wrapper
+# points mise at that file alone with MISE_OVERRIDE_CONFIG_FILENAMES for one
+# `mise exec` call, so DATABASE_URL stays out of every shell's env and out of
+# the tools that pick it up by default (app frameworks, ORMs, migration tools),
+# which would otherwise point at that database without saying so. It is the same
+# layering as bin/lib/gh-mise.sh, which uses MISE_ENV for GH_TOKEN.
+#
+# Why an override and not MISE_ENV=db: MISE_ENV only adds mise.db.local.toml to
+# the usual config chain, so a DATABASE_URL in any other mise config (a worktree's
+# tracked mise.toml, which is nearer than the main checkout's file) wins over it,
+# and with mise.db.local.toml absent that other value is used. With the override
+# set, mise loads mise.db.local.toml in place of the mise.toml / mise.local.toml
+# chain, so those cannot supply the URL. The global config (the mise config dir)
+# is still read; dotrc manages it, and it should not set DATABASE_URL.
+#
+# mise.db.local.toml is untracked and the wrapper is allowlisted, and mise
+# evaluates the file's content (`{{ exec(command=...) }}` in [env], `_.source`,
+# `_.path` pointing at a script in place of usql). By default a mise trust is
+# per path and survives edits, so an agent that can edit the file could run any
+# command through the allowlisted wrapper after one trust. The wrapper therefore
+# sets MISE_PARANOID=1, which ties trust to the file's content hash: any edit
+# makes mise refuse the file (exit 4) until a human runs `mise trust` again.
+# MISE_TRUSTED_CONFIG_PATHS is cleared too, because a trusted path prefix (that
+# env var or the trusted_config_paths setting) is honoured even under paranoid
+# and would bypass the hash. Measured with mise 2026.4.28: `[tools] usql` is
+# still resolved and installed under paranoid once the file is trusted.
+#
+# An inherited DATABASE_URL is dropped before mise runs, so the URL always comes
+# from the config: a value left in the caller's env (an app's .env, another tool)
+# never silently becomes the target. If the config does not set it, the wrapper
+# fails with exit 2 instead of letting usql fall back to its own default.
+#
+# The arguments are fixed rather than passed through, because usql is also a
+# shell: a backslash meta-command (`\!` runs a shell command, `\o` / `\w` write
+# files, `\i` reads them) is honoured in -c, mid-line after SQL, from -f and from
+# stdin. Passing usql's args through would make an allowlisted db-query run any
+# command without approval. So the wrapper takes exactly one -c <sql> plus
+# output-format flags, refuses any SQL containing a backslash (meta-commands
+# start with one; backslashes inside SQL string literals are refused too),
+# closes stdin, and skips usql's init scripts (-X) and password prompt (-w; a
+# password file such as USQLPASS is still read).
+#
+# What the SQL may do to the database is decided by the database user in
+# DATABASE_URL, not here, and only for a server database reached over the
+# network. An embedded engine (sqlite, duckdb, ...) runs inside usql with the
+# local user's own rights, so SQL alone reads and writes arbitrary local files
+# (ATTACH, COPY ... TO, read_text); there is no database user to bound it.
+# The URL scheme must therefore be on an allowlist of server drivers. An
+# allowlist rather than a denylist of embedded drivers, because usql has many
+# scheme aliases (sq, sqlite, mq, dk, ddb, ql, csv, h2, ...) and a missed one
+# would pass silently; a new server scheme only needs one line added here.
+# A scheme-less URL (usql also takes a file path or a saved connection name)
+# is refused too. Source of the names: `usql` "Available Drivers" listing.
+#
+# Exit: 1 bad arguments; 2 DATABASE_URL unset or empty; 3 usql not found;
+# 4 mise could not load mise.db.local.toml (e.g. not trusted); 5 DATABASE_URL
+# is not a server-database URL; 127 mise not found. Otherwise usql's own code, which can coincide with 2-4; the stderr
+# message tells them apart.
+
+usage() {
+  echo "usage: db-query [-J|--json|-C|--csv|-t|--tuples-only|-x|--expanded|-q|--quiet]... -c <sql>" >&2
+  exit "${1:-1}"
+}
+die_args() { echo "db-query: $1" >&2; usage 1; }
+
+fmt=() sql="" have_sql=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -J|--json|-C|--csv|-t|--tuples-only|-x|--expanded|-q|--quiet) fmt+=("$1"); shift ;;
+    -c|--command)
+      [ $# -ge 2 ] || die_args "$1 needs a value"
+      [ "$have_sql" -eq 0 ] || die_args "-c given more than once"
+      sql="$2"; have_sql=1; shift 2 ;;
+    -h|--help) usage 0 ;;
+    *) die_args "unsupported argument: $1" ;;
+  esac
+done
+[ "$have_sql" -eq 1 ] || die_args "-c <sql> is required"
+[ -n "$sql" ] || die_args "empty SQL"
+case "$sql" in
+  *\\*)
+    echo "db-query: SQL must not contain a backslash (usql would run it as a meta-command, e.g. \\! runs a shell command)" >&2
+    exit 1 ;;
+esac
+
+if ! command -v mise >/dev/null 2>&1; then
+  echo "db-query: mise not found on PATH; it is needed to read mise.db.local.toml" >&2
+  exit 127
+fi
+
+# mise's own failures (untrusted config, parse error) are caught here, so a code
+# from the exec below is not mise's.
+export MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml
+export MISE_PARANOID=1
+export MISE_TRUSTED_CONFIG_PATHS=
+if ! mise_err="$(env -u DATABASE_URL mise env 2>&1 >/dev/null)"; then
+  echo "db-query: mise could not load mise.db.local.toml:" >&2
+  echo "$mise_err" >&2
+  echo "If it is not trusted (or was edited since it was trusted), review it, then run at the repo root: MISE_TRUSTED_CONFIG_PATHS= MISE_PARANOID=1 MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust" >&2
+  exit 4
+fi
+
+# shellcheck disable=SC2016  # $DATABASE_URL must expand inside mise's env, not here.
+exec env -u DATABASE_URL mise exec -- bash -c '
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "db-query: DATABASE_URL is unset or empty. Put it in mise.db.local.toml at the repo root:" >&2
+  echo "  [env]" >&2
+  echo "  DATABASE_URL = \"postgres://readonly@localhost:5432/example\"" >&2
+  echo "Check what mise loads with: MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise config ls" >&2
+  exit 2
+fi
+if ! command -v usql >/dev/null 2>&1; then
+  echo "db-query: usql not found; add it to mise.db.local.toml ([tools] usql = \"...\") and run mise install" >&2
+  exit 3
+fi
+scheme="${DATABASE_URL%%://*}"
+case "$DATABASE_URL" in *://*) ;; *) scheme="" ;; esac
+case "$(printf "%s" "$scheme" | tr "[:upper:]" "[:lower:]")" in
+  postgres|pg|pgsql|postgresql|pgx|px|cockroachdb|cr|cdb|crdb|cockroach|redshift|rs|\
+  mysql|my|maria|aurora|mariadb|percona|memsql|me|mymysql|zm|mymy|tidb|ti|vitess|vt|\
+  sqlserver|ms|mssql|azuresql|oracle|or|ora|oci|oci8|clickhouse|ch) ;;
+  *)
+    echo "db-query: DATABASE_URL must be a server-database URL (postgres://, mysql://, sqlserver://, oracle://, clickhouse://); embedded engines such as sqlite or duckdb can read and write local files from SQL" >&2
+    exit 5 ;;
+esac
+exec usql -X -w "$@" "$DATABASE_URL" </dev/null
+' db-query ${fmt[@]+"${fmt[@]}"} -c "$sql"
