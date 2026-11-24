@@ -57,7 +57,9 @@ mk_mutant() {  # mk_mutant <name> <sed expression>
   fi
 }
 mk_mutant nooverride 's|^export MISE_OVERRIDE_CONFIG_FILENAMES=.*$|:|'
-mk_mutant misenv 's|^export MISE_OVERRIDE_CONFIG_FILENAMES=.*$|export MISE_ENV=db|'
+# (misenv also drops the trust hardening: its case is about config precedence,
+# and the chain's mise.toml files are trusted by path prefix in that case)
+mk_mutant misenv 's|^export MISE_OVERRIDE_CONFIG_FILENAMES=.*$|export MISE_ENV=db|;s|^export MISE_PARANOID=1$|:|;s|^export MISE_TRUSTED_CONFIG_PATHS=$|:|'
 mk_mutant keepenv 's|env -u DATABASE_URL mise exec|env mise exec|'
 mk_mutant noemptycheck 's|if \[ -z "\${DATABASE_URL:-}" \]; then|if false; then|;s|^    exit 5 ;;$|    : ;;|'
 # (the scheme check is also off, since it would otherwise refuse the empty URL)
@@ -66,6 +68,8 @@ mk_mutant keepstdin 's| </dev/null$||'
 mk_mutant passthrough 's|^    \*) die_args .*$|    *) fmt+=("$1"); shift ;;|'
 mk_mutant noemptysql 's|^\[ -n "\$sql" \] .*$|:|'
 mk_mutant nousqlcheck 's|if ! command -v usql >/dev/null 2>&1; then|if false; then|'
+mk_mutant noparanoid 's|^export MISE_PARANOID=1$|:|'
+mk_mutant noprefixclear 's|^export MISE_TRUSTED_CONFIG_PATHS=$|:|'
 mk_mutant nopreflight 's|^if ! mise_err=.*$|if false; then|'
 
 URL="postgres://ro@localhost/example"
@@ -245,8 +249,11 @@ else echo "FAIL: nousqlcheck mutant rc=$rc"; fail=1; fi
 # 6. Real mise. mise.db.local.toml at the main checkout's root is read from a
 # linked worktree under <repo>/.worktrees/<name>, and no other mise config (a
 # worktree's own mise.toml, a root mise.toml when mise.db.local.toml is absent)
-# can supply the URL. Hermetic in the same way as the real-mise cases of
-# gh-wrappers.test.sh.
+# can supply the URL, and editing it after it was trusted makes db-query stop
+# (exit 4) instead of evaluating the new content. Trust is given with a real
+# `mise trust` under MISE_PARANOID (a content hash), not with
+# MISE_TRUSTED_CONFIG_PATHS, which would bypass the hash. Hermetic in the same
+# way as the real-mise cases of gh-wrappers.test.sh.
 realmise="$(command -v mise 2>/dev/null || true)"
 if [ -z "$realmise" ]; then
   echo "skip: no real mise on PATH; the mise.db.local.toml cases need it"
@@ -259,14 +266,22 @@ else
   printf '[env]\nDATABASE_URL = "%s"\n' "$URL" >"$rmrepo/mise.db.local.toml"
   ln -s "$realmise" "$rmroot/bin/mise"
   cp "$stubdir/usql" "$rmroot/bin/usql"
+  # RM_PREFIX, when set, is a trusted path prefix in the caller's env.
   realmise_run() {  # realmise_run <db-query path>
     : >"$args"
     ( cd "$rmrepo/.worktrees/foo" && env -u MISE_ENV -u DATABASE_URL -u MISE_OVERRIDE_CONFIG_FILENAMES \
-        MISE_TRUSTED_CONFIG_PATHS="$rmrepo" MISE_CEILING_PATHS="$rmroot" \
+        MISE_TRUSTED_CONFIG_PATHS="${RM_PREFIX:-}" MISE_CEILING_PATHS="$rmroot" \
         MISE_GLOBAL_CONFIG_FILE="$rmroot/none.toml" MISE_CONFIG_DIR="$rmroot/cfg" \
         MISE_STATE_DIR="$rmroot/state" \
         USQL_ARGS_FILE="$args" PATH="$rmroot/bin:$PATH" "$1" -c 'select 1' ) >/dev/null 2>"$stubdir/err"
   }
+  realmise_trust() {  # the human step the exit 4 message names
+    ( cd "$rmrepo" && env -u MISE_ENV MISE_TRUSTED_CONFIG_PATHS= MISE_PARANOID=1 \
+        MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml MISE_CEILING_PATHS="$rmroot" \
+        MISE_GLOBAL_CONFIG_FILE="$rmroot/none.toml" MISE_CONFIG_DIR="$rmroot/cfg" \
+        MISE_STATE_DIR="$rmroot/state" mise trust ) >/dev/null 2>&1
+  }
+  realmise_trust
   realmise_run "$bindir/db-query"; rc=$?
   if [ "$rc" -eq 0 ] && grep -qxF "[$URL]" "$args"; then
     echo "ok: real mise reads the main checkout's mise.db.local.toml from a linked worktree"
@@ -285,7 +300,7 @@ else
     echo "ok: a worktree's own mise.toml DATABASE_URL does not override mise.db.local.toml"
   else echo "FAIL: worktree mise.toml rc=$rc args=$(cat "$args")"; fail=1; fi
 
-  realmise_run "$stubdir/misenv"; rc=$?
+  RM_PREFIX="$rmrepo" realmise_run "$stubdir/misenv"; rc=$?
   if grep -qxF '[postgres://rw@wt.example.invalid/db]' "$args"; then
     echo "ok: with MISE_ENV=db alone the worktree's mise.toml wins (the case above is discriminating)"
   else echo "FAIL: real mise misenv mutant rc=$rc args=$(cat "$args")"; fail=1; fi
@@ -300,10 +315,43 @@ else
     echo "ok: without mise.db.local.toml a root mise.toml DATABASE_URL is not used (exit 2)"
   else echo "FAIL: absent db config rc=$rc args=$(cat "$args")"; fail=1; fi
 
-  realmise_run "$stubdir/misenv"; rc=$?
+  RM_PREFIX="$rmrepo" realmise_run "$stubdir/misenv"; rc=$?
   if grep -qxF '[postgres://rw@root.example.invalid/db]' "$args"; then
     echo "ok: with MISE_ENV=db alone the root mise.toml URL is used (the case above is discriminating)"
   else echo "FAIL: real mise misenv mutant (absent) rc=$rc args=$(cat "$args")"; fail=1; fi
+
+  # An edit after trust must stop db-query: mise would evaluate the new
+  # content (here an exec template that touches a marker file).
+  rm "$rmrepo/mise.toml"
+  mv "$rmroot/db.off" "$rmrepo/mise.db.local.toml"
+  realmise_trust
+  realmise_run "$bindir/db-query"; rc=$?
+  if [ "$rc" -eq 0 ] && grep -qxF "[$URL]" "$args"; then
+    echo "ok: a content-trusted mise.db.local.toml is read"
+  else echo "FAIL: content-trusted config rc=$rc args=$(cat "$args")"; fail=1; fi
+  marker="$rmroot/pwned"
+  printf 'PWN = "{{ exec(command=\\"touch %s\\") }}"\n' "$marker" >>"$rmrepo/mise.db.local.toml"
+  realmise_run "$bindir/db-query"; rc=$?
+  if [ "$rc" -eq 4 ] && [ ! -s "$args" ] && [ ! -e "$marker" ] && grep -qF 'not trusted' "$stubdir/err"; then
+    echo "ok: editing mise.db.local.toml after trust makes db-query stop with 4 and run nothing"
+  else echo "FAIL: edited config rc=$rc args=$(cat "$args") marker=$(ls "$marker" 2>&1)"; fail=1; fi
+
+  realmise_run "$stubdir/noparanoid"; rc=$?
+  if [ "$rc" -eq 0 ] && [ -e "$marker" ]; then
+    echo "ok: without MISE_PARANOID the edited content is evaluated (the case above is discriminating)"
+  else echo "FAIL: noparanoid mutant rc=$rc marker=$(ls "$marker" 2>&1)"; fail=1; fi
+  rm -f "$marker"
+
+  # A trusted path prefix in the caller's env bypasses the hash unless cleared.
+  RM_PREFIX="$rmrepo" realmise_run "$bindir/db-query"; rc=$?
+  if [ "$rc" -eq 4 ] && [ ! -e "$marker" ]; then
+    echo "ok: a trusted path prefix in the env does not bypass the content trust"
+  else echo "FAIL: prefix rc=$rc marker=$(ls "$marker" 2>&1)"; fail=1; fi
+
+  RM_PREFIX="$rmrepo" realmise_run "$stubdir/noprefixclear"; rc=$?
+  if [ "$rc" -eq 0 ] && [ -e "$marker" ]; then
+    echo "ok: without clearing MISE_TRUSTED_CONFIG_PATHS the prefix bypasses it (the case above is discriminating)"
+  else echo "FAIL: noprefixclear mutant rc=$rc marker=$(ls "$marker" 2>&1)"; fail=1; fi
 fi
 
 exit "$fail"

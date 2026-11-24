@@ -46,8 +46,13 @@ usql = "0.21.6"
 DATABASE_URL = "postgres://readonly@localhost:5432/example"
 ```
 
-置いたら repo root で一度 `MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust` を実行する
-（環境変数なしの `mise trust` は `mise.db.local.toml` を対象にしない）。main checkout の root に置けば
+置いたら repo root で `MISE_TRUSTED_CONFIG_PATHS= MISE_PARANOID=1 MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust`
+を実行する（環境変数なしの `mise trust` は `mise.db.local.toml` を対象にしない）。`db-query` は
+`MISE_PARANOID=1` で mise を呼ぶので、trust は path ではなくファイルの内容に結びつき、**ファイルを編集するたびに
+再 trust が要る**（編集後は exit 4）。agent がこのファイルを書き換えて、allow 済みの `db-query` 経由で
+`{{ exec(...) }}` 等の任意コマンドを承認なしに走らせる経路を塞ぐためで、再 trust は人が中身を確認して行う。
+`db-query` は信頼済み path の prefix（`MISE_TRUSTED_CONFIG_PATHS` / `trusted_config_paths`）も無視する
+（prefix は paranoid 下でも効いて、内容 hash を迂回するため）。main checkout の root に置けば
 `<repo>/.worktrees/<name>` からも親を辿って読まれ、worktree が自分の `mise.toml` に `DATABASE_URL` を
 持っていても `mise.db.local.toml` が優先されるので、委譲先の worktree へ seed は要らない。mise の global
 config の `DATABASE_URL` だけは override 下でも読まれるので、そこには置かない。

@@ -55,11 +55,21 @@ root の `mise.toml` の値は使われない。mise の global config の `DATA
 読まれるので、global には置かない。
 
 main checkout の root に置いた `mise.db.local.toml` は、`<repo>/.worktrees/<name>` から override を
-付けて呼んでも親を辿って読まれる（実測）。trust は repo root で
-`MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust` を一度実行して与える（実測: この
-環境変数付きで通り、その後の `db-query` が URL を読めた）。未 trust のままだと mise が
-`Config files in .../mise.db.local.toml are not trusted.` で失敗し、`db-query` は mise の message と
-trust の手順を添えて exit 4 で止まる。
+付けて呼んでも親を辿って読まれる（実測）。
+
+mise は `mise.db.local.toml` の中身（`[env]` の `{{ exec(command=...) }}`、`_.source`、usql を差し替える
+`_.path`）を評価する。既定の trust は path 単位で内容の変更では外れないので、一度 trust された後に
+agent がこのファイルを書き換えると、allow 済みの `db-query` が承認なしに任意コマンドを実行する
+（実測）。そこで `db-query` は `MISE_PARANOID=1` を付けて mise を呼ぶ。paranoid 下の trust は内容の
+hash に結びつき、trust 後の書き換えは `Config files in .../mise.db.local.toml are not trusted.` で
+失敗する（実測）。`mise trust` は allowlist に無いので再 trust は人の承認になる。trust は repo root で
+`MISE_TRUSTED_CONFIG_PATHS= MISE_PARANOID=1 MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust`
+を実行して与える。`MISE_PARANOID=1` が無いと path 単位の trust になり、paranoid の呼び出しでは通らない
+（実測）。`MISE_TRUSTED_CONFIG_PATHS` を空にするのは、信頼済み path の prefix が paranoid 下でも効いて
+hash を迂回するため（実測: env でも `trusted_config_paths` setting でも）。prefix が覆っていると
+`mise trust` は hash を書かず "No untrusted config files found" で終わる。`db-query` も同じ変数を空にして
+呼ぶ。`[tools] usql` の install・解決は trust 後の paranoid 下でも従来どおり動く（実測、mise 2026.4.28）。
+未 trust・編集後のままだと `db-query` は mise の message と trust の手順を添えて exit 4 で止まる。
 
 `db-query` は usql の引数を素通しせず、`-c <sql>` と出力形式の flag だけを受け、`\` を含む SQL を拒否し、
 stdin は `/dev/null` にして読まない。usql の meta-command は shell の実行（`\!`）やファイルの読み書き（`\i` / `\o` /

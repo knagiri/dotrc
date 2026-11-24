@@ -19,6 +19,18 @@ set -euo pipefail
 # chain, so those cannot supply the URL. The global config (the mise config dir)
 # is still read; dotrc manages it, and it should not set DATABASE_URL.
 #
+# mise.db.local.toml is untracked and the wrapper is allowlisted, and mise
+# evaluates the file's content (`{{ exec(command=...) }}` in [env], `_.source`,
+# `_.path` pointing at a script in place of usql). By default a mise trust is
+# per path and survives edits, so an agent that can edit the file could run any
+# command through the allowlisted wrapper after one trust. The wrapper therefore
+# sets MISE_PARANOID=1, which ties trust to the file's content hash: any edit
+# makes mise refuse the file (exit 4) until a human runs `mise trust` again.
+# MISE_TRUSTED_CONFIG_PATHS is cleared too, because a trusted path prefix (that
+# env var or the trusted_config_paths setting) is honoured even under paranoid
+# and would bypass the hash. Measured with mise 2026.4.28: `[tools] usql` is
+# still resolved and installed under paranoid once the file is trusted.
+#
 # An inherited DATABASE_URL is dropped before mise runs, so the URL always comes
 # from the config: a value left in the caller's env (an app's .env, another tool)
 # never silently becomes the target. If the config does not set it, the wrapper
@@ -85,10 +97,12 @@ fi
 # mise's own failures (untrusted config, parse error) are caught here, so a code
 # from the exec below is not mise's.
 export MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml
+export MISE_PARANOID=1
+export MISE_TRUSTED_CONFIG_PATHS=
 if ! mise_err="$(env -u DATABASE_URL mise env 2>&1 >/dev/null)"; then
   echo "db-query: mise could not load mise.db.local.toml:" >&2
   echo "$mise_err" >&2
-  echo "If it is not trusted, run once at the repo root: MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust" >&2
+  echo "If it is not trusted (or was edited since it was trusted), review it, then run at the repo root: MISE_TRUSTED_CONFIG_PATHS= MISE_PARANOID=1 MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust" >&2
   exit 4
 fi
 
