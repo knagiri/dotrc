@@ -88,6 +88,8 @@
       "Bash(gh-pr-edit-body *)",
       "Bash(gh-issue-mark-delegated *)",
       "Bash(gh-issue-group *)",
+      "Bash(db-query)",
+      "Bash(db-query *)",
       "Bash(node --version)",
       "Bash(yarn --version)",
       "Bash(uv run ruff format)",

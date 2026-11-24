@@ -51,6 +51,7 @@ jobs:
             bin/claude-spinoff \
             bin/claude-stop-bg \
             bin/claude-worktree \
+            bin/db-query \
             bin/gh-automerge \
             bin/gh-await-reviews \
             bin/gh-issue-file \

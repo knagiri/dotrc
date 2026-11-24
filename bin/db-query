@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# db-query [usql args...] -- run usql against the DATABASE_URL of the current repo.
+#
+# The connection URL is read only from the repo's `mise.db.local.toml`, which
+# mise loads only when MISE_ENV=db. Nothing sets that globally, so DATABASE_URL
+# stays out of every shell's env and out of the tools that pick it up by default
+# (app frameworks, ORMs, migration tools), which would otherwise point at that
+# database without saying so. This wrapper sets MISE_ENV=db for one
+# `mise exec` call, the same layering as bin/lib/gh-mise.sh does for GH_TOKEN.
+#
+# An inherited DATABASE_URL is dropped before mise runs, so the URL always comes
+# from the mise config: a value left in the caller's env (an app's .env, another
+# tool) never silently becomes the target. If the config does not set it, the
+# wrapper fails with exit 2 instead of letting usql fall back to its own default.
+#
+# usql runs in the caller's cwd, so relative paths in its args (-f query.sql)
+# resolve as the caller wrote them; mise finds the config by walking up from
+# there, which also reaches the main checkout's config from <repo>/.worktrees/<name>.
+#
+# This wrapper is not a safety boundary: every usql arg is passed through. What
+# the connection may do is decided by the database user in DATABASE_URL.
+#
+# Exit: usql's code; 2 if DATABASE_URL is unset or empty; 127 if mise is missing.
+
+if ! command -v mise >/dev/null 2>&1; then
+  echo "db-query: mise not found on PATH; it is needed to read mise.db.local.toml" >&2
+  exit 127
+fi
+
+# shellcheck disable=SC2016  # $DATABASE_URL must expand inside mise's env, not here.
+exec env -u DATABASE_URL MISE_ENV=db mise exec -- bash -c '
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "db-query: DATABASE_URL is not set. Put it in mise.db.local.toml at the repo root:" >&2
+  echo "  [env]" >&2
+  echo "  DATABASE_URL = \"postgres://readonly@localhost:5432/example\"" >&2
+  echo "and trust it once with: MISE_ENV=db mise trust" >&2
+  exit 2
+fi
+exec usql "$DATABASE_URL" "$@"
+' db-query "$@"
