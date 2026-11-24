@@ -19,7 +19,7 @@ gh-issue-file [--global] --list-groups
 ```
 
 dotrc 以外の repo で作業中に起票するときは `--global` を付ける。付けると template の探索・
-denylist・起票先がすべて **`gh-issue-file` 自身が置かれた repo**（= dotrc）に揃う。付けないと cwd の
+起票先がともに **`gh-issue-file` 自身が置かれた repo**（= dotrc）に揃う。付けないと cwd の
 repo に `.github/ISSUE_TEMPLATE/<kind>.md` が無くて exit 1 になり、起票経路自体が無い。
 `claude-worktree --global` と同じ意図・同じ綴り。
 
@@ -32,10 +32,12 @@ repo に `.github/ISSUE_TEMPLATE/<kind>.md` が無くて exit 1 になり、起�
 - **本文の構造検証**: `gh issue create --title/--body` は非対話起票で issue template を適用しない
   ので、骨格を担保しているのはラッパー側だけである
 - **固定 label**: 観測か task かで付く label が決まり、crawler はその label で対象を選ぶ
-- **具体名の denylist**: 業務 repo のセッションからも public な dotrc へ人の目を通らずに入るので、
-  ラッパーが title と本文を gitignore 済みの `.issue-denylist` と照合して止める。push した具体名は
-  消せない
 - **session marker**: 本文末尾に起票した session の id を付け、同じ session の重複を 1 件と数えさせる
+
+title と本文には勤務先由来の具体名（組織名・repo 名・サービス名など）を一般に書かず、
+何がどう壊れたかを機構で書く。業務 repo のセッションからの起票も public な dotrc へ人の目を
+通らずに入り、一度公開した具体名は消せない。ラッパーは中身を検査しないので、この縛りは書く
+側にしか無い。対象の条件は dotrc の `CLAUDE.md`「勤務先由来の具体名を書かない」が正典である。
 
 [gh-commands.md](./gh-commands.md) §1 の表は issue 操作全般に `gh issue *` を挙げるが、**起票だけ**はこの rule が
 `gh-issue-file` に狭める。閲覧（`gh issue view` / `gh issue list`）は表のとおり高位コマンドを
@@ -47,13 +49,12 @@ repo に `.github/ISSUE_TEMPLATE/<kind>.md` が無くて exit 1 になり、起�
 |---|---|---|
 | 0 | 起票した（`--list-groups` なら一覧を出した） | stdout の URL を報告する |
 | 1 | 引数か body の不備（`--parent` が owner 起票の group でない場合を含む） | stderr を読んで切り分ける |
-| 3 | denylist に当たった、denylist を読めない、または使える denylist（ファイルが無い、パターンが 0 件）が無い環境で dotrc 以外の repo から起票した | 当たった場合は具体名を除いて書き直して再実行する。それ以外は起票せず、内容を完了報告に書く（denylist の作成・修復は人が行う） |
 | 4 | **起票は済んだ**が、`--resolved-by` の後処理（番号の読み取り・close）が失敗した | **再実行しない**（二重起票になる）。stderr の URL を報告し、close は人に任せる |
 | 128 | `--global` 無しで git repo 外から呼んだ（`set -e` 下で git 自体の失敗が素通しする） | cwd を repo 内へ移して再実行する |
 | 上記以外の非 0 | gh の失敗がそのまま伝播する（`set -e` は gh の実際の終了コードを返し、1 に丸めない。実測: 未認証の gh は exit 4） | stderr を読む。委譲 worktree では token 未供給を疑う（`worktree-scope.md` §6 の既知 gap） |
 
-code 1 と 3 は `bin/gh-issue-file` 自身の検証の失敗で、gh は起票前の呼び出しも含め呼ばれていても
-issue は作られていない。code 1 は stderr が欠落見出しや引数を名指ししていれば body・引数の不備なので
+code 1 は `bin/gh-issue-file` 自身の検証の失敗で、gh は起票前の呼び出しも含め呼ばれていても
+issue は作られていない。stderr が欠落見出しや引数を名指ししていれば body・引数の不備なので
 直して再実行する。gh の失敗（label 未作成・認証エラー・ネットワークエラー等）は上表の「上記以外の
 非 0」で返り、起票前の失敗なので body を直さず原因を潰してから再実行する。code 4 だけは起票後の
 失敗で、再実行してはならない。

@@ -3,4 +3,5 @@
 /mise.local.toml
 /mise.*.local.toml
 /tmux-client-*.log
+# Former gh-issue-file denylist. Leftover copies list employer-specific names; keep them out of this public repo.
 /.issue-denylist

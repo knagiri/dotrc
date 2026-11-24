@@ -59,8 +59,6 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
      手順 2 の方針を写し、`$CLAUDE_JOB_DIR` 配下のファイルに書く。具体名（組織名・repo 名・
      サービス名など）を書かない
    - `gh-issue-file --global --kind harness --title <title> --body-file <path> [--parent <N>]`
-   - exit 3 で denylist に当たったら、具体名を除いて書き直して再実行する。denylist が無いため
-     に拒否されたら起票せず、方針を下の報告に書く
    - 最終メッセージには起票した URL だけを書く。方針の本文は issue にある。既定の background
      委譲先として走っているなら、最終メッセージは誰にも読まれないまま委譲元に閉じられるので、
      委譲元への完了報告（SendMessage）に URL を添えて届ける

@@ -99,7 +99,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    4. PR を出したら、この指摘を観測として残す。本文を harness template の見出し
       （やること（WHAT）/ 設計（HOW）/ 受け入れ確認 / 由来）で書き、
       `gh-issue-file --global --kind harness --title <title> --body-file <path> --resolved-by <PR-URL>`
-      で起票する（close 済みで入る）。exit 3 なら具体名を除いて書き直す
+      で起票する（close 済みで入る）。具体名（組織名・repo 名・サービス名など）を書かない
    5. これはハーネスタスクなので、末尾の自己内省（harness-from-retrospective）はスキップする
    ```
 
