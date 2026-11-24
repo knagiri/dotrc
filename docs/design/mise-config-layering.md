@@ -35,8 +35,8 @@ dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を
 ## 他 repo の DB 接続（`mise.db.local.toml`）
 
 `bin/db-query` は同じ二重ゲートを各 repo の DB 接続に当てる。値（usql の version、
-`DATABASE_URL`）はその repo の root に置く untracked な `mise.db.local.toml` に書き、`MISE_ENV=db`
-で呼ぶ `db-query` の中でだけ読む。運用の規約は `dot/claude/rules/db-access.md`。
+`DATABASE_URL`）はその repo の root に置く untracked な `mise.db.local.toml` に書き、`db-query` が
+`MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml` で呼ぶ mise の中でだけ読む。運用の規約は `dot/claude/rules/db-access.md`。
 
 `DATABASE_URL` を絞る理由は `GH_TOKEN` より強い。`GH_TOKEN` が常時載っても読むのは gh だけだが、
 `DATABASE_URL` は app framework・ORM・migration ツールが既定で読むので、常時ロードすると
@@ -44,21 +44,29 @@ dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を
 呼び出し側の env にある `DATABASE_URL` を捨て、mise config の値だけを使う。
 
 業務 repo には dotrc の `.gitignore` が効かないので、`mise.local.toml` / `mise.*.local.toml` は
-global な git ignore（`dot/git/ignore`）で無視する。
+global な git ignore（`dot/git/ignore`）で無視する（先頭に `.` の付く形も mise は読むので含める）。
 
-main checkout の root に置いた `mise.db.local.toml` は、`<repo>/.worktrees/<name>` から
-`MISE_ENV=db` を付けたときだけ親を辿って読まれる（実測。付けないと読まれない）。trust は repo
-root で `MISE_ENV=db mise trust` を一度実行して与える。素の `mise trust` は
-`No untrusted config files found.` と返して `mise.db.local.toml` を対象にせず、その後の
-`MISE_ENV=db mise exec` は `Config files in .../mise.db.local.toml are not trusted.` で失敗する
-（実測）。
+`MISE_ENV=db` ではなく override を使うのは、`MISE_ENV` が `mise.db.local.toml` を通常の config 連鎖
+へ足すだけで、連鎖の近い側が勝つため。worktree が自分の `mise.toml` に `DATABASE_URL` を持つと
+main の `mise.db.local.toml` を黙って上書きし、`mise.db.local.toml` が無いときも別の config の値が
+使われて exit 2 にならない（実測、mise 2026.4.28）。override 下では `mise.db.local.toml` が
+`mise.toml` 系の連鎖の代わりに読まれ、`MISE_ENV` が無くても読まれ、worktree の `mise.toml` や
+root の `mise.toml` の値は使われない。mise の global config の `DATABASE_URL` は override 下でも
+読まれるので、global には置かない。
 
-`db-query` は usql の引数を素通しせず、`-c <sql>` と出力形式の flag だけを受け、`\` を含む SQL と
-stdin を拒否する。usql の meta-command は shell の実行（`\!`）やファイルの読み書き（`\i` / `\o` /
+main checkout の root に置いた `mise.db.local.toml` は、`<repo>/.worktrees/<name>` から override を
+付けて呼んでも親を辿って読まれる（実測）。trust は repo root で
+`MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust` を一度実行して与える（実測: この
+環境変数付きで通り、その後の `db-query` が URL を読めた）。未 trust のままだと mise が
+`Config files in .../mise.db.local.toml are not trusted.` で失敗し、`db-query` は mise の message と
+trust の手順を添えて exit 4 で止まる。
+
+`db-query` は usql の引数を素通しせず、`-c <sql>` と出力形式の flag だけを受け、`\` を含む SQL を拒否し、
+stdin は `/dev/null` にして読まない。usql の meta-command は shell の実行（`\!`）やファイルの読み書き（`\i` / `\o` /
 `\w`）ができ、`-c`・`-f`・stdin のどれからでも、SQL の後ろに続けても実行される（実測: `-c 'select 1;
 \! echo X'` で `X` が出る）。素通しすると `Bash(db-query *)` の allow が承認なしの任意コマンド実行に
 なる。一方 SQL の中身は wrapper では縛らず、DB に対して agent に何を許すかは `DATABASE_URL` の
 DB user の権限で決める。
 
-接続先が複数（dev / stg 等）ある場合は扱わない。`MISE_ENV` を接続ごとに分けるか、`db-query` に
+接続先が複数（dev / stg 等）ある場合は扱わない。override するファイル名を接続ごとに分けるか、`db-query` に
 接続名の引数を持たせるかは、必要になった時点で決める。

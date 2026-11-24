@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Functional tests for bin/db-query. A usql stub records its argv (one element
-# per bracketed line); a mise stub stands in for `mise exec -- <cmd>` and sets
-# DATABASE_URL only when MISE_ENV=db, the way mise loads mise.db.local.toml.
-# The last section repeats the core case with the real mise, if installed.
-# Each guard is also checked against a mutant of the wrapper that lacks it.
+# per bracketed line) and exits with $USQL_EXIT; a mise stub stands in for
+# `mise env` and `mise exec -- <cmd>` and sets DATABASE_URL only when mise is
+# pointed at mise.db.local.toml, the way the real override loads it. The last
+# section repeats the core cases with the real mise, if installed.
+# Each guard exercised below is also checked against a mutant of the wrapper
+# that lacks it (mk_mutant); the argument parser's value/duplicate checks and
+# the missing-mise check have no mutant.
 # No test framework; run with bash.
 set -u
 
@@ -22,10 +25,17 @@ cat >"$stubdir/usql" <<'STUB'
 #!/usr/bin/env bash
 printf '[%s]\n' "$@" >"$USQL_ARGS_FILE"
 [ -z "${USQL_STDIN_FILE:-}" ] || cat >"$USQL_STDIN_FILE"
+exit "${USQL_EXIT:-0}"
 STUB
 cat >"$stubdir/mise" <<'STUB'
 #!/usr/bin/env bash
-[ "${MISE_ENV:-}" != db ] || [ -z "${STUB_DB_URL:-}" ] || export DATABASE_URL="$STUB_DB_URL"
+if [ "${MISE_OVERRIDE_CONFIG_FILENAMES:-}" = mise.db.local.toml ]; then
+  [ -z "${STUB_DB_URL:-}" ] || export DATABASE_URL="$STUB_DB_URL"
+fi
+if [ "${1:-}" = env ]; then
+  [ -z "${STUB_MISE_FAIL:-}" ] || { echo "mise ERROR stub: config not trusted" >&2; exit 1; }
+  exit 0
+fi
 while [ $# -gt 0 ]; do case "$1" in --) shift; break ;; *) shift ;; esac; done
 exec "$@"
 STUB
@@ -46,26 +56,43 @@ mk_mutant() {  # mk_mutant <name> <sed expression>
     echo "FAIL: mutant '$1' is identical to db-query; its check is a no-op"; fail=1
   fi
 }
-mk_mutant nomiseenv 's|MISE_ENV=db ||'
-mk_mutant keepenv 's|env -u DATABASE_URL |env |'
+mk_mutant nooverride 's|^export MISE_OVERRIDE_CONFIG_FILENAMES=.*$|:|'
+mk_mutant misenv 's|^export MISE_OVERRIDE_CONFIG_FILENAMES=.*$|export MISE_ENV=db|'
+mk_mutant keepenv 's|env -u DATABASE_URL mise exec|env mise exec|'
 mk_mutant noemptycheck 's|if \[ -z "\${DATABASE_URL:-}" \]; then|if false; then|'
 mk_mutant nobackslash 's|^  \*\\\\\*)$|  __never__)|'
 mk_mutant keepstdin 's| </dev/null$||'
+mk_mutant passthrough 's|^    \*) die_args .*$|    *) fmt+=("$1"); shift ;;|'
+mk_mutant noemptysql 's|^\[ -n "\$sql" \] .*$|:|'
+mk_mutant nousqlcheck 's|if ! command -v usql >/dev/null 2>&1; then|if false; then|'
+mk_mutant nopreflight 's|^if ! mise_err=.*$|if false; then|'
+
+URL="postgres://ro@localhost/example"
 
 # 1. Fixed flags, the format flags and -c <sql>, then the URL from the db config.
-STUB_DB_URL="postgres://ro@localhost/example" run "$bindir/db-query" -J -c 'select 1'; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(cat "$args")" = "$(printf '[%s]\n' -X -w -J -c 'select 1' "postgres://ro@localhost/example")" ]; then
-  echo "ok: db-query hands usql -X -w, the format flags, -c <sql> and the MISE_ENV=db DATABASE_URL"
+STUB_DB_URL="$URL" run "$bindir/db-query" -J -c 'select 1'; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$args")" = "$(printf '[%s]\n' -X -w -J -c 'select 1' "$URL")" ]; then
+  echo "ok: db-query hands usql -X -w, the format flags, -c <sql> and the DATABASE_URL from mise.db.local.toml"
 else echo "FAIL: db-query rc=$rc args=$(cat "$args")"; fail=1; fi
 
-STUB_DB_URL="postgres://ro@localhost/example" run "$stubdir/nomiseenv" -c 'select 1'; rc=$?
+STUB_DB_URL="$URL" run "$stubdir/nooverride" -c 'select 1'; rc=$?
 if [ "$rc" -ne 0 ] && [ ! -s "$args" ]; then
-  echo "ok: without MISE_ENV=db the URL is not loaded (the case above is discriminating)"
-else echo "FAIL: nomiseenv mutant rc=$rc args=$(cat "$args")"; fail=1; fi
+  echo "ok: without the mise override the URL is not loaded (the case above is discriminating)"
+else echo "FAIL: nooverride mutant rc=$rc args=$(cat "$args")"; fail=1; fi
+
+STUB_DB_URL="$URL" run "$bindir/db-query" --json --command 'select 1'; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$args")" = "$(printf '[%s]\n' -X -w --json -c 'select 1' "$URL")" ]; then
+  echo "ok: db-query accepts the long forms --json and --command"
+else echo "FAIL: long flags rc=$rc args=$(cat "$args")"; fail=1; fi
+
+run "$bindir/db-query" -h; rc=$?
+if [ "$rc" -eq 0 ] && grep -qF 'usage:' "$stubdir/err" && [ ! -s "$args" ]; then
+  echo "ok: db-query -h prints usage and exits 0"
+else echo "FAIL: -h rc=$rc err=$(cat "$stubdir/err")"; fail=1; fi
 
 # 2. No DATABASE_URL in the config: a clear error, exit 2, usql never runs.
 run "$bindir/db-query" -c 'select 1'; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -s "$args" ] && grep -qF 'DATABASE_URL is not set' "$stubdir/err"; then
+if [ "$rc" -eq 2 ] && [ ! -s "$args" ] && grep -qF 'DATABASE_URL is unset or empty' "$stubdir/err"; then
   echo "ok: db-query fails with exit 2 and a message when DATABASE_URL is unset"
 else echo "FAIL: unset DATABASE_URL rc=$rc args=$(cat "$args") err=$(cat "$stubdir/err")"; fail=1; fi
 
@@ -87,40 +114,72 @@ else echo "FAIL: keepenv mutant rc=$rc args=$(cat "$args")"; fail=1; fi
 
 # 4. Argument shape: usql runs shell commands and writes files through
 # backslash meta-commands, so only -c <sql> and format flags get through.
-STUB_DB_URL="postgres://ro@localhost/example" run "$bindir/db-query" -c 'select 1; \! touch /tmp/x'; rc=$?
+STUB_DB_URL="$URL" run "$bindir/db-query" -c 'select 1; \! touch /tmp/x'; rc=$?
 if [ "$rc" -eq 1 ] && [ ! -s "$args" ] && grep -qF 'backslash' "$stubdir/err"; then
   echo "ok: db-query refuses SQL containing a backslash meta-command"
 else echo "FAIL: backslash rc=$rc args=$(cat "$args") err=$(cat "$stubdir/err")"; fail=1; fi
 
-STUB_DB_URL="postgres://ro@localhost/example" run "$stubdir/nobackslash" -c 'select 1; \! touch /tmp/x'; rc=$?
+STUB_DB_URL="$URL" run "$stubdir/nobackslash" -c 'select 1; \! touch /tmp/x'; rc=$?
 if [ -s "$args" ]; then
   echo "ok: without the backslash check the meta-command reaches usql (the case above is discriminating)"
 else echo "FAIL: nobackslash mutant rc=$rc args=$(cat "$args")"; fail=1; fi
 
-for bad in "-f q.sql" "-o out.txt" "-c" "-J" "-c a -c b" "-c select --set=x"; do
+# Each case carries a valid -c so the refusal comes from the unsupported
+# argument itself, not from a missing -c.
+for bad in "-f q.sql" "-o out.txt" "--set=x" "-W"; do
   # shellcheck disable=SC2086  # each case is a word list on purpose
-  STUB_DB_URL="postgres://ro@localhost/example" run "$bindir/db-query" $bad; rc=$?
-  if [ "$rc" -eq 1 ] && [ ! -s "$args" ]; then
-    echo "ok: db-query refuses '$bad'"
-  else echo "FAIL: '$bad' rc=$rc args=$(cat "$args")"; fail=1; fi
+  STUB_DB_URL="$URL" run "$bindir/db-query" -c 'select 1' $bad; rc=$?
+  if [ "$rc" -eq 1 ] && [ ! -s "$args" ] && grep -qF 'unsupported argument' "$stubdir/err"; then
+    echo "ok: db-query refuses '$bad' next to a valid -c"
+  else echo "FAIL: '$bad' rc=$rc args=$(cat "$args") err=$(cat "$stubdir/err")"; fail=1; fi
 done
+
+STUB_DB_URL="$URL" run "$stubdir/passthrough" -c 'select 1' -f q.sql; rc=$?
+if grep -qxF '[-f]' "$args"; then
+  echo "ok: without the unsupported-argument refusal -f reaches usql (the cases above are discriminating)"
+else echo "FAIL: passthrough mutant rc=$rc args=$(cat "$args")"; fail=1; fi
+
+# Malformed -c and missing -c: exit 1, usql never runs, and the message says why.
+check_bad() {  # check_bad <expected stderr fragment> <args...>
+  local want="$1"; shift
+  STUB_DB_URL="$URL" run "$bindir/db-query" "$@"; rc=$?
+  if [ "$rc" -eq 1 ] && [ ! -s "$args" ] && grep -qF -- "$want" "$stubdir/err"; then
+    echo "ok: db-query $* -> exit 1 ($want)"
+  else echo "FAIL: '$*' rc=$rc args=$(cat "$args") err=$(cat "$stubdir/err")"; fail=1; fi
+}
+check_bad 'needs a value' -c
+check_bad 'more than once' -c a -c b
+check_bad 'empty SQL' -c ''
+check_bad '-c <sql> is required' -J
+
+STUB_DB_URL="$URL" run "$stubdir/noemptysql" -c ''; rc=$?
+if [ -s "$args" ]; then
+  echo "ok: without the empty-SQL check usql runs (the empty-SQL case is discriminating)"
+else echo "FAIL: noemptysql mutant rc=$rc args=$(cat "$args")"; fail=1; fi
 
 # stdin is another path for meta-commands, so usql gets none of the caller's.
 : >"$stubdir/stdin"
-printf '\\! touch /tmp/x\n' | STUB_DB_URL="postgres://ro@localhost/example" \
+printf '\\! touch /tmp/x\n' | STUB_DB_URL="$URL" \
   USQL_STDIN_FILE="$stubdir/stdin" run "$bindir/db-query" -c 'select 1'; rc=$?
 if [ "$rc" -eq 0 ] && [ ! -s "$stubdir/stdin" ]; then
   echo "ok: db-query gives usql an empty stdin"
 else echo "FAIL: stdin rc=$rc stdin=$(cat "$stubdir/stdin")"; fail=1; fi
 
 : >"$stubdir/stdin"
-printf '\\! touch /tmp/x\n' | STUB_DB_URL="postgres://ro@localhost/example" \
+printf '\\! touch /tmp/x\n' | STUB_DB_URL="$URL" \
   USQL_STDIN_FILE="$stubdir/stdin" run "$stubdir/keepstdin" -c 'select 1'; rc=$?
 if [ -s "$stubdir/stdin" ]; then
   echo "ok: without </dev/null the caller's stdin reaches usql (the case above is discriminating)"
 else echo "FAIL: keepstdin mutant rc=$rc"; fail=1; fi
 
-# 5. No mise on PATH: fail before anything else, with a message.
+# usql's own exit code is passed through.
+STUB_DB_URL="$URL" USQL_EXIT=3 run "$bindir/db-query" -c 'select 1'; rc=$?
+if [ "$rc" -eq 3 ] && [ -s "$args" ]; then
+  echo "ok: db-query returns usql's exit code"
+else echo "FAIL: usql exit rc=$rc"; fail=1; fi
+
+# 5. Environment failures each get their own code and message.
+# 5a. No mise on PATH: fail before anything else.
 nomise="$stubdir/nomise"; mkdir -p "$nomise"
 ln -s "$(command -v bash)" "$nomise/bash"
 : >"$args"
@@ -129,37 +188,100 @@ if [ "$rc" -eq 127 ] && grep -qF 'mise not found' "$stubdir/err"; then
   echo "ok: db-query fails with 127 when mise is missing"
 else echo "FAIL: no mise rc=$rc err=$(cat "$stubdir/err")"; fail=1; fi
 
-# 6. Real mise: mise.db.local.toml at the main checkout's root is read from a
-# linked worktree under <repo>/.worktrees/<name>, and only with MISE_ENV=db.
-# Hermetic in the same way as the real-mise cases of gh-wrappers.test.sh.
+# 5b. mise cannot load the config (e.g. untrusted): exit 4, mise's message and
+# the trust command shown, usql never runs.
+STUB_DB_URL="$URL" STUB_MISE_FAIL=1 run "$bindir/db-query" -c 'select 1'; rc=$?
+if [ "$rc" -eq 4 ] && [ ! -s "$args" ] && grep -qF 'config not trusted' "$stubdir/err" \
+   && grep -qF 'MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust' "$stubdir/err"; then
+  echo "ok: db-query fails with 4 and the trust command when mise cannot load the config"
+else echo "FAIL: mise failure rc=$rc args=$(cat "$args") err=$(cat "$stubdir/err")"; fail=1; fi
+
+STUB_DB_URL="$URL" STUB_MISE_FAIL=1 run "$stubdir/nopreflight" -c 'select 1'; rc=$?
+if [ "$rc" -ne 4 ]; then
+  echo "ok: without the mise preflight the failure is not reported as 4 (the case above is discriminating)"
+else echo "FAIL: nopreflight mutant rc=$rc"; fail=1; fi
+
+# 5c. usql not installed: exit 3 with its own message. The stub dir has no usql
+# here, so the inner shell finds none.
+nousql="$stubdir/nousql"; mkdir -p "$nousql"; cp "$stubdir/mise" "$nousql/mise"
+ln -s "$(command -v bash)" "$nousql/bash"
+for tool in env dirname; do ln -s "$(command -v $tool)" "$nousql/$tool"; done
+nousql_run() {
+  : >"$args"
+  STUB_DB_URL="$URL" PATH="$nousql" "$1" -c 'select 1' >/dev/null 2>"$stubdir/err"
+}
+nousql_run "$bindir/db-query"; rc=$?
+if [ "$rc" -eq 3 ] && grep -qF 'usql not found' "$stubdir/err"; then
+  echo "ok: db-query fails with 3 when usql is missing"
+else echo "FAIL: no usql rc=$rc err=$(cat "$stubdir/err")"; fail=1; fi
+
+nousql_run "$stubdir/nousqlcheck"; rc=$?
+if [ "$rc" -ne 3 ]; then
+  echo "ok: without the usql check the failure is not reported as 3 (the case above is discriminating)"
+else echo "FAIL: nousqlcheck mutant rc=$rc"; fail=1; fi
+
+# 6. Real mise. mise.db.local.toml at the main checkout's root is read from a
+# linked worktree under <repo>/.worktrees/<name>, and no other mise config (a
+# worktree's own mise.toml, a root mise.toml when mise.db.local.toml is absent)
+# can supply the URL. Hermetic in the same way as the real-mise cases of
+# gh-wrappers.test.sh.
 realmise="$(command -v mise 2>/dev/null || true)"
 if [ -z "$realmise" ]; then
   echo "skip: no real mise on PATH; the mise.db.local.toml cases need it"
 else
   rmroot="$(cd "$stubdir" && pwd -P)/realmise"; rmrepo="$rmroot/repo"
-  mkdir -p "$rmrepo" "$rmroot/cfg" "$rmroot/bin"
+  mkdir -p "$rmrepo" "$rmroot/cfg" "$rmroot/state" "$rmroot/bin"
   git -C "$rmrepo" init -q
   git -C "$rmrepo" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
   git -C "$rmrepo" worktree add -q "$rmrepo/.worktrees/foo" -b foo 2>/dev/null
-  printf '[env]\nDATABASE_URL = "postgres://ro@localhost/example"\n' >"$rmrepo/mise.db.local.toml"
+  printf '[env]\nDATABASE_URL = "%s"\n' "$URL" >"$rmrepo/mise.db.local.toml"
   ln -s "$realmise" "$rmroot/bin/mise"
   cp "$stubdir/usql" "$rmroot/bin/usql"
   realmise_run() {  # realmise_run <db-query path>
     : >"$args"
-    ( cd "$rmrepo/.worktrees/foo" && env -u MISE_ENV -u DATABASE_URL \
+    ( cd "$rmrepo/.worktrees/foo" && env -u MISE_ENV -u DATABASE_URL -u MISE_OVERRIDE_CONFIG_FILENAMES \
         MISE_TRUSTED_CONFIG_PATHS="$rmrepo" MISE_CEILING_PATHS="$rmroot" \
         MISE_GLOBAL_CONFIG_FILE="$rmroot/none.toml" MISE_CONFIG_DIR="$rmroot/cfg" \
-        USQL_ARGS_FILE="$args" PATH="$rmroot/bin:$PATH" "$1" -c 'select 1' ) >/dev/null 2>&1
+        MISE_STATE_DIR="$rmroot/state" \
+        USQL_ARGS_FILE="$args" PATH="$rmroot/bin:$PATH" "$1" -c 'select 1' ) >/dev/null 2>"$stubdir/err"
   }
   realmise_run "$bindir/db-query"; rc=$?
-  if [ "$rc" -eq 0 ] && grep -qxF '[postgres://ro@localhost/example]' "$args"; then
+  if [ "$rc" -eq 0 ] && grep -qxF "[$URL]" "$args"; then
     echo "ok: real mise reads the main checkout's mise.db.local.toml from a linked worktree"
   else echo "FAIL: real mise rc=$rc args=$(cat "$args")"; fail=1; fi
 
-  realmise_run "$stubdir/nomiseenv"; rc=$?
+  realmise_run "$stubdir/nooverride"; rc=$?
   if [ "$rc" -ne 0 ] && [ ! -s "$args" ]; then
-    echo "ok: real mise without MISE_ENV=db does not load it (the case above is discriminating)"
-  else echo "FAIL: real mise nomiseenv rc=$rc args=$(cat "$args")"; fail=1; fi
+    echo "ok: real mise without the override does not load it (the case above is discriminating)"
+  else echo "FAIL: real mise nooverride rc=$rc args=$(cat "$args")"; fail=1; fi
+
+  # A worktree's own mise.toml with a DATABASE_URL is nearer than the main
+  # checkout's file; under MISE_ENV=db alone it would win.
+  printf '[env]\nDATABASE_URL = "postgres://rw@wt.example.invalid/db"\n' >"$rmrepo/.worktrees/foo/mise.toml"
+  realmise_run "$bindir/db-query"; rc=$?
+  if [ "$rc" -eq 0 ] && grep -qxF "[$URL]" "$args"; then
+    echo "ok: a worktree's own mise.toml DATABASE_URL does not override mise.db.local.toml"
+  else echo "FAIL: worktree mise.toml rc=$rc args=$(cat "$args")"; fail=1; fi
+
+  realmise_run "$stubdir/misenv"; rc=$?
+  if grep -qxF '[postgres://rw@wt.example.invalid/db]' "$args"; then
+    echo "ok: with MISE_ENV=db alone the worktree's mise.toml wins (the case above is discriminating)"
+  else echo "FAIL: real mise misenv mutant rc=$rc args=$(cat "$args")"; fail=1; fi
+
+  # mise.db.local.toml absent and only a root mise.toml sets the URL: exit 2,
+  # not that value.
+  rm "$rmrepo/.worktrees/foo/mise.toml"
+  mv "$rmrepo/mise.db.local.toml" "$rmroot/db.off"
+  printf '[env]\nDATABASE_URL = "postgres://rw@root.example.invalid/db"\n' >"$rmrepo/mise.toml"
+  realmise_run "$bindir/db-query"; rc=$?
+  if [ "$rc" -eq 2 ] && [ ! -s "$args" ]; then
+    echo "ok: without mise.db.local.toml a root mise.toml DATABASE_URL is not used (exit 2)"
+  else echo "FAIL: absent db config rc=$rc args=$(cat "$args")"; fail=1; fi
+
+  realmise_run "$stubdir/misenv"; rc=$?
+  if grep -qxF '[postgres://rw@root.example.invalid/db]' "$args"; then
+    echo "ok: with MISE_ENV=db alone the root mise.toml URL is used (the case above is discriminating)"
+  else echo "FAIL: real mise misenv mutant (absent) rc=$rc args=$(cat "$args")"; fail=1; fi
 fi
 
 exit "$fail"

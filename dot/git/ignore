@@ -10,6 +10,8 @@ mysecrets
 # (mise.gh.local.toml, mise.db.local.toml, ...); never meant to be committed.
 mise.local.toml
 mise.*.local.toml
+.mise.local.toml
+.mise.*.local.toml
 
 # git worktrees created by bin/claude-worktree live inside the main checkout at
 # <repo>/.worktrees/<name>; keep them out of the main working tree's status.

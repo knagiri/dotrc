@@ -28,18 +28,22 @@ $ printf 'select 2;\n\\! echo FROM-STDIN\n' | usql sq:./t.db
 FROM-STDIN
 $ usql sq:./t.db -c "select 'a\b' as x"
  a\b
+$ printf 'select 1;\n\\! echo FROM-F\n' > m.sql; usql sq:./t.db -f m.sql
+...
+FROM-F
 ```
 
-`-c` の先頭・SQL の後ろ・stdin のいずれからも meta-command が実行される。文字列リテラル内の `\` は
+`-c` の先頭・SQL の後ろ・`-f` のファイル・stdin のいずれからも meta-command が実行される。文字列リテラル内の `\` は
 meta-command にならない。
 
 ## 直し方
 
 `bin/db-query` は引数を素通しせず、`-c <sql>` 1 つと出力形式の flag（`-J` / `-C` / `-t` / `-x` /
 `-q`）だけを受ける。`\` を含む SQL は文字列リテラル内かを解析せず一律に拒否し、usql の stdin は
-`/dev/null` にし、init script を読まない `-X` と password prompt を出さない `-w` を固定で付ける。
-`test/db-query.test.sh` に、backslash を含む SQL・`-f` / `-o` 等の未対応引数・stdin の拒否と、
-それぞれのガードを外した変異版で落ちることを確かめるケースを足した。
+`/dev/null` にして読まず、init script を読まない `-X` と password prompt を出さない `-w` を固定で付ける。
+`test/db-query.test.sh` に、backslash を含む SQL・`-f` / `-o` 等の未対応引数の拒否・stdin を渡さないことのケースを足した。
+backslash の拒否・未対応引数の拒否・stdin を閉じること・空 SQL の拒否には、そのガードを外した変異版で
+落ちることを確かめるケースも付けた。
 
 ## 反映先
 
