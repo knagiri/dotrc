@@ -33,6 +33,10 @@ cat >"$stubdir/claude" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
   agents)
+    case "${CD_ROSTER_MODE:-}" in
+      fail) exit 1 ;;
+      object) echo '{"error":"not a roster"}'; exit 0 ;;
+    esac
     # Keyed on the CLAUDE_CONFIG_DIR this call saw (UNSET when unset) when a
     # fixture for it exists, so a case can assert which environment the roster
     # was read under.
@@ -545,6 +549,28 @@ echo '[]' >"$sandbox/roster.json"
 check "a session with a surviving cwd is offered --resume with its own uuid" \
   "$(if grep -qF "RESUME: claude --resume $early   (cwd: $repo_a)" <<<"$d1"
      then echo 0; else echo 1; fi)"
+
+# --- reachability when the roster cannot be read ----------------------------
+# The roster names $early as live. With it unreadable (the command fails, or
+# prints a non-array) the digest still completes, the session falls back to
+# RESUMABLE, and the fallback is announced on stderr. The first run is the
+# control: the same roster read normally reports the session LIVE.
+jq -cn --arg id "$early" '[{sessionId:$id, kind:"background", status:"idle"}]' >"$sandbox/roster.json"
+dctl="$(run 2026-03-01)"
+check "control: a readable roster reports the session LIVE" \
+  "$(if grep -A3 "SESSION $early" <<<"$dctl" | grep -qx 'REACH: LIVE'; then echo 0; else echo 1; fi)"
+for mode in fail object; do
+  dfail="$(env CLAUDE_PROJECTS_DIR="$projects" CLAUDE_DIGEST_DIR="$digests" \
+      CD_ROSTER="$sandbox/roster.json" CD_ROSTER_MODE="$mode" CD_CALLS="$sandbox/calls" \
+      PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>"$sandbox/err-roster")"; rcf=$?
+  check "roster mode $mode: the digest completes and the session falls back to RESUMABLE" \
+    "$(if [ "$rcf" -eq 0 ] && grep -A3 "SESSION $early" <<<"$dfail" | grep -qx 'REACH: RESUMABLE'
+       then echo 0; else echo 1; fi)"
+  check "roster mode $mode: the fallback is warned about on stderr" \
+    "$(if grep -qF 'claude-digest: could not read the session roster; reachability falls back to RESUMABLE/CWD_GONE' "$sandbox/err-roster"
+       then echo 0; else echo 1; fi)"
+done
+echo '[]' >"$sandbox/roster.json"
 
 # --- generate: idempotency and the two stages -------------------------------
 : >"$sandbox/calls"

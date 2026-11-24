@@ -123,6 +123,26 @@ if ! lkind="$(cq_kind_for "$id")"; then
 fi
 case "$lkind" in
   background)
+    # The roster above covers only this environment's config dir, so "not in
+    # the roster" does not mean "not running": a session of another config dir
+    # is absent too, and marking it done would leave its process running with
+    # nothing (the done-but-running sweep reads this roster as well) to stop it.
+    # claude keeps a session's transcript under its own config dir's projects/,
+    # so a transcript recorded elsewhere means it belongs to another dir. A row
+    # with no transcript path gives no such evidence.
+    cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    cfg="${cfg%/}"
+    if ! transcripts="$(cq_transcripts_for "$id")"; then
+      echo "claude-stop-bg: $id is not running, and the ledger cannot be read to check its config dir" >&2
+      exit 1
+    fi
+    while IFS= read -r tp; do
+      [ -n "$tp" ] || continue
+      case "$tp" in
+        "$cfg"/projects/*) ;;
+        *) echo "claude-stop-bg: $id is recorded under another config dir; not marking it done" >&2; exit 1 ;;
+      esac
+    done <<<"$transcripts"
     mark_done || exit 1
     echo "claude-stop-bg: $id is not running; marked done" >&2
     ;;

@@ -515,8 +515,13 @@ done
 # --- reachability -----------------------------------------------------------
 
 # A roster that cannot be read or parsed leaves every session unlisted, so
-# each one falls back to RESUMABLE or CWD_GONE rather than failing the digest.
-roster="$(claude agents --json 2>/dev/null)" && jq -e 'type == "array"' <<<"$roster" >/dev/null 2>&1 || roster="[]"
+# each one falls back to RESUMABLE or CWD_GONE rather than failing the digest,
+# and the fallback is said on stderr so a LIVE session is not silently
+# misreported as resumable.
+roster="$(claude agents --json 2>/dev/null)" && jq -e 'type == "array"' <<<"$roster" >/dev/null 2>&1 || {
+  echo 'claude-digest: could not read the session roster; reachability falls back to RESUMABLE/CWD_GONE' >&2
+  roster="[]"
+}
 declare -A s_reach=() s_state=() s_cwd=()
 
 for uuid in "${session_ids[@]}"; do

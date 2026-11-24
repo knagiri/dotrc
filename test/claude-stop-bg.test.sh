@@ -224,10 +224,12 @@ else echo "FAIL: CLAUDE_CONFIG_DIR was set: $(cat "$envlog")"; fail=1; fi
 if command -v sqlite3 >/dev/null 2>&1; then
   kdb="$tmp/kind.db"
   sqlite3 "$kdb" "
-    CREATE TABLE sessions (session_id TEXT PRIMARY KEY, config_dir TEXT, kind TEXT);
-    INSERT INTO sessions VALUES ('11111111-1111-2222-3333-444444444444', NULL, 'background');
-    INSERT INTO sessions VALUES ('22222222-1111-2222-3333-444444444444', NULL, 'interactive');
-    INSERT INTO sessions VALUES ('33333333-1111-2222-3333-444444444444', NULL, NULL);
+    CREATE TABLE sessions (session_id TEXT PRIMARY KEY, config_dir TEXT, kind TEXT, transcript_path TEXT);
+    INSERT INTO sessions VALUES ('11111111-1111-2222-3333-444444444444', NULL, 'background', '$HOME/.claude/projects/-w-a/11.jsonl');
+    INSERT INTO sessions VALUES ('22222222-1111-2222-3333-444444444444', NULL, 'interactive', NULL);
+    INSERT INTO sessions VALUES ('33333333-1111-2222-3333-444444444444', NULL, NULL, NULL);
+    INSERT INTO sessions VALUES ('55555555-1111-2222-3333-444444444444', NULL, 'background', '$tmp/.claude-other/projects/-w-a/55.jsonl');
+    INSERT INTO sessions VALUES ('66666666-1111-2222-3333-444444444444', NULL, 'background', NULL);
   "
   runk() { CLAUDE_QUEUE_DB="$kdb" run "$@"; }
 
@@ -236,6 +238,23 @@ if command -v sqlite3 >/dev/null 2>&1; then
   if [ "$rc" -eq 0 ] && [ ! -s "$stoplog" ] && [ "$(cat "$donelog")" = "11111111" ]; then
     echo "ok: a background session no longer running is marked done without a stop"
   else echo "FAIL: gone background rc=$rc out=$out donelog=$(cat "$donelog")"; fail=1; fi
+
+  # A background row whose transcript is under another config dir may be
+  # running there, out of this roster's sight: marking it done would leave the
+  # process with nothing to stop it. Refused, nothing written.
+  : >"$stoplog"; : >"$donelog"
+  out="$(runk 55555555 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && [ ! -s "$stoplog" ] && [ ! -s "$donelog" ] \
+     && grep -qF 'recorded under another config dir; not marking it done' <<<"$out"; then
+    echo "ok: a background row recorded under another config dir is refused, done not written"
+  else echo "FAIL: foreign-dir background rc=$rc out=$out donelog=$(cat "$donelog")"; fail=1; fi
+
+  # No transcript recorded: no evidence of another dir, so the mark proceeds.
+  : >"$stoplog"; : >"$donelog"
+  out="$(runk 66666666 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$(cat "$donelog")" = "66666666" ]; then
+    echo "ok: a background row with no transcript path is marked done"
+  else echo "FAIL: no-transcript background rc=$rc out=$out"; fail=1; fi
 
   # The done mark fails (claude-queue exits 1): the mark is this path's only
   # effect, so it must end non-zero and must not claim "marked done".
