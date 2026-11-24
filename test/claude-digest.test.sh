@@ -33,9 +33,9 @@ cat >"$stubdir/claude" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
   agents)
-    # Per CLAUDE_CONFIG_DIR when a per-dir fixture exists, as the real daemon
-    # answers: each config dir has its own roster. The default dir is reached
-    # with CLAUDE_CONFIG_DIR unset, which reads the UNSET fixture.
+    # Keyed on the CLAUDE_CONFIG_DIR this call saw (UNSET when unset) when a
+    # fixture for it exists, so a case can assert which environment the roster
+    # was read under.
     key="${CLAUDE_CONFIG_DIR-UNSET}"; key="${key//\//_}"
     if [ -n "${CD_ROSTER_DIR:-}" ] && [ -f "$CD_ROSTER_DIR/$key.json" ]; then
       cat "$CD_ROSTER_DIR/$key.json"
@@ -748,78 +748,46 @@ check "--dry-run without --generate is rejected" "$rc"
 if "$bin" --nope >/dev/null 2>&1; then rc=1; else rc=0; fi
 check "an unknown flag is rejected" "$rc"
 
-# --- transcripts under more than one config dir ------------------------------
+# --- config dir from the environment ----------------------------------------
 #
-# Transcripts live under <config dir>/projects, and the ledger is the only place
-# the config dirs in use are written down. Without the discovery a session run
-# under a second dir is simply absent from the digest -- no warning, no empty
-# section, nothing that says it was ever there.
+# Without CLAUDE_PROJECTS_DIR, transcripts come from the config dir claude itself
+# resolves: $CLAUDE_CONFIG_DIR when set, ~/.claude otherwise. The roster is read
+# under the same inherited environment.
 
-if command -v sqlite3 >/dev/null 2>&1; then
-  cfg_home="$sandbox/cfghome"
-  work_cfg="$cfg_home/.claude"
-  personal_cfg="$cfg_home/.claude-personal"
-  mkdir -p "$work_cfg/projects/-proj-a" "$personal_cfg/projects/-proj-a"
+cfg_home="$sandbox/cfghome"
+def_cfg="$cfg_home/.claude"
+alt_cfg="$cfg_home/alt-config"
+def_sid=11111111-aaaa-bbbb-cccc-000000000001
+alt_sid=22222222-aaaa-bbbb-cccc-000000000002
+mkdir -p "$def_cfg/projects/-proj-a" "$alt_cfg/projects/-proj-a"
+for pair in "$def_cfg/projects/-proj-a/$def_sid.jsonl:default side" \
+            "$alt_cfg/projects/-proj-a/$alt_sid.jsonl:alt side"; do
+  jq -cn --arg cwd "$repo_a" --arg text "${pair#*:}" \
+    '{type:"assistant", entrypoint:"cli", isSidechain:false,
+      timestamp:"2026-03-01T03:20:00.100Z", cwd:$cwd, gitBranch:"main",
+      message:{role:"assistant", content:[{type:"text", text:$text}]}}' \
+    >"${pair%%:*}"
+done
+cfg_rosters="$sandbox/cfg-rosters"; mkdir -p "$cfg_rosters"
+echo '[]' >"$cfg_rosters/UNSET.json"
+jq -n --arg id "$alt_sid" '[{sessionId:$id, kind:"background", status:"idle"}]' \
+  >"$cfg_rosters/${alt_cfg//\//_}.json"
 
-  work_sid=11111111-aaaa-bbbb-cccc-000000000001
-  personal_sid=22222222-aaaa-bbbb-cccc-000000000002
-  for pair in "$work_cfg/projects/-proj-a/$work_sid.jsonl:work side" \
-              "$personal_cfg/projects/-proj-a/$personal_sid.jsonl:personal side"; do
-    jq -cn --arg cwd "$repo_a" --arg text "${pair#*:}" \
-      '{type:"assistant", entrypoint:"cli", isSidechain:false,
-        timestamp:"2026-03-01T03:20:00.100Z", cwd:$cwd, gitBranch:"main",
-        message:{role:"assistant", content:[{type:"text", text:$text}]}}' \
-      >"${pair%%:*}"
-  done
+unset_facts="$(env -u CLAUDE_PROJECTS_DIR -u CLAUDE_CONFIG_DIR HOME="$cfg_home" \
+    CLAUDE_DIGEST_DIR="$digests" CD_ROSTER="$sandbox/roster.json" CD_ROSTER_DIR="$cfg_rosters" \
+    CD_CALLS="$sandbox/calls" PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>/dev/null)"
+check "with CLAUDE_CONFIG_DIR unset, transcripts come from ~/.claude/projects" \
+  "$(if grep -q "SESSION $def_sid" <<<"$unset_facts" && ! grep -q "SESSION $alt_sid" <<<"$unset_facts"
+     then echo 0; else echo 1; fi)"
 
-  # Only the personal session is recorded with a config dir; the work one has
-  # none, standing in for a row written before the column existed. The default
-  # dir has to be in the list regardless of what the ledger says.
-  cfg_queue="$sandbox/cfg-queue.db"
-  sqlite3 "$cfg_queue" "
-    CREATE TABLE sessions (session_id TEXT PRIMARY KEY, config_dir TEXT);
-    INSERT INTO sessions VALUES ('$work_sid', NULL);
-    INSERT INTO sessions VALUES ('$personal_sid', '$personal_cfg');
-  "
-
-  # CLAUDE_PROJECTS_DIR is deliberately NOT set here: setting it is the pin that
-  # skips discovery, so a test that set it would assert nothing about this.
-  cfg_facts="$(env -u CLAUDE_PROJECTS_DIR HOME="$cfg_home" CLAUDE_QUEUE_DB="$cfg_queue" \
-      CLAUDE_DIGEST_DIR="$digests" CD_ROSTER="$sandbox/roster.json" CD_CALLS="$sandbox/calls" \
-      PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>"$sandbox/cfg_err")"
-
-  check "a session under the default config dir is in the digest" \
-    "$(if grep -q "SESSION $work_sid" <<<"$cfg_facts"; then echo 0; else echo 1; fi)"
-  check "a session under a second config dir is in the digest" \
-    "$(if grep -q "SESSION $personal_sid" <<<"$cfg_facts"; then echo 0; else echo 1; fi)"
-
-  # A config dir the ledger names but whose projects/ is gone must be skipped,
-  # not treated as "no transcripts anywhere".
-  sqlite3 "$cfg_queue" "INSERT INTO sessions VALUES ('33333333-dead-beef-cafe-000000000003', '$cfg_home/.claude-reaped');"
-  gone_facts="$(env -u CLAUDE_PROJECTS_DIR HOME="$cfg_home" CLAUDE_QUEUE_DB="$cfg_queue" \
-      CLAUDE_DIGEST_DIR="$digests" CD_ROSTER="$sandbox/roster.json" CD_CALLS="$sandbox/calls" \
-      PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>/dev/null)"
-  check "a config dir with no projects/ is skipped, not fatal" \
-    "$(if grep -q "SESSION $personal_sid" <<<"$gone_facts"; then echo 0; else echo 1; fi)"
-
-  # The roster is per config dir too. The personal session is live only in the
-  # personal dir's roster; the default dir's is empty. Reading one roster under
-  # the process's own dir would report it RESUMABLE, not LIVE.
-  cfg_rosters="$sandbox/cfg-rosters"; mkdir -p "$cfg_rosters"
-  echo '[]' >"$cfg_rosters/UNSET.json"
-  jq -n --arg id "$personal_sid" '[{sessionId:$id, kind:"background", status:"idle"}]' \
-    >"$cfg_rosters/${personal_cfg//\//_}.json"
-  live_facts="$(env -u CLAUDE_PROJECTS_DIR -u CLAUDE_CONFIG_DIR HOME="$cfg_home" CLAUDE_QUEUE_DB="$cfg_queue" \
-      CLAUDE_DIGEST_DIR="$digests" CD_ROSTER="$sandbox/roster.json" CD_ROSTER_DIR="$cfg_rosters" \
-      CD_CALLS="$sandbox/calls" PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>/dev/null)"
-  check "a session live under a second config dir is reported LIVE" \
-    "$(if grep -A3 "SESSION $personal_sid" <<<"$live_facts" | grep -qx 'REACH: LIVE'
-       then echo 0; else echo 1; fi)"
-  check "a session absent from every roster is not reported LIVE" \
-    "$(if grep -A3 "SESSION $work_sid" <<<"$live_facts" | grep -qx 'REACH: RESUMABLE'
-       then echo 0; else echo 1; fi)"
-else
-  echo "skip: sqlite3 not available; multi config dir discovery not exercised"
-fi
+alt_facts="$(env -u CLAUDE_PROJECTS_DIR HOME="$cfg_home" CLAUDE_CONFIG_DIR="$alt_cfg" \
+    CLAUDE_DIGEST_DIR="$digests" CD_ROSTER="$sandbox/roster.json" CD_ROSTER_DIR="$cfg_rosters" \
+    CD_CALLS="$sandbox/calls" PATH="$stubdir:$PATH" "$bin" --generate --dry-run 2026-03-01 2>/dev/null)"
+check "an inherited CLAUDE_CONFIG_DIR picks the transcript dir" \
+  "$(if grep -q "SESSION $alt_sid" <<<"$alt_facts" && ! grep -q "SESSION $def_sid" <<<"$alt_facts"
+     then echo 0; else echo 1; fi)"
+check "the roster is read under the inherited CLAUDE_CONFIG_DIR" \
+  "$(if grep -A3 "SESSION $alt_sid" <<<"$alt_facts" | grep -qx 'REACH: LIVE'
+     then echo 0; else echo 1; fi)"
 
 exit "$fail"
