@@ -594,12 +594,13 @@ md_run() {  # md_run <bindir> <labels> [args...]; returns the wrapper's rc
   : >"$mddir/args"
   : >"$mddir/mise-args"
   env GH_ARGS_FILE="$mddir/args" MISE_ARGS_FILE="$mddir/mise-args" GH_LABELS="$2" PATH="$mddir:$PATH" \
-    "$1/gh-issue-mark-delegated" "${@:3}" >/dev/null 2>&1
+    ISSUE_REPO=example-owner/example-issues "$1/gh-issue-mark-delegated" "${@:3}" >/dev/null 2>&1
 }
 md_edited() { grep -qxF '[edit]' "$mddir/args"; }
 # The whole log is compared: one read, then exactly this edit and nothing else.
-md_expected="$(printf '[%s]\n' issue view 42 --json labels --jq '.labels[].name' \
-  issue edit 42 --remove-label status/ready --add-label status/delegated)"
+# Both target the issue repo (-R), whatever the caller's cwd.
+md_expected="$(printf '[%s]\n' issue view -R example-owner/example-issues 42 --json labels --jq '.labels[].name' \
+  issue edit -R example-owner/example-issues 42 --remove-label status/ready --add-label status/delegated)"
 
 md_run "$bindir" $'bug\nstatus/ready' 42; rc=$?
 if [ "$rc" -eq 0 ] && [ "$(cat "$mddir/args")" = "$md_expected" ]; then
@@ -617,6 +618,18 @@ md_run "$bindir" $'bug\nstatus/ready' 42
 if md_via_mise; then
   echo "ok: gh-issue-mark-delegated runs both view and edit under MISE_ENV=gh mise exec"
 else echo "FAIL: gh-issue-mark-delegated mise calls=$(cat "$mddir/mise-args" 2>/dev/null)"; fail=1; fi
+
+# gh runs in the repo holding the script (its token), not in the caller's cwd:
+# run from an unrelated repo, both mise calls still name the script's toplevel.
+md_other="$mddir/other"; mkdir -p "$md_other"; git -C "$md_other" init -q
+md_root="$(cd "$bindir/.." && git rev-parse --show-toplevel)"
+: >"$mddir/args"; : >"$mddir/mise-args"
+( cd "$md_other" && env GH_ARGS_FILE="$mddir/args" MISE_ARGS_FILE="$mddir/mise-args" \
+    GH_LABELS=status/ready PATH="$mddir:$PATH" ISSUE_REPO=example-owner/example-issues \
+    "$bindir/gh-issue-mark-delegated" 42 ) >/dev/null 2>&1
+if [ "$(grep -cxF "[mise:$md_root]" "$mddir/mise-args")" -eq 2 ]; then
+  echo "ok: gh-issue-mark-delegated runs gh in its own repo, not the caller's cwd"
+else echo "FAIL: gh-issue-mark-delegated cwd mise=$(cat "$mddir/mise-args")"; fail=1; fi
 
 # Rejections: each must fail AND never issue the edit.
 md_rejects() {  # md_rejects <bindir> -> 0 iff every bad call fails without an edit
@@ -1153,7 +1166,9 @@ git -C "$miserepo" init -q
 miserepo_real="$(cd "$miserepo" && pwd -P)"
 miseargs="$stubdir/miseargs"
 
-wrappers="gh-automerge gh-await-reviews gh-issue-mark-delegated gh-list-threads gh-pr-checks gh-pr-comments gh-pr-edit-body gh-reply-thread gh-resolve-thread"
+# gh-issue-mark-delegated is not here: it runs gh in its own repo rather than
+# the caller's, which its own section checks.
+wrappers="gh-automerge gh-await-reviews gh-list-threads gh-pr-checks gh-pr-comments gh-pr-edit-body gh-reply-thread gh-resolve-thread"
 printf 'body\n' >"$miserepo/sub/body.md"
 wrapper_arg() {  # the arguments each wrapper's validation accepts
   case "$1" in

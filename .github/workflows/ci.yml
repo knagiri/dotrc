@@ -69,7 +69,9 @@ jobs:
             bin/git-reap-gone \
             bin/git-set-commit-sign \
             bin/lib/claude-queue-db.sh \
+            bin/lib/dotrc-config.sh \
             bin/lib/gh-mise.sh \
+            bin/lib/issue-repo.sh \
             githooks/post-merge \
             test/claude-digest.test.sh \
             test/claude-hook-git-guard.test.sh \
@@ -80,6 +82,7 @@ jobs:
             test/claude-worktree.test.sh \
             test/db-query.test.sh \
             test/deploy.test.sh \
+            test/dotrc-config.test.sh \
             test/gh-issue-file.test.sh \
             test/gh-issue-group.test.sh \
             test/gh-wrappers.test.sh \
