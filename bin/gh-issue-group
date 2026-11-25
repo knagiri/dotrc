@@ -33,8 +33,11 @@ set -euo pipefail
 #       status/delegated.
 #
 # Exit: 0 done / 1 bad input or a target that fails its check (no write is
-#       made) / 3 the issue repo is not configured (bin/lib/issue-repo.sh; no
-#       gh call) / anything else: gh's own exit code (bin/lib/gh-mise.sh).
+#       made) / 3 the issue repo is not configured, is malformed, or its setting
+#       cannot be read (bin/lib/issue-repo.sh; no gh call) / 5 the issue repo is
+#       not private, or that could not be verified (nothing read or written
+#       beyond that one check) / anything else: gh's own exit code
+#       (bin/lib/gh-mise.sh).
 
 usage() {
   sed -n '/^# Usage:/,/^# Exit:/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^Exit:/d' >&2
@@ -89,6 +92,7 @@ here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 . "$here/lib/issue-repo.sh"
 # gh runs in this script's repo, for its token; the target is always -R.
 gh_mise_use "$(gh_mise_repo_root "$here")"
+issue_repo_require_private  # private-check@dotrc
 R=(-R "$ISSUE_REPO")
 
 # view <issue> -- read <issue> into $state, $parent_of (its parent number or

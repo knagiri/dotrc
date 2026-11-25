@@ -48,6 +48,10 @@ printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$1 ${2:-}" in
   "repo view")
     case "$*" in
+      # The privacy check (bin/lib/issue-repo.sh): what its --jq prints.
+      *isPrivate*)
+        [ -z "${GH_EXIT_REPO:-}" ] || { echo "gh stub: forced failure" >&2; exit "$GH_EXIT_REPO"; }
+        echo "${GH_PRIVATE-true}" ;;
       *nameWithOwner*) echo "${GH_NWO:-o/r}" ;;
       *) echo "example-owner" ;;
     esac ;;
@@ -204,11 +208,12 @@ if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
 else echo "FAIL: --parent x rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
 # The issue repo is private, so who filed the parent is not checked: the read
-# asks for labels only, and no repo-owner lookup is made.
+# asks for labels only, and the one `repo view` is the privacy check, not an
+# owner lookup.
 run --kind harness --title t --body-file "$full_body" --parent 12
 if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args" \
-  && [ "$(grep -A1 -xF '[--json]' "$tmp/args" | sed -n 2p)" = '[labels]' ] \
-  && ! grep -qxF '[repo]' "$tmp/args"; then
+  && grep -A1 -xF '[--json]' "$tmp/args" | grep -qxF '[labels]' \
+  && [ "$(grep -cxF '[repo]' "$tmp/args")" -eq 1 ] && grep -qxF '[isPrivate]' "$tmp/args"; then
   echo "ok: --parent checks the group label only, with no author lookup"
 else echo "FAIL: --parent author lookup rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
@@ -321,10 +326,11 @@ else echo "FAIL: --list-groups exclusivity rc=$rc args=$(cat "$tmp/args")"; fail
 
 # --- --repo -------------------------------------------------------------------
 # Prints the issue repo, from ISSUE_REPO when set and from the dotrc config file
-# (bin/lib/dotrc-config.sh) otherwise, without calling gh.
+# (bin/lib/dotrc-config.sh) otherwise. The only gh call is the privacy check.
 run --repo
-if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/out")" = "$issue_repo" ] && [ ! -s "$tmp/args" ]; then
-  echo "ok: --repo prints ISSUE_REPO without calling gh"
+if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/out")" = "$issue_repo" ] \
+  && grep -qxF '[isPrivate]' "$tmp/args" && ! grep -qxF '[issue]' "$tmp/args"; then
+  echo "ok: --repo prints ISSUE_REPO after the privacy check, reading no issue"
 else echo "FAIL: --repo rc=$rc out=$(cat "$tmp/out") args=$(cat "$tmp/args")"; fail=1; fi
 
 # run_unset <args...> -- like run, with ISSUE_REPO absent from the environment.
@@ -579,5 +585,78 @@ if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
   echo "ok: a filing from another repo files even when .issue-denylist lists a word in the title"
 else echo "FAIL: denylist-present foreign rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 rm -f "$scriptrepo/.issue-denylist"
+
+# --- argument errors come before the issue repo is resolved -----------------------
+# With nothing configured, bad input is still exit 1 (the caller's mistake), not
+# 3 (the machine's). The arguments need no issue repo to be judged.
+rm -f "$dotrc_cfg"
+for bad in "--kind bogus --title t --body-file $full_body" "--kind task" \
+    "--kind task --title t" "--kind task --title t --body-file $tmp/does-not-exist.md" \
+    "--list-groups --kind harness" "--repo --kind harness" "--bogus"; do
+  # shellcheck disable=SC2086
+  run_unset $bad
+  if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
+    echo "ok: with no issue repo configured, '${bad%% --body-file*}' still exits 1 (arguments are checked first)"
+  else echo "FAIL: arg check before config '$bad' rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+done
+
+# Discrimination: the issue repo resolved before the arguments are read turns
+# the same bad input into exit 3.
+ordmut="$tmp/ordmut"; rm -rf "$ordmut"; mkdir -p "$ordmut"; cp -a "$bindir/." "$ordmut/"
+sed 's|^kind=""; title=""|. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/issue-repo.sh"\n&|' \
+  "$bindir/gh-issue-file" >"$ordmut/gh-issue-file"
+chmod +x "$ordmut/gh-issue-file"
+if cmp -s "$bindir/gh-issue-file" "$ordmut/gh-issue-file"; then
+  echo "FAIL: the source-order mutant is identical; the check below is a no-op"; fail=1
+fi
+( cd "$isorepo" && env -u ISSUE_REPO GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+    "$ordmut/gh-issue-file" --kind bogus --title t --body-file "$full_body" ) >"$tmp/out" 2>"$tmp/err"; rc=$?
+if [ "$rc" -eq 3 ]; then
+  echo "ok: resolving the issue repo before the arguments turns bad input into exit 3 (the case above is discriminating)"
+else echo "FAIL: source-order mutant rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+# --- the issue repo must be private (fail closed) ---------------------------------
+# Public, an unreadable lookup and output that is not `true` all stop every mode
+# with exit 5 before any issue is read or written (and --repo prints nothing).
+for v in GH_PRIVATE=false GH_EXIT_REPO=1 GH_PRIVATE=maybe GH_PRIVATE=; do
+  for mode in repo groups file; do
+    case "$mode" in
+      repo)   a=(--repo) ;;
+      groups) a=(--list-groups) ;;
+      file)   a=(--kind harness --title t --body-file "$full_body") ;;
+    esac
+    export "${v?}"
+    run "${a[@]}"
+    unset "${v%%=*}"
+    if [ "$rc" -eq 5 ] && ! grep -qxF '[issue]' "$tmp/args" && [ ! -s "$tmp/out" ] \
+      && grep -qE 'not private|cannot verify' "$tmp/err"; then
+      echo "ok: $mode with $v exits 5 before any issue is read or written"
+    else echo "FAIL: private check $mode $v rc=$rc args=$(cat "$tmp/args") out=$(cat "$tmp/out") err=$(cat "$tmp/err")"; fail=1; fi
+  done
+done
+
+# Discrimination: with the check removed, or its comparison loosened to "any
+# output", a public repo goes through. Each mutant runs from a copy of bin/.
+privmut() {  # privmut <name> <file under bin/> <sed expr>; sets $privmut_dir
+  privmut_dir="$tmp/privmut-$1"; rm -rf "$privmut_dir"; mkdir -p "$privmut_dir"
+  cp -a "$bindir/." "$privmut_dir/"
+  sed "$3" "$bindir/$2" >"$privmut_dir/$2"
+  chmod +x "$privmut_dir/$2"
+  if cmp -s "$bindir/$2" "$privmut_dir/$2"; then
+    echo "FAIL: the $1 mutant is identical; the check below is a no-op"; fail=1
+  fi
+}
+privmut nocall gh-issue-file '/private-check@dotrc$/d'
+( cd "$isorepo" && env GH_PRIVATE=false GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+    "$privmut_dir/gh-issue-file" --repo ) >"$tmp/out" 2>"$tmp/err"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/out")" = "$issue_repo" ]; then
+  echo "ok: without the check a public issue repo is used (the exit-5 cases are discriminating)"
+else echo "FAIL: no-call mutant rc=$rc out=$(cat "$tmp/out")"; fail=1; fi
+privmut loose lib/issue-repo.sh 's|\[ "\$last" != true \]|[ -z "$last" ]|'
+( cd "$isorepo" && env GH_PRIVATE=false GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+    "$privmut_dir/gh-issue-file" --repo ) >"$tmp/out" 2>"$tmp/err"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/out")" = "$issue_repo" ]; then
+  echo "ok: a comparison loosened to any output lets a public repo through (the exit-5 cases are discriminating)"
+else echo "FAIL: loose-compare mutant rc=$rc out=$(cat "$tmp/out")"; fail=1; fi
 
 exit "$fail"

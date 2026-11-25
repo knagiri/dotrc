@@ -23,7 +23,10 @@ cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$1 ${2:-}" in
-  "repo view") echo "example-owner" ;;
+  "repo view")
+    # The privacy check (bin/lib/issue-repo.sh): what its --jq prints.
+    [ -z "${GH_EXIT_REPO:-}" ] || { echo "gh stub: forced failure" >&2; exit "$GH_EXIT_REPO"; }
+    echo "${GH_PRIVATE-true}" ;;
   "issue view")
     n=""; for a in "${@:3}"; do [[ "$a" =~ ^[0-9]+$ ]] && { n="$a"; break; }; done
     v="GH_VIEW_$n"
@@ -70,8 +73,9 @@ run() {  # run gh-issue-group with a fresh argv log; sets $rc
   r_consistent "$*"
 }
 # r_consistent <label> -- every gh `issue` call in the argv log names the issue
-# repo: as many `[-R]` + `[$issue_repo]` pairs as `[issue]` calls, and at least
-# one call. A call without -R would write to the dotrc issue of the same number.
+# repo: as many `[-R]` + `[$issue_repo]` pairs as `[issue]` calls (a run that
+# stops before calling gh has none of either). A call without -R would write to
+# the dotrc issue of the same number.
 r_consistent() {
   local calls pairs
   calls="$(grep -cxF '[issue]' "$tmp/args")"
@@ -99,13 +103,14 @@ if [ "$rc" -eq 0 ] && grep -A1 -xF '[--add-sub-issue]' "$tmp/args" | grep -qxF '
   echo "ok: attach adds every observation as a sub-issue of the open group"
 else echo "FAIL: attach rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
 
-# Every read and write names the issue repo: as many `-R <repo>` pairs as gh
+# Every read and write names the issue repo: as many `-R <repo>` pairs as issue
 # calls (three views and one edit here), and who filed an issue is not read
-# (the issue repo is private), so no repo-owner lookup either.
+# (the issue repo is private): the one `repo view` is the privacy check.
 run attach 5 10 11
 if [ "$(grep -cxF '[issue]' "$tmp/args")" -eq 4 ] \
   && [ "$(grep -A1 -xF '[-R]' "$tmp/args" | grep -cxF "[$issue_repo]")" -eq 4 ] \
-  && ! grep -qxF '[repo]' "$tmp/args" && ! grep -q 'author' "$tmp/args"; then
+  && [ "$(grep -cxF '[repo]' "$tmp/args")" -eq 1 ] && grep -qxF '[isPrivate]' "$tmp/args" \
+  && ! grep -q 'author' "$tmp/args"; then
   echo "ok: every gh call targets the issue repo, with no author or owner read"
 else echo "FAIL: attach -R args=$(cat "$tmp/args")"; fail=1; fi
 
@@ -305,5 +310,72 @@ run frobnicate 5
 if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
   echo "ok: an unknown subcommand exits 1 before calling gh"
 else echo "FAIL: unknown subcommand rc=$rc"; fail=1; fi
+
+# --- the issue repo: not configured (3), not private (5) --------------------------
+# Not configured: ISSUE_REPO is absent and the sandbox HOME has no config file,
+# so every subcommand stops with 3 before gh is called.
+run_unset() {  # run_unset <bindir> <args...>; ISSUE_REPO absent from the environment
+  : >"$tmp/args"
+  env -u ISSUE_REPO GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+    "$1/gh-issue-group" "${@:2}" >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+}
+unconfigured_stops() {  # 0 iff every subcommand exits 3 without a gh call
+  local bad=0 c
+  for c in "close 10" "close-task 31" "attach 5 10" "mark 5 clear" "reopen 6"; do
+    # shellcheck disable=SC2086
+    run_unset "$1" $c
+    { [ "$rc" -eq 3 ] && [ ! -s "$tmp/args" ]; } || bad=1
+  done
+  return "$bad"
+}
+if unconfigured_stops "$bindir"; then
+  echo "ok: with no issue repo configured every subcommand exits 3 without calling gh"
+else echo "FAIL: unconfigured rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
+# Discrimination: with exit 3 turned into a no-op in the lib, a call is made.
+cfgmut="$tmp/cfgmut"; rm -rf "$cfgmut"; mkdir -p "$cfgmut"; cp -a "$bindir/." "$cfgmut/"
+sed 's/exit 3/:/' "$bindir/lib/issue-repo.sh" >"$cfgmut/lib/issue-repo.sh"
+if cmp -s "$bindir/lib/issue-repo.sh" "$cfgmut/lib/issue-repo.sh"; then
+  echo "FAIL: the exit-3 mutant is identical; the check below is a no-op"; fail=1
+fi
+if ! unconfigured_stops "$cfgmut"; then
+  echo "ok: without the exit 3 an unconfigured issue repo gets through (the case above is discriminating)"
+else echo "FAIL: exit-3 mutant still stopped everything"; fail=1; fi
+
+# Not private (or not verifiable): exit 5, and no issue is read or written.
+not_private_stops() {  # not_private_stops <bindir>; 0 iff every case exits 5 with no issue call
+  local bad=0 v c
+  for v in GH_PRIVATE=false GH_EXIT_REPO=1 GH_PRIVATE=maybe GH_PRIVATE=; do
+    for c in "close 10" "close-task 31" "attach 5 10" "mark 5 clear" "reopen 6" "create --title g --body-file $tmp/gbody.md"; do
+      : >"$tmp/args"
+      # shellcheck disable=SC2086
+      env "$v" GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+        "$1/gh-issue-group" $c >"$tmp/out" 2>"$tmp/err"
+      rc=$?
+      { [ "$rc" -eq 5 ] && ! grep -qxF '[issue]' "$tmp/args" && grep -qE 'not private|cannot verify' "$tmp/err"; } || bad=1
+    done
+  done
+  return "$bad"
+}
+if not_private_stops "$bindir"; then
+  echo "ok: a public, unverifiable or odd-answer issue repo exits 5 before any issue is touched"
+else echo "FAIL: not private rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
+# Discrimination: the call dropped, or the comparison loosened to any output.
+privmut="$tmp/privmut"; rm -rf "$privmut"; mkdir -p "$privmut"; cp -a "$bindir/." "$privmut/"
+sed '/private-check@dotrc$/d' "$bindir/gh-issue-group" >"$privmut/gh-issue-group"
+if cmp -s "$bindir/gh-issue-group" "$privmut/gh-issue-group"; then
+  echo "FAIL: the no-check mutant is identical; the check below is a no-op"; fail=1
+fi
+if ! not_private_stops "$privmut"; then
+  echo "ok: without the privacy check a public issue repo is written to (the exit-5 cases are discriminating)"
+else echo "FAIL: no-check mutant still stopped everything"; fail=1; fi
+sed 's|\[ "\$last" != true \]|[ -z "$last" ]|' "$bindir/lib/issue-repo.sh" >"$privmut/lib/issue-repo.sh"
+cp -a "$bindir/gh-issue-group" "$privmut/gh-issue-group"
+if cmp -s "$bindir/lib/issue-repo.sh" "$privmut/lib/issue-repo.sh"; then
+  echo "FAIL: the loose-compare mutant is identical; the check below is a no-op"; fail=1
+fi
+if ! not_private_stops "$privmut"; then
+  echo "ok: a comparison loosened to any output lets a public repo through (the exit-5 cases are discriminating)"
+else echo "FAIL: loose-compare mutant still stopped everything"; fail=1; fi
 
 exit "$fail"

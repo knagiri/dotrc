@@ -11,8 +11,8 @@ set -euo pipefail
 #   1. Structure. `gh issue create --title X --body Y` never applies an issue
 #      template (-T/--template is starting text for the interactive/editor
 #      path), and YAML issue forms are unreachable non-interactively. So the
-#      body is checked here, against the very same .github/ISSUE_TEMPLATE file
-#      the web UI serves -- one source of truth, no second skeleton to drift.
+#      body is checked here, against the .github/ISSUE_TEMPLATE file of the
+#      dotfiles repo, which is the single source of truth for the skeleton.
 #   2. Fixed labels. harness and bug are observations (label `observation`, no
 #      status/*): duplicates are not refused. task keeps status/triage, the
 #      human gate.
@@ -37,9 +37,16 @@ set -euo pipefail
 # --repo prints the issue repo as OWNER/NAME, for `gh issue view -R <it>`.
 # --global is accepted and ignored (compatibility).
 #
+# Arguments are validated first, so bad input exits 1 whether or not the issue
+# repo is configured. Then the issue repo is resolved and verified private
+# (bin/lib/issue-repo.sh); every mode, --repo included, passes that check
+# before it reads or writes anything.
+#
 # Exit:  0 created (or listed, or printed) / 1 bad input
-#        / 3 the issue repo is not configured (bin/lib/issue-repo.sh): nothing
-#          was filed
+#        / 3 the issue repo is not configured, is malformed, or its setting
+#          cannot be read (bin/lib/issue-repo.sh): no gh call was made
+#        / 5 the issue repo is not private, or that could not be verified (gh
+#          was called once to ask): nothing was read or filed
 #        / 4 the issue WAS created but the --resolved-by follow-up (reading the
 #          number, closing) failed: do not run again, it would file a duplicate
 #        / anything else: gh's own exit code from before the issue exists,
@@ -77,20 +84,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-# shellcheck source=bin/lib/issue-repo.sh
-. "$here/lib/issue-repo.sh"
-
 if [ "$print_repo" = 1 ]; then
   if [ "$list_groups" = 1 ] || [ -n "$kind$title$body_file$parent$resolved_by" ]; then
     echo "gh-issue-file: --repo takes no other flag" >&2
     usage 1
   fi
-  printf '%s\n' "$ISSUE_REPO"
-  exit 0
-fi
-
-if [ "$list_groups" = 0 ]; then
+elif [ "$list_groups" = 0 ]; then
   case "$kind" in
     harness|bug|task) ;;
     "") echo "gh-issue-file: --kind is required" >&2; usage 1 ;;
@@ -114,14 +113,23 @@ fi
 
 # Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
 # is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
+here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 # shellcheck source=bin/lib/gh-mise.sh
 . "$here/lib/gh-mise.sh"
+# shellcheck source=bin/lib/issue-repo.sh
+. "$here/lib/issue-repo.sh"
 
 # $root is the repo holding this script (resolving any PATH symlink first),
 # never cwd's: the template comes from there, and gh_mise runs gh there so the
 # token is that repo's. Where the issue lands is -R "$ISSUE_REPO" on each call.
 root="$(gh_mise_repo_root "$here")"  # template-root@dotrc
 gh_mise_use "$root"
+issue_repo_require_private  # private-check@dotrc
+
+if [ "$print_repo" = 1 ]; then
+  printf '%s\n' "$ISSUE_REPO"
+  exit 0
+fi
 
 if [ "$list_groups" = 1 ]; then
   gh_mise issue list -R "$ISSUE_REPO" --label group --state open --limit 200 \

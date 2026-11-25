@@ -101,6 +101,53 @@ printf 'DC_A=from-xdg\n' >"$xdg/dotrc/config"
 out="$(XDG_CONFIG_HOME="$xdg" bash -c '. "$1"; dotrc_config DC_A' _ "$lib" 2>"$tmp/err")"; rc=$?
 expect "XDG_CONFIG_HOME moves the file" 0 "from-xdg"
 
+# CRLF line endings (a file edited on another platform): the \r is dropped with
+# the rest of the trailing whitespace, so it never ends up in a value.
+printf 'DC_A=crlf-value\r\nDC_B=x=y\r\n' >"$cfg"
+get DC_A
+expect "a CRLF line ending does not leave a carriage return in the value" 0 "crlf-value"
+get DC_B
+expect "a CRLF line ending after a value with = is dropped too" 0 "x=y"
+
+# Discrimination: with the trailing-whitespace trim removed, the \r stays.
+nomut="$tmp/nottrim.sh"
+grep -v 'line="${line%"${line##\*\[!\[:space:\]\]}"}"' "$lib" >"$nomut"
+if cmp -s "$lib" "$nomut"; then
+  echo "FAIL: the trailing-trim mutant is identical; the check below is a no-op"; fail=1
+fi
+printf 'DC_A=crlf-value\r\n' >"$cfg"
+out="$(env -u DC_A bash -c '. "$1"; dotrc_config DC_A' _ "$nomut" 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" != "crlf-value" ]; then
+  pass "without the trailing trim the carriage return stays in the value (the CRLF case is discriminating)"
+else nope "trailing-trim mutant"; fi
+
+# A file that exists but cannot be read is an error, not "unset": the default
+# must not quietly stand in for a setting that is there but unreadable. (Root
+# reads any file, so the case cannot be set up as root.)
+printf 'DC_A=from-file\n' >"$cfg"
+chmod 000 "$cfg"
+if [ -r "$cfg" ]; then
+  echo "skip: the config file is readable despite chmod 000 (running as root?); unreadable-file case not run"
+else
+  get DC_A fallback
+  if [ "$rc" -eq 2 ] && [ -z "$out" ] && [[ "$err" == *"cannot read $cfg"* ]]; then
+    pass "an unreadable config file returns 2 naming the file, not the default"
+  else nope "an unreadable config file returns 2 naming the file, not the default"; fi
+  # Discrimination: without the readability check the same file yields the
+  # default (or "unset"), never the error.
+  noread="$tmp/noread.sh"
+  sed 's|\[ ! -r "\$file" \]|false|' "$lib" >"$noread"
+  if cmp -s "$lib" "$noread"; then
+    echo "FAIL: the readability mutant is identical; the check below is a no-op"; fail=1
+  fi
+  out="$(env -u DC_A bash -c '. "$1"; dotrc_config DC_A fallback' _ "$noread" 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 2 ]; then
+    pass "without the readability check the unreadable file is not reported (the case above is discriminating)"
+  else nope "readability mutant"; fi
+fi
+chmod 600 "$cfg"
+rm -f "$cfg"
+
 get 'bad key'
 if [ "$rc" -eq 2 ]; then pass "a key that is not an identifier returns 2"; else nope "a key that is not an identifier returns 2"; fi
 

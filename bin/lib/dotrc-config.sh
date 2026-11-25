@@ -14,9 +14,9 @@
 #   removal, no variable or command expansion.
 # - If a key appears more than once, the last line wins.
 #
-# The file is parsed, never sourced. Allowlisted wrappers read it, so
-# executing it would let anything that can write the file run commands
-# without an approval prompt.
+# The file is parsed, never sourced: a read never executes anything in it, so
+# whoever can write the file cannot make a reader run commands that no
+# approval prompt has seen.
 #
 # dotrc_config <KEY> [<default>]
 #   Prints the value of KEY. Lookup order: a non-empty environment variable
