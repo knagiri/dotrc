@@ -36,12 +36,24 @@ if [ -e "$FIX/claude_ran" ]; then
 fi
 groups_file="${groups_file:-$FIX/groups.json}"
 case "$1 ${2:-}" in
-  "repo view") echo example-owner ;;
   "issue list")
+    # Every issue read must name the issue repo; anything else is a bug.
+    [ "$(after -R "$@")" = "$ISSUE_REPO" ] || { echo "gh stub: issue list without -R $ISSUE_REPO: $*" >&2; exit 1; }
     if [ "$(after --label "$@")" = group ]; then cat "$groups_file"
+    elif [ "$(after --label "$@")" = kind/task ]; then
+      # Only started tasks are read: closing one that was never started is wrong.
+      has status/delegated "$@" || { echo "gh stub: task list without status/delegated: $*" >&2; exit 1; }
+      cat "$FIX/tasks.json" 2>/dev/null || echo '[]'
     elif has --search "$@"; then cat "$FIX/obs_recent.json"
     else cat "$FIX/obs_open.json"; fi ;;
-  "pr list") cat "$FIX/prs.json" ;;
+  "pr list")
+    # GH_FAIL_MERGED fails only the merged-PR read, past every other read.
+    if [ -n "${GH_FAIL_MERGED:-}" ] && [ "$(after --state "$@")" = merged ]; then
+      echo "gh stub: forced failure of the merged PR list" >&2; exit 1
+    fi
+    if has -R "$@"; then echo "gh stub: PRs are this repo's, not -R: $*" >&2; exit 1; fi
+    if [ "$(after --state "$@")" = merged ]; then cat "$FIX/merged_prs.json" 2>/dev/null || echo '[]'
+    else cat "$FIX/prs.json"; fi ;;
   *) echo "gh stub: unexpected: $*" >&2; exit 1 ;;
 esac
 STUB
@@ -57,6 +69,7 @@ STUB
 cat >"$stubdir/claude" <<'STUB'
 #!/usr/bin/env bash
 printf 'claude' >>"$CALLS"; printf ' [%s]' "$@" >>"$CALLS"; echo >>"$CALLS"
+printf 'claude-env GH_REPO=%s\n' "${GH_REPO:-}" >>"$CALLS"
 : >"$FIX/claude_ran"
 cat >"$CLAUDE_STDIN"
 STUB
@@ -80,6 +93,8 @@ STUB
 cat >"$stubdir/gh-issue-group" <<'STUB'
 #!/usr/bin/env bash
 printf 'gh-issue-group %s\n' "$*" >>"$CALLS"
+# GIG_FAIL=<args> fails exactly that call.
+[ "${GIG_FAIL:-}" != "$*" ] || exit 1
 STUB
 chmod +x "$stubdir"/*
 
@@ -94,26 +109,26 @@ now=2026-06-30T00:00:00Z
 run() {  # run issue-crawl against the fixtures; sets $rc
   : >"$calls"; : >"$tmp/stdin"; rm -f "$fix/claude_ran"
   env CALLS="$calls" FIX="$fix" CLAUDE_STDIN="$tmp/stdin" PATH="$stubdir:$PATH" \
+    ISSUE_REPO=example-owner/example-issues \
     "$crawl" --now "$now" "$@" >"$tmp/out" 2>"$tmp/err"
   rc=$?
 }
 called() { grep -qxF -- "$1" "$calls"; }
 
-# obs <number> <parent|null> <createdAt> <session|""> [author] [state] [body]
+# obs <number> <parent|null> <createdAt> <session|""> [state] [body]
 obs() {
-  local body="${7:-observation $1}"
+  local body="${6:-observation $1}"
   [ -z "$4" ] || body="$body
 <!-- observed-session: $4 -->"
-  jq -n --argjson n "$1" --argjson p "$2" --arg c "$3" --arg a "${5:-example-owner}" \
-    --arg s "${6:-OPEN}" --arg b "$body" \
-    '{number:$n, createdAt:$c, author:{login:$a}, state:$s, body:$b,
+  jq -n --argjson n "$1" --argjson p "$2" --arg c "$3" \
+    --arg s "${5:-OPEN}" --arg b "$body" \
+    '{number:$n, createdAt:$c, state:$s, body:$b,
       parent:(if $p == null then null else {number:$p} end)}'
 }
-# group <number> <state> <labels,csv> [stateReason] [closedAt] [author]
+# group <number> <state> <labels,csv> [stateReason] [closedAt]
 group() {
   jq -n --argjson n "$1" --arg s "$2" --arg l "$3" --arg r "${4:-}" --arg c "${5:-}" \
-    --arg a "${6:-example-owner}" \
-    '{number:$n, state:$s, author:{login:$a},
+    '{number:$n, state:$s,
       stateReason:(if $r == "" then null else $r end),
       closedAt:(if $c == "" then null else $c end),
       labels:($l | split(",") | map({name:.}))}'
@@ -122,7 +137,7 @@ group() {
 # --- count_group ----------------------------------------------------------------
 # Sourced in library mode so the counting rule can be checked on its own.
 count() {  # count <json-array>
-  ( ISSUE_CRAWL_LIB=1; owner=example-owner; since=2026-05-31T00:00:00Z
+  ( ISSUE_CRAWL_LIB=1; since=2026-05-31T00:00:00Z
     # shellcheck source=bin/issue-crawl
     . "$crawl"; count_group "$1" )
 }
@@ -136,9 +151,9 @@ if [ "$(count "$unmarked")" = 3 ]; then
   echo "ok: observations without a session marker count one each"
 else echo "FAIL: unmarked count=$(count "$unmarked")"; fail=1; fi
 
-mixed="[$(obs 1 9 2026-06-10T00:00:00Z a),$(obs 2 9 2026-06-10T00:00:00Z b someone-else),$(obs 3 9 2026-05-01T00:00:00Z c)]"
-if [ "$(count "$mixed")" = 1 ]; then
-  echo "ok: observations by others or older than 30 days are not counted"
+mixed="[$(obs 1 9 2026-06-10T00:00:00Z a),$(obs 2 9 2026-06-10T00:00:00Z b),$(obs 3 9 2026-05-01T00:00:00Z c)]"
+if [ "$(count "$mixed")" = 2 ]; then
+  echo "ok: observations older than 30 days are not counted"
 else echo "FAIL: mixed count=$(count "$mixed")"; fail=1; fi
 
 # Discrimination (evidence-over-guesswork §4): with the session dedup removed
@@ -148,7 +163,7 @@ sed 's#^.*session-key@dotrc$#      | null as $s#' "$crawl" >"$mutant"
 if cmp -s "$crawl" "$mutant"; then
   echo "FAIL: the dedup mutant is identical; the check below is a no-op"; fail=1
 fi
-mcount="$( ISSUE_CRAWL_LIB=1; owner=example-owner; since=2026-05-31T00:00:00Z
+mcount="$( ISSUE_CRAWL_LIB=1; since=2026-05-31T00:00:00Z
   # shellcheck disable=SC1090
   . "$mutant"; count_group "$same_session" )"
 if [ "$mcount" = 3 ]; then
@@ -160,7 +175,7 @@ else echo "FAIL: dedup mutant count=$mcount"; fail=1; fi
 # rejected and has nothing new since its PR closed; group 5 is delegated and
 # its PR was closed unmerged; group 6 was completed but has two observations
 # from after it closed (a recurrence) and one from before; group 7 has nothing
-# recent; group 8 is someone else's; group 9 was closed as not planned with an
+# recent; group 9 was closed as not planned with an
 # older observation left open.
 secret='SECRET-BODY-TEXT'
 {
@@ -172,7 +187,6 @@ secret='SECRET-BODY-TEXT'
   group 5 OPEN agent-task,group,group/delegated; echo ,
   group 6 CLOSED agent-task,group COMPLETED 2026-06-10T00:00:00Z; echo ,
   group 7 OPEN agent-task,group; echo ,
-  group 8 OPEN agent-task,group '' '' someone-else; echo ,
   group 9 CLOSED agent-task,group NOT_PLANNED 2026-06-10T00:00:00Z
   echo ']'
 } >"$fix/groups.json"
@@ -180,8 +194,7 @@ secret='SECRET-BODY-TEXT'
 recent=(
   "$(obs 11 1 2026-06-20T00:00:00Z a1)" "$(obs 12 1 2026-06-20T00:00:00Z a2)"
   "$(obs 13 1 2026-06-20T00:00:00Z a3)"
-  "$(obs 91 1 2026-06-20T00:00:00Z x1 someone-else OPEN "$secret")"
-  "$(obs 21 2 2026-06-20T00:00:00Z b1 example-owner OPEN "$secret")"
+  "$(obs 21 2 2026-06-20T00:00:00Z b1 OPEN "$secret")"
   "$(obs 22 2 2026-06-20T00:00:00Z b2)" "$(obs 23 2 2026-06-20T00:00:00Z b3)"
   "$(obs 24 2 2026-06-20T00:00:00Z b4)" "$(obs 25 2 2026-06-20T00:00:00Z b5)"
   "$(obs 31 3 2026-06-20T00:00:00Z c1)" "$(obs 32 3 2026-06-20T00:00:00Z c2)"
@@ -194,7 +207,6 @@ recent=(
   "$(obs 61 6 2026-06-15T00:00:00Z f1)" "$(obs 62 6 2026-06-05T00:00:00Z f2)"
   "$(obs 65 6 2026-06-16T00:00:00Z f3)" "$(obs 64 9 2026-06-05T00:00:00Z h9)"
   "$(obs 90 null 2026-06-25T00:00:00Z g1)"
-  "$(obs 101 null 2026-06-25T00:00:00Z g2 someone-else)"
 )
 (IFS=,; printf '[%s]\n' "${recent[*]}") >"$fix/obs_recent.json"
 open_obs=(
@@ -204,8 +216,6 @@ open_obs=(
   "$(obs 61 6 2026-06-15T00:00:00Z f1)" "$(obs 62 6 2026-06-05T00:00:00Z f2)"
   "$(obs 65 6 2026-06-16T00:00:00Z f3)" "$(obs 64 9 2026-06-05T00:00:00Z h9)"
   "$(obs 90 null 2026-06-25T00:00:00Z g1)"
-  "$(obs 101 null 2026-06-25T00:00:00Z g2 someone-else)"
-  "$(obs 103 null 2026-04-01T00:00:00Z g3 someone-else)"
 )
 (IFS=,; printf '[%s]\n' "${open_obs[*]}") >"$fix/obs_open.json"
 # pr <number> <state> <mergedAt|null> <closedAt|null> <headRefName>
@@ -226,10 +236,7 @@ run
 if called "gh-issue-group close 100 --not-planned" && ! grep -q 'gh-issue-group close 102' "$calls"; then
   echo "ok: an observation older than 30 days is closed; a younger one is not"
 else echo "FAIL: observation expiry calls=$(cat "$calls")"; fail=1; fi
-if ! grep -q 'gh-issue-group close 103' "$calls"; then
-  echo "ok: someone else's stale issue is left alone"
-else echo "FAIL: non-owner observation expired"; fail=1; fi
-if called "gh-issue-group close 7 --not-planned" && ! grep -q 'gh-issue-group close 8' "$calls" \
+if called "gh-issue-group close 7 --not-planned" \
   && ! grep -qE 'gh-issue-group close [1-5]( |$)' "$calls"; then
   echo "ok: only the group with no recent observation is closed"
 else echo "FAIL: group expiry calls=$(cat "$calls")"; fail=1; fi
@@ -270,15 +277,16 @@ if ! grep '^claude-worktree ' "$calls" | grep -q "$secret"; then
   echo "ok: the delegation prompt carries no observation body"
 else echo "FAIL: observation body leaked into the delegation prompt"; fail=1; fi
 
-# Clustering. The prompt is fixed; only the owner, the window start and a work
-# dir are appended.
+# Clustering. The prompt is fixed; only the issue repo, the window start and a
+# work dir are appended.
 wd="$(tail -n1 "$tmp/stdin" | sed -n 's/^work dir: //p')"
-if grep -qF "claude [-p] [--model] [sonnet] [--allowedTools] [Bash(gh-issue-group *),Bash(gh issue view *),Bash(gh issue list *),Edit(/$wd/**)]" "$calls" \
+if grep -qF "claude [-p] [--model] [sonnet] [--allowedTools] [Bash(gh-issue-group *),Bash(gh issue view -R example-owner/example-issues *),Bash(gh issue list -R example-owner/example-issues *),Edit(/$wd/**)]" "$calls" \
+  && called "claude-env GH_REPO=example-owner/example-issues" \
   && [ -n "$wd" ] \
   && { cat "$here/../dot/claude/crawler/cluster-prompt.md"
-       printf '\nrepo owner: example-owner\nsince: 2026-05-31\nwork dir: %s\n' "$wd"; } | cmp -s - "$tmp/stdin" \
+       printf '\nissue repo: example-owner/example-issues\nsince: 2026-05-31\nwork dir: %s\n' "$wd"; } | cmp -s - "$tmp/stdin" \
   && ! grep -q "$secret" "$tmp/stdin"; then
-  echo "ok: unparented observations start claude -p with the fixed prompt, the owner, the window and the fixed tools"
+  echo "ok: unparented observations start claude -p with the fixed prompt, the issue repo, the window and the fixed tools"
 else echo "FAIL: cluster invocation calls=$(cat "$calls")"; fail=1; fi
 if grep -q '^mise .*-- claude ' "$calls"; then
   echo "ok: claude -p runs through mise in the repo"
@@ -315,7 +323,7 @@ if [ "$rc" -eq 0 ] && ! grep -qE '^(gh-issue-group|claude-worktree|claude) ' "$c
 else echo "FAIL: dry run rc=$rc calls=$(cat "$calls")"; fail=1; fi
 
 # --- reads fail before any write ---------------------------------------------------
-for what in issue_list repo_view pr_list; do
+for what in issue_list pr_list; do
   GH_FAIL="$what" run
   if [ "$rc" -eq 1 ] && ! grep -qE '^(gh-issue-group|claude-worktree|claude) ' "$calls"; then
     echo "ok: a failing $what read exits 1 with no write"
@@ -334,12 +342,12 @@ if called "gh-issue-group mark 4 clear" \
 else echo "FAIL: rejection lift calls=$(cat "$calls")"; fail=1; fi
 
 # --- nothing unparented, no clustering --------------------------------------------
-keep='[.[] | select(.parent != null or .author.login != "example-owner")]'
+keep='[.[] | select(.parent != null)]'
 jq "$keep" "$fix/obs_open.json" >"$tmp/o.json"; mv "$tmp/o.json" "$fix/obs_open.json"
 jq "$keep" "$fix/obs_recent.json" >"$tmp/o.json"; mv "$tmp/o.json" "$fix/obs_recent.json"
 run
 if ! grep -q '^claude ' "$calls"; then
-  echo "ok: with no unparented owner observation claude -p is not started"
+  echo "ok: with no unparented observation claude -p is not started"
 else echo "FAIL: claude -p started with nothing to cluster calls=$(cat "$calls")"; fail=1; fi
 
 # An unparented observation older than the window is not a reason to cluster.
@@ -351,7 +359,7 @@ if ! grep -q '^claude ' "$calls"; then
 else echo "FAIL: stale unparented observation clustered calls=$(cat "$calls")"; fail=1; fi
 
 # A closed, unparented observation (filed already resolved) is still grouped.
-{ echo '['; "obs" 67 null 2026-06-26T00:00:00Z r1 example-owner CLOSED; echo ']'; } >"$tmp/closed.json"
+{ echo '['; "obs" 67 null 2026-06-26T00:00:00Z r1 CLOSED; echo ']'; } >"$tmp/closed.json"
 jq -s '.[0] + .[1]' "$fix/obs_recent.json" "$tmp/closed.json" >"$tmp/o.json"; mv "$tmp/o.json" "$fix/obs_recent.json"
 run
 if grep -q '^claude ' "$calls"; then
@@ -369,7 +377,7 @@ else echo "FAIL: group expiry guard rc=$rc calls=$(cat "$calls") err=$(cat "$tmp
 
 # --- follow and in-flight scenarios -----------------------------------------------
 # Group 12: delegated, no PR yet. 13: an old closed PR and a newer open one on
-# the same branch. 14: reopened after its PR merged. 16: re-delegated on a new
+# the same branch. 14: its PR merged. 16: re-delegated on a new
 # branch that has no PR yet, with a closed PR on the old one. 17: rejected with
 # no PR at all. 20 reaches the threshold.
 {
@@ -383,7 +391,7 @@ else echo "FAIL: group expiry guard rc=$rc calls=$(cat "$calls") err=$(cat "$tmp
   echo ']'
 } >"$fix/groups.json"
 o20=("$(obs 201 20 2026-06-20T00:00:00Z s1)" "$(obs 202 20 2026-06-20T00:00:00Z s2)" "$(obs 203 20 2026-06-20T00:00:00Z s3)")
-o14=("$(obs 141 14 2026-06-20T00:00:00Z t1)" "$(obs 142 14 2026-06-20T00:00:00Z t2)")
+o14=("$(obs 141 14 2026-06-20T00:00:00Z t1)" "$(obs 142 14 2026-06-20T00:00:00Z t2)" "$(obs 143 14 2026-06-20T00:00:00Z t3)")
 o12=("$(obs 121 12 2026-06-20T00:00:00Z u1)" "$(obs 131 13 2026-06-20T00:00:00Z u2)" "$(obs 171 17 2026-06-20T00:00:00Z u3)")
 (IFS=,; printf '[%s]\n' "${o20[*]},${o14[*]},${o12[*]}") >"$fix/obs_recent.json"
 echo '[]' >"$fix/obs_open.json"
@@ -397,9 +405,36 @@ run
 if ! grep -q 'mark 12 \|mark 13 \|mark 16 ' "$calls"; then
   echo "ok: delegated groups with no PR yet, a mix of closed and open PRs, or a new branch without a PR are not rejected"
 else echo "FAIL: premature rejection calls=$(cat "$calls")"; fail=1; fi
-if called "gh-issue-group mark 14 clear"; then
-  echo "ok: a delegated group reopened after its PR merged is cleared"
-else echo "FAIL: merged-then-reopened group calls=$(cat "$calls")"; fail=1; fi
+clear_line="$(grep -n '^gh-issue-group mark 14 clear$' "$calls" | cut -d: -f1)"
+close_line="$(grep -n '^gh-issue-group close 14$' "$calls" | cut -d: -f1)"
+if [ -n "$clear_line" ] && [ -n "$close_line" ] && [ "$clear_line" -lt "$close_line" ]; then
+  echo "ok: a delegated group whose PR merged is cleared, then closed as completed"
+else echo "FAIL: merged group calls=$(cat "$calls")"; fail=1; fi
+# 14 is closed now: it neither takes a slot nor becomes a candidate.
+if ! grep -q 'group-14-2026063' "$calls"; then
+  echo "ok: a group closed on merge is not delegated again in the same pass"
+else echo "FAIL: closed group delegated calls=$(cat "$calls")"; fail=1; fi
+
+# Discrimination: without the close the merged group stays open.
+mutant="$tmp/mbin-merged/issue-crawl"; rm -rf "$tmp/mbin-merged"; cp -a "$here/../bin" "$tmp/mbin-merged"
+grep -v 'merged-close@dotrc' "$crawl" >"$mutant"; chmod +x "$mutant"
+if cmp -s "$crawl" "$mutant"; then
+  echo "FAIL: the merged-close mutant is identical; the check below is a no-op"; fail=1
+fi
+: >"$calls"; rm -f "$fix/claude_ran"
+env CALLS="$calls" FIX="$fix" CLAUDE_STDIN="$tmp/stdin" PATH="$stubdir:$PATH" \
+  ISSUE_REPO=example-owner/example-issues "$mutant" --now "$now" >/dev/null 2>&1
+# The clear is asserted too, so a mutant that never ran cannot pass.
+if called "gh-issue-group mark 14 clear" && ! called "gh-issue-group close 14"; then
+  echo "ok: without the close step the merged group is left open (the case above is discriminating)"
+else echo "FAIL: merged-close mutant still closed 14"; fail=1; fi
+# A clear that fails must not be followed by a close: the group would be left
+# closed with group/delegated still on it.
+GIG_FAIL="mark 14 clear" run
+if [ "$rc" -eq 2 ] && called "gh-issue-group mark 14 clear" && ! called "gh-issue-group close 14"; then
+  echo "ok: a failed clear on a merged group is not followed by a close, and the pass exits 2"
+else echo "FAIL: close after failed clear rc=$rc calls=$(cat "$calls")"; fail=1; fi
+run
 if ! grep -q 'mark 17 ' "$calls" && grep -q 'group #17 is rejected' "$tmp/err"; then
   echo "ok: a rejected group with no closed PR is left alone with a warning"
 else echo "FAIL: rejected without PR calls=$(cat "$calls") err=$(cat "$tmp/err")"; fail=1; fi
@@ -408,8 +443,6 @@ else echo "FAIL: rejected without PR calls=$(cat "$calls") err=$(cat "$tmp/err")
 if ! grep -q '^claude-worktree ' "$calls" && grep -q 'skip: 3 automatic PR(s) in flight' "$tmp/out"; then
   echo "ok: delegated groups count as in flight even without an open PR"
 else echo "FAIL: in-flight count calls=$(cat "$calls") out=$(cat "$tmp/out")"; fail=1; fi
-# 14's observations are all older than its merge (06-15)? No: they are newer
-# (06-20) but only two, so it does not reach the threshold by itself.
 if ! grep -q 'close 12\|close 13\|close 16' "$calls"; then
   echo "ok: expiry does not close a delegated group"
 else echo "FAIL: delegated group closed calls=$(cat "$calls")"; fail=1; fi
@@ -431,6 +464,25 @@ run
 if [ "$(grep -c '^claude-worktree ' "$calls")" -eq 1 ] && ! grep -q 'close 12' "$calls"; then
   echo "ok: a delegated group with no PR takes a slot, so one of two candidates goes"
 else echo "FAIL: delegated slot calls=$(cat "$calls")"; fail=1; fi
+
+# --- a group closed on merge is not a candidate in the same pass -------------------
+# Group 14 merged and has three recent observations (the threshold) from after
+# the merge; no group is delegated, so a slot is free. Only group 20 goes.
+{
+  echo '['
+  group 14 OPEN agent-task,group,group/delegated; echo ,
+  group 20 OPEN agent-task,group
+  echo ']'
+} >"$fix/groups.json"
+(IFS=,; printf '[%s]\n' "${o14[*]},${o20[*]}") >"$fix/obs_recent.json"
+prs "$(pr 612 CLOSED '"2026-06-15T00:00:00Z"' '"2026-06-15T00:00:00Z"' group-14-20260610000000)"
+run
+if called "gh-issue-group close 14" \
+  && [ "$(grep -c '^claude-worktree ' "$calls")" -eq 1 ] && grep -q '^claude-worktree .* group-20-' "$calls" \
+  && ! called "gh-issue-group mark 14 delegated"; then
+  echo "ok: a group closed on merge is not delegated again, though its new count reaches the threshold"
+else echo "FAIL: merged group re-delegated calls=$(cat "$calls")"; fail=1; fi
+(IFS=,; printf '[%s]\n' "${o20[*]},${o21[*]}") >"$fix/obs_recent.json"
 
 # --- a merged PR's date starts a new count ----------------------------------------
 # Group 20's three observations predate its merged PR, so it does not count
@@ -490,5 +542,43 @@ for what in issue_list pr_list; do
     echo "ok: a failing $what re-read after clustering skips follow and delegate"
   else echo "FAIL: $what re-read failure rc=$rc calls=$(cat "$calls") err=$(cat "$tmp/err")"; fail=1; fi
 done
+
+# --- delegated tasks closed on merge -------------------------------------------
+# 40 has a merged task-40-* PR; 41 only shares a number prefix with task-411-*;
+# 42's PR is not merged (absent from the merged list). Only 40 is closed.
+echo '[{"number":40},{"number":41},{"number":42}]' >"$fix/tasks.json"
+echo '[{"headRefName":"task-40-fix-thing"},{"headRefName":"task-411-other"},{"headRefName":"group-20-20260620000000"}]' >"$fix/merged_prs.json"
+run
+if [ "$rc" -eq 0 ] && called "gh-issue-group close-task 40" \
+  && [ "$(grep -c '^gh-issue-group close-task ' "$calls")" -eq 1 ]; then
+  echo "ok: only a delegated task whose task-<N>- branch PR merged is closed"
+else echo "FAIL: task close rc=$rc calls=$(cat "$calls")"; fail=1; fi
+
+run --dry-run
+if ! grep -q '^gh-issue-group close-task' "$calls" && grep -q 'dry-run: follow: task #40' "$tmp/out"; then
+  echo "ok: --dry-run reports the task close without writing"
+else echo "FAIL: task dry run calls=$(cat "$calls") out=$(cat "$tmp/out")"; fail=1; fi
+
+# Discrimination: matching without the trailing dash closes 41 as well.
+mutant="$tmp/mbin-taskprefix/issue-crawl"; rm -rf "$tmp/mbin-taskprefix"; cp -a "$here/../bin" "$tmp/mbin-taskprefix"
+sed 's|"\^task-\$t-"|"^task-$t"|' "$crawl" >"$mutant"; chmod +x "$mutant"
+if cmp -s "$crawl" "$mutant"; then
+  echo "FAIL: the task-prefix mutant is identical; the check below is a no-op"; fail=1
+fi
+: >"$calls"; rm -f "$fix/claude_ran"
+env CALLS="$calls" FIX="$fix" CLAUDE_STDIN="$tmp/stdin" PATH="$stubdir:$PATH" \
+  ISSUE_REPO=example-owner/example-issues "$mutant" --now "$now" >/dev/null 2>&1
+if called "gh-issue-group close-task 41"; then
+  echo "ok: a prefix match without the dash closes the wrong task (the case above is discriminating)"
+else echo "FAIL: task-prefix mutant did not close 41 calls=$(cat "$calls")"; fail=1; fi
+
+# A failing merged-PR read (every other read succeeding) ends the pass before
+# any write, with its own message.
+GH_FAIL_MERGED=1 run
+if [ "$rc" -eq 1 ] && ! grep -qE '^(gh-issue-group|claude-worktree|claude) ' "$calls" \
+  && grep -q 'cannot list merged PRs' "$tmp/err"; then
+  echo "ok: a failing merged-PR read exits 1 with no write"
+else echo "FAIL: merged PR read failure rc=$rc calls=$(cat "$calls") err=$(cat "$tmp/err")"; fail=1; fi
+rm -f "$fix/tasks.json" "$fix/merged_prs.json"
 
 exit "$fail"
