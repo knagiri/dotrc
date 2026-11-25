@@ -24,8 +24,9 @@
 # through a wrapper (gh-pr-create) or spells it `MISE_ENV=gh mise exec -- gh ...`.
 #
 # `-C "$dir"` carries both halves of the fix: mise resolves that directory's
-# config AND runs gh there, so a wrapper aimed at another repo (gh-issue-file
-# --global) gets that repo's token *and* has gh resolve that repo from its cwd.
+# config AND runs gh there, so a wrapper anchored to its own repo rather than
+# the caller's cwd gets that repo's token *and* has gh resolve that repo from its
+# cwd (unless the caller passes -R).
 # The cost is that gh's cwd is no longer the caller's, so a wrapper must
 # absolutise any path it hands to gh -- otherwise a relative --body-file is
 # resolved against the repo root and reads a different file, or none.

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# gh-issue-mark-delegated <issue#> -- move an issue from status/ready to
-# status/delegated (dot/claude/rules/issue-workflow.md §3).
+# gh-issue-mark-delegated <issue#> -- move an issue in the issue repo
+# (bin/lib/issue-repo.sh) from status/ready to status/delegated
+# (dot/claude/rules/issue-workflow.md §3).
 #
 # That one transition is all it can do, so the grant can be allowlisted as
 # `Bash(gh-issue-mark-delegated *)` without handing out label, title or body
@@ -20,6 +21,12 @@ set -euo pipefail
 # through an approval prompt instead.
 #
 # Usage: gh-issue-mark-delegated <issue-number>
+#
+# Exit: 0 moved / 1 bad input or not exactly status/ready / 3 the issue repo is
+#       not configured, is malformed, or its setting cannot be read
+#       (bin/lib/issue-repo.sh; no gh call) / 5 the issue repo is not private,
+#       or that could not be verified (nothing read or edited beyond that one
+#       check) / anything else: gh's own exit code.
 
 usage() { echo "usage: gh-issue-mark-delegated <issue-number>" >&2; exit "${1:-1}"; }
 
@@ -33,10 +40,16 @@ fi
 
 # Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
 # is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
-gh_mise_use "$(gh_mise_repo_root)"
+here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+# shellcheck source=bin/lib/gh-mise.sh
+. "$here/lib/gh-mise.sh"
+# shellcheck source=bin/lib/issue-repo.sh
+. "$here/lib/issue-repo.sh"
+# gh runs in this script's repo, for its token; the target is always -R.
+gh_mise_use "$(gh_mise_repo_root "$here")"
+issue_repo_require_private  # private-check@dotrc
 
-labels="$(gh_mise issue view "$issue" --json labels --jq '.labels[].name')"
+labels="$(gh_mise issue view -R "$ISSUE_REPO" "$issue" --json labels --jq '.labels[].name')"
 status="$(printf '%s\n' "$labels" | grep '^status/' || true)"
 if [ "$status" != "status/ready" ]; then
   got="${status//$'\n'/, }"
@@ -44,4 +57,4 @@ if [ "$status" != "status/ready" ]; then
   exit 1
 fi
 
-gh_mise issue edit "$issue" --remove-label status/ready --add-label status/delegated
+gh_mise issue edit -R "$ISSUE_REPO" "$issue" --remove-label status/ready --add-label status/delegated

@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# gh-issue-file -- the single path an agent uses to open an issue in this repo.
+# gh-issue-file -- the single path an agent uses to open an agent issue.
+#
+# Issues are filed into the issue repo (bin/lib/issue-repo.sh), whatever the
+# caller's cwd. The body is checked against the template in the repo holding
+# this script (the dotfiles repo), so the skeleton has one source of truth.
 #
 # What it enforces that a bare `gh issue create` cannot:
 #   1. Structure. `gh issue create --title X --body Y` never applies an issue
 #      template (-T/--template is starting text for the interactive/editor
 #      path), and YAML issue forms are unreachable non-interactively. So the
-#      body is checked here, against the very same .github/ISSUE_TEMPLATE file
-#      the web UI serves -- one source of truth, no second skeleton to drift.
+#      body is checked here, against the .github/ISSUE_TEMPLATE file of the
+#      dotfiles repo, which is the single source of truth for the skeleton.
 #   2. Fixed labels. harness and bug are observations (label `observation`, no
 #      status/*): duplicates are not refused. task keeps status/triage, the
 #      human gate.
@@ -20,28 +24,31 @@ set -euo pipefail
 # Allowlist as `Bash(gh-issue-file *)`. No flag pass-through: labels are fixed
 # and unknown flags are refused rather than handed to gh.
 #
-# Usage: gh-issue-file [--global] --kind <harness|bug|task> --title <title>
+# Usage: gh-issue-file --kind <harness|bug|task> --title <title>
 #                      --body-file <path> [--parent N] [--resolved-by <PR-URL>]
-#        gh-issue-file [--global] --list-groups
+#        gh-issue-file --list-groups
+#        gh-issue-file --repo
 #
-# --parent N files the issue as a sub-issue of group #N; #N must be a group
-# filed by the repo owner. --resolved-by files it and then closes it with a
-# comment pointing at the PR that already fixed it; a PR in another repository
-# is not named in the comment.
-# --list-groups prints the repo owner's open groups as `#N<TAB>title`, one per
-# line, to choose --parent from.
+# --parent N files the issue as a sub-issue of group #N; #N must carry the
+# `group` label. --resolved-by files it and then closes it with a comment
+# pointing at the PR that already fixed it.
+# --list-groups prints the open groups as `#N<TAB>title`, one per line, to
+# choose --parent from.
+# --repo prints the issue repo as OWNER/NAME, for `gh issue view -R <it>`.
+# --global is accepted and ignored (compatibility).
 #
-# --global files into the repo this script lives in (the dotfiles repo) instead
-# of cwd's, so an agent working in an unrelated project can still open a harness
-# issue where the harness lives. Without it, that agent has no filing path at
-# all: cwd's repo has no .github/ISSUE_TEMPLATE/<kind>.md and the wrapper stops
-# at exit 1. Same spelling, and the same intent, as claude-worktree --global.
+# Arguments are validated first, so bad input exits 1 whether or not the issue
+# repo is configured. Then the issue repo is resolved and verified private
+# (bin/lib/issue-repo.sh); every mode, --repo included, passes that check
+# before it reads or writes anything.
 #
-# Exit:  0 created (or listed) / 1 bad input
+# Exit:  0 created (or listed, or printed) / 1 bad input
+#        / 3 the issue repo is not configured, is malformed, or its setting
+#          cannot be read (bin/lib/issue-repo.sh): no gh call was made
+#        / 5 the issue repo is not private, or that could not be verified (gh
+#          was called once to ask): nothing was read or filed
 #        / 4 the issue WAS created but the --resolved-by follow-up (reading the
 #          number, closing) failed: do not run again, it would file a duplicate
-#        / 128 called outside a git repo without --global (git itself fails
-#          `set -e` below)
 #        / anything else: gh's own exit code from before the issue exists,
 #          passed through unchanged by `set -e` (not rounded to 1). gh runs through gh_mise
 #          (bin/lib/gh-mise.sh); `mise exec` propagates its child's status
@@ -49,19 +56,21 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: gh-issue-file [--global] --kind <harness|bug|task> --title <title>
+usage: gh-issue-file --kind <harness|bug|task> --title <title>
                      --body-file <path> [--parent N] [--resolved-by <PR-URL>]
-       gh-issue-file [--global] --list-groups
+       gh-issue-file --list-groups
+       gh-issue-file --repo
 EOF
   exit "${1:-1}"
 }
 
-kind=""; title=""; body_file=""; parent=""; resolved_by=""; file_global=0; list_groups=0
+kind=""; title=""; body_file=""; parent=""; resolved_by=""; list_groups=0; print_repo=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)     usage 0 ;;
-    --global)      file_global=1; shift ;;
+    --global)      shift ;;  # accepted and ignored (compatibility)
     --list-groups) list_groups=1; shift ;;
+    --repo)        print_repo=1; shift ;;
     --kind)        [ $# -ge 2 ] || usage 1; kind="$2"; shift 2 ;;
     --title)       [ $# -ge 2 ] || usage 1; title="$2"; shift 2 ;;
     --body-file)   [ $# -ge 2 ] || usage 1; body_file="$2"; shift 2 ;;
@@ -75,7 +84,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ "$list_groups" = 0 ]; then
+if [ "$print_repo" = 1 ]; then
+  if [ "$list_groups" = 1 ] || [ -n "$kind$title$body_file$parent$resolved_by" ]; then
+    echo "gh-issue-file: --repo takes no other flag" >&2
+    usage 1
+  fi
+elif [ "$list_groups" = 0 ]; then
   case "$kind" in
     harness|bug|task) ;;
     "") echo "gh-issue-file: --kind is required" >&2; usage 1 ;;
@@ -93,32 +107,32 @@ if [ "$list_groups" = 0 ]; then
     exit 1
   fi
 elif [ -n "$kind$title$body_file$parent$resolved_by" ]; then
-  echo "gh-issue-file: --list-groups takes no other flag but --global" >&2
+  echo "gh-issue-file: --list-groups takes no other flag" >&2
   usage 1
 fi
 
 # Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
 # is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+# shellcheck source=bin/lib/gh-mise.sh
+. "$here/lib/gh-mise.sh"
+# shellcheck source=bin/lib/issue-repo.sh
+. "$here/lib/issue-repo.sh"
 
-# One $root decides everything this wrapper does -- which template the body is
-# checked against and which repo the issue is filed into -- so they can never
-# drift apart. --global moves it to the repo holding this script (resolving
-# any PATH symlink first), the same anchor claude-worktree --global uses.
-if [ "$file_global" = 1 ]; then
-  root="$(gh_mise_repo_root "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"  # global-root@dotrc
-else
-  root="$(git rev-parse --show-toplevel)"
-fi
-# gh_mise runs gh with $root as its cwd, which is what makes every call land in
-# $root's repo rather than the caller's.
+# $root is the repo holding this script (resolving any PATH symlink first),
+# never cwd's: the template comes from there, and gh_mise runs gh there so the
+# token is that repo's. Where the issue lands is -R "$ISSUE_REPO" on each call.
+root="$(gh_mise_repo_root "$here")"  # template-root@dotrc
 gh_mise_use "$root"
+issue_repo_require_private  # private-check@dotrc
+
+if [ "$print_repo" = 1 ]; then
+  printf '%s\n' "$ISSUE_REPO"
+  exit 0
+fi
 
 if [ "$list_groups" = 1 ]; then
-  # Only the owner's groups: anyone can open an issue in a public repo, and a
-  # title written by someone else is not something to put in front of an agent.
-  owner="$(gh_mise repo view --json owner --jq .owner.login)"
-  gh_mise issue list --label group --state open --author "$owner" --limit 200 \
+  gh_mise issue list -R "$ISSUE_REPO" --label group --state open --limit 200 \
     --json number,title --jq '.[] | "#\(.number)\t\(.title)"'
   exit 0
 fi
@@ -126,9 +140,7 @@ fi
 template="$root/.github/ISSUE_TEMPLATE/$kind.md"
 if [ ! -r "$template" ]; then
   echo "gh-issue-file: no template at $template" >&2
-  echo "  This repo has no agent-task scaffolding. See docs/design/agent-issue-workflow.md." >&2
-  [ "$file_global" = 1 ] || \
-    echo "  To file a harness issue into the dotfiles repo instead, pass --global." >&2
+  echo "  See docs/design/agent-issue-workflow.md." >&2
   exit 1
 fi
 
@@ -169,32 +181,12 @@ fi
 
 # --- checks before create ---------------------------------------------------
 if [ -n "$parent" ]; then
-  # Only the owner's groups: anyone can open an issue in a public repo.
-  owner="$(gh_mise repo view --json owner --jq .owner.login)"
-  parent_line="$(gh_mise issue view "$parent" --json author,labels \
-    --jq '"\(.author.login)\t\([.labels[].name] | join(","))"')"
-  IFS=$'\t' read -r parent_author parent_labels <<<"$parent_line"
-  if [ "$parent_author" != "$owner" ]; then
-    echo "gh-issue-file: --parent #$parent was not filed by $owner; not filed." >&2
-    exit 1
-  fi
+  parent_labels="$(gh_mise issue view -R "$ISSUE_REPO" "$parent" --json labels \
+    --jq '[.labels[].name] | join(",")')"
   case ",$parent_labels," in
     *,group,*) ;;
     *) echo "gh-issue-file: --parent #$parent is not a group; not filed." >&2; exit 1 ;;
   esac
-fi
-
-resolved_note=""
-if [ -n "$resolved_by" ]; then
-  nwo="$(gh_mise repo view --json nameWithOwner --jq .nameWithOwner)"
-  pr_repo="${resolved_by#https://github.com/}"; pr_repo="${pr_repo%/pull/*}"
-  # Only a PR of this repo is named in the public comment: a link into another
-  # repository can disclose it.
-  if [ "${pr_repo,,}" = "${nwo,,}" ]; then
-    resolved_note="Resolved by $resolved_by"
-  else
-    resolved_note="Resolved by a PR in another repository"
-  fi
 fi
 
 # --- create -----------------------------------------------------------------
@@ -212,7 +204,7 @@ fi
 # status/triage in particular is not the caller's to choose: promoting it to
 # status/ready is the human gate (dot/claude/rules/issue-workflow.md).
 #
-# If these labels do not exist yet in the repo, gh fails right here. That is
+# If these labels do not exist yet in the issue repo, gh fails right here. That is
 # intentional -- the wrapper does not create labels (that would widen what this
 # grant can do); run the one-time setup in
 # docs/design/agent-issue-workflow.md first.
@@ -223,7 +215,7 @@ esac
 parent_args=()
 [ -z "$parent" ] || parent_args=(--parent "$parent")
 
-url="$(gh_mise issue create --title "$title" --body-file "$body" \
+url="$(gh_mise issue create -R "$ISSUE_REPO" --title "$title" --body-file "$body" \
   "${labels[@]}" ${parent_args[@]+"${parent_args[@]}"})"
 printf '%s\n' "$url"
 
@@ -235,6 +227,7 @@ if [ -n "$resolved_by" ]; then
     echo "gh-issue-file: filed $url but cannot read its number; NOT closed. Do not run again." >&2
     exit 4
   fi
-  gh_mise issue close "$number" --comment "$resolved_note" \
+  # The issue repo is private, so naming the PR discloses nothing.
+  gh_mise issue close -R "$ISSUE_REPO" "$number" --comment "Resolved by $resolved_by" \
     || { echo "gh-issue-file: filed $url but closing it failed; NOT closed. Do not run again." >&2; exit 4; }
 fi

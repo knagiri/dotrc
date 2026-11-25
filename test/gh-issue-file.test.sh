@@ -48,20 +48,24 @@ printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$1 ${2:-}" in
   "repo view")
     case "$*" in
+      # The privacy check (bin/lib/issue-repo.sh): what its --jq prints.
+      *isPrivate*)
+        [ -z "${GH_EXIT_REPO:-}" ] || { echo "gh stub: forced failure" >&2; exit "$GH_EXIT_REPO"; }
+        echo "${GH_PRIVATE-true}" ;;
       *nameWithOwner*) echo "${GH_NWO:-o/r}" ;;
       *) echo "example-owner" ;;
     esac ;;
   "issue view")
-    # What the wrapper's --jq prints: author<TAB>labels (a group by default).
-    printf '%s\n' "${GH_VIEW_OUT:-example-owner$(printf '\t')agent-task,group}" ;;
+    # What the wrapper's --jq prints: the labels, comma-joined (a group by default).
+    printf '%s\n' "${GH_VIEW_OUT:-agent-task,group}" ;;
   "issue list")
     [ -z "${GH_EXIT_LIST:-}" ] || exit "$GH_EXIT_LIST"
     printf '%s' "${GH_LIST_OUT:-}" ;;
   "issue close")
     [ -z "${GH_EXIT_CLOSE:-}" ] || exit "$GH_EXIT_CLOSE" ;;
   "issue create")
-    # Which repo the issue lands in is decided by gh's cwd, so the --global
-    # cases below need to see it.
+    # gh's cwd decides whose token (mise config) is used, so the
+    # cwd-independence cases below need to see it.
     [ -z "${GH_PWD_FILE:-}" ] || pwd -P >"$GH_PWD_FILE"
     # Read the body through the path gh was actually handed, from the cwd gh was
     # actually run in -- that is the whole point of the relative --body-file
@@ -105,6 +109,10 @@ mkdir -p "$isorepo/.github"
 cp -a "$here/../.github/ISSUE_TEMPLATE" "$isorepo/.github/"
 cp -a "$bindir" "$isorepo/bin"
 git init -q "$isorepo"
+
+# Every case targets this fixture name, never the real issue repo.
+issue_repo=example-owner/example-issues
+export ISSUE_REPO="$issue_repo"
 
 run() {  # run gh-issue-file with a fresh argv log; echoes nothing, sets $rc
   : >"$tmp/args"
@@ -199,15 +207,24 @@ if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
   echo "ok: non-numeric --parent exits 1 without calling gh"
 else echo "FAIL: --parent x rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
-# The parent must be a group the owner filed: anyone can open an issue in a
-# public repo, and a sub-issue under someone else's issue is not ours to make.
-GH_VIEW_OUT="$(printf 'someone-else\tagent-task,group')" \
-  run --kind harness --title t --body-file "$full_body" --parent 12
-if [ "$rc" -eq 1 ] && ! grep -qxF '[create]' "$tmp/args" && grep -q 'not filed by' "$tmp/err"; then
-  echo "ok: --parent filed by someone else exits 1 before create"
-else echo "FAIL: --parent non-owner rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+# The issue repo is private, so who filed the parent is not checked: the read
+# asks for labels only, and the one `repo view` is the privacy check, not an
+# owner lookup.
+run --kind harness --title t --body-file "$full_body" --parent 12
+if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args" \
+  && grep -A1 -xF '[--json]' "$tmp/args" | grep -qxF '[labels]' \
+  && [ "$(grep -cxF '[repo]' "$tmp/args")" -eq 1 ] && grep -qxF '[isPrivate]' "$tmp/args"; then
+  echo "ok: --parent checks the group label only, with no author lookup"
+else echo "FAIL: --parent author lookup rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
-GH_VIEW_OUT="$(printf 'example-owner\tagent-task,kind/task')" \
+# The parent read and the create both name the issue repo: a view without -R
+# would read the dotrc issue of the same number.
+if [ "$(grep -cxF '[-R]' "$tmp/args")" -eq 2 ] \
+  && [ "$(grep -A1 -xF '[-R]' "$tmp/args" | grep -cxF "[$issue_repo]")" -eq 2 ]; then
+  echo "ok: --parent's view and create both target the issue repo"
+else echo "FAIL: --parent -R args=$(cat "$tmp/args")"; fail=1; fi
+
+GH_VIEW_OUT='agent-task,kind/task' \
   run --kind harness --title t --body-file "$full_body" --parent 12
 if [ "$rc" -eq 1 ] && ! grep -qxF '[create]' "$tmp/args" && grep -q 'not a group' "$tmp/err"; then
   echo "ok: --parent that is not a group exits 1 before create"
@@ -246,24 +263,30 @@ close_line="$(grep -n -xF '[close]' "$tmp/args" | cut -d: -f1)"
 create_line="$(grep -n -xF '[create]' "$tmp/args" | cut -d: -f1)"
 if [ "$rc" -eq 0 ] && [ -n "$close_line" ] && [ -n "$create_line" ] \
   && [ "$close_line" -gt "$create_line" ] \
-  && grep -A1 -xF '[close]' "$tmp/args" | grep -qxF '[57]' \
-  && grep -A1 -xF '[--comment]' "$tmp/args" | grep -q 'pull/9' \
+  && grep -A3 -xF '[close]' "$tmp/args" | grep -qxF '[57]' \
+  && [ "$(argval --comment)" = 'Resolved by https://github.com/o/r/pull/9' ] \
   && grep -q 'issues/57' "$tmp/out"; then
   echo "ok: --resolved-by closes the new issue with a pointer to the PR"
 else echo "FAIL: --resolved-by rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# Both the create and the close name the issue repo.
+if [ "$(grep -cxF '[-R]' "$tmp/args")" -eq 2 ] \
+  && [ "$(grep -A1 -xF '[-R]' "$tmp/args" | grep -cxF "[$issue_repo]")" -eq 2 ]; then
+  echo "ok: --resolved-by creates and closes in the issue repo"
+else echo "FAIL: --resolved-by -R args=$(cat "$tmp/args")"; fail=1; fi
 
 run --kind harness --title t --body-file "$full_body" --resolved-by 'not-a-url'
 if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
   echo "ok: malformed --resolved-by exits 1 without calling gh"
 else echo "FAIL: bad --resolved-by rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
-# A PR of another repository is not named in the public comment.
+# The comment lands in the private issue repo, so a PR of any repository is
+# named as is.
 GH_CREATE_URL="https://github.com/o/r/issues/58" \
   run --kind harness --title t --body-file "$full_body" \
-  --resolved-by https://github.com/elsewhere/private/pull/3
-if [ "$rc" -eq 0 ] && grep -A1 -xF '[--comment]' "$tmp/args" | grep -q 'another repository' \
-  && ! grep -q 'elsewhere' "$tmp/args"; then
-  echo "ok: --resolved-by into another repo is not named in the comment"
+  --resolved-by https://github.com/elsewhere/other/pull/3
+if [ "$rc" -eq 0 ] && [ "$(argval --comment)" = 'Resolved by https://github.com/elsewhere/other/pull/3' ]; then
+  echo "ok: --resolved-by names a PR of another repository too"
 else echo "FAIL: foreign --resolved-by rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
 
 # --resolved-by failing after the issue exists exits 4, never gh's own code or
@@ -287,18 +310,72 @@ if [ "$rc" -eq 0 ] \
   && grep -qxF '[list]' "$tmp/args" \
   && [ "$(argval --label)" = group ] \
   && [ "$(argval --state)" = open ] \
-  && [ "$(argval --author)" = example-owner ] \
+  && [ "$(argval -R)" = "$issue_repo" ] \
+  && ! grep -qxF '[--author]' "$tmp/args" \
   && ! grep -qxF '[create]' "$tmp/args" \
   && grep -qF "$(printf '#5\tsome group')" "$tmp/out"; then
-  echo "ok: --list-groups lists the owner's open groups without validating a body"
+  echo "ok: --list-groups lists the issue repo's open groups without validating a body"
 else echo "FAIL: --list-groups rc=$rc args=$(cat "$tmp/args") out=$(cat "$tmp/out")"; fail=1; fi
 
-# --list-groups takes nothing but --global: combined with a filing flag it is
-# refused before gh is called, rather than silently ignoring the flag.
+# --list-groups takes no filing flag: combined with one it is refused before
+# gh is called, rather than silently ignoring the flag.
 run --list-groups --kind harness
 if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
   echo "ok: --list-groups with another flag exits 1 without calling gh"
 else echo "FAIL: --list-groups exclusivity rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+# --- --repo -------------------------------------------------------------------
+# Prints the issue repo, from ISSUE_REPO when set and from the dotrc config file
+# (bin/lib/dotrc-config.sh) otherwise. The only gh call is the privacy check.
+run --repo
+if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/out")" = "$issue_repo" ] \
+  && grep -qxF '[isPrivate]' "$tmp/args" && ! grep -qxF '[issue]' "$tmp/args"; then
+  echo "ok: --repo prints ISSUE_REPO after the privacy check, reading no issue"
+else echo "FAIL: --repo rc=$rc out=$(cat "$tmp/out") args=$(cat "$tmp/args")"; fail=1; fi
+
+# run_unset <args...> -- like run, with ISSUE_REPO absent from the environment.
+# HOME is the sandbox's, so the config file is whatever the case wrote there.
+dotrc_cfg="$HOME/.config/dotrc/config"
+run_unset() {
+  : >"$tmp/args"
+  ( cd "$isorepo" && env -u ISSUE_REPO GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+      "$isorepo/bin/gh-issue-file" "$@" ) >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+}
+
+mkdir -p "${dotrc_cfg%/*}"
+printf '# machine-local\nISSUE_REPO=example-owner/from-config\n' >"$dotrc_cfg"
+run_unset --repo
+if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/out")" = "example-owner/from-config" ]; then
+  echo "ok: --repo without ISSUE_REPO prints the name from the dotrc config file"
+else echo "FAIL: --repo from config rc=$rc out=$(cat "$tmp/out") err=$(cat "$tmp/err")"; fail=1; fi
+
+# Not configured: exit 3 before any gh call, naming the file and the line to add.
+rm -f "$dotrc_cfg"
+run_unset --kind harness --title t --body-file "$full_body"
+if [ "$rc" -eq 3 ] && [ ! -s "$tmp/args" ] && grep -qF "$dotrc_cfg" "$tmp/err" \
+    && grep -qF 'ISSUE_REPO=' "$tmp/err"; then
+  echo "ok: unconfigured issue repo exits 3 without calling gh, naming the config line"
+else echo "FAIL: unconfigured rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
+
+# A value that is not OWNER/NAME is refused the same way (it ends up in -R and,
+# in issue-crawl, inside an --allowedTools pattern).
+printf 'ISSUE_REPO=example-owner/x *) Bash(*\n' >"$dotrc_cfg"
+run_unset --kind harness --title t --body-file "$full_body"
+if [ "$rc" -eq 3 ] && [ ! -s "$tmp/args" ]; then
+  echo "ok: a malformed ISSUE_REPO exits 3 without calling gh"
+else echo "FAIL: malformed rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
+rm -f "$dotrc_cfg"
+
+run --repo --list-groups
+if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
+  echo "ok: --repo with --list-groups exits 1 without calling gh"
+else echo "FAIL: --repo --list-groups rc=$rc args=$(cat "$tmp/args")"; fail=1; fi
+
+run --repo --kind harness
+if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
+  echo "ok: --repo with another flag exits 1"
+else echo "FAIL: --repo exclusivity rc=$rc out=$(cat "$tmp/out")"; fail=1; fi
 
 # Case H: a body whose heading lines carry trailing whitespace still passes.
 # The wrapper strips trailing whitespace off body lines before comparing
@@ -315,11 +392,11 @@ else echo "FAIL: trailing ws body rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 # trailing whitespace off template heading lines with `sub(/[ \t]+$/, "")`
 # before printing them; without that strip a trailing space baked into the
 # template would make every real body -- which naturally has none -- look like
-# it is missing that heading. This needs its own throwaway git repo, since the
-# wrapper locates the template via `git rev-parse --show-toplevel` run from the
-# caller's cwd (same convention as the fixture repos in git-reap-gone.test.sh).
+# it is missing that heading. This needs its own throwaway git repo holding a
+# copy of bin/, since the wrapper reads the template from the repo it lives in.
 tmpl_repo="$tmp/tmplrepo"
 mkdir -p "$tmpl_repo/.github/ISSUE_TEMPLATE"
+cp -a "$bindir" "$tmpl_repo/bin"
 git init -q "$tmpl_repo"
 cat >"$tmpl_repo/.github/ISSUE_TEMPLATE/task.md" <<'TMPL'
 ---
@@ -341,7 +418,7 @@ something
 BODY
 : >"$tmp/args"
 ( cd "$tmpl_repo" && env GH_ARGS_FILE="$tmp/args" \
-    PATH="$stubdir:$PATH" "$bindir/gh-issue-file" --kind task --title t \
+    PATH="$stubdir:$PATH" "$tmpl_repo/bin/gh-issue-file" --kind task --title t \
     --body-file "$tmpl_body" >"$tmp/out" 2>"$tmp/err" )
 rc=$?
 if [ "$rc" -eq 0 ]; then
@@ -361,7 +438,7 @@ if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ] \
 else echo "FAIL: missing --body-file rc=$rc args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
 
 # --- Case N: a relative --body-file survives the cwd move -------------------
-# gh runs with the repo root as its cwd (mise exec -C "$root"), not the
+# gh runs with the script repo's root as its cwd (mise exec -C "$root"), not the
 # caller's, so a relative --body-file handed straight to gh would be resolved
 # against the root. The wrapper hands gh an absolute copy instead. The fixture makes the
 # failure mode visible rather than merely absent: a DECOY body.md sits at the
@@ -369,6 +446,7 @@ else echo "FAIL: missing --body-file rc=$rc args=$(cat "$tmp/args") err=$(cat "$
 # the wrong file, which is exactly the silent class this guards.
 relrepo="$tmp/relrepo"
 mkdir -p "$relrepo/.github/ISSUE_TEMPLATE" "$relrepo/sub"
+cp -a "$bindir" "$relrepo/bin"
 git init -q "$relrepo"
 cat >"$relrepo/.github/ISSUE_TEMPLATE/task.md" <<'TMPL'
 ---
@@ -388,7 +466,7 @@ relrun() {  # relrun <bindir>; runs from $relrepo/sub with a RELATIVE --body-fil
   rc=$?
 }
 
-relrun "$bindir"
+relrun "$relrepo/bin"
 if [ "$rc" -eq 0 ] && grep -q 'REAL-BODY' "$tmp/body"; then
   echo "ok: a relative --body-file still reaches gh as the caller's file, not the repo root's"
 else echo "FAIL: relative --body-file rc=$rc body=$(cat "$tmp/body" 2>/dev/null) err=$(cat "$tmp/err")"; fail=1; fi
@@ -404,13 +482,12 @@ if [ "$rc" -eq 4 ]; then
 else echo "FAIL: gh issue create exit code rc=$rc (want 4)"; fail=1; fi
 
 
-# --- Case P: --global files into the script's own repo ----------------------
-# An agent working in an unrelated project still has to be able to open a
-# harness issue where the harness lives. Without --global there is no path at
-# all: cwd's repo carries no .github/ISSUE_TEMPLATE/<kind>.md. The fixture is
-# two throwaway repos -- a "script repo" holding a copy of bin/ (stands in for
-# dotrc) and an unrelated cwd repo -- mirroring test/claude-worktree.test.sh.
-# No issue is created against a real repo: gh is the stub throughout.
+# --- Case P: filing does not depend on cwd ----------------------------------
+# An agent working in an unrelated project files exactly as one in this repo:
+# the template comes from the repo holding the script and the issue goes to the
+# issue repo via -R. The fixture is two throwaway repos -- a "script repo"
+# holding a copy of bin/ (stands in for dotrc) and an unrelated cwd repo --
+# mirroring test/claude-worktree.test.sh. gh is the stub throughout.
 scriptrepo="$tmp/scriptrepo"
 mkdir -p "$scriptrepo/.github/ISSUE_TEMPLATE" "$scriptrepo/bin"
 cp -a "$bindir/." "$scriptrepo/bin/"
@@ -438,56 +515,148 @@ globalrun() {  # globalrun <bindir> <cwd> <title> [extra flags...]
     >"$tmp/out" 2>"$tmp/err"
   rc=$?
 }
+filed_into_issue_repo() {
+  [ "$rc" -eq 0 ] \
+    && [ "$(cat "$tmp/pwd" 2>/dev/null)" = "$scriptrepo_real" ] \
+    && grep -qxF '[create]' "$tmp/args" \
+    && [ "$(argval -R)" = "$issue_repo" ]
+}
 
-# Without --global the wrapper stops on the missing template -- and says how to
-# reach the repo that does have one.
+# From an unrelated repo, without --global: the script repo's template, gh run
+# in the script repo (its token), the issue repo as the target.
 globalrun "$scriptrepo/bin" "$otherrepo" t
-if [ "$rc" -eq 1 ] && grep -q 'no template at' "$tmp/err" && grep -q -- '--global' "$tmp/err"; then
-  echo "ok: without --global an unrelated repo fails on the missing template and names --global"
-else echo "FAIL: no-global rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+if filed_into_issue_repo; then
+  echo "ok: from an unrelated repo the script repo's template is used and the issue goes to the issue repo"
+else echo "FAIL: cwd-independent rc=$rc pwd=$(cat "$tmp/pwd" 2>/dev/null) args=$(cat "$tmp/args") err=$(cat "$tmp/err")"; fail=1; fi
 
-# With --global: the script repo's template validates the body and the issue is
-# created with gh running in the script repo.
+# --global is accepted and changes nothing.
 globalrun "$scriptrepo/bin" "$otherrepo" t --global
-if [ "$rc" -eq 0 ] \
-  && [ "$(cat "$tmp/pwd" 2>/dev/null)" = "$scriptrepo_real" ] \
-  && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: --global reads the script repo's template and files into that repo"
+if filed_into_issue_repo; then
+  echo "ok: --global is accepted and ignored"
 else echo "FAIL: --global rc=$rc pwd=$(cat "$tmp/pwd" 2>/dev/null) err=$(cat "$tmp/err")"; fail=1; fi
 
-# Discrimination (evidence-over-guesswork §4): the root resolution is put back
-# to cwd's repo and the case above must break. `cmp` keeps the check from
-# rotting into a no-op if the tag goes.
-globalmutant="$tmp/globalmutant"
+# Discrimination (evidence-over-guesswork §4): the template root is resolved
+# from cwd instead, and the first case must break. The mutant sits inside the
+# script repo so that, unmutated, it would still find the template there.
+# `cmp` keeps the check from rotting into a no-op if the tag goes.
+globalmutant="$scriptrepo/mutbin"
 rm -rf "$globalmutant"; mkdir -p "$globalmutant"
 cp -a "$bindir/." "$globalmutant/"
-sed 's|^.*global-root@dotrc$|  root="$(git rev-parse --show-toplevel)"|' \
+sed 's|^.*template-root@dotrc$|root="$(git rev-parse --show-toplevel)"|' \
   "$bindir/gh-issue-file" >"$globalmutant/gh-issue-file"
 chmod +x "$globalmutant/gh-issue-file"
 if cmp -s "$bindir/gh-issue-file" "$globalmutant/gh-issue-file"; then
-  echo "FAIL: the --global mutant is identical to gh-issue-file; the check above is a no-op"; fail=1
+  echo "FAIL: the template-root mutant is identical to gh-issue-file; the check above is a no-op"; fail=1
 fi
-globalrun "$globalmutant" "$otherrepo" t --global
+globalrun "$globalmutant" "$otherrepo" t
 if [ "$rc" -eq 1 ] && grep -q 'no template at' "$tmp/err"; then
-  echo "ok: resolving --global's root from cwd instead loses the template (the case above is discriminating)"
-else echo "FAIL: --global mutant rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+  echo "ok: resolving the template root from cwd loses the template (the case above is discriminating)"
+else echo "FAIL: template-root mutant rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+# Mutant: the -R on create dropped; the issue-repo assertion must catch it.
+rm -rf "$globalmutant"; mkdir -p "$globalmutant"
+cp -a "$bindir/." "$globalmutant/"
+sed 's|gh_mise issue create -R "\$ISSUE_REPO"|gh_mise issue create|' \
+  "$bindir/gh-issue-file" >"$globalmutant/gh-issue-file"
+chmod +x "$globalmutant/gh-issue-file"
+if cmp -s "$bindir/gh-issue-file" "$globalmutant/gh-issue-file"; then
+  echo "FAIL: the no-R mutant is identical to gh-issue-file; the check below is a no-op"; fail=1
+fi
+globalrun "$globalmutant" "$otherrepo" t
+if ! filed_into_issue_repo; then
+  echo "ok: dropping -R from create is caught (the issue-repo assertion is discriminating)"
+else echo "FAIL: no-R mutant still looked like it filed into the issue repo"; fail=1; fi
+rm -rf "$globalmutant"
 
 # --- Case Q: no content gate on a filing from another repo ------------------
-# A --global filing from an unrelated repo is created whether or not a
+# A filing from an unrelated repo is created whether or not a
 # .issue-denylist file exists in the script repo, and whatever that file lists:
 # the wrapper does not read it. Against a wrapper that does (refusing without a
 # usable list, or on a listed term), both runs below exit non-zero.
 rm -f "$scriptrepo/.issue-denylist"
-globalrun "$scriptrepo/bin" "$otherrepo" 'about example-corp things' --global
+globalrun "$scriptrepo/bin" "$otherrepo" 'about example-corp things'
 if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: --global from another repo files with no .issue-denylist present"
+  echo "ok: a filing from another repo files with no .issue-denylist present"
 else echo "FAIL: no-denylist foreign rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 
 printf 'Example-Corp\n' >"$scriptrepo/.issue-denylist"
-globalrun "$scriptrepo/bin" "$otherrepo" 'about example-corp things' --global
+globalrun "$scriptrepo/bin" "$otherrepo" 'about example-corp things'
 if [ "$rc" -eq 0 ] && grep -qxF '[create]' "$tmp/args"; then
-  echo "ok: --global from another repo files even when .issue-denylist lists a word in the title"
+  echo "ok: a filing from another repo files even when .issue-denylist lists a word in the title"
 else echo "FAIL: denylist-present foreign rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
 rm -f "$scriptrepo/.issue-denylist"
+
+# --- argument errors come before the issue repo is resolved -----------------------
+# With nothing configured, bad input is still exit 1 (the caller's mistake), not
+# 3 (the machine's). The arguments need no issue repo to be judged.
+rm -f "$dotrc_cfg"
+for bad in "--kind bogus --title t --body-file $full_body" "--kind task" \
+    "--kind task --title t" "--kind task --title t --body-file $tmp/does-not-exist.md" \
+    "--list-groups --kind harness" "--repo --kind harness" "--bogus"; do
+  # shellcheck disable=SC2086
+  run_unset $bad
+  if [ "$rc" -eq 1 ] && [ ! -s "$tmp/args" ]; then
+    echo "ok: with no issue repo configured, '${bad%% --body-file*}' still exits 1 (arguments are checked first)"
+  else echo "FAIL: arg check before config '$bad' rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+done
+
+# Discrimination: the issue repo resolved before the arguments are read turns
+# the same bad input into exit 3.
+ordmut="$tmp/ordmut"; rm -rf "$ordmut"; mkdir -p "$ordmut"; cp -a "$bindir/." "$ordmut/"
+sed 's|^kind=""; title=""|. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/issue-repo.sh"\n&|' \
+  "$bindir/gh-issue-file" >"$ordmut/gh-issue-file"
+chmod +x "$ordmut/gh-issue-file"
+if cmp -s "$bindir/gh-issue-file" "$ordmut/gh-issue-file"; then
+  echo "FAIL: the source-order mutant is identical; the check below is a no-op"; fail=1
+fi
+( cd "$isorepo" && env -u ISSUE_REPO GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+    "$ordmut/gh-issue-file" --kind bogus --title t --body-file "$full_body" ) >"$tmp/out" 2>"$tmp/err"; rc=$?
+if [ "$rc" -eq 3 ]; then
+  echo "ok: resolving the issue repo before the arguments turns bad input into exit 3 (the case above is discriminating)"
+else echo "FAIL: source-order mutant rc=$rc err=$(cat "$tmp/err")"; fail=1; fi
+
+# --- the issue repo must be private (fail closed) ---------------------------------
+# Public, an unreadable lookup and output that is not `true` all stop every mode
+# with exit 5 before any issue is read or written (and --repo prints nothing).
+for v in GH_PRIVATE=false GH_EXIT_REPO=1 GH_PRIVATE=maybe GH_PRIVATE=; do
+  for mode in repo groups file; do
+    case "$mode" in
+      repo)   a=(--repo) ;;
+      groups) a=(--list-groups) ;;
+      file)   a=(--kind harness --title t --body-file "$full_body") ;;
+    esac
+    export "${v?}"
+    run "${a[@]}"
+    unset "${v%%=*}"
+    if [ "$rc" -eq 5 ] && ! grep -qxF '[issue]' "$tmp/args" && [ ! -s "$tmp/out" ] \
+      && grep -qE 'not private|cannot verify' "$tmp/err"; then
+      echo "ok: $mode with $v exits 5 before any issue is read or written"
+    else echo "FAIL: private check $mode $v rc=$rc args=$(cat "$tmp/args") out=$(cat "$tmp/out") err=$(cat "$tmp/err")"; fail=1; fi
+  done
+done
+
+# Discrimination: with the check removed, or its comparison loosened to "any
+# output", a public repo goes through. Each mutant runs from a copy of bin/.
+privmut() {  # privmut <name> <file under bin/> <sed expr>; sets $privmut_dir
+  privmut_dir="$tmp/privmut-$1"; rm -rf "$privmut_dir"; mkdir -p "$privmut_dir"
+  cp -a "$bindir/." "$privmut_dir/"
+  sed "$3" "$bindir/$2" >"$privmut_dir/$2"
+  chmod +x "$privmut_dir/$2"
+  if cmp -s "$bindir/$2" "$privmut_dir/$2"; then
+    echo "FAIL: the $1 mutant is identical; the check below is a no-op"; fail=1
+  fi
+}
+privmut nocall gh-issue-file '/private-check@dotrc$/d'
+( cd "$isorepo" && env GH_PRIVATE=false GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+    "$privmut_dir/gh-issue-file" --repo ) >"$tmp/out" 2>"$tmp/err"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/out")" = "$issue_repo" ]; then
+  echo "ok: without the check a public issue repo is used (the exit-5 cases are discriminating)"
+else echo "FAIL: no-call mutant rc=$rc out=$(cat "$tmp/out")"; fail=1; fi
+privmut loose lib/issue-repo.sh 's|\[ "\$last" != true \]|[ -z "$last" ]|'
+( cd "$isorepo" && env GH_PRIVATE=false GH_ARGS_FILE="$tmp/args" PATH="$stubdir:$PATH" \
+    "$privmut_dir/gh-issue-file" --repo ) >"$tmp/out" 2>"$tmp/err"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/out")" = "$issue_repo" ]; then
+  echo "ok: a comparison loosened to any output lets a public repo through (the exit-5 cases are discriminating)"
+else echo "FAIL: loose-compare mutant rc=$rc out=$(cat "$tmp/out")"; fail=1; fi
 
 exit "$fail"

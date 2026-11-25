@@ -584,6 +584,10 @@ cat >"$mddir/gh" <<'STUB'
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$1 $2" in
   "issue view") [ -z "$GH_LABELS" ] || printf '%s\n' "$GH_LABELS" ;;
+  "repo view")
+    # The privacy check (bin/lib/issue-repo.sh): what its --jq prints.
+    [ -z "${GH_EXIT_REPO:-}" ] || { echo "gh stub: forced failure" >&2; exit "$GH_EXIT_REPO"; }
+    echo "${GH_PRIVATE-true}" ;;
 esac
 exit 0
 STUB
@@ -594,12 +598,15 @@ md_run() {  # md_run <bindir> <labels> [args...]; returns the wrapper's rc
   : >"$mddir/args"
   : >"$mddir/mise-args"
   env GH_ARGS_FILE="$mddir/args" MISE_ARGS_FILE="$mddir/mise-args" GH_LABELS="$2" PATH="$mddir:$PATH" \
-    "$1/gh-issue-mark-delegated" "${@:3}" >/dev/null 2>&1
+    ISSUE_REPO=example-owner/example-issues "$1/gh-issue-mark-delegated" "${@:3}" >/dev/null 2>&1
 }
 md_edited() { grep -qxF '[edit]' "$mddir/args"; }
-# The whole log is compared: one read, then exactly this edit and nothing else.
-md_expected="$(printf '[%s]\n' issue view 42 --json labels --jq '.labels[].name' \
-  issue edit 42 --remove-label status/ready --add-label status/delegated)"
+# The whole log is compared: the privacy check, one read, then exactly this edit
+# and nothing else. The read and the edit target the issue repo (-R), whatever
+# the caller's cwd.
+md_expected="$(printf '[%s]\n' repo view example-owner/example-issues --json isPrivate --jq .isPrivate \
+  issue view -R example-owner/example-issues 42 --json labels --jq '.labels[].name' \
+  issue edit -R example-owner/example-issues 42 --remove-label status/ready --add-label status/delegated)"
 
 md_run "$bindir" $'bug\nstatus/ready' 42; rc=$?
 if [ "$rc" -eq 0 ] && [ "$(cat "$mddir/args")" = "$md_expected" ]; then
@@ -609,14 +616,26 @@ else echo "FAIL: gh-issue-mark-delegated rc=$rc args=$(cat "$mddir/args" 2>/dev/
 # Both the view and the edit must go through gh_mise (MISE_ENV=gh mise exec):
 # the gh stub sits on PATH, so a bare `gh issue edit` would be caught by it and
 # pass the case above, yet fail against the real token (hosts.yml).
-md_via_mise() {  # 0 iff the last md_run called mise exactly twice, both with MISE_ENV=gh
-  [ "$(grep -cxF '[mise:MISE_ENV=gh]' "$mddir/mise-args")" -eq 2 ] \
+md_via_mise() {  # 0 iff the last md_run called mise exactly three times (check, view, edit), all with MISE_ENV=gh
+  [ "$(grep -cxF '[mise:MISE_ENV=gh]' "$mddir/mise-args")" -eq 3 ] \
     && grep -qxF '[mise:edit]' "$mddir/mise-args"
 }
 md_run "$bindir" $'bug\nstatus/ready' 42
 if md_via_mise; then
   echo "ok: gh-issue-mark-delegated runs both view and edit under MISE_ENV=gh mise exec"
 else echo "FAIL: gh-issue-mark-delegated mise calls=$(cat "$mddir/mise-args" 2>/dev/null)"; fail=1; fi
+
+# gh runs in the repo holding the script (its token), not in the caller's cwd:
+# run from an unrelated repo, both mise calls still name the script's toplevel.
+md_other="$mddir/other"; mkdir -p "$md_other"; git -C "$md_other" init -q
+md_root="$(cd "$bindir/.." && git rev-parse --show-toplevel)"
+: >"$mddir/args"; : >"$mddir/mise-args"
+( cd "$md_other" && env GH_ARGS_FILE="$mddir/args" MISE_ARGS_FILE="$mddir/mise-args" \
+    GH_LABELS=status/ready PATH="$mddir:$PATH" ISSUE_REPO=example-owner/example-issues \
+    "$bindir/gh-issue-mark-delegated" 42 ) >/dev/null 2>&1
+if [ "$(grep -cxF "[mise:$md_root]" "$mddir/mise-args")" -eq 3 ]; then
+  echo "ok: gh-issue-mark-delegated runs gh in its own repo, not the caller's cwd"
+else echo "FAIL: gh-issue-mark-delegated cwd mise=$(cat "$mddir/mise-args")"; fail=1; fi
 
 # Rejections: each must fail AND never issue the edit.
 md_rejects() {  # md_rejects <bindir> -> 0 iff every bad call fails without an edit
@@ -667,6 +686,54 @@ md_run "$mddir/mutant-nostatus" 'status/triage' 42
 if md_edited; then
   echo "ok: without the status check a status/triage issue is marked delegated (the triage case is discriminating)"
 else echo "FAIL: nostatus mutant did not edit a triage issue args=$(cat "$mddir/args" 2>/dev/null)"; fail=1; fi
+
+# The issue repo: not configured (exit 3, no gh call) and not private (exit 5,
+# no issue read or edited).
+md_unset() {  # md_unset <bindir>; 0 iff it exits 3 without calling gh
+  : >"$mddir/args"
+  env -u ISSUE_REPO GH_ARGS_FILE="$mddir/args" MISE_ARGS_FILE="$mddir/mise-args" GH_LABELS=status/ready \
+    PATH="$mddir:$PATH" "$1/gh-issue-mark-delegated" 42 >/dev/null 2>&1
+  local r=$?
+  [ "$r" -eq 3 ] && [ ! -s "$mddir/args" ]
+}
+md_not_private() {  # md_not_private <bindir>; 0 iff every case exits 5 with no issue call
+  local bad=0 v r
+  for v in GH_PRIVATE=false GH_EXIT_REPO=1 GH_PRIVATE=maybe GH_PRIVATE=; do
+    : >"$mddir/args"
+    env "$v" GH_ARGS_FILE="$mddir/args" MISE_ARGS_FILE="$mddir/mise-args" GH_LABELS=status/ready \
+      ISSUE_REPO=example-owner/example-issues PATH="$mddir:$PATH" \
+      "$1/gh-issue-mark-delegated" 42 >/dev/null 2>&1
+    r=$?
+    { [ "$r" -eq 5 ] && ! grep -qxF '[issue]' "$mddir/args"; } || bad=1
+  done
+  return "$bad"
+}
+if md_unset "$bindir"; then
+  echo "ok: gh-issue-mark-delegated exits 3 without a gh call when no issue repo is configured"
+else echo "FAIL: gh-issue-mark-delegated unconfigured args=$(cat "$mddir/args" 2>/dev/null)"; fail=1; fi
+if md_not_private "$bindir"; then
+  echo "ok: gh-issue-mark-delegated exits 5 for a public, unverifiable or odd-answer issue repo, touching no issue"
+else echo "FAIL: gh-issue-mark-delegated private check args=$(cat "$mddir/args" 2>/dev/null)"; fail=1; fi
+md_mutant nocheck 's|^issue_repo_require_private.*$|:|'
+if ! md_not_private "$mddir/mutant-nocheck"; then
+  echo "ok: without the privacy check a public issue repo is edited (the exit-5 case is discriminating)"
+else echo "FAIL: gh-issue-mark-delegated nocheck mutant still stopped everything"; fail=1; fi
+md_cfgmut="$mddir/mutant-config"; rm -rf "$md_cfgmut"; mkdir -p "$md_cfgmut"; cp -a "$bindir/." "$md_cfgmut/"
+sed 's/exit 3/:/' "$bindir/lib/issue-repo.sh" >"$md_cfgmut/lib/issue-repo.sh"
+if cmp -s "$bindir/lib/issue-repo.sh" "$md_cfgmut/lib/issue-repo.sh"; then
+  echo "FAIL: the exit-3 mutant is identical; the check below is a no-op"; fail=1
+fi
+if ! md_unset "$md_cfgmut"; then
+  echo "ok: without the exit 3 an unconfigured issue repo gets through (the exit-3 case is discriminating)"
+else echo "FAIL: gh-issue-mark-delegated exit-3 mutant still stopped"; fail=1; fi
+md_loose="$mddir/mutant-loose"; rm -rf "$md_loose"; mkdir -p "$md_loose"; cp -a "$bindir/." "$md_loose/"
+sed 's|\[ "\$last" != true \]|[ -z "$last" ]|' "$bindir/lib/issue-repo.sh" >"$md_loose/lib/issue-repo.sh"
+if cmp -s "$bindir/lib/issue-repo.sh" "$md_loose/lib/issue-repo.sh"; then
+  echo "FAIL: the loose-compare mutant is identical; the check below is a no-op"; fail=1
+fi
+if ! md_not_private "$md_loose"; then
+  echo "ok: a comparison loosened to any output lets a public repo through (the exit-5 case is discriminating)"
+else echo "FAIL: gh-issue-mark-delegated loose mutant still stopped everything"; fail=1; fi
 
 # --- gh-pr-checks -----------------------------------------------------------
 # gh-pr-checks consumes gh's *output*, so it needs a stub that answers each call
@@ -1153,7 +1220,9 @@ git -C "$miserepo" init -q
 miserepo_real="$(cd "$miserepo" && pwd -P)"
 miseargs="$stubdir/miseargs"
 
-wrappers="gh-automerge gh-await-reviews gh-issue-mark-delegated gh-list-threads gh-pr-checks gh-pr-comments gh-pr-edit-body gh-reply-thread gh-resolve-thread"
+# gh-issue-mark-delegated is not here: it runs gh in its own repo rather than
+# the caller's, which its own section checks.
+wrappers="gh-automerge gh-await-reviews gh-list-threads gh-pr-checks gh-pr-comments gh-pr-edit-body gh-reply-thread gh-resolve-thread"
 printf 'body\n' >"$miserepo/sub/body.md"
 wrapper_arg() {  # the arguments each wrapper's validation accepts
   case "$1" in

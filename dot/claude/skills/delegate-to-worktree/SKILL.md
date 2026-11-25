@@ -97,13 +97,19 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    `status/triage` の issue は HOW が未確定でありうるので委譲しない（上の「WHAT と HOW が固まって
    いるか確認」を label で表現したもの）。`triage → ready` の遷移は人間が行う。
 
-   - `gh issue view <N> --json title,body` の body をそのまま手順 2 の `## やること（WHAT）` /
+   - `gh issue view -R <repo> <N> --json title,body`（`<repo>` は `gh-issue-file --repo`）の body をそのまま手順 2 の `## やること（WHAT）` /
      `## 設計（HOW）` として畳む。issue template の `## やること（WHAT）` / `## 設計（HOW）` は手順 2 の雛形と
      一致させてあるので加工は要らない。issue template に `## 禁止事項` は無いので、該当する
      破壊的操作があれば委譲元が書き足す。
-   - `<name>` と `-b <branch>` は `issue-<N>-<slug>`。
-   - 委譲プロンプトに「PR 本文へ `Closes #<N>` を入れること」を明記する。merge で issue が
-     自動 close される。
+   - `<name>` と `-b <branch>` は `task-<N>-<slug>`。issue と PR の対応は branch 名だけが担う
+     （merge 後は crawler が `task-<N>-*` の PR の merge を見て close する。dotrc 以外の repo が
+     対象なら人が close する）。`<slug>` は issue の title をそのまま写さず、勤務先由来の具体名を
+     入れない（branch 名は PR とともに public に出る）。
+   - 委譲プロンプトに「PR 本文・commit message に `Closes #<N>` や issue 番号を書かないこと」を
+     明記する。issue は private な repo にあり、public な PR に番号を書くと対象 repo の別 issue に
+     autolink される。issue の URL と issue repo の名前も PR 本文・title・commit message・差分に
+     書かず、PR の title に勤務先由来の具体名を入れず、issue 本文の具体名も PR へ写さない
+     （どれも public に出る）。
    - harness を足す issue なら、incident doc の扱いも明記する（issue 本文の `## 由来` を写す。
      harness の範囲・置き場所・対象 repo が dotrc 以外のときの扱い・書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）。
    - 起動後、issue の label を `status/ready` → `status/delegated` へ替える

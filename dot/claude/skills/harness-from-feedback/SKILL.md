@@ -98,7 +98,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
       pr-automerge は呼ばない。人間の approve を待つ」に差し替える）
    4. PR を出したら、この指摘を観測として残す。本文を harness template の見出し
       （やること（WHAT）/ 設計（HOW）/ 受け入れ確認 / 由来）で書き、
-      `gh-issue-file --global --kind harness --title <title> --body-file <path> --resolved-by <PR-URL>`
+      `gh-issue-file --kind harness --title <title> --body-file <path> --resolved-by <PR-URL>`
       で起票する（close 済みで入る）。具体名（組織名・repo 名・サービス名など）を書かない
    5. これはハーネスタスクなので、末尾の自己内省（harness-from-retrospective）はスキップする
    ```
@@ -113,10 +113,13 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - リポジトリ固有: `claude-worktree --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
    - グローバル（dotrc）: `claude-worktree --global --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
 
-   **issue 起点で起こす場合**は branch / name を `issue-<N>-<slug>` にし、委譲プロンプトへ
-   「PR 本文に `Closes #<N>` を入れること」を明記する（手順 4 の観測の起票は、issue 起点でも
-   行う）。起票は `gh-issue-file` 経由で行い、生の `gh issue create` は使わない
-   （`dot/claude/rules/issue-workflow.md`）。
+   **issue 起点で起こす場合**は branch / name を `task-<N>-<slug>` にし（`<slug>` は issue の title を
+   そのまま写さず、勤務先由来の具体名を入れない）、委譲プロンプトへ
+   「PR 本文・commit message に `Closes #<N>` や issue 番号を書かないこと」に加え、issue の URL・issue repo の
+   名前も PR 本文・title・commit message・差分に書かず、PR の title に勤務先由来の具体名を入れないことを
+   明記する（手順 4 の観測の起票は、issue 起点でも行う）。起票は `gh-issue-file` 経由で行い、生の `gh issue create` は使わない
+   （`dot/claude/rules/issue-workflow.md`）。merge 後の close は crawler が行う。dotrc 以外の repo が
+   対象なら人が close する（同 §6.2）。
 
 6. **報告して終了**（fire-and-forget）: `claude-worktree` の出力（worktree / branch / session /
    model / report-to / attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:

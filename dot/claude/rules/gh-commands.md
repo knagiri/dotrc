@@ -14,13 +14,13 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 | PR の CI 状態を見る | `gh-pr-checks <N>`（§5 参照） | `gh pr checks` は fine-grained PAT では**必ず失敗する**（statusCheckRollup が check runs 権限を要求するが、fine-grained token にはその権限自体が存在しない）。`gh-pr-checks` は読み取り専用の `gh api`（`actions/runs` と `commits/<sha>/status`）2 本を合成する薄いラッパーで、高位コマンドが使えない代替であって「`gh api` を避けている」わけではない |
 | PR にコメントを投げる | `gh pr comment <N> -b "..."` | 後述の reply ポリシーを守りつつ簡潔 |
 | PR に review を提出する | `gh pr review <N> [--approve\|--request-changes\|--comment] -b "..."` | 高位コマンドが review object を正しく扱う |
-| Issue 操作 | `gh issue *`。ただし**起票のみ** `gh-issue-file`（[issue-workflow.md](./issue-workflow.md) §1）、`ready → delegated` の label 付け替えは `gh-issue-mark-delegated`（同 §3）。閲覧（`gh issue view` / `gh issue list`）は高位コマンドのまま | 同上 |
+| Issue 操作 | `gh issue *`。ただし**起票のみ** `gh-issue-file`（[issue-workflow.md](./issue-workflow.md) §1）、`ready → delegated` の label 付け替えは `gh-issue-mark-delegated`（同 §3）。issue は private な issue repo にあるので、閲覧（`gh issue view` / `gh issue list`）は高位コマンドのまま `-R <repo>` を付ける（repo は `gh-issue-file --repo`） | 同上 |
 | Run（GH Actions）を見る | `gh run view *` | 同上 |
 | Repo 情報を見る | `gh repo view *` | 同上 |
 
 `gh api` を使うのは、高位コマンドに該当機能が無い場合に限る（例：特定エンドポイントの未対応フィールド取得、bulk 操作など）。
 
-ラッパーの無い書き込み操作（issue へのコメント、label 付け替え、本文編集など）は、dotrc では `MISE_ENV=gh mise exec -- gh ...` の形で呼ぶ。素の `gh` は `~/.config/gh/hosts.yml` のトークンに落ち、それは issue への書き込み権限を持たないので `Resource not accessible by personal access token` で失敗する。書き込み権限を持つ個人用アクセストークンは `MISE_ENV=gh` のときだけ読まれる（仕組みは `bin/lib/gh-mise.sh` の冒頭コメントと [worktree-scope.md](./worktree-scope.md) §6）。投稿してよいかの判断は §3 と [issue-workflow.md](./issue-workflow.md) §4 のまま変わらない。
+ラッパーの無い書き込み操作（issue へのコメント、label 付け替え、本文編集など）は、dotrc では `MISE_ENV=gh mise exec -- gh ...` の形で呼ぶ（issue repo の issue には `-R <repo>` も付ける。repo は `gh-issue-file --repo`）。素の `gh` は `~/.config/gh/hosts.yml` のトークンに落ち、それは issue への書き込み権限を持たないので `Resource not accessible by personal access token` で失敗する。書き込み権限を持つ個人用アクセストークンは `MISE_ENV=gh` のときだけ読まれる（仕組みは `bin/lib/gh-mise.sh` の冒頭コメントと [worktree-scope.md](./worktree-scope.md) §6）。投稿してよいかの判断は §3 と [issue-workflow.md](./issue-workflow.md) §4 のまま変わらない。
 
 実例: dotrc/docs/incidents/bare-gh-issue-write-denied.md
 
@@ -120,8 +120,8 @@ prompt injection / 権限バイパスの経路になる。
 | CI の fail 有無の確認 | `gh-pr-checks <PR>` | read-only な `gh api` の actions runs と commit statuses | `Bash(gh-pr-checks *)` |
 | PR 作成 | `gh-pr-create [flags]` | `gh pr create`（フラグは素通し） | `Bash(gh-pr-create *)` |
 | PR 本文の更新 | `gh-pr-edit-body <PR> <body-file>` | `gh pr edit <PR> --body-file <body-file>` のみ。本文を置き換える（追記は `gh pr view <PR> --json body` で現本文を取って編集したファイルを渡す） | `Bash(gh-pr-edit-body *)` |
-| issue の `status/ready → status/delegated` | `gh-issue-mark-delegated <issue>` | `gh issue view <issue> --json labels` で `status/*` がちょうど `status/ready` 1 個であることを確かめてから `gh issue edit <issue> --remove-label status/ready --add-label status/delegated`。それ以外の遷移は拒否する | `Bash(gh-issue-mark-delegated *)` |
-| 観測グループの操作（作成・sub-issue の付け外し・本文更新・close / reopen・`group/*` の付け替え） | `gh-issue-group <subcommand> ...` | 対象を `gh issue view --json state,author,parent,labels` で読み、author が repo owner で操作に合う label（`observation` / `group`）を持つときだけ（attach は既に親を持つ観測を拒否する）、操作ごとに固定した `gh issue create` / `edit` / `close` / `reopen` を撃つ | `Bash(gh-issue-group *)` |
+| issue の `status/ready → status/delegated` | `gh-issue-mark-delegated <issue>` | issue repo に対し `gh issue view -R <repo> <issue> --json labels` で `status/*` がちょうど `status/ready` 1 個であることを確かめてから `gh issue edit -R <repo> <issue> --remove-label status/ready --add-label status/delegated`。それ以外の遷移は拒否する | `Bash(gh-issue-mark-delegated *)` |
+| 観測グループの操作（作成・sub-issue の付け外し・本文更新・close / reopen・`group/*` の付け替え）と、task の close（`close-task <task>`） | `gh-issue-group <subcommand> ...` | issue repo の対象を `gh issue view -R <repo> --json state,parent,labels` で読み、操作に合う label（`observation` / `group`。`close-task` は `kind/task` と `status/delegated` の両方）を持つときだけ（attach は既に親を持つ観測を拒否する）、操作ごとに固定した `gh issue create` / `edit` / `close` / `reopen` を `-R <repo>` 付きで撃つ。起票者（author）は見ない（issue repo は private で collaborator を招かない前提。`docs/design/agent-issue-workflow.md`） | `Bash(gh-issue-group *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>`、clean 拒否のときだけ `gh pr merge --merge <PR>` へ fallback | `Bash(gh-automerge *)` |
 | auto-merge の一時停止（既存 PR へ修正を積む間。`implement-and-review` 手順 4） | `gh-automerge --disable <PR>` | `gh pr view --json state,autoMergeRequest` で読み、merge 済み / close 済みなら exit 3、既に無効なら何もせず exit 0、有効なら `gh pr merge --disable-auto <PR>` を撃って無効になったことを読み直して確かめる | `Bash(gh-automerge *)`（同上） |
 

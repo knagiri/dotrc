@@ -71,7 +71,7 @@ allowed-tools: Bash(claude-spinoff *), Read, Glob, Grep
      詰める」を明記する
 
    dotrc のグローバル harness（rules / skills / bin）に関する切り出しを、他 repo の session から
-   出すときは `--global` を付ける。
+   出すときは `claude-spinoff --global` を付ける（issue 起票の `gh-issue-file` に `--global` は要らない）。
 4. 起動後、出力の `window` 行（作った window と pane）と `attach` 行（tmux 内なら
    `tmux switch-client -t <pane_id>`、外なら `tmux attach -t <pane_id>`。その window まで直接
    飛ぶ）をユーザーに伝える。共有 session には window が複数あるので、session 名だけでは

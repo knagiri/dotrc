@@ -53,12 +53,12 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 
 3. **観測として起票して終了**: 改善点ごとに観測 issue を 1 件起票する。重複を気にして起票を
    控えない。同じ指摘が別 session から何度も入ることが優先度の信号になる。
-   - `gh-issue-file --global --list-groups` で open なグループを見て、根本原因が合うものがあれば
+   - `gh-issue-file --list-groups` で open なグループを見て、根本原因が合うものがあれば
      `--parent <N>` を付ける。迷えば付けない（日次の振り分けが拾う）
    - 本文は harness template の見出し（やること（WHAT）/ 設計（HOW）/ 受け入れ確認 / 由来）に
      手順 2 の方針を写し、`$CLAUDE_JOB_DIR` 配下のファイルに書く。具体名（組織名・repo 名・
      サービス名など）を書かない
-   - `gh-issue-file --global --kind harness --title <title> --body-file <path> [--parent <N>]`
+   - `gh-issue-file --kind harness --title <title> --body-file <path> [--parent <N>]`
    - 最終メッセージには起票した URL だけを書く。方針の本文は issue にある。既定の background
      委譲先として走っているなら、最終メッセージは誰にも読まれないまま委譲元に閉じられるので、
      委譲元への完了報告（SendMessage）に URL を添えて届ける
