@@ -456,6 +456,13 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >    判断する。一覧は必ず漏れ、漏れた語は照合を素通りするため。見つけたものは書き換えで
 >    直せるので `findings_to_fix` に載せる（公開面への露出なので、手順 5 の 3 巡目以降の
 >    絞り込みでも安全性の指摘として扱う）。
+>    差分に加えて PR 本文（手順 2 で読んだもの）と commit message（headline も含めて
+>    `gh pr view <PR> --json commits --jq '.commits[] | .messageHeadline, .messageBody'` で読む）も
+>    同じ観点で読み、勤務先由来の具体名が入っていないか確認する。あわせて、手順 1 で読んだ規約が
+>    public な PR・commit message への issue 番号（`#N`）の記載を禁じていれば（dotrc なら
+>    `dot/claude/rules/issue-workflow.md` §1 と `docs/design/agent-issue-workflow.md`）、それも
+>    確認する。規約が禁じない repo の正当な `Closes #N` は載せない。見つけたものは同じく
+>    `findings_to_fix` に載せる。
 >    あわせて `~/.claude/rules/structural-fix.md`（dotrc では `dot/claude/rules/structural-fix.md`）
 >    の観点でも見る。設計のズレの指摘も手順 5 の仕分けに従う（担当内で直せるなら
 >    `findings_to_fix`、作り直しがこの PR の担当を超えるなら手順 5 の担当外の扱い）。
