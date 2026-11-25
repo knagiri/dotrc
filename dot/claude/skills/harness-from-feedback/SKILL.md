@@ -113,9 +113,11 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - リポジトリ固有: `claude-worktree --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
    - グローバル（dotrc）: `claude-worktree --global --model opus [--seed <path>]... harness-<slug> -b harness/<slug> -- "<prompt>"`
 
-   **issue 起点で起こす場合**は branch / name を `task-<N>-<slug>` にし、委譲プロンプトへ
-   「PR 本文・commit message に `Closes #<N>` や issue 番号を書かないこと」を明記する（手順 4 の観測の起票は、issue 起点でも
-   行う）。起票は `gh-issue-file` 経由で行い、生の `gh issue create` は使わない
+   **issue 起点で起こす場合**は branch / name を `task-<N>-<slug>` にし（`<slug>` は issue の title を
+   そのまま写さず、勤務先由来の具体名を入れない）、委譲プロンプトへ
+   「PR 本文・commit message に `Closes #<N>` や issue 番号を書かないこと」に加え、issue の URL・issue repo の
+   名前も PR 本文・title・commit message・差分に書かず、PR の title に勤務先由来の具体名を入れないことを
+   明記する（手順 4 の観測の起票は、issue 起点でも行う）。起票は `gh-issue-file` 経由で行い、生の `gh issue create` は使わない
    （`dot/claude/rules/issue-workflow.md`）。merge 後の close は crawler が行う。dotrc 以外の repo が
    対象なら人が close する（同 §6.2）。
 

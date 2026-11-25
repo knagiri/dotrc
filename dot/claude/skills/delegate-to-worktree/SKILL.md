@@ -103,10 +103,13 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
      破壊的操作があれば委譲元が書き足す。
    - `<name>` と `-b <branch>` は `task-<N>-<slug>`。issue と PR の対応は branch 名だけが担う
      （merge 後は crawler が `task-<N>-*` の PR の merge を見て close する。dotrc 以外の repo が
-     対象なら人が close する）。
+     対象なら人が close する）。`<slug>` は issue の title をそのまま写さず、勤務先由来の具体名を
+     入れない（branch 名は PR とともに public に出る）。
    - 委譲プロンプトに「PR 本文・commit message に `Closes #<N>` や issue 番号を書かないこと」を
      明記する。issue は private な repo にあり、public な PR に番号を書くと対象 repo の別 issue に
-     autolink される。issue 本文の具体名も PR へ写さない。
+     autolink される。issue の URL と issue repo の名前も PR 本文・title・commit message・差分に
+     書かず、PR の title に勤務先由来の具体名を入れず、issue 本文の具体名も PR へ写さない
+     （どれも public に出る）。
    - harness を足す issue なら、incident doc の扱いも明記する（issue 本文の `## 由来` を写す。
      harness の範囲・置き場所・対象 repo が dotrc 以外のときの扱い・書き方は `dot/claude/rules/rule-authoring.md`「由来は一般化して本文に書き、経緯は incident doc に置く」節）。
    - 起動後、issue の label を `status/ready` → `status/delegated` へ替える

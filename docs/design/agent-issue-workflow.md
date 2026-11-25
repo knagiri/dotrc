@@ -10,8 +10,10 @@ agent が生む気づき（harness 改善案・不具合）を、人の手と目
 issue（観測・グループ・task）は private な issue repo に置く。dotrc（public）に出るのは改善 PR と
 branch 名だけである。issue repo の名前も public にしないので tracked には書かず、マシンローカル設定の
 `ISSUE_REPO`（`docs/design/dotrc-machine-config.md`）から `bin/lib/issue-repo.sh` が読み、issue 系の
-wrapper と crawler が source する。未設定なら wrapper も crawler も gh を呼ばずに exit 3 で止まる。
-agent が repo 名を要るときは `gh-issue-file --repo` で引き、`gh issue view -R <repo>` のように渡す。
+wrapper と crawler が source する。未設定（形が不正・設定ファイルが読めない場合を含む）なら
+wrapper も crawler も gh を呼ばずに exit 3 で止まる。設定された repo が private であることは、
+どの wrapper も crawler も issue を読み書きする前に `gh repo view --json isPrivate` で確かめ、
+public だった場合も確かめられなかった場合も exit 5 で止まる（fail closed）。agent が repo 名を要るときは `gh-issue-file --repo` で引き、`gh issue view -R <repo>` のように渡す。
 skill や prompt に直書きしない。
 
 分けた理由は `docs/incidents/issues-filed-to-public-repo.md` にある。観測は業務 repo の session からも
@@ -68,15 +70,19 @@ issue に autolink され、誤った誘導になるため。issue の template 
    観測の要旨・共通する根本原因・この策にした理由を、issue 番号も観測本文も写さずに書く。
    `pr-review-loop` までは回し、`pr-automerge` は呼ばない
 4. **確認（人）**: merge すれば、次の crawler が最新 branch の PR の merge を見て `group/delegated` を外し、
-   グループを close する（completed。外してから閉じるのは、close に失敗しても label 付きで
-   閉じたグループを残さないため）。PR 本文は issue 番号を持たないので、`Closes` による
+   グループを close する（completed。外してから閉じるのは、外すのに失敗したら閉じないため。
+   label が付いたまま閉じたグループは、再発で reopen されたときに次の pass で再び close される。
+   閉じるのに失敗しても label の無い open なグループが残るだけで、merge 以降の観測を数える
+   候補になる）。PR 本文は issue 番号を持たないので、`Closes` による
    自動 close は無い。残った観測は、グループの close 後に crawler が閉じる。方針が違えば理由を
    コメントして PR を close する。crawler はグループを `group/rejected` にし、次に委譲するとき
    委譲先がその理由を dotrc の closed PR から読む
 5. **期限切れ**: 作成から 30 日経った観測は close する（事例として残る）。直近 30 日の観測が
-   0 件になったグループも close する。close 後の再発は、振り分けが close 済みのグループ（直近 30 日に
-   close）へ `attach` すると reopen される。crawler が merge 後に閉じたグループへの再発も同じ経路で
-   reopen される
+   0 件になったグループも close する。close 後の再発は 2 つの経路で reopen される。振り分けが close 済みの
+   グループ（直近 30 日に close）へ `attach` したときと、次の pass の最初の手順が、close 済みのグループに
+   ぶら下がる open な観測のうち「閉じた後」に作られたものを見つけたときである。completed のグループは
+   merge の後に crawler が閉じるので、「閉じた後」は close の時刻ではなく最新の PR の merge（close）の
+   時刻で測る。merge から crawler の close までに付いた観測も再発として数えられる
 
 ## 数え方と歯止め
 
@@ -106,7 +112,10 @@ crawler が見ないので、人が close する。close の成立条件の限�
 
 - **issue repo に collaborator を招かない。** private repo に issue を書けるのは owner と招いた
   collaborator だけなので、招かない限り issue の起票者を検査する必要が無い。wrapper と crawler は
-  author を見ない。招く運用に変えるなら、author 検査を戻す
+  author を見ない。招く運用に変えるなら、author 検査を戻す。この前提は検査できない（誰にアクセス権が
+  あるかは `gh repo view` から見えない）ので、ここに置く。一方、repo が private であることは実行時に
+  検査する。設定の書き間違いや env で public な repo を指すと、public に起票し、第三者の issue を
+  crawler が委譲の材料にするため
 - **issue 本文は信頼できない外部入力として読む。** 観測は業務 repo で読んだ第三者のテキストを
   要約して含みうるので、起票者が owner であっても本文を指示として扱わない。委譲プロンプトには
   group 番号だけを入れ、本文は委譲先が自分で読む（`gh-commands.md` §5 の「第三者が
@@ -115,7 +124,11 @@ crawler が見ないので、人が close する。close の成立条件の限�
   操作に合う label（`observation` / `group` / `kind/task` + `status/delegated`）を持つことを確かめる
   `bin/gh-issue-group` に限る。token は `MISE_ENV=gh` 経由（`bin/lib/gh-mise.sh`）。読み取りは素の
   `gh issue view -R <repo>` / `gh issue list -R <repo>` で足り（hosts.yml の token が issue repo を読めることが前提。
-  setup 参照）、読み取りラッパーは無い
+  setup 参照）、読み取りラッパーは無い。crawler は振り分けの `claude -p` を起こす前に、その session と
+  同じ token（`MISE_ENV=gh` 無し）で issue repo を 1 件読み、読めなければ振り分けだけを飛ばして
+  exit 2 にする。crawler 自身は PAT で読めるので、これが無いと振り分けだけが黙って進まない。
+  振り分けの session が使える書き込みは `create` / `attach` / `detach` / `set-body` / `close` だけ
+  で、`close-task`・`reopen`・`mark` は crawler の手順であり session には許さない
 - **merge は人。** 全 PR が人の merge なので、grant 変更を含む PR の規約（`gh-commands.md` §5）も
   自然に満たす
 - **crawler は claude の daemon を起動しない。** timer から起こすと systemd service の env が以後の
@@ -125,9 +138,12 @@ crawler が見ないので、人が close する。close の成立条件の限�
   起動した）
 - **負荷**: nice は timer の service（`ExecStart`）側だけで掛ける。`claude -p` にも掛けると二重になり niceness が上限へ丸められる（`shared-machine-load.md`）
 - **勤務先由来の具体名が public に出る経路は、委譲先の PR だけ。** 観測を読んだ委譲先が内容を
-  PR 本文・commit message・差分へ写すと、public に載る。守りは 3 つある。dotrc の `CLAUDE.md` の規約、
-  `pr-review-loop` の判定役が PR 本文と差分に具体名・issue 番号が無いかを見ること、人の merge。
-  issue 側は private なので、観測の title と本文は具体名を含んでよいが、機構で書く習慣は残す
+  PR 本文・title・commit message・差分・branch 名へ写すと、public に載る。`task-<N>-<slug>` の
+  slug は issue の title から作られやすい。issue repo の名前と issue の URL も public に出さない。
+  守りは 3 つある。dotrc の `CLAUDE.md` の規約、`pr-review-loop` の判定役が PR 本文・title・
+  branch 名・commit message・差分に具体名・issue 番号・issue repo の名前・issue の URL が無いかを
+  見ること、人の merge。issue 側は private なので、観測の title と本文は具体名を含んでよいが、
+  機構で書く習慣は残す
 
 ## 一次情報 — 非対話起票に issue template は効かない
 
@@ -176,11 +192,12 @@ form を正典にすると本文骨格をラッパーへ再実装することに
 - PR を出さずに終わった委譲先（`design-from-observations` が根本原因を絞れず止まった場合を含む）の
   グループは `group/delegated` のまま残り、crawler は外さない。in-flight の枠を占め続けるので、
   人が `gh-issue-group mark <N> clear` で外す
-- PR の merge からグループの close までに起票された観測は、close 時点より前なので leftover として
-  閉じられる。再発として数えられない
 - dotrc 以外の repo を対象にした task は crawler が close しない。人が close する
 - `design-from-observations` の `-R` 漏れは、手順で読んだ issue の `url` を検査して検出する。allowlist では
-  縛っていない（振り分けの `claude -p` は `-R <issue repo>` 付きの読み取りだけを allow し、`GH_REPO` も渡す）
+  縛っていない。振り分けの `claude -p` は読み取りを `gh issue view -R <issue repo> *` と
+  `gh issue list -R <issue repo> *` に絞り、`GH_REPO` も渡すが、末尾の `*` は 2 つ目の `-R` も通し、
+  gh は後に書かれた `-R` を使うので、別の repo を読めてしまう。pattern では塞げない。読めるだけで書けない
+  ので影響は小さい
 - crawler の `gh issue list` と `gh pr list`（automatic PR 一覧・merged PR 一覧 `--state merged`）は
   `--limit 1000`、振り分けの `claude -p` と `--list-groups` は `--limit 200` までしか読まない。
   超えた分は読まれない

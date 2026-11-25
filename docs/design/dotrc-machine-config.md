@@ -2,9 +2,8 @@
 
 マシンごとに違う値や、public な dotrc に載せたくない値（秘密ではないが公開したくない名前など）は、
 checkout の外の untracked なファイル `${XDG_CONFIG_HOME:-$HOME/.config}/dotrc/config` に置き、
-`bin/lib/dotrc-config.sh` の `dotrc_config <KEY> [<default>]` で読む。今ある項目は issue repo の
-`ISSUE_REPO`（`docs/design/agent-issue-workflow.md`）だけで、この種の値を足すときもここに置く。
-既存の env knob（`GH_AWAIT_REVIEWS_*` 等）は動作の調整であってマシン固有の値ではないので、移さない。
+`bin/lib/dotrc-config.sh` の `dotrc_config <KEY> [<default>]` で読む。各項目の意味は、それを
+読む側の doc が持つ。既存の env knob（`GH_AWAIT_REVIEWS_*` 等）は動作の調整であってマシン固有の値ではないので、移さない。
 
 ## 形式と解決順
 
@@ -18,8 +17,8 @@ lib のヘッダが正典である。
 
 ## source しない
 
-ファイルは shell として実行せず、key を照合して値を文字列として取り出すだけにしている。読むのは
-allowlist 済みのラッパー（`gh-issue-file` 等）なので、`source` すると、このファイルを書き換えられる
+ファイルは shell として実行せず、key を照合して値を文字列として取り出すだけにしている。読み手は
+承認プロンプトを挟まずに動くことがあるので、`source` すると、このファイルを書き換えられる
 ものが承認なしに任意のコマンドを走らせられる。`mise.db.local.toml` を paranoid trust で読むのと
 同じ懸念である（`docs/design/mise-config-layering.md`）。
 
