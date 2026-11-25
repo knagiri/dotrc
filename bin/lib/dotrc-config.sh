@@ -22,8 +22,11 @@
 #   Prints the value of KEY. Lookup order: a non-empty environment variable
 #   named KEY, then the file, then <default>. An empty value counts as unset.
 #   With no default and no value, prints the file path and the line to add to
-#   stderr and returns 1. A KEY that is not a shell identifier returns 2, and
-#   so does a file that exists but cannot be read.
+#   stderr and returns 1. A KEY that is not an upper-case shell identifier
+#   (`^[A-Z_][A-Z0-9_]*$`) returns 2, and so does a file that exists but cannot
+#   be read. Lower-case keys are refused because the environment lookup is an
+#   indirect expansion that would otherwise read this function's own local
+#   variables (all lower-case) instead of the environment.
 
 dotrc_config_file() {
   printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/dotrc/config"
@@ -31,7 +34,7 @@ dotrc_config_file() {
 
 dotrc_config() {
   local key="${1-}" file line k v found=""
-  if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+  if [[ ! "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
     echo "dotrc_config: invalid key: $key" >&2
     return 2
   fi

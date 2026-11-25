@@ -148,6 +148,25 @@ fi
 chmod 600 "$cfg"
 rm -f "$cfg"
 
+# A KEY named like one of the function's own locals must not read the local.
+get key fallback
+if [ "$rc" -eq 2 ]; then pass "a lower-case key (same name as a local) is refused with 2"; else nope "a lower-case key (same name as a local) is refused with 2"; fi
+printf 'key=fromfile\n' >"$cfg"
+out="$(found=envval bash -c '. "$1"; dotrc_config found fallback' _ "$lib" 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 2 ]; then pass "a lower-case key never resolves from a local or the environment"; else nope "lower-case env key"; fi
+rm -f "$cfg"
+
+# Discrimination: with the old identifier pattern, `key` returns the local.
+oldpat="$tmp/oldpat.sh"
+sed 's|\^\[A-Z_\]\[A-Z0-9_\]\*\$|^[A-Za-z_][A-Za-z0-9_]*$|' "$lib" >"$oldpat"
+if cmp -s "$lib" "$oldpat"; then
+  echo "FAIL: the pattern mutant is identical; the check below is a no-op"; fail=1
+fi
+out="$(bash -c '. "$1"; dotrc_config key fallback' _ "$oldpat" 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "key" ]; then
+  pass "with the old pattern the key reads the function's local (the cases above are discriminating)"
+else nope "pattern mutant"; fi
+
 get 'bad key'
 if [ "$rc" -eq 2 ]; then pass "a key that is not an identifier returns 2"; else nope "a key that is not an identifier returns 2"; fi
 
