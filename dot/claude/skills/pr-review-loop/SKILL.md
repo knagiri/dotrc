@@ -69,6 +69,9 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 1. `owner` / `repo` を取得: `gh repo view --json owner,name --jq '.owner.login + " " + .name'`。
    あわせて監査巡（手順 2.e）の状態を初期化する: `AUDIT_PENDING` は下ろし、`PRIOR_FIXES` は空で
    始める（手順 3.a で手順 2 へ戻っても初期化しない）。
+   さらに `gh-merge-when-green --enabled` を 1 回実行し、exit 0 なら `<BYPASS_GATE>` を `判定する`、
+   それ以外（3 / 4 / その他）なら `判定しない` に決める。全イテレーションで同じ値を使う。admin bypass
+   を許可した repo でだけ、判定役が収束時の bypass ゲートを判定する（手順 3.b、判定 subagent prompt の 5.6）。
 2. イテレーション `i` を 1..5 で回す:
 
    a-0. **`LAST_SEEN` の更新**: イテレーション 2 以降は、判定役を dispatch する**前**に
@@ -141,7 +144,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
       空）、この PR の担当領域 `<SCOPE>`、専門レビューの findings `<SPECIALIST_FINDINGS>`（a-0.5 で
       作る。イテレーション 2 以降は「なし（1 巡目のみ実施）」と書き、空と書き忘れを区別できるように
       する）、巡の種別 `<REVIEW_MODE>`（ここでは `通常巡`。`監査巡` は手順 2.e だけが使う）、
-      `<PRIOR_FIXES>`（通常巡では「なし（通常巡）」）を埋めて渡す。判定役は最終メッセージに判定
+      `<PRIOR_FIXES>`（通常巡では「なし（通常巡）」）、手順 1 で決めた `<BYPASS_GATE>` を埋めて渡す。判定役は最終メッセージに判定
       verdict JSON だけを返す。a-1 の再 dispatch では a-0.5 をやり直さず、同じ `<SPECIALIST_FINDINGS>` を渡す。
 
       **`<PROHIBITIONS>` の埋め方**: 呼び出し元から
@@ -339,6 +342,12 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
       収束: head_sha=<head_sha> last_seen=<LAST_SEEN>
       ```
 
+      `<BYPASS_GATE>` が `判定する` の repo では、収束条件を満たした最後の判定 verdict（通常巡か監査巡）の
+      `bypass_gate` を同じ行の末尾に ` bypass_gate=<値>` として足す（例: `bypass_gate=ok`、
+      `bypass_gate=ng:テストが無い`）。verdict に値が無い・null なら `bypass_gate=ng:未判定` と書く。
+      `判定しない` の repo では足さない（行の形を変えない）。`pr-automerge` の admin 経路はこの値が
+      `ok` のときだけ merge へ進む。
+
       `LAST_SEEN` が null（HEAD 宛の activity が無かった）のときは `last_seen=null` と書く。
       キーを省略しない（`pr-automerge` は省略を未受領として止める）。
 
@@ -370,7 +379,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
    経ていないので loop 自身の過去の修正指示は検証されていない旨を添える（verdict が無いので、載せられる
    項目は最後の検出レポートの `missing` と各回の結果になる）。
 
-## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` / `<SCOPE>` / `<PROHIBITIONS>` / `<SPECIALIST_FINDINGS>` / `<REVIEW_MODE>` / `<PRIOR_FIXES>` を埋めて判定役に渡す）
+## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` / `<SCOPE>` / `<PROHIBITIONS>` / `<SPECIALIST_FINDINGS>` / `<REVIEW_MODE>` / `<PRIOR_FIXES>` / `<BYPASS_GATE>` を埋めて判定役に渡す）
 
 > あなたは PR #`<PR>`（`<owner>/<repo>`）を独立した立場でレビューする**判定役**です。あなたは
 > この PR の作者ではありません。会話履歴はありません。**コードは一切変更しません**（変更は
@@ -624,6 +633,20 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >    - thread にならない指摘（`origin` が `review_body` / `comment`）の `decline` / `defer` / `stale` は、
 >      修正役が PR 本文の「レビュー指摘への対応」節に記録する。1 つの review 本文に複数の指摘があれば
 >      指摘ごとに 1 要素にする。
+> 5.6. **bypass ゲート（`<BYPASS_GATE>` が `判定する` のときだけ）**: この repo では、レビューが収束すると
+>    approve 無しの admin bypass で merge されうる。人の approve の代わりになるので、次の 3 つを
+>    すべて満たすかを判定し、`bypass_gate` に書く。満たせば `"ok"`、1 つでも満たさなければ
+>    `"ng:<理由>"`（理由は 1 行）。確信が持てなければ `ng` にする。`<BYPASS_GATE>` が `判定しない`
+>    なら `null` にする。
+>    - 差分が上の担当領域 `<SCOPE>` に収まっている（`<SCOPE>` が「限定なし」なら、担当の範囲を
+>      確かめられないので `ng`）
+>    - 振る舞いの変更にはテストがあり、対象 repo のテスト規約に従っている。対象 repo にテストを
+>      レビューする skill や規約があるなら、それを最重要度の指摘がゼロになるまで回したことが
+>      PR 上（本文・コメント・commit）で確かめられる
+>    - 設計・契約を決める変更ではない（新しい API・データの形・外部との契約・設計判断を足す変更は
+>      人が見る）
+>    この判定は findings の仕分け（手順 5）とは独立で、`ng` は merge を人に回すだけで finding では
+>    ない。`ng` の理由を `findings_*` に重ねて載せない。
 > 6. **verdict 出力**: 下記スキーマの JSON **だけ**を出力する。
 >
 > ```json
@@ -634,9 +657,12 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >   "pr_dispositions": [{"origin": "thread", "thread_id": "...", "source": "coderabbitai", "summary": "...", "action": "decline", "reason": "...", "detail": null, "reply_done": false, "bot_severity": "Major"}],
 >   "ci_status": "pending",
 >   "mergeable": false,
->   "summary": "一言サマリ"
+>   "summary": "一言サマリ",
+>   "bypass_gate": null
 > }
 > ```
+>
+> - `bypass_gate`: 手順 5.6 の結果。`"ok"` / `"ng:<理由>"`、`<BYPASS_GATE>` が `判定しない` なら `null`。
 >
 > - `pr_dispositions`: 手順 5.5 で `decline` / `defer` / `stale` / `not_a_finding` を割り当てた bot の
 >   指摘（無ければ空配列）。`origin` は `thread` / `review_body` / `comment`。`thread_id` は `origin` が

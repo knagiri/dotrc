@@ -124,6 +124,7 @@ prompt injection / 権限バイパスの経路になる。
 | 観測グループの操作（作成・sub-issue の付け外し・本文更新・close / reopen・`group/*` の付け替え）と、task の close（`close-task <task>`） | `gh-issue-group <subcommand> ...` | issue repo の対象を `gh issue view -R <repo> --json state,parent,labels` で読み、操作に合う label（`observation` / `group`。`close-task` は `kind/task` と `status/delegated` の両方）を持つときだけ（attach は既に親を持つ観測を拒否する）、操作ごとに固定した `gh issue create` / `edit` / `close` / `reopen` を `-R <repo>` 付きで撃つ。起票者（author）は見ない（issue repo は private で collaborator を招かない前提。`docs/design/agent-issue-workflow.md`） | `Bash(gh-issue-group *)` |
 | merge | `gh-automerge <PR>` | `gh pr merge --auto --merge <PR>`、clean 拒否のときだけ `gh pr merge --merge <PR>` へ fallback | `Bash(gh-automerge *)` |
 | auto-merge の一時停止（既存 PR へ修正を積む間。`implement-and-review` 手順 4） | `gh-automerge --disable <PR>` | `gh pr view --json state,autoMergeRequest` で読み、merge 済み / close 済みなら exit 3、既に無効なら何もせず exit 0、有効なら `gh pr merge --disable-auto <PR>` を撃って無効になったことを読み直して確かめる | `Bash(gh-automerge *)`（同上） |
+| CI 全通過を待って admin bypass で merge（許可した repo だけ。`pr-automerge` の admin 経路） | `gh-merge-when-green <PR> <SHA>` / `gh-merge-when-green --enabled` | repo 許可リスト・PR のゲート・パス許可リスト・head の一致・全チェックの通過をすべて満たしたときだけ `gh pr merge <PR> --admin --merge --match-head-commit <SHA>`。`--enabled` は repo 許可リストの照合だけ | `Bash(gh-merge-when-green *)` |
 
 - ラッパーはフラグ素通しをしない（**`gh-pr-create` だけは例外**で全フラグを素通しする。
   あれが包んでいるのは grant の広さではなく env で、`Bash(gh pr create *)` が既に allow 済み
@@ -146,6 +147,14 @@ prompt injection / 権限バイパスの経路になる。
   `gh-reply-thread` 経由に限る）。人間の議論待ち thread は resolve せず
   残してサマリで報告する。
 - ラッパーは **repo 単位**で、特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）。`--auto` は branch protection / required checks を尊重するため未通過 PR を強制 merge はできないが、「PR 限定ではない」点は把握しておく。fallback の直接 merge（`gh pr merge --merge`）も同じで、ゲートを掛けるのは GitHub 側の branch protection であり、ラッパーは `--admin` 等のバイパスフラグを一切付けない。したがって fallback 経路に落ちても required checks / required approvals は変わらず強制される。
+- allowlist から `--admin` に到達できるのは `gh-merge-when-green` だけで、それも次のゲートを全部
+  通ったときに限る: repo がマシンローカル設定 `ADMIN_MERGE_REPOS` に載っている、PR の author が
+  token の本人・fork でない・base が default branch・変更 100 件未満、全変更パス（rename の両側を
+  含む）が main working tree の `.dotrc-admin-merge-paths` に収まり `.github/`・`.claude/` に触れない、
+  head が渡した SHA、その SHA の全チェックが pass / skipping。branch protection の approve 要件を
+  バイパスするので、許可リストは agent が書けない場所（`~/.config/dotrc/config` と main working
+  tree の git 管理外 dotfile）にだけ置き、agent はどちらも書かない。各ゲートと終了コードの正典は
+  `bin/gh-merge-when-green` のヘッダ、設計の理由は `docs/design/admin-merge-when-green.md`。
 - `gh-automerge` の fallback は **clean 拒否 1 種類にだけ**効く。`gh pr merge --auto` の失敗の
   stderr に `clean status` が含まれるとき（= 待つものが何も無い PR に auto-merge は張れない、と
   GitHub が拒否したとき）だけ `gh pr merge --merge <PR>` へ落ちる。CI workflow を持たない repo は
