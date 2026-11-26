@@ -2,17 +2,17 @@
 set -euo pipefail
 
 # gh-request-approval <PR#> <SHA> -- for a PR whose head is <SHA>, check the
-#   gates below, start the repo's approve workflow, wait until the PR is
-#   approved, then enable auto-merge on it.
+#   gates below and start the repo's approve workflow. That is all it does: it
+#   does not wait for the approval and does not merge or enable auto-merge.
 # gh-request-approval --enabled -- exit 0 if the cwd's repo has both settings
 #   files and the workflow name is well-formed, 4 if the files are missing, 3 if
 #   they are unusable. Resolves the repo with `gh repo view`; touches no PR.
 #
 # These two forms (and -h/--help, which prints the usage and exits 0) are all it
 # accepts: <PR#> is a number, <SHA> 40 lower-case hex digits, and no option is
-# passed through to gh. It never passes --admin: the approval comes from the repo's own workflow (a GitHub App
-# approving <SHA>), and the merge is left to GitHub's auto-merge, so required
-# checks and every other branch protection rule still apply.
+# passed through to gh. It issues no merge at all: the approval comes from the
+# repo's own workflow (a GitHub App approving <SHA>), and whether the PR merges
+# is left to GitHub's auto-merge (enabled separately) and the repo's rules.
 #
 # Environment: the caller's environment takes no part. The script first
 # re-executes itself under `env -i` with only
@@ -66,31 +66,18 @@ set -euo pipefail
 #      with ':' (all case-insensitive), whatever `paths` says
 #   4. the PR head is <SHA>
 # Then: `gh workflow run <workflow> -R <nwo> --ref refs/heads/<default> -f pr=<PR>
-# -f head_sha=<SHA>`; wait, polling every 15s and giving up once 480s have
-# passed (at most about 500s plus the gh calls, under the Bash tool's 600s), until an App
-# (a review author of type Bot other than the PR author) has an APPROVED review
-# whose commit_id is <SHA> as its latest review on <SHA>, while the head stays
-# <SHA> and the PR stays OPEN (reviewDecision is not used: where approvals
-# survive a push it stays APPROVED on an approval of an older commit);
-# check gates 1 and 2 again; enable auto-merge with
-# `gh pr merge <PR> -R <nwo> --auto --merge --match-head-commit <SHA>`, and
-# only when GitHub refuses that because the PR is in clean status, merge it
-# with `gh pr merge <PR> -R <nwo> --merge --match-head-commit <SHA>` (the
-# gh-automerge contract, pinned to <nwo> and <SHA>). The wait limits are
-# constants: environment knobs would not survive the re-exec.
+# -f head_sha=<SHA>`, and exit 0 once gh reports the run as started.
 #
 # Exit codes (the reason is printed to stderr in one line):
-#   0  auto-merge enabled, or merged (--enabled: the repo is enabled)
+#   0  the approve workflow was started (--enabled: the repo is enabled)
 #   1  bad arguments, not in a git working tree (a submodule, a bare repo or a
 #      separate git dir included), an unexpected gh or git failure or output, a
 #      dirty environment despite the marker
 #   3  the settings are unusable (unreadable, not one workflow file name)
-#   4  a gate refused, including a repo that is not enabled, a `paths` that
-#      allows nothing, or the PR closing while waiting
-#   5  the head is not <SHA>, or moved while waiting for the approval
+#   4  a gate refused, including a repo that is not enabled or a `paths` that
+#      allows nothing
+#   5  the head is not <SHA>
 #   6  starting the workflow failed
-#   7  no approval within the wait limit
-#   8  enabling auto-merge (or the clean-status direct merge) failed
 #
 # Requires jq and git (see bin/list-install.sh). The logic lives in
 # bin/lib/gh-request-approval.sh; this file only clears the environment.
