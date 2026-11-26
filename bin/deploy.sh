@@ -116,7 +116,7 @@ fi
 # `mise exec`), so a shim there resolves without per-session PATH fixes.
 # node.corepack makes mise run `corepack enable` after each node install, but
 # only at install time, so the versions already installed are enabled here. A
-# node without corepack is reported and skipped. The node's own bin/ goes first
+# node without corepack (every Node 25+ install) is reported and skipped. The node's own bin/ goes first
 # on PATH for two reasons: corepack is `#!/usr/bin/env node`, and it writes the
 # shims beside the first corepack found on PATH.
 if command -v mise >/dev/null 2>&1; then
@@ -133,7 +133,7 @@ if command -v mise >/dev/null 2>&1; then
         while IFS= read -r __node_dir; do
             [ -n "${__node_dir}" ] || continue
             if [ ! -x "${__node_dir}/bin/corepack" ]; then
-                echo "deploy.sh: no corepack in ${__node_dir}; yarn/pnpm shims not installed" >&2
+                echo "deploy.sh: no corepack in ${__node_dir}; yarn/pnpm shims not installed (Node 25+ does not ship corepack)" >&2
                 continue
             fi
             if [ -e "${__node_dir}/bin/yarn" ] && [ -e "${__node_dir}/bin/pnpm" ]; then
