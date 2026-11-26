@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# gh-merge-when-green <PR#> <SHA> -- wait for every check on <SHA> to pass, then
-#   merge the pull request with administrator privileges (bypassing required
-#   approvals): `gh pr merge <PR> --admin --merge --match-head-commit <SHA>`.
+# gh-merge-when-green <PR#> <SHA> -- once every check of the PR passes while its
+#   head is <SHA>, merge it with administrator privileges, which bypasses
+#   required approvals and required checks:
+#   `gh pr merge <PR> -R <OWNER/NAME> --admin --merge --match-head-commit <SHA>`.
 # gh-merge-when-green --enabled -- exit 0 if the repo of the cwd is allowed for
 #   that merge, 4 if not, 3 if the setting is unusable. Reads only.
 #
@@ -12,43 +13,53 @@ set -euo pipefail
 # allowlisted path to `gh pr merge --admin`, and it reaches it only after every
 # gate below has passed, in this order:
 #
-#   1. repo allowlist: the cwd's repo (`gh repo view`) is listed in the dotrc
-#      machine-local setting ADMIN_MERGE_REPOS (bin/lib/dotrc-config.sh), a
-#      whitespace-separated list of OWNER/NAME. Unset, empty, unreadable, or any
-#      element not of that form -> exit 3, before any gh call. Neither this
-#      wrapper nor an agent writes that setting.
+#   1. repo allowlist: the cwd's repo (`gh repo view`) is listed in
+#      ADMIN_MERGE_REPOS, a whitespace-separated list of OWNER/NAME read from
+#      the dotrc config FILE only (bin/lib/dotrc-config.sh). Unlike other dotrc
+#      settings, an ADMIN_MERGE_REPOS in the environment is ignored: a caller
+#      must not be able to name the repos it may bypass-merge. Unset, empty,
+#      unreadable, or any element not of that form -> exit 3.
 #   2. PR gate: the PR's author is the token's own login (`gh api user`), the
 #      head is not from a fork (isCrossRepository false), the base is the repo's
-#      default branch, and fewer than 100 files changed.
+#      default branch, and 1 to 99 files changed.
 #   3. path allowlist: every changed path -- both sides of a rename, deleted
-#      files included -- is allowed by `.dotrc-admin-merge-paths` (see below).
-#   4. the PR head is <SHA>.
-#   5. every check on the PR passes (see "CI wait").
+#      files included -- is allowed by the repo's path list (see below).
+#   4. no unresolved review thread was started by a human (its first comment's
+#      author is not a Bot), checked here and again right before merging.
+#   5. the PR head is <SHA>.
+#   6. every check on the PR passes (see "CI wait").
 #
-# Changed files come from the REST endpoint pulls/<N>/files?per_page=100, read
-# with `gh api`: `gh pr view --json files` carries no previous path for a
-# rename (measured with gh 2.105.0: a RENAMED entry has only path, additions,
-# deletions, changeType), while the REST entry has previous_filename. One page
-# of 100 is read; a PR whose page is full is refused rather than paginated, so
-# a path cut off by a page boundary can never pass unchecked.
+# gh: every call is a plain `gh` with the hosts.yml login -- not bin/lib/
+# gh-mise.sh, whose `mise exec` would let a checkout's mise config inject
+# GH_REPO / GH_TOKEN -- and every GH_* / GITHUB_* token or selector in the
+# environment is dropped first. The repo is resolved once from the cwd and then
+# pinned with -R (or spelled out in the API path) on every later call.
 #
-# Path allowlist: `.dotrc-admin-merge-paths` in the root of the repo's MAIN
-# working tree, i.e. the parent of `git rev-parse --path-format=absolute
-# --git-common-dir`, never a linked worktree's copy -- an agent working in a
-# worktree must not be able to loosen the list it is judged by. The file is
-# untracked (dot/git/ignore has `.dotrc-*`). Missing, unreadable, or without a
-# single pattern line -> nothing is merged (exit 4): empty is the intended
-# initial state, not a misconfiguration.
+# Changed files come from the REST endpoint pulls/<N>/files?per_page=100: `gh
+# pr view --json files` carries no previous path for a rename (measured with gh
+# 2.105.0: a RENAMED entry has only path, additions, deletions, changeType),
+# while the REST entry has previous_filename. One page of 100 is read; a full
+# page is refused rather than paginated, so a path cut off by a page boundary
+# can never pass unchecked. The head is read again after the list, and a head
+# that moved in between stops the run (5).
+#
+# Path list: ${XDG_CONFIG_HOME:-$HOME/.config}/dotrc/admin-merge-paths/OWNER/NAME,
+# spelled as in ADMIN_MERGE_REPOS. It lives next to the dotrc config, outside
+# any checkout, so nothing a PR or a checkout contains can change it. Missing,
+# unreadable, or without a single pattern line -> nothing is merged (exit 4):
+# empty is the intended initial state, not a misconfiguration.
 #
 # Its format and meaning are exactly .gitignore's, because git evaluates it: the
 # list becomes the info/exclude of an empty scratch repo, and the changed paths
 # are fed to `git check-ignore --no-index --stdin -z -v -n`. "Ignored" reads as
 # "may be merged"; a path whose last matching pattern is a negation (`!...`)
-# or that matches nothing is refused. gitignore's own limits come along: a path
-# under an excluded parent directory cannot be re-included with `!`. The
-# scratch repo runs with GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1
-# and core.excludesFile=/dev/null, so neither the user's config nor the default
-# ~/.config/git/ignore (read even when no excludesFile is configured) takes part.
+# or that matches nothing is refused. In allowlist terms, gitignore's limit on
+# re-including reads: once `dir/` is allowed, nothing beneath it can be refused
+# again with `!` (`dir/` + `!dir/secret` still allows dir/secret); write
+# `dir/*` + `!dir/secret` to carve a path out. The scratch git runs under
+# `env -i` with GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null,
+# core.excludesFile=/dev/null and core.ignoreCase=false, so no config of the
+# caller's environment, user or system takes part.
 #
 # Parent directories with --no-index: the paths do not exist in the scratch
 # repo, yet a directory pattern still matches what lies beneath it, so each
@@ -63,33 +74,45 @@ set -euo pipefail
 #
 # Never allowed, whatever the list says: anything under the root `.github/`
 # (a PR could rewrite the CI that gates it) and anything under a `.claude/`
-# directory at any depth (permission grants).
+# directory at any depth (Claude Code permission grants), both compared
+# case-insensitively. Other places that grant permissions in a given repo are
+# for its path list to leave out.
 #
 # CI wait: wait GH_MERGE_WHEN_GREEN_INITIAL_DELAY seconds (default 30), then
 # poll every GH_MERGE_WHEN_GREEN_INTERVAL (30). Each poll re-reads the head
-# (moved off <SHA> -> 5) and then `gh pr checks <PR> --json name,bucket,state`,
-# judged by its `bucket`s, not its exit code (with --json, gh exits 0 even
-# when a check failed):
+# (moved off <SHA> -> 5) and the base (changed -> 4), then reads
+# `gh pr checks <PR> --json name,bucket,state`, judged by its `bucket`s, not
+# its exit code (with --json, gh exits 0 even when a check failed):
 #   - any fail / cancel -> 6
 #   - any pending (or an unknown bucket) -> keep waiting
 #   - only pass / skipping -> complete; merge once complete has been seen on two
-#     polls in a row, so a workflow that is created late is still waited for
+#     polls in a row, so a workflow created shortly after the others is still
+#     waited for
 # Every check counts, required or not. No checks at all is not a pass: when
 # none have appeared GH_MERGE_WHEN_GREEN_NO_CHECKS_GRACE (180) seconds after the
 # start -> 7. Past GH_MERGE_WHEN_GREEN_TIMEOUT (3600) seconds -> 8. With no
 # checks gh prints "no checks reported on the '<branch>' branch" and exits 1
-# even with --json (measured with gh 2.105.0); that reads as zero checks. A
-# permission error ("Resource not accessible", HTTP 403; e.g. a fine-grained PAT
-# without access to check runs) -> 9.
+# even with --json (measured with gh 2.105.0); that reads as zero checks.
+# `gh pr checks` reads check runs, which a fine-grained PAT has no permission
+# for, so with such a token every run ends in 9 ("Resource not accessible",
+# HTTP 403) and a host whose hosts.yml token is fine-grained never merges this
+# way; a classic or OAuth token can read them.
+#
+# Limits: --admin bypasses required checks too, so a required workflow whose run
+# is created later than two polls after the others finished is not waited for.
+# The judgement gates (scope, tests, no design decision) are reported by the
+# caller and not verified here.
 #
 # Exit codes:
 #   0  merged (--enabled: the repo is allowed)
-#   1  bad arguments or environment knobs, an unexpected gh / git failure
+#   1  bad arguments or environment knobs, an unexpected gh failure or output
 #   3  ADMIN_MERGE_REPOS is unusable (unset, malformed, config unreadable)
 #   4  a gate refused: repo not allowed, author is not the token's login, fork,
-#      base is not the default branch, a path outside the list, the list is
-#      missing / empty / unreadable, 100 or more changed files
-#   5  the head is not <SHA> (before or while waiting)
+#      base is not (or stopped being) the default branch, no or 100+ changed
+#      files, a path outside the list or always refused, the list is missing /
+#      empty / unreadable or cannot be evaluated, an unresolved thread started
+#      by a human (or more than 100 threads to check)
+#   5  the head is not <SHA>, or moved while the PR was being read or waited on
 #   6  a check failed or was cancelled
 #   7  no check appeared within the grace period
 #   8  timed out waiting for checks
@@ -122,81 +145,80 @@ case "${1:-}" in
     ;;
 esac
 
-# Which repo gh and git act on must come from the cwd alone: GH_REPO / GH_HOST
-# would point gh at another repo than the checkout whose path list is read,
-# and the GIT_* selectors would point git at another checkout than the cwd.
-unset GH_REPO GH_HOST GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_PREFIX
+# Which repo and token gh uses must not come from the caller: drop every gh /
+# GitHub token and selector (GH_REPO, GH_HOST, GH_TOKEN, GH_CONFIG_DIR, ...),
+# and git's repo selectors, which `gh repo view` reads through git. This
+# wrapper's own GH_MERGE_WHEN_GREEN_* knobs stay.
+for v in $(compgen -v GH_) $(compgen -v GITHUB_); do
+  case "$v" in GH_MERGE_WHEN_GREEN_*) ;; *) unset "$v" ;; esac
+done
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_PREFIX GIT_CEILING_DIRECTORIES
 
 here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 # shellcheck source=bin/lib/dotrc-config.sh
 . "$here/lib/dotrc-config.sh"
-# Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
-# is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
-# shellcheck source=bin/lib/gh-mise.sh
-. "$here/lib/gh-mise.sh"
-repo_root="$(gh_mise_repo_root)"
-gh_mise_use "$repo_root"
 
 # --- 1. repo allowlist -------------------------------------------------------
+# dotrc_config prefers a non-empty environment variable; this key is read from
+# the file only.
+unset ADMIN_MERGE_REPOS
 repos_raw="$(dotrc_config ADMIN_MERGE_REPOS)" || exit 3
 read -r -a allowed_repos <<<"$repos_raw"
 [ "${#allowed_repos[@]}" -gt 0 ] || die 3 "ADMIN_MERGE_REPOS is empty"
 for r in "${allowed_repos[@]}"; do
   [[ "$r" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
     || die 3 "ADMIN_MERGE_REPOS must be whitespace-separated OWNER/NAME (got: $r)"
+  case "/$r/" in */./*|*/../*) die 3 "ADMIN_MERGE_REPOS has a . or .. component (got: $r)" ;; esac
 done
 
-repo_line="$(gh_mise repo view --json nameWithOwner,defaultBranchRef \
-  --jq '"\(.nameWithOwner) \(.defaultBranchRef.name)"')" \
+repo_out="$(gh repo view --json nameWithOwner,defaultBranchRef \
+  --jq '.nameWithOwner, (.defaultBranchRef.name // "")')" \
   || die 1 "gh repo view failed"
-read -r nwo default_branch <<<"$repo_line"
-[ -n "$nwo" ] || die 1 "gh repo view returned no repository"
+{ read -r nwo; read -r default_branch; } <<<"$repo_out" || true
+[ -n "${nwo:-}" ] || die 1 "gh repo view returned no repository"
 
-listed=0
+listed=""
 for r in "${allowed_repos[@]}"; do
   # GitHub owner and repo names are case-insensitive.
-  [ "${r,,}" = "${nwo,,}" ] && listed=1
+  [ "${r,,}" = "${nwo,,}" ] && listed="$r"
 done
-if [ "$listed" -eq 0 ]; then
-  die 4 "$nwo is not in ADMIN_MERGE_REPOS"
-fi
+[ -n "$listed" ] || die 4 "$nwo is not in ADMIN_MERGE_REPOS"
 if [ "$enabled_only" -eq 1 ]; then
   echo "$me: $nwo is in ADMIN_MERGE_REPOS" >&2
   exit 0
 fi
+owner="${nwo%%/*}"; name="${nwo#*/}"
 
 # --- 2. PR gate --------------------------------------------------------------
-me_login="$(gh_mise api user --jq .login)" || die 1 "gh api user failed"
+me_login="$(gh api user --jq .login)" || die 1 "gh api user failed"
 [ -n "$me_login" ] || die 1 "gh api user returned no login"
 
-pr_line="$(gh_mise pr view "$pr" --json author,isCrossRepository,baseRefName,headRefOid \
-  --jq '[.author.login, (.isCrossRepository | tostring), .baseRefName, .headRefOid] | @tsv')" \
+pr_out="$(gh pr view "$pr" -R "$nwo" --json author,isCrossRepository,baseRefName,headRefOid \
+  --jq '(.author.login // ""), (.isCrossRepository | tostring), (.baseRefName // ""), (.headRefOid // "")')" \
   || die 1 "gh pr view #$pr failed"
-IFS=$'\t' read -r author cross base head <<<"$pr_line"
+{ read -r author; read -r cross; read -r base; read -r head; } <<<"$pr_out" || true
 
-[ "$author" = "$me_login" ] || die 4 "#$pr is by $author, not by the token's login $me_login"
+[ "$author" = "$me_login" ] || die 4 "#$pr is by '$author', not by the token's login $me_login"
 [ "$cross" = false ] || die 4 "#$pr comes from a fork (isCrossRepository: $cross)"
 [ -n "$default_branch" ] && [ "$base" = "$default_branch" ] \
-  || die 4 "#$pr targets $base, not the default branch ${default_branch:-(unknown)}"
+  || die 4 "#$pr targets '$base', not the default branch '${default_branch:-(unknown)}'"
 
-files_json="$(gh_mise api "repos/$nwo/pulls/$pr/files?per_page=100")" \
+files_json="$(gh api "repos/$nwo/pulls/$pr/files?per_page=100")" \
   || die 1 "gh api pulls/$pr/files failed"
 nfiles="$(jq 'if type == "array" then length else error("not an array") end' <<<"$files_json")" \
   || die 1 "unexpected pulls/$pr/files response"
 [ "$nfiles" -lt 100 ] || die 4 "#$pr changes 100 or more files; refusing to judge a truncated list"
 [ "$nfiles" -gt 0 ] || die 4 "#$pr lists no changed files"
-# The file list is of whatever the head was when it was read. Re-read the head
-# afterwards: if it moved, the list may belong to another commit than the one
-# step 4 compares with <SHA>, so stop rather than judge it.
-head_after="$(gh_mise pr view "$pr" --json headRefOid --jq .headRefOid)" \
+# The file list is of whatever the head was when it was read. If the head moved
+# meanwhile, the list may belong to another commit than the one step 5 compares
+# with <SHA>, so stop rather than judge it.
+head_after="$(gh pr view "$pr" -R "$nwo" --json headRefOid --jq .headRefOid)" \
   || die 1 "gh pr view #$pr failed"
 [ "$head_after" = "$head" ] \
   || die 5 "#$pr head moved from $head to $head_after while its files were read"
 
 # --- 3. path allowlist -------------------------------------------------------
-common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
-  || die 4 "cannot locate the main working tree to read .dotrc-admin-merge-paths"
-paths_file="$(dirname "$common_dir")/.dotrc-admin-merge-paths"
+paths_file="${XDG_CONFIG_HOME:-$HOME/.config}/dotrc/admin-merge-paths/$listed"
 [ -f "$paths_file" ] || die 4 "no path list at $paths_file; nothing is merged"
 [ -r "$paths_file" ] || die 4 "cannot read $paths_file"
 grep -qvE '^[[:space:]]*(#.*)?$' "$paths_file" 2>/dev/null \
@@ -209,7 +231,7 @@ jq -j '.[] | (.filename, "\u0000"), (.previous_filename // empty | (., "\u0000")
   <<<"$files_json" >"$scratch/paths" || die 1 "unexpected pulls/$pr/files response"
 
 while IFS= read -r -d '' p; do
-  case "/$p/" in
+  case "/${p,,}/" in
     /.github/*) die 4 "$p is under .github/, which is never merged this way" ;;
     */.claude/*) die 4 "$p is under .claude/, which is never merged this way" ;;
   esac
@@ -217,12 +239,10 @@ done <"$scratch/paths"
 
 # Runs git with nothing of the caller's environment or config taking part.
 scratch_git() {
-  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_PREFIX \
-    -u GIT_CEILING_DIRECTORIES GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-    git -c core.excludesFile=/dev/null "$@"
+  env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    git -c core.excludesFile=/dev/null -c core.ignoreCase=false "$@"
 }
-scratch_git init -q "$scratch/repo" || die 1 "git init failed in the scratch dir"
-mkdir -p "$scratch/repo/.git/info"
+scratch_git init -q "$scratch/repo" || die 4 "git init failed in the scratch dir"
 cp "$paths_file" "$scratch/repo/.git/info/exclude" || die 4 "cannot read $paths_file"
 
 rc=0
@@ -237,20 +257,48 @@ while IFS= read -r -d '' src && IFS= read -r -d '' _line \
   && IFS= read -r -d '' pat && IFS= read -r -d '' p; do
   checked=$((checked + 1))
   if [ -z "$src" ] || [ -z "$pat" ]; then
-    die 4 "$p is not in .dotrc-admin-merge-paths"
+    die 4 "$p is not in the path list $paths_file"
   fi
   case "$pat" in
-    '!'*) die 4 "$p is excluded by '$pat' in .dotrc-admin-merge-paths" ;;
+    '!'*) die 4 "$p is excluded by '$pat' in $paths_file" ;;
   esac
 done <"$scratch/verdict"
 expected="$(tr -cd '\0' <"$scratch/paths" | wc -c)"
 [ "$checked" -eq "$expected" ] \
   || die 4 "git check-ignore judged $checked of $expected paths; refusing"
 
-# --- 4. head -----------------------------------------------------------------
+# --- 4. human threads --------------------------------------------------------
+# Unresolved threads whose first comment is not by a Bot (a deleted author
+# counts as human). More than one page is refused rather than paginated.
+human_threads() {
+  local out
+  # shellcheck disable=SC2016  # $owner etc. are GraphQL variables
+  out="$(gh api graphql \
+    -f query='query($owner:String!,$name:String!,$pr:Int!){
+      repository(owner:$owner,name:$name){ pullRequest(number:$pr){
+        reviewThreads(first:100){ pageInfo{ hasNextPage }
+          nodes{ isResolved comments(first:1){ nodes{ author{ __typename } } } } } } } }' \
+    -f owner="$owner" -f name="$name" -F pr="$pr")" \
+    || die 1 "gh api graphql (review threads of #$pr) failed"
+  jq -er '.data.repository.pullRequest.reviewThreads
+      | if .pageInfo.hasNextPage then "more"
+        else [.nodes[] | select(.isResolved | not)
+              | select((.comments.nodes[0].author.__typename // "") != "Bot")] | length
+        end' <<<"$out" \
+    || die 1 "unexpected review threads response for #$pr"
+}
+check_threads() {
+  local n
+  n="$(human_threads)"
+  [ "$n" != more ] || die 4 "#$pr has more than 100 review threads; refusing to judge a truncated list"
+  [ "$n" -eq 0 ] || die 4 "#$pr has $n unresolved review thread(s) started by a human"
+}
+check_threads
+
+# --- 5. head -----------------------------------------------------------------
 [ "$head" = "$sha" ] || die 5 "#$pr head is $head, not $sha"
 
-# --- 5. CI wait --------------------------------------------------------------
+# --- 6. CI wait --------------------------------------------------------------
 knob() {  # knob <name> <default> -- a non-negative integer from the environment
   local v="${!1:-$2}"
   [[ "$v" =~ ^[0-9]+$ ]] || die 1 "$1 must be a non-negative integer (got: $v)"
@@ -265,12 +313,15 @@ started=$(date -u +%s)
 sleep "$initial_s"
 complete_streak=0
 while :; do
-  head="$(gh_mise pr view "$pr" --json headRefOid --jq .headRefOid)" \
+  now_out="$(gh pr view "$pr" -R "$nwo" --json headRefOid,baseRefName \
+    --jq '(.headRefOid // ""), (.baseRefName // "")')" \
     || die 1 "gh pr view #$pr failed while waiting"
+  { read -r head; read -r base; } <<<"$now_out" || true
   [ "$head" = "$sha" ] || die 5 "#$pr head moved to $head while waiting for checks on $sha"
+  [ "$base" = "$default_branch" ] || die 4 "#$pr base changed to '$base' while waiting"
 
   rc=0
-  checks="$(gh_mise pr checks "$pr" --json name,bucket,state 2>"$scratch/checks.err")" || rc=$?
+  checks="$(gh pr checks "$pr" -R "$nwo" --json name,bucket,state 2>"$scratch/checks.err")" || rc=$?
   if [ "$rc" -ne 0 ] && grep -q 'no checks reported' "$scratch/checks.err"; then
     checks='[]'
   elif grep -qiE 'Resource not accessible|HTTP 403' "$scratch/checks.err"; then
@@ -279,7 +330,7 @@ while :; do
     # 8 is gh's "checks pending" status; the JSON on stdout is still valid.
     die 1 "gh pr checks #$pr failed ($rc): $(head -n1 "$scratch/checks.err")"
   fi
-  counts="$(jq -r 'if type != "array" then error("not an array") else
+  counts="$(jq -er 'if type != "array" then error("not an array") else
       [length,
        (map(select(.bucket == "fail" or .bucket == "cancel")) | length),
        (map(select(.bucket != "pass" and .bucket != "skipping"
@@ -305,6 +356,8 @@ while :; do
 done
 
 # --- merge -------------------------------------------------------------------
-gh_mise pr merge "$pr" --admin --merge --match-head-commit "$sha" \
+# A human may have opened a thread while the checks ran.
+check_threads
+gh pr merge "$pr" -R "$nwo" --admin --merge --match-head-commit "$sha" \
   || die 10 "gh pr merge --admin failed for #$pr at $sha"
 echo "$me: merged #$pr at $sha" >&2

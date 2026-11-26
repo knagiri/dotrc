@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Functional tests for bin/gh-merge-when-green. gh is a stub that plays one PR
 # from files under $state and appends every call to a log; it never runs the
-# real gh, so no test can reach `gh pr merge --admin` on a real repository. A
-# mise stub runs the command after `--` the way gh_mise expects. The repo the
-# wrapper runs in is a scratch git repo with a linked worktree, so the path
-# list is read from the scratch main working tree, never a real checkout.
-# ADMIN_MERGE_REPOS comes from the environment (or a config file under the
-# sandbox HOME). No test framework; run with bash.
+# real gh, so no test can reach `gh pr merge --admin` on a real repository.
+# ADMIN_MERGE_REPOS and the path list live under XDG_CONFIG_HOME, pointed at a
+# scratch dir, so the real dotrc config is never read or written. No test
+# framework; run with bash.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -23,98 +21,97 @@ sha="$(printf '%040d' 0 | tr 0 a)"
 other_sha="$(printf '%040d' 0 | tr 0 b)"
 pass_json='[{"name":"build","bucket":"pass","state":"SUCCESS"},{"name":"lint","bucket":"skipping","state":"SKIPPED"}]'
 pending_json='[{"name":"build","bucket":"pending","state":"IN_PROGRESS"}]'
+no_threads='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}'
+# thread_json <isResolved> <__typename of the first comment's author>
+thread_json() {
+  jq -cn --argjson r "$1" --arg t "$2" \
+    '{data:{repository:{pullRequest:{reviewThreads:{pageInfo:{hasNextPage:false},
+      nodes:[{isResolved:$r, comments:{nodes:[{author:{__typename:$t}}]}}]}}}}}'
+}
 
 stubdir="$tmp/stub"; mkdir -p "$stubdir"
 state="$tmp/state"
 cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GH_LOG"
-[ -z "${GH_REPO:-}" ] || echo "GH_REPO_SEEN=$GH_REPO" >>"$GH_LOG"
+printf '%s\n' "$*" >>"$MWG_LOG"
+# Any GitHub token or selector reaching gh from the caller's environment.
+for v in $(compgen -v GH_) $(compgen -v GITHUB_); do
+  case "$v" in GH_MERGE_WHEN_GREEN_*) ;; *) echo "LEAKED_ENV=$v" >>"$MWG_LOG" ;; esac
+done
 jqexpr=""; prev=""
 for a in "$@"; do [ "$prev" = --jq ] && jqexpr="$a"; prev="$a"; done
 emit() { if [ -n "$jqexpr" ]; then jq -r "$jqexpr" <<<"$1"; else printf '%s\n' "$1"; fi; }
 # pop <file>: the first line; it is consumed unless it is the last one left.
 pop() {
-  local f="$GH_STATE/$1" first
+  local f="$MWG_STATE/$1" first
   first="$(head -n1 "$f")"
   if [ "$(wc -l <"$f")" -gt 1 ]; then tail -n +2 "$f" >"$f.next" && mv "$f.next" "$f"; fi
   printf '%s\n' "$first"
 }
 case "$1 $2" in
-  "repo view") emit "$(cat "$GH_STATE/repo.json")" ;;
-  "api user") emit "{\"login\":\"$(cat "$GH_STATE/login")\"}" ;;
-  "api repos/"*) cat "$GH_STATE/files.json" ;;
-  "pr view") emit "$(jq -c --arg h "$(pop heads)" '.headRefOid = $h' "$GH_STATE/pr.json")" ;;
+  "repo view") emit "$(cat "$MWG_STATE/repo.json")" ;;
+  "api user") emit "{\"login\":\"$(cat "$MWG_STATE/login")\"}" ;;
+  "api graphql") pop threads ;;
+  "api repos/"*) cat "$MWG_STATE/files.json" ;;
+  "pr view")
+    emit "$(jq -c --arg h "$(pop heads)" --arg b "$(pop bases)" \
+      '.headRefOid = $h | .baseRefName = $b' "$MWG_STATE/pr.json")" ;;
   "pr checks")
     c="$(pop checks)"
     case "$c" in
       NOCHECKS) echo "no checks reported on the 'feature/foo' branch" >&2; exit 1 ;;
       DENIED) echo "GraphQL: Resource not accessible by personal access token (repository.pullRequest.statusCheckRollup)" >&2; exit 1 ;;
       ERR) echo "something else broke" >&2; exit 1 ;;
+      EMPTY) exit 0 ;;
       rc8:*) printf '%s\n' "${c#rc8:}"; exit 8 ;;
     esac
     printf '%s\n' "$c" ;;
-  "pr merge") exit "$(cat "$GH_STATE/merge_rc")" ;;
+  "pr merge") exit "$(cat "$MWG_STATE/merge_rc")" ;;
   *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;
 esac
 STUB
 chmod +x "$stubdir/gh"
-cat >"$stubdir/mise" <<'STUB'
-#!/usr/bin/env bash
-dir=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -C) dir="$2"; shift 2 ;;
-    --) shift; break ;;
-    *)  shift ;;
-  esac
-done
-cd "${dir:-.}" && exec "$@"
-STUB
+# gh must be called directly: a mise on PATH that is reached fails the run.
+printf '#!/usr/bin/env bash\necho "MISE_CALLED $*" >>"$MWG_LOG"\nexit 97\n' >"$stubdir/mise"
 chmod +x "$stubdir/mise"
 
-# The repo the wrapper runs in: a main working tree and a linked worktree.
-main="$tmp/main"
-git init -q "$main"
-git -C "$main" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
-wt="$tmp/wt"
-git -C "$main" worktree add -q "$wt" -b feature/foo
-list="$main/.dotrc-admin-merge-paths"
+xdg="$tmp/xdg"
+conf="$xdg/dotrc/config"
+list="$xdg/dotrc/admin-merge-paths/example-org/example-repo"
+cwd="$tmp/cwd"; mkdir -p "$cwd"
 
 files_of() {  # files_of <path>... -> files.json with one "modified" entry each
   printf '%s\n' "$@" | jq -R . | jq -s 'map({filename: ., status: "modified"})' >"$state/files.json"
 }
 
 reset_state() {
-  rm -rf "$state"; mkdir -p "$state"
+  rm -rf "$state" "$xdg"; mkdir -p "$state" "$(dirname "$list")"
+  printf 'ADMIN_MERGE_REPOS=example-org/example-repo\n' >"$conf"
   printf '%s\n' '{"nameWithOwner":"example-org/example-repo","defaultBranchRef":{"name":"main"}}' >"$state/repo.json"
   echo example-bot >"$state/login"
-  printf '%s\n' '{"author":{"login":"example-bot"},"isCrossRepository":false,"baseRefName":"main","headRefOid":""}' >"$state/pr.json"
+  printf '%s\n' '{"author":{"login":"example-bot"},"isCrossRepository":false,"baseRefName":"","headRefOid":""}' >"$state/pr.json"
   echo "$sha" >"$state/heads"
+  echo main >"$state/bases"
   printf '%s\n' "$pass_json" >"$state/checks"
+  printf '%s\n' "$no_threads" >"$state/threads"
   echo 0 >"$state/merge_rc"
   files_of docs/a.md
   printf 'docs/\n' >"$list"
-  rm -f "$wt/.dotrc-admin-merge-paths"
 }
 checks_seq() { printf '%s\n' "$@" >"$state/checks"; }
 heads_seq() { printf '%s\n' "$@" >"$state/heads"; }
 
 # mwg <bindir> [VAR=value...] -- <args...>; rc in $rc, stderr in $tmp/err.
+# timeout: a mutant without a working wait limit would otherwise poll forever.
 mwg() {
   local bd="$1"; shift
-  local -a envs=() unsets=() repos=(ADMIN_MERGE_REPOS="example-org/example-repo")
-  while [ "$1" != -- ]; do
-    # env takes -u only before the assignments; an unset replaces the default.
-    if [ "$1" = -u ]; then unsets+=(-u "$2"); repos=(); shift 2
-    else envs+=("$1"); shift; fi
-  done
+  local -a envs=()
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done
   shift
   : >"$tmp/log"
   rc=0
-  # timeout: a mutant without a working wait limit would otherwise poll forever.
-  (cd "$wt" && timeout 20 env "${unsets[@]}" GH_LOG="$tmp/log" GH_STATE="$state" PATH="$stubdir:$PATH" \
-    "${repos[@]}" \
+  (cd "$cwd" && timeout 20 env MWG_LOG="$tmp/log" MWG_STATE="$state" PATH="$stubdir:$PATH" \
+    XDG_CONFIG_HOME="$xdg" \
     GH_MERGE_WHEN_GREEN_INITIAL_DELAY=0 GH_MERGE_WHEN_GREEN_INTERVAL=0 \
     GH_MERGE_WHEN_GREEN_TIMEOUT=5 GH_MERGE_WHEN_GREEN_NO_CHECKS_GRACE=0 \
     "${envs[@]}" "$bd/gh-merge-when-green" "$@") >/dev/null 2>"$tmp/err" || rc=$?
@@ -122,21 +119,14 @@ mwg() {
 merged() { grep -q '^pr merge' "$tmp/log"; }
 calls() { grep -c "^$1" "$tmp/log"; }
 
-# expect <name> <want-rc> <merged yes|no> -- report the last mwg run.
-expect() {
-  local m=no; merged && m=yes
-  if [ "$rc" -eq "$2" ] && [ "$m" = "$3" ]; then echo "ok: $1"
-  else echo "FAIL: $1 (rc=$rc want $2, merged=$m want $3): $(cat "$tmp/err")"; fail=1; fi
-}
-
 # --- control: the stub is what the merge reaches ----------------------------
-# Before any mutant runs, show that on the wrapper's real path (gh_mise -> mise
-# stub -> gh stub) the merge call lands in the stub's log with exactly the
-# intended argv, so a mutant that merges is caught here and goes nowhere else.
+# Before any mutant runs, show that on the wrapper's real path the merge call
+# lands in the stub's log with exactly the intended argv, so a mutant that
+# merges is caught here and goes nowhere else.
 reset_state
 mwg "$bindir" -- 42 "$sha"
-if [ "$rc" -eq 0 ] && [ "$(grep '^pr merge' "$tmp/log")" = "pr merge 42 --admin --merge --match-head-commit $sha" ]; then
-  echo "ok: happy path merges through the stub with --admin --merge --match-head-commit"
+if [ "$rc" -eq 0 ] && [ "$(grep '^pr merge' "$tmp/log")" = "pr merge 42 -R example-org/example-repo --admin --merge --match-head-commit $sha" ]; then
+  echo "ok: happy path merges through the stub with -R --admin --merge --match-head-commit"
 else echo "FAIL: happy path rc=$rc log=$(cat "$tmp/log") err=$(cat "$tmp/err")"; fail=1; fi
 
 # --- the checks below, as functions so mutants can rerun them -----------------
@@ -152,36 +142,56 @@ ck_args() {  # malformed calls stop with 1 before any gh call
 }
 ck_config() {  # unusable ADMIN_MERGE_REPOS -> 3 before any gh call
   local v
-  for v in "example-org" "example-org/example-repo bad" "a/b/c" "example-org/exa mple"; do
-    reset_state; mwg "$1" "ADMIN_MERGE_REPOS=$v" -- 42 "$sha"
+  for v in "example-org" "example-org/example-repo bad" "a/b/c" "example-org/exa mple" \
+           "../example-repo" "example-org/.."; do
+    reset_state; printf 'ADMIN_MERGE_REPOS=%s\n' "$v" >"$conf"; mwg "$1" -- 42 "$sha"
     [ "$rc" -eq 3 ] && [ ! -s "$tmp/log" ] || return 1
   done
-  reset_state; mwg "$1" -u ADMIN_MERGE_REPOS -- 42 "$sha"
-  [ "$rc" -eq 3 ] && [ ! -s "$tmp/log" ]
-}
-ck_config_file() {  # read from the config file when the env is unset
-  mkdir -p "$HOME/.config/dotrc"
-  printf 'ADMIN_MERGE_REPOS=example-org/other example-org/example-repo\n' >"$HOME/.config/dotrc/config"
-  reset_state; mwg "$1" -u ADMIN_MERGE_REPOS -- 42 "$sha"; local r1=$rc
-  chmod 000 "$HOME/.config/dotrc/config"
-  local r2=3
-  if ! [ -r "$HOME/.config/dotrc/config" ]; then  # root reads anyway; skip then
-    reset_state; mwg "$1" -u ADMIN_MERGE_REPOS -- 42 "$sha"; r2=$rc
+  reset_state; rm -f "$conf"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 3 ] && [ ! -s "$tmp/log" ] || return 1
+  reset_state; chmod 000 "$conf"
+  if ! [ -r "$conf" ]; then  # root reads anyway; skip then
+    mwg "$1" -- 42 "$sha"; [ "$rc" -eq 3 ] && [ ! -s "$tmp/log" ] || return 1
   fi
-  rm -rf "$HOME/.config/dotrc"
-  [ "$r1" -eq 0 ] && [ "$r2" -eq 3 ]
+  chmod 600 "$conf"
 }
-ck_repo() {  # an unlisted repo -> 4; matching is case-insensitive
-  reset_state; mwg "$1" ADMIN_MERGE_REPOS=example-org/another -- 42 "$sha"
+ck_config_env_ignored() {  # the environment cannot name the repos
+  reset_state; rm -f "$conf"
+  mwg "$1" ADMIN_MERGE_REPOS=example-org/example-repo -- 42 "$sha"
+  [ "$rc" -eq 3 ] && ! merged || return 1
+  reset_state; printf 'ADMIN_MERGE_REPOS=example-org/another\n' >"$conf"
+  mwg "$1" ADMIN_MERGE_REPOS=example-org/example-repo -- 42 "$sha"
+  [ "$rc" -eq 4 ] && ! merged
+}
+ck_repo() {  # an unlisted repo -> 4; matching is case-insensitive, the list path follows the config's spelling
+  reset_state; printf 'ADMIN_MERGE_REPOS=example-org/another\n' >"$conf"; mwg "$1" -- 42 "$sha"
   [ "$rc" -eq 4 ] && ! merged && [ "$(calls 'pr ')" -eq 0 ] || return 1
-  reset_state; mwg "$1" ADMIN_MERGE_REPOS=Example-Org/Example-Repo -- 42 "$sha"
-  [ "$rc" -eq 0 ]
+  reset_state; printf 'ADMIN_MERGE_REPOS=example-org/other Example-Org/Example-Repo\n' >"$conf"
+  mkdir -p "$xdg/dotrc/admin-merge-paths/Example-Org"
+  printf 'docs/\n' >"$xdg/dotrc/admin-merge-paths/Example-Org/Example-Repo"; rm -f "$list"
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 0 ]
 }
 ck_enabled() {  # --enabled: 0 / 4 / 3, never touches the PR
   reset_state; mwg "$1" -- --enabled; [ "$rc" -eq 0 ] || return 1
   [ "$(grep -vc '^repo view' "$tmp/log")" -eq 0 ] || return 1
-  mwg "$1" ADMIN_MERGE_REPOS=example-org/another -- --enabled; [ "$rc" -eq 4 ] || return 1
-  mwg "$1" -u ADMIN_MERGE_REPOS -- --enabled; [ "$rc" -eq 3 ] && [ ! -s "$tmp/log" ]
+  printf 'ADMIN_MERGE_REPOS=example-org/another\n' >"$conf"
+  mwg "$1" -- --enabled; [ "$rc" -eq 4 ] || return 1
+  rm -f "$conf"; mwg "$1" -- --enabled; [ "$rc" -eq 3 ] && [ ! -s "$tmp/log" ]
+}
+ck_env_dropped() {  # GitHub tokens / selectors and git selectors from the caller do not reach gh
+  reset_state
+  mwg "$1" GH_REPO=example-org/elsewhere GH_HOST=example.invalid GH_TOKEN=x \
+    GH_CONFIG_DIR="$tmp/nowhere" GITHUB_TOKEN=y "GIT_DIR=$tmp/nowhere" -- 42 "$sha"
+  [ "$rc" -eq 0 ] && ! grep -q '^LEAKED_ENV=' "$tmp/log"
+}
+ck_no_mise() {  # gh is called directly, never through mise
+  reset_state; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] && ! grep -q '^MISE_CALLED' "$tmp/log"
+}
+ck_pinned_repo() {  # every PR call names the repo resolved first
+  reset_state; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] || return 1
+  ! grep '^pr ' "$tmp/log" | grep -vq -- '-R example-org/example-repo'
 }
 ck_author() {
   reset_state; echo someone-else >"$state/login"; mwg "$1" -- 42 "$sha"
@@ -192,16 +202,23 @@ ck_fork() {
   mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged
 }
 ck_base() {
-  reset_state; jq '.baseRefName = "release"' "$state/pr.json" >"$state/x" && mv "$state/x" "$state/pr.json"
+  # One `pr view`: refused at the gate, not by the first poll's re-read.
+  reset_state; echo release >"$state/bases"
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged && [ "$(calls 'pr view')" -eq 1 ]
+}
+ck_base_during() {  # the base is re-read on every poll
+  reset_state; printf 'main\nmain\nrelease\n' >"$state/bases"
   mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged
 }
-ck_file_count() {  # 100 files (a full page) -> 4; 99 -> merged
+ck_file_count() {  # 100 files (a full page) -> 4; 99 -> merged; none -> 4
   local -a f=(); local i
   for i in $(seq 1 100); do f+=("docs/f$i.md"); done
   reset_state; files_of "${f[@]}"; mwg "$1" -- 42 "$sha"
   [ "$rc" -eq 4 ] && ! merged || return 1
   reset_state; files_of "${f[@]:0:99}"; mwg "$1" -- 42 "$sha"
-  [ "$rc" -eq 0 ]
+  [ "$rc" -eq 0 ] || return 1
+  reset_state; echo '[]' >"$state/files.json"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 4 ] && ! merged
 }
 # path_case <bindir> <list content> <want rc> <path>...
 path_case() {
@@ -212,6 +229,11 @@ path_case() {
 ck_list_missing() {
   reset_state; rm -f "$list"; mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged || return 1
   path_case "$1" '# only a comment\n\n   \n' 4 docs/a.md
+}
+ck_list_not_in_checkout() {  # a list in the cwd checkout is not read
+  reset_state; printf '*\n' >"$cwd/.dotrc-admin-merge-paths"; files_of src/a.sh
+  mwg "$1" -- 42 "$sha"; local r=$rc; rm -f "$cwd/.dotrc-admin-merge-paths"
+  [ "$r" -eq 4 ]
 }
 ck_paths_outside() { path_case "$1" 'docs/\n' 4 docs/a.md src/b.sh; }
 ck_paths_forms() {  # the main .gitignore forms, as git reads them
@@ -224,7 +246,8 @@ ck_paths_forms() {  # the main .gitignore forms, as git reads them
 ck_paths_negation() {
   path_case "$1" 'docs/*\n!docs/secret.md\n' 4 docs/secret.md || return 1
   path_case "$1" 'docs/*\n!docs/secret.md\n' 0 docs/public.md || return 1
-  # gitignore cannot re-include under an excluded parent directory; accepted.
+  # gitignore cannot re-include under an excluded parent directory, so `!`
+  # cannot carve a path out of an allowed `dir/`; accepted and documented.
   path_case "$1" 'docs/\n!docs/keep.md\n' 0 docs/keep.md
 }
 ck_always_denied() {
@@ -232,6 +255,10 @@ ck_always_denied() {
   path_case "$1" '*\n' 4 src/a.sh .github/workflows/ci.yml || return 1
   path_case "$1" '*\n' 4 .claude/settings.json || return 1
   path_case "$1" '*\n' 4 pkg/.claude/settings.local.json
+}
+ck_always_denied_case() {  # a case-insensitive checkout reads .Claude as .claude
+  path_case "$1" '*\n' 4 .Claude/settings.json || return 1
+  path_case "$1" '*\n' 4 .GitHub/workflows/ci.yml
 }
 ck_rename() {  # both sides of a rename are judged
   reset_state
@@ -244,12 +271,6 @@ ck_rename() {  # both sides of a rename are judged
   printf '%s\n' '[{"filename":"secret/gone.md","status":"removed"}]' >"$state/files.json"
   mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ]
 }
-ck_main_tree_list() {  # the worktree's copy is not read
-  reset_state; printf 'docs/\n' >"$list"; printf '*\n' >"$wt/.dotrc-admin-merge-paths"; files_of src/a.sh
-  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] || return 1
-  reset_state; printf '*\n' >"$list"; files_of src/a.sh
-  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 0 ]
-}
 ck_default_ignore() {  # ~/.config/git/ignore (read with no excludesFile set) does not leak in
   mkdir -p "$HOME/.config/git"; printf '*\n' >"$HOME/.config/git/ignore"
   path_case "$1" 'docs/\n' 4 src/a.sh; local r=$?
@@ -261,6 +282,33 @@ ck_global_config() {  # ~/.gitconfig (ignoreCase, excludesFile) does not leak in
   path_case "$1" 'docs/\n' 4 DOCS/a.md; local r=$?
   rm -f "$HOME/.gitconfig"; return "$r"
 }
+ck_env_config() {  # config injected through the environment does not leak in
+  reset_state; printf 'docs/\n' >"$list"; files_of DOCS/a.md
+  mwg "$1" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.ignoreCase GIT_CONFIG_VALUE_0=true \
+    "GIT_CONFIG_PARAMETERS='core.ignorecase'='true'" -- 42 "$sha"
+  [ "$rc" -eq 4 ] && ! merged
+}
+ck_threads() {  # an unresolved thread started by a human blocks; bots and resolved ones do not
+  reset_state; thread_json false User >"$state/threads"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 4 ] && ! merged && [ "$(calls 'pr checks')" -eq 0 ] || return 1
+  reset_state; thread_json false Bot >"$state/threads"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] || return 1
+  reset_state; thread_json true User >"$state/threads"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] || return 1
+  reset_state  # a deleted author has no __typename: counted as human
+  jq -c '.data.repository.pullRequest.reviewThreads.nodes = [{isResolved:false, comments:{nodes:[{author:null}]}}]' \
+    <<<"$no_threads" >"$state/threads"
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged
+}
+ck_threads_page() {  # more than one page of threads is refused
+  reset_state
+  jq -c '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage = true' <<<"$no_threads" >"$state/threads"
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged
+}
+ck_threads_before_merge() {  # a human thread opened while the checks ran
+  reset_state; { printf '%s\n' "$no_threads"; thread_json false User; } >"$state/threads"
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged && [ "$(calls 'pr checks')" -eq 2 ]
+}
 ck_head_before() {
   # Two `pr view`s (gate, re-read after the files): the head is judged before
   # the wait starts, not by its first poll.
@@ -270,12 +318,6 @@ ck_head_before() {
 ck_head_while_files() {  # a push between the gate read and the file list
   reset_state; heads_seq "$sha" "$other_sha"; mwg "$1" -- 42 "$sha"
   [ "$rc" -eq 5 ] && ! merged && [ "$(calls 'pr view')" -eq 2 ]
-}
-ck_env_redirect() {  # GH_REPO / GIT_DIR from the caller are dropped
-  reset_state; mwg "$1" GH_REPO=example-org/elsewhere "GIT_DIR=$tmp/nowhere" -- 42 "$sha"
-  [ "$rc" -eq 0 ] || return 1
-  # the stub would see GH_REPO if it leaked
-  ! grep -q GH_REPO_SEEN "$tmp/log"
 }
 ck_head_during() {
   reset_state; heads_seq "$sha" "$sha" "$other_sha"; checks_seq "$pending_json"
@@ -295,7 +337,11 @@ ck_two_in_a_row() {  # complete, then a late workflow appears -> wait again
   reset_state; checks_seq "$pass_json" "$pending_json" "$pass_json"
   mwg "$1" -- 42 "$sha"; [ "$rc" -eq 0 ] && [ "$(calls 'pr checks')" -eq 4 ] || return 1
   reset_state; checks_seq "$pass_json" '[{"name":"late","bucket":"fail","state":"FAILURE"}]'
-  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 6 ] && ! merged
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 6 ] && ! merged || return 1
+  # checks vanishing in between also restart the count
+  reset_state; checks_seq "$pass_json" NOCHECKS "$pass_json"
+  mwg "$1" GH_MERGE_WHEN_GREEN_NO_CHECKS_GRACE=100 -- 42 "$sha"
+  [ "$rc" -eq 0 ] && [ "$(calls 'pr checks')" -eq 4 ]
 }
 ck_no_checks() {
   reset_state; checks_seq NOCHECKS; mwg "$1" -- 42 "$sha"; [ "$rc" -eq 7 ] && ! merged || return 1
@@ -307,13 +353,16 @@ ck_no_checks_grace() {  # checks that appear within the grace period are waited 
 }
 ck_timeout() {
   reset_state; checks_seq "$pending_json"
-  mwg "$1" GH_MERGE_WHEN_GREEN_TIMEOUT=0 -- 42 "$sha"; [ "$rc" -eq 8 ] && ! merged || return 1
-  reset_state; checks_seq '[{"name":"odd","bucket":"weird","state":"?"}]'   # unknown bucket is not a pass
   mwg "$1" GH_MERGE_WHEN_GREEN_TIMEOUT=0 -- 42 "$sha"; [ "$rc" -eq 8 ] && ! merged
+}
+ck_unknown_bucket() {  # an unknown bucket is not a pass: waited on until the timeout
+  reset_state; checks_seq '[{"name":"odd","bucket":"weird","state":"?"}]'
+  mwg "$1" GH_MERGE_WHEN_GREEN_TIMEOUT=1 -- 42 "$sha"; [ "$rc" -eq 8 ] && ! merged
 }
 ck_denied() {
   reset_state; checks_seq DENIED; mwg "$1" -- 42 "$sha"; [ "$rc" -eq 9 ] && ! merged || return 1
-  reset_state; checks_seq ERR; mwg "$1" -- 42 "$sha"; [ "$rc" -eq 1 ] && ! merged
+  reset_state; checks_seq ERR; mwg "$1" -- 42 "$sha"; [ "$rc" -eq 1 ] && ! merged || return 1
+  reset_state; checks_seq EMPTY; mwg "$1" -- 42 "$sha"; [ "$rc" -eq 1 ] && ! merged
 }
 ck_merge_fails() {
   reset_state; echo 1 >"$state/merge_rc"; mwg "$1" -- 42 "$sha"; [ "$rc" -eq 10 ]
@@ -322,11 +371,14 @@ ck_knobs() {
   reset_state; mwg "$1" GH_MERGE_WHEN_GREEN_INTERVAL=abc -- 42 "$sha"; [ "$rc" -eq 1 ] && ! merged
 }
 
-checks=(ck_args ck_config ck_config_file ck_repo ck_enabled ck_author ck_fork ck_base
-  ck_file_count ck_list_missing ck_paths_outside ck_paths_forms ck_paths_negation
-  ck_always_denied ck_rename ck_main_tree_list ck_default_ignore ck_global_config
-  ck_head_before ck_head_while_files ck_env_redirect ck_head_during ck_fail ck_pending_then_pass ck_two_in_a_row
-  ck_no_checks ck_no_checks_grace ck_timeout ck_denied ck_merge_fails ck_knobs)
+checks=(ck_args ck_config ck_config_env_ignored ck_repo ck_enabled ck_env_dropped
+  ck_no_mise ck_pinned_repo ck_author ck_fork ck_base ck_base_during ck_file_count
+  ck_list_missing ck_list_not_in_checkout ck_paths_outside ck_paths_forms
+  ck_paths_negation ck_always_denied ck_always_denied_case ck_rename
+  ck_default_ignore ck_global_config ck_env_config ck_threads ck_threads_page
+  ck_threads_before_merge ck_head_before ck_head_while_files ck_head_during
+  ck_fail ck_pending_then_pass ck_two_in_a_row ck_no_checks ck_no_checks_grace
+  ck_timeout ck_unknown_bucket ck_denied ck_merge_fails ck_knobs)
 for c in "${checks[@]}"; do
   if "$c" "$bindir"; then echo "ok: $c"
   else echo "FAIL: $c (rc=$rc): $(cat "$tmp/err")"; fail=1; fi
@@ -336,12 +388,22 @@ done
 # The wrapper is new, so each guard is broken one at a time in a copy and the
 # check covering it must then fail. `cmp` keeps a sed that matched nothing from
 # passing as a mutant. The control above showed the merge of a mutant lands in
-# the stub.
+# the stub; the unmutated copy below shows the copy itself passes every check,
+# so a mutant is not "caught" merely because the copy is broken.
 w="$bindir/gh-merge-when-green"
-mutant() {  # mutant <name> <sed expression> <check fn>
+copy_of() {  # copy_of <name> [<sed expression>] -> prints the copy's bindir
   local d="$tmp/mutant-$1"
   rm -rf "$d"; mkdir -p "$d"; cp -a "$bindir/." "$d/"
-  sed "$2" "$w" >"$d/gh-merge-when-green"; chmod +x "$d/gh-merge-when-green"
+  sed "${2:-}" "$w" >"$d/gh-merge-when-green"; chmod +x "$d/gh-merge-when-green"
+  printf '%s\n' "$d"
+}
+d="$(copy_of unmutated)"
+copy_ok=1
+for c in "${checks[@]}"; do "$c" "$d" >/dev/null 2>&1 || { copy_ok=0; echo "FAIL: unmutated copy fails $c"; }; done
+[ "$copy_ok" -eq 1 ] && echo "ok: an unmutated copy passes every check" || fail=1
+
+mutant() {  # mutant <name> <sed expression> <check fn>
+  local d; d="$(copy_of "$1" "$2")"
   if cmp -s "$w" "$d/gh-merge-when-green"; then
     echo "FAIL: mutant '$1' is identical; the sed matched nothing"; fail=1
   elif ! "$3" "$d" >/dev/null 2>&1; then
@@ -350,12 +412,20 @@ mutant() {  # mutant <name> <sed expression> <check fn>
 }
 mutant sha-format 's/\^\[0-9a-f\]{40}\$/^.+$/' ck_args
 mutant repo-format 's|\^\[A-Za-z0-9_.-\]+/\[A-Za-z0-9_.-\]+\$|^.+$|' ck_config
-mutant repo-list 's/\[ "\$listed" -eq 0 \]/false/' ck_repo
+mutant repo-dots 's|\*/\./\*|\*/no/\*|; s|\*/\.\./\*|\*/nono/\*|' ck_config
+mutant env-repos 's/^unset ADMIN_MERGE_REPOS$/: /' ck_config_env_ignored
+mutant repo-list 's/\[ -n "\$listed" \]/true/' ck_repo
+mutant list-spelling 's|admin-merge-paths/\$listed"|admin-merge-paths/$nwo"|' ck_repo
 mutant enabled-exit 's/  exit 0$/  exit 4/' ck_enabled
+mutant env-gh 's/\*) unset "\$v" ;; esac/*) : ;; esac/' ck_env_dropped
+mutant pin-repo 's/gh pr view "\$pr" -R "\$nwo"/gh pr view "$pr"/' ck_pinned_repo
+mutant via-mise 's/^me_login="\$(gh api user/me_login="$(mise exec -- gh api user/' ck_no_mise
 mutant author 's/\[ "\$author" = "\$me_login" \]/true/' ck_author
 mutant fork 's/\[ "\$cross" = false \]/true/' ck_fork
-mutant base 's/\[ "\$base" = "\$default_branch" \]/true/' ck_base
+mutant base 's/\[ -n "\$default_branch" \] && \[ "\$base" = "\$default_branch" \]/true/' ck_base
+mutant base-during 's/\[ "\$base" = "\$default_branch" \] || die 4/true || die 4/' ck_base_during
 mutant file-count 's/\[ "\$nfiles" -lt 100 \]/[ "$nfiles" -lt 1000 ]/' ck_file_count
+mutant file-none 's/\[ "\$nfiles" -gt 0 \]/true/' ck_file_count
 # A missing or pattern-less list is refused by its own check and again by the
 # no-match check (nothing can match), and a missing one also by every read of
 # it, so those guards are broken together (evidence-over-guesswork §4, double
@@ -363,27 +433,39 @@ mutant file-count 's/\[ "\$nfiles" -lt 100 \]/[ "$nfiles" -lt 1000 ]/' ck_file_c
 no_match='s/if \[ -z "\$src" \] || \[ -z "\$pat" \]; then/if false; then/'
 mutant list-empty "s/grep -qvE '\\^\\[\\[:space:\\]\\]\\*(#\\.\\*)?\\\$'/true/; $no_match" ck_list_missing
 mutant list-missing "s/\\[ -[fr] \"\\\$paths_file\" \\] ||/true ||/; s/grep -qvE '\\^\\[\\[:space:\\]\\]\\*(#\\.\\*)?\\\$'/true/; s/^cp \"\\\$paths_file\" \"\\\$scratch\\/repo\\/.git\\/info\\/exclude\" ||/true ||/; $no_match" ck_list_missing
-mutant no-match 's/if \[ -z "\$src" \] || \[ -z "\$pat" \]; then/if false; then/' ck_paths_outside
+mutant no-match "$no_match" ck_paths_outside
 mutant negation "s/'!'\\*) die 4/'!'*) : /" ck_paths_negation
 mutant github 's|/.github/\*) die 4|/.github/*) :|' ck_always_denied
 mutant claude 's|\*/.claude/\*) die 4|*/.claude/*) :|' ck_always_denied
+mutant denied-case 's|case "/\${p,,}/" in|case "/$p/" in|' ck_always_denied_case
 mutant rename 's/, (.previous_filename \/\/ empty | (., "\\u0000"))//' ck_rename
-mutant worktree-list 's|paths_file="\$(dirname "\$common_dir")/|paths_file="$repo_root/|' ck_main_tree_list
-mutant excludesfile 's| -c core.excludesFile=/dev/null "\$@"| "$@"|' ck_default_ignore
-mutant global-config 's/GIT_CONFIG_GLOBAL=\/dev\/null/GIT_CONFIG_GLOBAL_X=/' ck_global_config
+# The user's files are kept out twice or three times over: HOME is a scratch
+# dir under env -i, the global config is /dev/null, and -c fixes excludesFile
+# and ignoreCase. Each case breaks all the guards that cover it together.
+home_through='s/  env -i PATH="\$PATH" HOME="\$scratch"/  env -i PATH="$PATH" HOME="$HOME"/'
+mutant excludesfile "$home_through; s| -c core.excludesFile=/dev/null -c core.ignoreCase=false \"\\\$@\"| -c core.ignoreCase=false \"\$@\"|" ck_default_ignore
+mutant global-config "$home_through; s/GIT_CONFIG_GLOBAL=\\/dev\\/null/GIT_CONFIG_GLOBAL_X=/; s/ -c core.ignoreCase=false \"\\\$@\"/ \"\$@\"/" ck_global_config
+mutant env-config 's/  env -i PATH="\$PATH" HOME="\$scratch"/  env HOME="$scratch"/; s/ -c core.ignoreCase=false "\$@"/ "$@"/' ck_env_config
+mutant threads 's/\[ "\$n" -eq 0 \] || die 4/true || die 4/' ck_threads
+mutant threads-bot 's/!= "Bot")\]/!= "Nobody")]/' ck_threads
+# "more" is also refused by the numeric test that follows (a non-number fails
+# -eq), so both are broken together.
+mutant threads-page 's/\[ "\$n" != more \] || die 4/true || die 4/; s/\[ "\$n" -eq 0 \] || die 4/true || die 4/' ck_threads_page
+mutant threads-final '/^# A human may have opened a thread while the checks ran\.$/{n;s/^check_threads$/:/}' ck_threads_before_merge
 mutant head-before 's/\[ "\$head" = "\$sha" \] || die 5 "#\$pr head is/true || die 5 "#$pr head is/' ck_head_before
 mutant head-while-files 's/\[ "\$head_after" = "\$head" \]/true/' ck_head_while_files
-mutant env-ghrepo 's/^unset GH_REPO GH_HOST /unset GH_HOST /' ck_env_redirect
-mutant env-gitdir 's/ GIT_DIR GIT_WORK_TREE/ GIT_WORK_TREE/' ck_env_redirect
 mutant head-during 's/\[ "\$head" = "\$sha" \] || die 5 "#\$pr head moved/true || die 5 "#$pr head moved/' ck_head_during
 mutant fail 's/if \[ "\$failed" -gt 0 \]/if false/' ck_fail
 mutant pending 's/\[ "\$pending" -eq 0 \]/true/' ck_pending_then_pass
+mutant unknown-bucket 's/(map(select(.bucket != "pass" and .bucket != "skipping"/(map(select(.bucket == "pending" and .bucket != "skipping"/' ck_unknown_bucket
 mutant streak 's/\[ "\$complete_streak" -lt 2 \]/[ "$complete_streak" -lt 1 ]/' ck_two_in_a_row
+mutant streak-reset '/elif \[ "\$total" -eq 0 \]; then/{n;s/complete_streak=0/:/}' ck_two_in_a_row
 mutant zero-checks 's/elif \[ "\$total" -eq 0 \]/elif false/' ck_no_checks
 mutant grace 's/\[ "\$elapsed" -lt "\$grace_s" \] ||/false ||/' ck_no_checks_grace
 mutant nochecks-msg 's/no checks reported/no such message/' ck_no_checks
 mutant timeout 's/\[ "\$elapsed" -lt "\$timeout_s" \] ||/true ||/' ck_timeout
 mutant denied 's/Resource not accessible|HTTP 403/no such message/' ck_denied
+mutant empty-checks "s/counts=\"\$(jq -er /counts=\"\$(jq -r /" ck_denied
 mutant merge-rc 's/|| die 10 /|| die 1 /' ck_merge_fails
 
 if [ "$fail" -eq 0 ]; then echo "PASS"; else echo "FAILED"; exit 1; fi
