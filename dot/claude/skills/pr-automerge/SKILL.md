@@ -14,7 +14,8 @@ allowed-tools: Read, Grep, Glob
 `$ARGUMENTS` に PR 番号と、`pr-review-loop` が収束時に出した `head_sha` / `last_seen`、任意で
 `approve_gate=<値>` が入る（例: `/pr-automerge 42 head_sha=<sha> last_seen=<timestamp> [approve_gate=<値>]`）。以降 `<PR>` / `<HEAD_SHA>` /
 `<LAST_SEEN>` と表記する。同じ session で `pr-review-loop` から続けて呼ぶときは、その収束
-メッセージの `収束: head_sha=... last_seen=...` 行から読んでよい。`approve_gate` は以降 `<APPROVE_GATE>` と表記し、手順 0.5 の経路の選択にだけ使う。同じ session で
+メッセージの `収束: head_sha=... last_seen=...` 行から読んでよい。`approve_gate` は以降 `<APPROVE_GATE>` と表記し、手順 0.5 の経路の選択にだけ使う。approve 経路になるのは、
+`approve_gate` キーがちょうど 1 つで値が `ok` に完全一致するときだけで、キーが重複・欠落、または値が `ok` 以外なら従来の経路になる。同じ session で
 収束行から読むときも、同じ行の `approve_gate=<値>` があれば入力とする。
 
 ## 不変条件（厳守）
@@ -136,5 +137,6 @@ allowed-tools: Read, Grep, Glob
    （`MERGED`。`--auto` の即時成立でも手順 2 の fallback でも同じ値になる）か。「有効化済み」と
    決め打ちで書くと、後者に達した場合に報告文が実際の結果を表せない。
 5. **停止・報告**（auto-merge を有効化しなかった場合）: 停止理由（手順 0 のゲート、手順 1 の CI の
-   fail とその cancelled のみ切り分け、手順 3 の `NOT_TERMINAL`）と残課題、手順 0.5 の経路とその理由を箇条書きで要約し、
+   fail とその cancelled のみ切り分け、手順 3 の `NOT_TERMINAL`）と残課題、手順 0.5 の経路とその理由、手順 2 の `gh-request-approval` の
+   結果（実行したなら終了コード）を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿はしない（人間が引き取る）。
