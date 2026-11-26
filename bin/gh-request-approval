@@ -56,8 +56,11 @@ set -euo pipefail
 #      whatever `paths` says
 #   4. the PR head is <SHA>
 # Then: `gh workflow run <workflow> -R <nwo> --ref <default> -f pr=<PR>
-# -f head_sha=<SHA>`; wait, polling every 15s for at most 600s, until
-# reviewDecision is APPROVED while the head stays <SHA> and the PR stays OPEN;
+# -f head_sha=<SHA>`; wait, polling every 15s for at most 600s, until an App
+# (a review author of type Bot other than the PR author) has an APPROVED review
+# whose commit_id is <SHA> as its latest review on <SHA>, while the head stays
+# <SHA> and the PR stays OPEN (reviewDecision is not used: where approvals
+# survive a push it stays APPROVED on an approval of an older commit);
 # check gate 2 again; enable auto-merge with
 # `gh pr merge <PR> -R <nwo> --auto --merge --match-head-commit <SHA>`, and
 # only when GitHub refuses that because the PR is in clean status, merge it

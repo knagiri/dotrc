@@ -42,6 +42,10 @@ auto-merge を張っておくと、後で人が approve した時点でゲート
   （任意の branch が書き換えられる）からの `GH_TOKEN` 等の注入を受けない。token は main checkout の
   `mise.gh.local.toml` があればその個人 PAT、無ければ hosts.yml になる。最初に解決した repo は以降の全
   呼び出しに `-R` で固定する。
+- **approve は内容に紐づけて待つ。** 待機の終了条件は `reviewDecision == APPROVED` ではなく、App（PR author
+  以外の Bot）の APPROVED review で `commit_id` が渡された SHA に一致するものである。dismiss stale reviews が
+  無効な repo では、push 後も古い commit への approve が残り `reviewDecision` は APPROVED のままなので、
+  それを待つと approve されていない内容に auto-merge を張りうる。
 - パスの照合は git 自身（空の一時 repo の `info/exclude` と `git check-ignore --no-index`）に任せる。自前の
   glob は gitignore と細部が食い違ったときに黙って許可を広げうるため。変更ファイル一覧は head が渡された
   SHA と一致すると確かめる前提で、`compare/<base>...<SHA>` から SHA に固定して読む。
@@ -54,5 +58,8 @@ auto-merge を張っておくと、後で人が approve した時点でゲート
   判定）を経るが、settings.json で deny してはおらず、Bash 経由の書き込みは塞げない。
 - App の approve が required approval として数えられるかは、repo の ruleset の review 設定で決まる。
   ruleset の review 設定を変えたら、App の approve が数えられるかを確かめ直す。
+- approve と auto-merge は張った時点の SHA に固定されるが、その後 PR に push されると、dismiss stale reviews が
+  無効な repo では古い approve が数えられたまま auto-merge が新しい head を merge しうる。auto-merge を張った
+  後の PR に push しない（修正を積むなら先に `gh-automerge --disable` する）ことで守っている。
 - 待機は approve が付くまでで、CI は待たない。approve 後に CI が落ちれば auto-merge は成立せず、PR は
   auto-merge が有効なまま残る。

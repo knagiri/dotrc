@@ -138,6 +138,24 @@ gra_check_paths() {
     || gra_die 4 "git check-ignore judged $checked of $expected paths; refusing"
 }
 
+# gra_app_approvals <nwo> <pr> <sha> <author> -- prints how many Apps (review
+# author of type Bot, not <author>) have, as their latest review on <sha>, an
+# APPROVED one. Reviews are matched by commit_id, not by reviewDecision: in a
+# repo that keeps approvals after a push, reviewDecision stays APPROVED on an
+# approval of an older commit, which would let the wait pass for content that
+# was never approved.
+gra_app_approvals() {
+  local nwo="$1" pr="$2" sha="$3" author="$4" out
+  out="$(gh_mise api "repos/$nwo/pulls/$pr/reviews?per_page=100" --paginate \
+    --jq '.[] | {login: (.user.login // ""), type: (.user.type // ""), state, commit_id}')" \
+    || gra_die 1 "gh api pulls/$pr/reviews failed"
+  # Reviews come oldest first, so the last one per login on <sha> is its latest.
+  jq -ers --arg sha "$sha" --arg author "$author" \
+    '[.[] | select(.commit_id == $sha and .type == "Bot" and .login != "" and .login != $author)]
+     | group_by(.login) | map(last | select(.state == "APPROVED")) | length' <<<"$out" \
+    || gra_die 1 "unexpected pulls/$pr/reviews response"
+}
+
 # gra_enable_automerge <nwo> <pr> <sha> -- the gh-automerge contract, pinned to
 # <nwo> and <sha>: `gh pr merge --auto --merge`, and only when GitHub refuses
 # that because the PR is in clean status, a direct `gh pr merge --merge`.
@@ -160,7 +178,7 @@ gra_enable_automerge() {
 
 gra_main() {
   local enabled_only=0 pr="" sha="" root repo_out nwo default_branch dir workflow paths_file
-  local me_login pr_out author cross base head state scratch started now elapsed decision
+  local me_login pr_out author cross base head state scratch started now elapsed approvals
 
   case "${1:-}" in
     -h|--help) [ $# -eq 1 ] || gra_usage 1; gra_usage 0 ;;
@@ -232,16 +250,17 @@ gra_main() {
   # --- 6. wait for the approval ---------------------------------------------
   started=$(date -u +%s)
   while :; do
-    pr_out="$(gh_mise pr view "$pr" -R "$nwo" --json headRefOid,reviewDecision,state \
-      --jq '(.headRefOid // ""), (.reviewDecision // ""), (.state // "")')" \
+    pr_out="$(gh_mise pr view "$pr" -R "$nwo" --json headRefOid,state \
+      --jq '(.headRefOid // ""), (.state // "")')" \
       || gra_die 1 "gh pr view #$pr failed while waiting"
-    { read -r head; read -r decision; read -r state; } <<<"$pr_out" || true
+    { read -r head; read -r state; } <<<"$pr_out" || true
     [ "$head" = "$sha" ] || gra_die 5 "#$pr head moved to ${head:-unknown} while waiting for the approval of $sha"
     [ "$state" = OPEN ] || gra_die 4 "#$pr became ${state:-unknown} while waiting for the approval"
-    [ "$decision" != APPROVED ] || break
+    approvals="$(gra_app_approvals "$nwo" "$pr" "$sha" "$author")" || exit $?
+    [ "$approvals" -eq 0 ] || break
     now=$(date -u +%s); elapsed=$((now - started))
     [ "$elapsed" -lt "$gra_wait_timeout" ] \
-      || gra_die 7 "no approval on #$pr after ${elapsed}s (reviewDecision: ${decision:-none})"
+      || gra_die 7 "no App approval of $sha on #$pr after ${elapsed}s"
     sleep "$gra_wait_interval"
   done
 

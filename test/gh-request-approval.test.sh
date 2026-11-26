@@ -66,12 +66,12 @@ case "$1 $2" in
   "repo view") emit "$(cat "$GRA_STATE/repo.json")" ;;
   "api user") emit "{\"login\":\"$(cat "$GRA_STATE/login")\"}" ;;
   "api graphql") pop threads ;;
+  "api repos/"*/pulls/*/reviews*) emit "$(pop reviews)" ;;
   "api repos/"*/branches/*) emit "{\"commit\":{\"sha\":\"$(printf "%040d" 0 | tr 0 c)\"}}" ;;
   "api repos/"*compare/*) jq -c '{files: .}' "$GRA_STATE/files.json" ;;
   "pr view")
     pr="$(cat "$GRA_STATE/pr.json")"
     case "$*" in *headRefOid*) pr="$(jq -c --arg h "$(pop heads)" '.headRefOid = $h' <<<"$pr")" ;; esac
-    case "$*" in *reviewDecision*) pr="$(jq -c --arg d "$(pop decisions)" '.reviewDecision = $d' <<<"$pr")" ;; esac
     emit "$pr" ;;
   "workflow run") exit "$(cat "$GRA_STATE/workflow_rc")" ;;
   "pr merge")
@@ -108,11 +108,17 @@ reset_state() {
   echo example-bot >"$state/login"
   printf '%s\n' '{"author":{"login":"example-bot"},"isCrossRepository":false,"baseRefName":"main","state":"OPEN"}' >"$state/pr.json"
   echo "$sha" >"$state/heads"
-  printf 'REVIEW_REQUIRED\nAPPROVED\n' >"$state/decisions"
+  printf '[]\n%s\n' "$(app_review APPROVED "$sha")" >"$state/reviews"
   printf '%s\n' "$no_threads" >"$state/threads"
   echo 0 >"$state/workflow_rc"
   echo 0 >"$state/auto_rc"; : >"$state/auto_msg"
   files_of docs/a.md
+}
+# app_review <state> <commit_id> [<login> [<type>]] -> a one-review JSON array as
+# the REST pulls/<N>/reviews endpoint returns it (the App by default).
+app_review() {
+  jq -cn --arg s "$1" --arg c "$2" --arg l "${3:-example-approver[bot]}" --arg t "${4:-Bot}" \
+    '[{user:{login:$l, type:$t}, state:$s, commit_id:$c}]'
 }
 pr_set() { jq -c "$1" "$state/pr.json" >"$state/pr.next" && mv "$state/pr.next" "$state/pr.json"; }
 
@@ -235,14 +241,27 @@ ck_workflow_fail() {  # a failed workflow start -> 6, no merge
   reset_state; echo 1 >"$state/workflow_rc"; gra "$1" -- 42 "$sha"
   [ "$rc" -eq 6 ] && ! merged
 }
-ck_wait() {  # merge only after APPROVED; never approved -> 7, no merge
-  reset_state; printf 'REVIEW_REQUIRED\nREVIEW_REQUIRED\nAPPROVED\n' >"$state/decisions"
+ck_wait() {  # merge only after an App approves <SHA> itself; otherwise -> 7, no merge
+  reset_state; printf '[]\n[]\n%s\n' "$(app_review APPROVED "$sha")" >"$state/reviews"
   gra "$1" -- 42 "$sha"
-  [ "$rc" -eq 0 ] && [ "$(grep -c '^pr view 42 -R '"$nwo"' --json headRefOid,reviewDecision' "$tmp/log")" -eq 3 ] || return 1
-  reset_state; echo REVIEW_REQUIRED >"$state/decisions"; gra "$1" -- 42 "$sha"
-  [ "$rc" -eq 7 ] && started && ! merged || return 1
-  reset_state; echo CHANGES_REQUESTED >"$state/decisions"; gra "$1" -- 42 "$sha"
-  [ "$rc" -eq 7 ] && ! merged
+  [ "$rc" -eq 0 ] && [ "$(grep -c '^api repos/'"$nwo"'/pulls/42/reviews' "$tmp/log")" -eq 3 ] || return 1
+  local r
+  # never approved; an App approval of an older commit (what reviewDecision
+  # would still count where approvals survive a push); a human's approval; an
+  # approval by the PR author's own login; an App approval later dismissed or
+  # followed by its own CHANGES_REQUESTED on the same commit
+  for r in '[]' "$(app_review APPROVED "$other_sha")" \
+           "$(app_review APPROVED "$sha" someone User)" \
+           "$(app_review APPROVED "$sha" example-bot Bot)" \
+           "$(app_review DISMISSED "$sha")" \
+           "$(jq -c '. + $n' --argjson n "$(app_review CHANGES_REQUESTED "$sha")" <<<"$(app_review APPROVED "$sha")")"; do
+    reset_state; printf '%s\n' "$r" >"$state/reviews"; gra "$1" -- 42 "$sha"
+    [ "$rc" -eq 7 ] && started && ! merged || return 1
+  done
+  # an App's later approval of <SHA> counts even after an earlier non-approval
+  reset_state
+  printf '%s\n' "$(jq -c '. + $n' --argjson n "$(app_review APPROVED "$sha")" <<<"$(app_review COMMENTED "$sha")")" >"$state/reviews"
+  gra "$1" -- 42 "$sha"; [ "$rc" -eq 0 ] && merged
 }
 ck_merge() {  # clean refusal -> direct merge pinned to the SHA; other failures -> 8, no fallback
   reset_state; echo 1 >"$state/auto_rc"
@@ -301,7 +320,11 @@ expect_broken nocap 's|\[ "\$nfiles" -lt 100 \]|true|' ck_paths
 expect_broken nohead 's|\[ "\$head" = "\$sha" \] \|\| gra_die 5 "#\$pr head is|true \|\| gra_die 5 "#$pr head is|' ck_head
 expect_broken nowaithead 's|\[ "\$head" = "\$sha" \] \|\| gra_die 5 "#\$pr head moved|true \|\| gra_die 5 "#$pr head moved|' ck_head
 expect_broken noworkflowrc 's|\|\| gra_die 6|\|\| true|' ck_workflow_fail
-expect_broken noapproval 's|\[ "\$decision" != APPROVED \] \|\| break|break|' ck_wait
+expect_broken noapproval 's|\[ "\$approvals" -eq 0 \] \|\| break|break|' ck_wait
+expect_broken nocommitpin 's|select(.commit_id == \$sha and |select(|' ck_wait
+expect_broken nobottype 's| and .type == "Bot"||' ck_wait
+expect_broken noauthorlogin 's| and .login != \$author||' ck_wait
+expect_broken nolatest 's|map(last \| select|map(.[] \| select|' ck_wait
 expect_broken nocleanonly "s|grep -qi 'clean status' <<<\"\\\$err\"|true|" ck_merge
 
 # --- token resolution with the real mise --------------------------------------
