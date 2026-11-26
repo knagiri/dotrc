@@ -165,6 +165,7 @@ gra_check_pr_gate() {
     --jq '(.author.login // ""), (.isCrossRepository | tostring), (.baseRefName // ""), (.state // "")')" \
     || gra_die 1 "gh pr view #$pr failed"
   { read -r author; read -r cross; read -r base; read -r state; } <<<"$pr_out" || true
+  [ -n "$state" ] || gra_die 1 "unexpected gh pr view output for #$pr"
   [ "$state" = OPEN ] || gra_die 4 "#$pr is ${state:-in an unknown state}, not OPEN"
   [ "$author" = "$me_login" ] || gra_die 4 "#$pr is by '$author', not by the token's login $me_login"
   [ "$cross" = false ] || gra_die 4 "#$pr comes from a fork (isCrossRepository: $cross)"
