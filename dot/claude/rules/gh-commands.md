@@ -133,7 +133,12 @@ prompt injection / 権限バイパスの経路になる。
   フラグを付けられない。auto-merge 有効化前に skill 自身が `gh-pr-checks` で
   **fail が無いこと**を確認する（二重化）。pending は待たずに auto-merge へ委ねる。merge method は
   `--merge`（merge commit）で logical commits を潰さない。
-- ここで `gh pr checks` を使わないのは、fine-grained PAT では **必ず失敗する**ため。`gh pr checks` は
+- ここで `gh pr checks` を使わないのは、fine-grained PAT では **必ず失敗する**ため。GitHub 公式 docs の
+  "Fine-grained personal access tokens limitations" 節が、fine-grained PAT で使えないものとして
+  "Using fine-grained personal access token to call the Checks API." を挙げている
+  （<https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#fine-grained-personal-access-tokens-limitations>）。
+  同じ節は "All of these gaps will be solved over time" とも書いており、将来解消されうるので、
+  そのときはこの節の前提を見直す。`gh pr checks` は
   statusCheckRollup（check runs）を読むが、fine-grained token には check runs を読む権限が
   そもそも存在しない（GitHub の fine-grained 権限一覧に Checks の項目が無く、check runs の REST
   リファレンスも classic token の `repo` スコープしか挙げていない）。実測でも
