@@ -49,6 +49,9 @@ base が default branch であること、変更パスの許可リスト、人�
 
 - `--admin` は required check も迂回する。required な workflow の run が、他のチェックの完了から 2 回の
   観測より遅れて作られると、それを待たずに merge される。
+- 許可リストの場所は `XDG_CONFIG_HOME` / `HOME` から決まり、待機の knob（`GH_MERGE_WHEN_GREEN_*`）も
+  env で変えられる。呼び出し側がこれらを前置すれば、別の config を読ませたり、2 回の観測の間隔を
+  縮めたりできる。テストを env で行うための形で、塞いでいない。
 - 判断を要するゲート（`bypass_gate`）は呼び出し側の申告で、ラッパーは検証しない。ラッパーは allowlist
   済みなので、`pr-review-loop` を経ずに直接呼ばれれば機械的なゲートだけが残る。
 - `gh pr checks` は check runs を読むので、fine-grained PAT では常に失敗する（exit 9）。hosts.yml の
