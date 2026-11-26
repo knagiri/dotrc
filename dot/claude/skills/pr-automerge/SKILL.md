@@ -19,7 +19,7 @@ allowed-tools: Read, Grep, Glob
 
 ## 不変条件（厳守）
 
-- **この skill の終端状態は「auto-merge を有効化したこと（clean な PR では `gh-automerge` の fallback による直接 merge）」であって「PR が merge されたこと」ではない。** 実際に merge されるかは repo の branch protection（required checks / required approvals）が決める。**merge されていないことを異常とみなして調査してはならない。** 裏返しに、**既に merge が成立している状態も等しく正常な終端**である（required check の無い repo では `--auto` がその場で merge を成立させ、clean 拒否のときは手順 2 の fallback が直接 merge する）。終端は「有効化されて待っている」か「もう merge された」かのどちらかで、後者も異常とみなさない（手順 3）。
+- **この skill の終端状態は「auto-merge を有効化したこと（clean な PR では `gh-automerge` の fallback による直接 merge）」であって「PR が merge されたこと」ではない。** 実際に merge されるかは repo の branch protection（required checks / required approvals）が決める。**merge されていないことを異常とみなして調査してはならない。** 裏返しに、**既に merge が成立している状態も等しく正常な終端**である（required check の無い repo では `--auto` がその場で merge を成立させ、clean 拒否のときは手順 2 の fallback が直接 merge する）。終端は「有効化されて待っている」か「もう merge された」かのどちらかで、後者も異常とみなさない（手順 3）。末尾の admin 経路では、終端は `MERGED` か停止・報告のどちらかである。
 - **review を経ていない HEAD を merge しない。** 手順 0 のゲートを通らなければ、それ以降の手順へ進まない。
 - auto-merge の有効化は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。同じラッパーの `--disable` 形（無効化）はこの skill では使わない（既存 PR へ修正を積む間の一時停止として `implement-and-review` が使う）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。例外は手順 0.5 で `gh-merge-when-green --enabled` が 0 を返した repo で、そこでは「admin 経路」の手順だけに従い、merge は `gh-merge-when-green` ラッパーのみで行う。
 - 結果は **PR に投稿しない**。**session の最終メッセージとして出力するだけ**にする。raw `gh pr comment` は使わない。
@@ -39,27 +39,9 @@ allowed-tools: Read, Grep, Glob
 
    review を経ない merge を手順側で塞ぐためのゲートである。呼び出し側が `pr-review-loop` を
    飛ばしても、ここで止まる。
-0.5. **経路の選択**: `gh-merge-when-green --enabled` を実行する。exit 0 なら下の「admin 経路」へ進み、
-   手順 1 以降は使わない。exit 3 / 4 なら従来どおり手順 1 へ進む（admin bypass を許可していない repo の
+0.5. **経路の選択**: `gh-merge-when-green --enabled` を実行する。exit 0 なら末尾の「admin 経路」節へ進み、
+   手順 1〜3 は使わない。exit 3 / 4 なら従来どおり手順 1 へ進む（admin bypass を許可していない repo の
    挙動は変えない）。それ以外の非 0 なら merge せず手順 5 へ抜け、終了コードと stderr を報告する。
-
-### admin 経路（`gh-merge-when-green --enabled` が 0 の repo）
-
-approve 無しの bypass merge を許可した repo では、auto-merge は approve を待ち続けて merge しない。
-この経路は CI の完了を手元で待ち、`gh-merge-when-green` で admin merge する。ゲートを 1 つでも満たさ
-なければ `gh-automerge` にも落とさず、PR を通常の PR として残して手順 5 で理由を報告する
-（auto-merge を張ると、後で人が approve した時点で、ゲートを通っていない PR が merge されるため）。
-
-1. 収束行の `bypass_gate` を確かめる。`bypass_gate=ok` でなければ（キーが無い・`ng:<理由>`）止める。
-   判断を要するゲート（範囲・テスト・設計判断でないこと）は `pr-review-loop` の判定役が出したこの値に
-   委ねる。
-2. `gh-list-threads <PR>` で未解決 thread を取り、起点コメントの author が人間（`__typename` が `Bot`
-   でない）のものが 1 件でもあれば止める。
-3. 手順 2 と同じ PR 本文と HEAD の整合確認を行う（直すなら `gh-pr-edit-body`）。
-4. `gh-merge-when-green <PR> <HEAD_SHA>` を実行する。exit 0 なら終端は `MERGED`（手順 4 で
-   「admin 経路で merge した」と書く）。非 0 なら merge せず手順 5 へ抜け、終了コードの意味
-   （`bin/gh-merge-when-green` のヘッダの表）と stderr の 1 行を報告する。数分〜数十分ブロックしうる
-   （CI の完了待ち）。
 1. **CI 確認**: `gh-pr-checks <PR>` を実行する（raw `gh pr checks` は使わない。fine-grained PAT では
    必ず失敗する）。返る JSON の **`has_failure` が `true` なら auto-merge を有効化しない** → 手順 5 へ
    （`checks[]` の fail した項目を報告に使う）。**チェックの確定は待たない**（`pending_count` が
@@ -143,5 +125,22 @@ approve 無しの bypass merge を許可した repo では、auto-merge は appr
    （`MERGED`。`--auto` の即時成立でも手順 2 の fallback でも同じ値になる）か。「有効化済み」と
    決め打ちで書くと、後者に達した場合に報告文が実際の結果を表せない。
 5. **停止・報告**（auto-merge を有効化しなかった場合）: 停止理由（手順 0 のゲート、手順 1 の CI の
-   fail とその cancelled のみ切り分け、手順 3 の `NOT_TERMINAL`）と残課題を箇条書きで要約し、
+   fail とその cancelled のみ切り分け、手順 3 の `NOT_TERMINAL`、admin 経路の停止）と残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿はしない（人間が引き取る）。
+
+## admin 経路（手順 0.5 で `gh-merge-when-green --enabled` が 0 の repo）
+
+approve 無しの bypass merge を許可した repo では、auto-merge は approve を待ち続けて merge しない。
+この経路は CI の完了を手元で待ち、`gh-merge-when-green` で admin merge する。ゲートを 1 つでも満たさ
+なければ `gh-automerge` にも落とさず、PR を通常の PR として残して手順 5 で理由を報告する
+（auto-merge を張ると、後で人が approve した時点で、ゲートを通っていない PR が merge されるため）。
+
+A1. 収束行の `bypass_gate` を確かめる。`bypass_gate=ok` でなければ（キーが無い・`ng:<理由>`）止める。
+    判断を要するゲート（範囲・テスト・設計判断でないこと）は `pr-review-loop` の判定役が出したこの値に
+    委ねる。
+A2. 通常経路の手順 2 に書いた、PR 本文と HEAD の整合確認を行う（直すなら `gh-pr-edit-body`）。
+    `gh-merge-when-green` はその場で merge しうるので、ここが本文を直せる最後の地点である。
+A3. `gh-merge-when-green <PR> <HEAD_SHA>` を実行する。人間が起こした未解決 thread の有無も含め、
+    機械的なゲートはラッパーが確かめる。exit 0 なら終端は `MERGED`（手順 4 で「admin 経路で merge
+    した」と書く）。非 0 なら merge せず手順 5 へ抜け、終了コードの意味（`bin/gh-merge-when-green` の
+    ヘッダの表）と stderr の 1 行を報告する。CI の完了を待つので数分〜数十分ブロックしうる。

@@ -6,40 +6,54 @@ required な CI が通っても approve が無ければ merge しないので、
 経路を `bin/gh-merge-when-green` と `pr-automerge` の分岐として持つ。ゲート・終了コード・待機の細目の
 正典はラッパーのヘッダにある。
 
-## merge の条件を 2 つに絞る
+## GitHub 側の設定は解釈せず、CI の結果だけを見る
 
-merge してよい条件は「レビューループが収束している」と「その SHA のチェックが全部通っている」だけに
-する。ruleset を読んで bypass 対象の rule 種別を判定する、といった GitHub 側の設定の解釈はしない。
-解釈を足すほど、設定の変更や API の形の違いで黙って誤判定する経路が増えるため。required かどうかも
-問わず全チェックを見る。`gh pr checks --required` は既に報告された required しか見えず、まだ作られて
-いない workflow を見落とすので、全件を見たうえで「全件完了」を 2 回続けて観測してから merge する。
+CI について見るのは「その PR のチェックが全部通っている」ことだけで、ruleset を読んで bypass 対象の rule
+種別を判定する、といった GitHub 側の設定の解釈はしない。解釈を足すほど、設定の変更や API の形の違いで
+黙って誤判定する経路が増えるため。required かどうかも問わず全チェックを見る。`gh pr checks --required` は
+既に報告された required しか見えず、まだ作られていない workflow を見落とすので、全件を見たうえで
+「全件完了」を 2 回続けて観測してから merge する。
 
 ## ゲートを機械と判断で分ける
 
-ラッパーが確かめるのは、機械的に決まるものだけである: repo の許可リスト、author が token の本人で
-fork でなく base が default branch であること、変更パスの許可リスト、head の一致、チェックの結果。
-差分が委譲した範囲に収まっているか、振る舞いの変更にテストがあるか、設計・契約を決める変更でないか、
-は判断を要するので、`pr-review-loop` の判定役が収束時に `bypass_gate=ok|ng:<理由>` として出し、
-`pr-automerge` がそれと人間の未解決 thread の有無を見てからラッパーを呼ぶ。どちらかを満たさなければ
-`gh-automerge` にも落とさず、通常の PR として残す。
+ラッパーが確かめるのは、機械的に決まるものである: repo の許可リスト、author が token の本人で fork でなく
+base が default branch であること、変更パスの許可リスト、人間が起こした未解決 thread が無いこと、head の
+一致、チェックの結果。差分が委譲した範囲に収まっているか、振る舞いの変更にテストがあるか、設計・契約を
+決める変更でないか、は判断を要するので、`pr-review-loop` の判定役が収束時に `bypass_gate=ok|ng:<理由>`
+として出し、`pr-automerge` がそれを見てからラッパーを呼ぶ。満たさなければ `gh-automerge` にも落とさず、
+通常の PR として残す。
 
-## 許可リストは agent が書けない場所に置く
+## 許可リストは checkout の外に置く
 
 - repo の許可リストは dotrc のマシンローカル設定 `ADMIN_MERGE_REPOS`（空白区切りの `OWNER/NAME`。
-  `docs/design/dotrc-machine-config.md`）。未設定・形が不正なら何もしない。
-- パスの許可リストは対象 repo の main working tree の root に置く git 管理外の `.dotrc-admin-merge-paths`。
-  worktree 内のコピーではなく main working tree から読むので、worktree で動く agent がリストを緩めても
-  効かない。初期状態は空（ファイルが無い）で、空なら何も merge しない。安全と確かめたパスを人が足して
-  いく。
+  `docs/design/dotrc-machine-config.md`）。他の設定と違い、同名の環境変数は無視して config ファイルから
+  だけ読む。呼び出し側が env で bypass merge してよい repo を名乗れないようにするため。
+- パスの許可リストは `~/.config/dotrc/admin-merge-paths/<OWNER>/<NAME>`。checkout の中に置くと、PR や
+  agent が作った別の clone の内容でリストを差し替えられるので、checkout の外に置く。初期状態は空
+  （ファイルが無い）で、空なら何も merge しない。安全と確かめたパスを人が足していく。
 - 書式と解釈は `.gitignore` と同じにし、照合は git 自身（空の一時 repo の `info/exclude` と
   `git check-ignore --no-index`）に任せる。自前の glob 実装は、gitignore と細部が食い違ったときに
-  黙って許可を広げうるため。
+  黙って許可を広げうるため。gitignore の制約から、`dir/` を許可するとその下を `!` で外せない（外したい
+  ときは `dir/*` で書く）。
 - `.github/`（PR が自分を判定する CI を書き換えられる）と `.claude/`（permission の grant）は、リストに
-  何が書かれていても対象外にする。
+  何が書かれていても対象外にする。repo ごとの他の grant の置き場所は、その repo のリストから外す。
+- ラッパーの gh は mise を経由せず hosts.yml の login で呼び、呼び出し側の GitHub 関係の env を落とし、
+  最初に解決した repo を以降の全呼び出しに `-R` で固定する。checkout の mise config や env から、別の
+  repo・別の token へ向け直されないようにするため。
 
-リストの内容ハッシュによる trust（`db-query` の paranoid trust の方式）は入れていない。ファイルが
-checkout の外（`~/.config`）と main working tree の git 管理外にあり、どちらも agent の作業範囲の外に
-あることで足りるとしている。
+`~/.config/dotrc/` は checkout の外なので、agent が書くには承認（auto mode では classifier の判定）を
+経る。deny では塞いでおらず、人のレビューを前提に agent へ変更を頼む余地を残している。リストの
+内容ハッシュによる trust（`db-query` の paranoid trust の方式）は入れていない。
+
+## 限界
+
+- `--admin` は required check も迂回する。required な workflow の run が、他のチェックの完了から 2 回の
+  観測より遅れて作られると、それを待たずに merge される。
+- 判断を要するゲート（`bypass_gate`）は呼び出し側の申告で、ラッパーは検証しない。ラッパーは allowlist
+  済みなので、`pr-review-loop` を経ずに直接呼ばれれば機械的なゲートだけが残る。
+- `gh pr checks` は check runs を読むので、fine-grained PAT では常に失敗する（exit 9）。hosts.yml の
+  token が fine-grained のホストでは admin 経路は使えず、毎回 exit 9 で止まる（PR は通常の PR として
+  残る）。classic か OAuth token のホストでだけ機能する。
 
 ## 監査
 
