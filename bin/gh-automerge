@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# gh-automerge <PR#> -- merge a pull request, preferring auto-merge.
+# gh-automerge <PR#> [<SHA>] -- merge a pull request, preferring auto-merge.
 # gh-automerge --disable <PR#> -- turn its auto-merge off again (see below).
 #
 # Runs EXACTLY `gh pr merge --auto --merge <PR>` with no flag passthrough, so a
@@ -18,6 +18,20 @@ set -euo pipefail
 # protection (required checks / approvals); this wrapper bypasses nothing, and
 # --admin remains unreachable. Any other failure (unmet required check,
 # conflict, ...) is passed back to the caller untouched.
+#
+# <SHA> (optional, 40 lower-case hex digits): both the auto-merge call and the
+# clean-status fallback get `--match-head-commit <SHA>`, so GitHub merges the PR
+# only while its head is <SHA>. Without it, a head pushed after auto-merge was
+# enabled is merged once the remaining conditions are met -- including an
+# approval left over from an older commit where approvals survive a push.
+# Without <SHA> the calls are exactly as above.
+#
+# gh runs through gh_mise anchored at the MAIN working tree of the cwd's repo
+# (gh_mise_main_root in bin/lib/gh-mise.sh), so mise never reads a linked
+# worktree's own config: a worktree's tracked mise.toml, which any branch can
+# change, cannot inject a GH_TOKEN or another GH_* into the merge call. gh also
+# resolves the repository there. Outside a working tree (a submodule, a bare
+# repo or a separate git dir included) it exits 1 before any gh call.
 #
 # --disable: `gh-automerge --disable <PR#>` turns an already enabled auto-merge
 # off again, for the window in which more fix commits are pushed onto an open PR
@@ -37,11 +51,11 @@ set -euo pipefail
 # The accepted forms are exactly the two below; no other option is parsed or
 # passed through, so --admin stays unreachable in both.
 #
-# Usage: gh-automerge <PR-number>
+# Usage: gh-automerge <PR-number> [<head-SHA>]
 #        gh-automerge --disable <PR-number>
 
 usage() {
-  echo "usage: gh-automerge <PR-number>" >&2
+  echo "usage: gh-automerge <PR-number> [<head-SHA>]" >&2
   echo "       gh-automerge --disable <PR-number>" >&2
   exit "${1:-1}"
 }
@@ -49,19 +63,33 @@ usage() {
 disable=0
 case "${1:-}" in
   -h|--help) [ $# -eq 1 ] || usage 1; usage 0 ;;
-  --disable) disable=1; shift ;;
+  --disable) disable=1; shift; [ $# -eq 1 ] || usage 1 ;;
 esac
-[ $# -eq 1 ] || usage 1
+[ $# -eq 1 ] || [ $# -eq 2 ] || usage 1
 pr="$1"
 if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
   echo "gh-automerge: PR number must be numeric (got: $pr)" >&2
   exit 1
 fi
+# Appended to both merge calls when a SHA is given; empty otherwise (expanded
+# with ${match[@]+...} so an empty array is safe under set -u on old bash).
+match=()
+if [ $# -eq 2 ]; then
+  if [[ ! "$2" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "gh-automerge: SHA must be 40 lower-case hex digits (got: $2)" >&2
+    exit 1
+  fi
+  match=(--match-head-commit "$2")
+fi
 
 # Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
 # is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
-gh_mise_use "$(gh_mise_repo_root)"
+root="$(gh_mise_main_root)" || {
+  echo "gh-automerge: $PWD is not in a git working tree" >&2
+  exit 1
+}
+gh_mise_use "$root"
 
 if [ "$disable" -eq 1 ]; then
   # One line: "<state> <true|false>", the latter whether auto-merge is enabled.
@@ -104,7 +132,7 @@ err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 
 rc=0
-gh_mise pr merge --auto --merge "$pr" 2>"$err" || rc=$?
+gh_mise pr merge --auto --merge "$pr" ${match[@]+"${match[@]}"} 2>"$err" || rc=$?
 cat "$err" >&2
 if [ "$rc" -eq 0 ]; then
   echo "gh-automerge: enabled auto-merge on #$pr" >&2
@@ -116,4 +144,4 @@ if ! grep -qi 'clean status' "$err"; then
 fi
 
 echo "gh-automerge: auto-merge refused (#$pr is in clean status); merging directly" >&2
-gh_mise pr merge --merge "$pr"
+gh_mise pr merge --merge "$pr" ${match[@]+"${match[@]}"}
