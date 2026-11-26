@@ -38,8 +38,10 @@ set -euo pipefail
 # environment is dropped first. The repo is resolved once from the cwd and then
 # pinned with -R (or spelled out in the API path) on every later call.
 #
-# Changed files come from the REST endpoint repos/<nwo>/compare/<base>...<SHA>
-# (per_page=100), read only after the head is confirmed to be <SHA>: the list is
+# Changed files come from the REST endpoint repos/<nwo>/compare/<B>...<SHA>
+# (per_page=100), where <B> is the base branch's commit resolved through
+# branches/<base> (a bare name would also resolve a tag of the same name), read
+# only after the head is confirmed to be <SHA>: the list is
 # pinned to that commit, so a head that moves and comes back (A -> B -> A)
 # cannot make the list of one commit be judged for another. `gh pr view --json
 # files` carries no previous path for a rename (measured with gh 2.105.0: a
@@ -212,10 +214,16 @@ pr_out="$(gh pr view "$pr" -R "$nwo" --json author,isCrossRepository,baseRefName
 # --- 3. head -----------------------------------------------------------------
 [ "$head" = "$sha" ] || die 5 "#$pr head is $head, not $sha"
 
-files_json="$(gh api "repos/$nwo/compare/$base...$sha?per_page=100")" \
-  || die 1 "gh api compare/$base...$sha failed"
+# The base is resolved to a commit through the branches endpoint first: given a
+# bare name, compare would resolve a tag of the same name as well, which
+# anyone who can push could point elsewhere.
+base_sha="$(gh api "repos/$nwo/branches/$base" --jq .commit.sha)" \
+  || die 1 "gh api branches/$base failed"
+[[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || die 1 "unexpected branches/$base response: $base_sha"
+files_json="$(gh api "repos/$nwo/compare/$base_sha...$sha?per_page=100")" \
+  || die 1 "gh api compare/$base_sha...$sha failed"
 nfiles="$(jq 'if (.files | type) == "array" then .files | length else error("no files array") end' <<<"$files_json")" \
-  || die 1 "unexpected compare/$base...$sha response"
+  || die 1 "unexpected compare/$base_sha...$sha response"
 [ "$nfiles" -lt 100 ] || die 4 "#$pr changes 100 or more files; refusing to judge a truncated list"
 [ "$nfiles" -gt 0 ] || die 4 "#$pr lists no changed files"
 
@@ -230,7 +238,7 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 # Both sides of a rename; NUL-separated so any byte in a path survives.
 jq -j '.files[] | (.filename, "\u0000"), (.previous_filename // empty | (., "\u0000"))' \
-  <<<"$files_json" >"$scratch/paths" || die 1 "unexpected compare/$base...$sha response"
+  <<<"$files_json" >"$scratch/paths" || die 1 "unexpected compare/$base_sha...$sha response"
 
 while IFS= read -r -d '' p; do
   case "/${p,,}/" in

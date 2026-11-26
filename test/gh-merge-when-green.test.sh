@@ -19,6 +19,7 @@ trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
 sha="$(printf '%040d' 0 | tr 0 a)"
 other_sha="$(printf '%040d' 0 | tr 0 b)"
+base_sha="$(printf '%040d' 0 | tr 0 c)"
 pass_json='[{"name":"build","bucket":"pass","state":"SUCCESS"},{"name":"lint","bucket":"skipping","state":"SKIPPED"}]'
 pending_json='[{"name":"build","bucket":"pending","state":"IN_PROGRESS"}]'
 no_threads='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]},"latestOpinionatedReviews":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}'
@@ -63,6 +64,7 @@ case "$1 $2" in
   "repo view") emit "$(cat "$MWG_STATE/repo.json")" ;;
   "api user") emit "{\"login\":\"$(cat "$MWG_STATE/login")\"}" ;;
   "api graphql") pop threads ;;
+  "api repos/"*/branches/*) emit "{\"commit\":{\"sha\":\"$(printf "%040d" 0 | tr 0 c)\"}}" ;;
   "api repos/"*compare/*) jq -c '{files: .}' "$MWG_STATE/files.json" ;;
   "pr view")
     emit "$(jq -c --arg h "$(pop heads)" --arg b "$(pop bases)" \
@@ -328,7 +330,7 @@ ck_reviews() {  # a human's CHANGES_REQUESTED review blocks; a Bot's, or a human
 }
 ck_files_pinned() {  # the file list is read for <SHA>, not for the PR's moving head
   reset_state; mwg "$1" -- 42 "$sha"
-  [ "$rc" -eq 0 ] && grep -qx "api repos/example-org/example-repo/compare/main...$sha?per_page=100" "$tmp/log"
+  [ "$rc" -eq 0 ] && grep -qx "api repos/example-org/example-repo/compare/$base_sha...$sha?per_page=100" "$tmp/log"
 }
 ck_threads_page() {  # more than one page of threads is refused
   reset_state
@@ -481,7 +483,8 @@ mutant reviews 's/\[ "\$r" -eq 0 \] || die 4/true || die 4/' ck_reviews
 mutant reviews-bot 's/(.author.__typename \/\/ "") != "Bot")\] | length) as \$r/(.author.__typename \/\/ "") != "Nobody")] | length) as $r/' ck_reviews
 mutant reviews-state 's/select(.state == "CHANGES_REQUESTED")/select(.state != "CHANGES_REQUESTED")/' ck_reviews
 mutant reviews-page 's/ or (\$p.latestOpinionatedReviews.pageInfo.hasNextPage \/\/ false)//' ck_threads_page
-mutant files-pin 's|compare/\$base\.\.\.\$sha?|compare/$base...$base?|' ck_files_pinned
+mutant files-pin 's|compare/\$base_sha\.\.\.\$sha?|compare/$base_sha...$base_sha?|' ck_files_pinned
+mutant base-by-name 's|^files_json="\$(gh api "repos/\$nwo/compare/\$base_sha|files_json="$(gh api "repos/$nwo/compare/$base|' ck_files_pinned
 mutant git-env 's/^unset GIT_DIR GIT_WORK_TREE.*$/:/' ck_env_dropped
 mutant threads-bot 's/!= "Bot")\]/!= "Nobody")]/' ck_threads
 # "more" is also refused by the numeric test that follows (a non-number fails
