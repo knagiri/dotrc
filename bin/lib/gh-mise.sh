@@ -53,6 +53,28 @@ gh_mise_repo_root() {
   printf '%s\n' "${root:-$d}"
 }
 
+# gh_mise_main_root [<dir>] -- the MAIN working tree of the repo holding <dir>
+# (cwd by default): the parent of `git rev-parse --git-common-dir`, which is the
+# same for the main working tree and every linked worktree of it.
+# `gh_mise_use "$(gh_mise_main_root)"` makes mise read only the main checkout's
+# config (and the global one), never a linked worktree's: a worktree's tracked
+# mise.toml -- which any branch can change -- then cannot inject a GH_TOKEN or
+# another GH_* into gh. The token is still resolved as for any wrapper: the
+# main checkout's mise.gh.local.toml if it has one, otherwise hosts.yml.
+# Returns 1 without output when <dir> is not in a checkout, or when that parent
+# is not a working tree's toplevel (a submodule or a bare repo, whose common dir
+# is not `<toplevel>/.git`); there is no fallback, since falling back to <dir>
+# would read exactly the config this function exists to keep out.
+# shellcheck disable=SC2120
+gh_mise_main_root() {
+  local d="${1:-$PWD}" common main top
+  common="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  main="$(dirname "$common")"
+  top="$(git -C "$main" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ "$top" = "$main" ] || return 1
+  printf '%s\n' "$main"
+}
+
 # gh_mise <gh args...> -- what the wrappers call wherever they used to run `gh`.
 # gh's exit code is propagated unchanged through both branches, which
 # dot/claude/rules/issue-workflow.md §2 relies on for gh-issue-file.
