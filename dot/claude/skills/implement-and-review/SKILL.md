@@ -181,7 +181,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    PR を出したら `pr-review-loop` を呼び、author とは独立した立場でレビューして収束させる。
    委譲プロンプトに `## 禁止事項` 節があれば、同 skill の `<PROHIBITIONS>` に原文のまま渡す
    （差し込み先と規定は同 skill。理由は手順 2）。収束したら、merge を見送る理由が無ければ
-   `pr-automerge` を呼び、収束時の `head_sha` / `last_seen` を渡して自律 merge する。merge を
+   `pr-automerge` を呼び、収束行のキー（`head_sha` / `last_seen` と、あれば `approve_gate`）をそのまま渡して自律 merge する。merge を
    見送る理由（委譲プロンプトの禁止事項、grant 変更を含む PR（`dot/claude/rules/gh-commands.md` §5）
    等）があれば `pr-automerge` は呼ばず、見送った理由を手順 6 で報告する。
 
@@ -209,7 +209,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    実例: dotrc/docs/incidents/automerge-fired-during-followup-review.md
 
    このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しは
-   `pr-automerge` 手順 2 が `gh-automerge` の直前に行い、PR 本文との食い違いは
+   `pr-automerge` 手順 2 / 2-A（approve 経路）が auto-merge を有効化する呼び出しの直前に行い、PR 本文との食い違いは
    `gh-pr-edit-body` で直して、直した箇所を最終サマリに載せる。戻った時点では既に
    merge 済みでありうるので、ここで直せる前提に立たない。
 5. **自己内省（末尾ハーネス）**: 手順 4 から戻ったら（`pr-review-loop` が収束せず停止した場合、
