@@ -39,9 +39,12 @@ dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を
 daemon や `mise exec` 経由で PATH に載るので、corepack の shim がその `bin/` にあれば `yarn` は
 解決する。そこで `bin/deploy.sh` は mise の global setting `node.corepack` を `true` にし、以後の
 node の install で mise が `corepack enable` を走らせるようにする。この setting は install 時に
-しか効かないので、既に入っている version のうち `bin/yarn` が無いものには deploy が
-`corepack enable` を撃つ。shim を session ごとの一時ディレクトリに作って PATH に足す形は、PATH を
-整える手当てが session ごとに要るので採らない。
+しか効かないので、既に入っている version のうち corepack を同梱し、`bin/yarn` と `bin/pnpm` の
+どちらかが無いものには deploy が `corepack enable` を撃つ。corepack を同梱しない node
+には効かず、deploy は stderr にそれを報告して先へ進む。既存 install の列挙に `jq` を使うので、
+`jq` が無い（または `mise ls` が失敗した）ときは既存 install への enable をせず、stderr に理由を
+出す。shim を session ごとの一時ディレクトリに作って PATH に足す形は、PATH を整える手当てが
+session ごとに要るので採らない。
 
 ## 他 repo の DB 接続（`mise.db.local.toml`）
 

@@ -235,58 +235,115 @@ else
 fi
 
 # --- Case J: corepack shims for mise's node installs --------------------------
-# node.corepack is set (once) for future installs, and installs already present
-# get `corepack enable` unless they already have a yarn shim. The installs are
-# fakes under the sandbox HOME's mise data dir; their corepack is a stub that
-# records the call and creates bin/yarn, never forwarding to a real corepack.
+# node.corepack is set for future installs, and installs already present get
+# `corepack enable` unless they already have both the yarn and pnpm shims. The
+# installs are fakes under the sandbox HOME's mise data dir; their corepack is
+# a stub that records the call and the path `command -v corepack` resolves to,
+# and creates the shims beside itself (never beside what PATH resolves to, so a
+# mutant that breaks the PATH prefix cannot write outside the sandbox). It never
+# forwards to a real corepack.
 if command -v mise >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-  fake_node() {  # fake_node <home> <version> [with-yarn]
+  fake_node() {  # fake_node <home> <version> [shims|yarn-only|no-corepack|failing]
     local d="$1/.local/share/mise/installs/node/$2/bin"
     mkdir -p "$d"
-    printf '#!/bin/sh\necho "$*" >>"$(dirname "$0")/corepack.calls"\ntouch "$(dirname "$0")/yarn"\n' >"$d/corepack"
+    case "${3-}" in
+      no-corepack) return 0 ;;
+      failing) printf '#!/bin/sh\nexit 1\n' >"$d/corepack" ;;
+      *) printf '#!/bin/sh\necho "$*" >>"$(dirname "$0")/corepack.calls"\ncommand -v corepack >"$(dirname "$0")/corepack.which"\ntouch "$(dirname "$0")/yarn" "$(dirname "$0")/pnpm"\n' >"$d/corepack" ;;
+    esac
     chmod +x "$d/corepack"
-    if [ "${3-}" = with-yarn ]; then : >"$d/yarn"; fi
+    case "${3-}" in
+      shims) : >"$d/yarn"; : >"$d/pnpm" ;;
+      yarn-only) : >"$d/yarn" ;;
+    esac
   }
   nbin() { printf '%s\n' "$1/.local/share/mise/installs/node/$2/bin"; }
+  # Assumes mise writes the setting as `corepack = true` under [settings.node].
   corepack_lines() {  # corepack_lines <home>
     grep -c '^corepack = true$' "$1/.config/mise/config.toml" 2>/dev/null || true
   }
+  called() {  # called <home> <version>; 0 if corepack enable ran there
+    [ -e "$(nbin "$1" "$2")/corepack.calls" ]
+  }
 
   home_j="$sandbox/home_j"; mkdir -p "$home_j"
+  fake_node "$home_j" 96.0.0 no-corepack
+  fake_node "$home_j" 97.0.0 yarn-only
+  fake_node "$home_j" 97.5.0 failing
   fake_node "$home_j" 98.0.0
-  fake_node "$home_j" 99.0.0 with-yarn
+  fake_node "$home_j" 99.0.0 shims
+  run_capture_stderr "$repo/bin/deploy.sh" "$home_j" "$sandbox/j.err"; rc_j=$?
   run "$repo/bin/deploy.sh" "$home_j"
-  run "$repo/bin/deploy.sh" "$home_j"
-  check "node.corepack is set to true, once across two runs" \
+  check "node.corepack is true after deploy (set once, not duplicated)" \
     "$(if [ "$(sandboxed "$home_j" mise settings get node.corepack 2>/dev/null)" = true ] \
          && [ "$(corepack_lines "$home_j")" -eq 1 ]
        then echo 0; else echo 1; fi)"
-  check "an install without a yarn shim gets exactly one corepack enable" \
+  check "deploy exits 0 with a failing corepack and a node without corepack" \
+    "$(if [ "$rc_j" -eq 0 ]; then echo 0; else echo 1; fi)"
+  check "an install without shims gets exactly one corepack enable across two runs" \
     "$(if [ -e "$(nbin "$home_j" 98.0.0)/yarn" ] \
          && [ "$(cat "$(nbin "$home_j" 98.0.0)/corepack.calls" 2>/dev/null)" = enable ]
        then echo 0; else echo 1; fi)"
-  check "an install that already has a yarn shim is left alone" \
-    "$(if [ ! -e "$(nbin "$home_j" 99.0.0)/corepack.calls" ]; then echo 0; else echo 1; fi)"
-
-  # Controls: drop the setting, and drop the already-enabled check.
-  grep -v 'mise settings set node.corepack true' "$repo/bin/deploy.sh" >"$repo/bin/deploy-nocp.sh"
-  sed 's|^            \[ -e "${__node_dir}/bin/yarn" \] && continue$|            :|' \
-    "$repo/bin/deploy.sh" >"$repo/bin/deploy-reenable.sh"
-  chmod +x "$repo/bin/deploy-nocp.sh" "$repo/bin/deploy-reenable.sh"
-  check "the controls really differ from the script under test" \
-    "$(if ! cmp -s "$repo/bin/deploy.sh" "$repo/bin/deploy-nocp.sh" \
-         && ! cmp -s "$repo/bin/deploy.sh" "$repo/bin/deploy-reenable.sh"
+  check "corepack enable runs with the install's own corepack first on PATH" \
+    "$(if [ "$(cat "$(nbin "$home_j" 98.0.0)/corepack.which" 2>/dev/null)" = "$(nbin "$home_j" 98.0.0)/corepack" ]
        then echo 0; else echo 1; fi)"
+  check "an install with yarn but no pnpm shim is enabled" \
+    "$(if called "$home_j" 97.0.0 && [ -e "$(nbin "$home_j" 97.0.0)/pnpm" ]; then echo 0; else echo 1; fi)"
+  check "an install that already has both shims is left alone" \
+    "$(if ! called "$home_j" 99.0.0; then echo 0; else echo 1; fi)"
+  check "a node without corepack is reported, and the other installs are still processed" \
+    "$(if grep -qF "no corepack in $(cd "$(nbin "$home_j" 96.0.0)/.." && pwd -P)" "$sandbox/j.err" \
+         && called "$home_j" 97.0.0 && called "$home_j" 98.0.0
+       then echo 0; else echo 1; fi)"
+  check "a failing corepack enable is reported and does not stop the other installs" \
+    "$(if grep -qF "corepack enable failed in $(cd "$(nbin "$home_j" 97.5.0)/.." && pwd -P)" "$sandbox/j.err" \
+         && called "$home_j" 97.0.0 && called "$home_j" 98.0.0
+       then echo 0; else echo 1; fi)"
+
+  home_j0="$sandbox/home_j0"; mkdir -p "$home_j0"
+  run "$repo/bin/deploy.sh" "$home_j0"; rc_j0=$?
+  check "deploy succeeds when no node is installed" \
+    "$(if [ "$rc_j0" -eq 0 ]; then echo 0; else echo 1; fi)"
+
+  # Controls. Each mutant replaces one line with a no-op (or an edited form) and
+  # must differ from the script under test; a syntax error would make every
+  # control pass vacuously, so each run is also required to exit 0.
+  mutate() {  # mutate <out> <sed-expr>
+    sed "$2" "$repo/bin/deploy.sh" >"$repo/bin/$1"
+    chmod +x "$repo/bin/$1"
+  }
+  mutate deploy-nocp.sh 's|^        mise settings set node.corepack true$|        :|'
+  mutate deploy-reenable.sh 's|^            if \[ -e "${__node_dir}/bin/yarn" \] \&\& \[ -e "${__node_dir}/bin/pnpm" \]; then$|            if false; then|'
+  mutate deploy-yarnonly.sh 's|^            if \[ -e "${__node_dir}/bin/yarn" \] \&\& \[ -e "${__node_dir}/bin/pnpm" \]; then$|            if [ -e "${__node_dir}/bin/yarn" ]; then|'
+  mutate deploy-nopath.sh 's|PATH="${__node_dir}/bin:${PATH}" "${__node_dir}/bin/corepack" enable|"${__node_dir}/bin/corepack" enable|'
+  check "the controls really differ from the script under test" \
+    "$(ok=0; for m in nocp reenable yarnonly nopath; do
+         cmp -s "$repo/bin/deploy.sh" "$repo/bin/deploy-$m.sh" && ok=1
+       done; echo "$ok")"
   home_j2="$sandbox/home_j2"; mkdir -p "$home_j2"
-  run "$repo/bin/deploy-nocp.sh" "$home_j2"
-  check "without the setting line, node.corepack stays off" \
-    "$(if [ "$(sandboxed "$home_j2" mise settings get node.corepack 2>/dev/null)" != true ]
+  fake_node "$home_j2" 98.0.0
+  run "$repo/bin/deploy-nocp.sh" "$home_j2"; rc_nocp=$?
+  check "without the setting line, node.corepack stays off (and the rest still ran)" \
+    "$(if [ "$rc_nocp" -eq 0 ] && called "$home_j2" 98.0.0 \
+         && [ "$(sandboxed "$home_j2" mise settings get node.corepack 2>/dev/null)" != true ]
        then echo 0; else echo 1; fi)"
   home_j3="$sandbox/home_j3"; mkdir -p "$home_j3"
-  fake_node "$home_j3" 99.0.0 with-yarn
-  run "$repo/bin/deploy-reenable.sh" "$home_j3"
-  check "without the yarn check, an enabled install would be enabled again" \
-    "$(if [ -e "$(nbin "$home_j3" 99.0.0)/corepack.calls" ]; then echo 0; else echo 1; fi)"
+  fake_node "$home_j3" 99.0.0 shims
+  run "$repo/bin/deploy-reenable.sh" "$home_j3"; rc_re=$?
+  check "without the shim check, an enabled install would be enabled again" \
+    "$(if [ "$rc_re" -eq 0 ] && called "$home_j3" 99.0.0; then echo 0; else echo 1; fi)"
+  home_j4="$sandbox/home_j4"; mkdir -p "$home_j4"
+  fake_node "$home_j4" 97.0.0 yarn-only
+  run "$repo/bin/deploy-yarnonly.sh" "$home_j4"; rc_yo=$?
+  check "with a yarn-only check, an install missing the pnpm shim would be skipped" \
+    "$(if [ "$rc_yo" -eq 0 ] && ! called "$home_j4" 97.0.0; then echo 0; else echo 1; fi)"
+  home_j5="$sandbox/home_j5"; mkdir -p "$home_j5"
+  fake_node "$home_j5" 98.0.0
+  run "$repo/bin/deploy-nopath.sh" "$home_j5"; rc_np=$?
+  check "without the PATH prefix, corepack would not resolve to the install's own" \
+    "$(if [ "$rc_np" -eq 0 ] && called "$home_j5" 98.0.0 \
+         && [ "$(cat "$(nbin "$home_j5" 98.0.0)/corepack.which" 2>/dev/null)" != "$(nbin "$home_j5" 98.0.0)/corepack" ]
+       then echo 0; else echo 1; fi)"
 else
   echo "skip: mise or jq not available; corepack shims not exercised"
 fi
