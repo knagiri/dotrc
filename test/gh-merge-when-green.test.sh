@@ -63,7 +63,10 @@ pop() {
 case "$1 $2" in
   "repo view") emit "$(cat "$MWG_STATE/repo.json")" ;;
   "api user") emit "{\"login\":\"$(cat "$MWG_STATE/login")\"}" ;;
-  "api graphql") pop threads ;;
+  "api graphql")
+    c="$(pop threads)"
+    [ "$c" != GHFAIL ] || { echo "gh: graphql failed" >&2; exit 1; }
+    printf '%s\n' "$c" ;;
   "api repos/"*/branches/*) emit "{\"commit\":{\"sha\":\"$(printf "%040d" 0 | tr 0 c)\"}}" ;;
   "api repos/"*compare/*) jq -c '{files: .}' "$MWG_STATE/files.json" ;;
   "pr view")
@@ -330,7 +333,13 @@ ck_reviews() {  # a human's CHANGES_REQUESTED review blocks; a Bot's, or a human
 }
 ck_files_pinned() {  # the file list is read for <SHA>, not for the PR's moving head
   reset_state; mwg "$1" -- 42 "$sha"
-  [ "$rc" -eq 0 ] && grep -qx "api repos/example-org/example-repo/compare/$base_sha...$sha?per_page=100" "$tmp/log"
+  [ "$rc" -eq 0 ] && grep -qx "api repos/example-org/example-repo/compare/$base_sha...$sha" "$tmp/log"
+}
+ck_threads_gh_fail() {  # a failing graphql call is exit 1 (unexpected gh failure), not 4 (gate refused)
+  reset_state; echo GHFAIL >"$state/threads"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 1 ] && ! merged || return 1
+  reset_state; { printf '%s\n' "$no_threads"; echo GHFAIL; } >"$state/threads"  # also on the re-check before merging
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 1 ] && ! merged
 }
 ck_threads_page() {  # more than one page of threads is refused
   reset_state
@@ -407,7 +416,7 @@ checks=(ck_args ck_config ck_config_env_ignored ck_repo ck_enabled ck_env_droppe
   ck_no_mise ck_pinned_repo ck_author ck_fork ck_base ck_base_during ck_file_count
   ck_list_missing ck_list_not_in_checkout ck_paths_outside ck_paths_forms
   ck_paths_negation ck_always_denied ck_always_denied_case ck_rename
-  ck_default_ignore ck_global_config ck_env_config ck_threads ck_threads_page
+  ck_default_ignore ck_global_config ck_env_config ck_threads ck_threads_gh_fail ck_threads_page
   ck_reviews ck_files_pinned ck_threads_before_merge ck_head_before ck_head_during
   ck_fail ck_pending_then_pass ck_two_in_a_row ck_no_checks ck_no_checks_grace
   ck_timeout ck_unknown_bucket ck_denied ck_merge_fails ck_knobs)
@@ -483,9 +492,10 @@ mutant reviews 's/\[ "\$r" -eq 0 \] || die 4/true || die 4/' ck_reviews
 mutant reviews-bot 's/(.author.__typename \/\/ "") != "Bot")\] | length) as \$r/(.author.__typename \/\/ "") != "Nobody")] | length) as $r/' ck_reviews
 mutant reviews-state 's/select(.state == "CHANGES_REQUESTED")/select(.state != "CHANGES_REQUESTED")/' ck_reviews
 mutant reviews-page 's/ or (\$p.latestOpinionatedReviews.pageInfo.hasNextPage \/\/ false)//' ck_threads_page
-mutant files-pin 's|compare/\$base_sha\.\.\.\$sha?|compare/$base_sha...$base_sha?|' ck_files_pinned
+mutant files-pin 's|compare/\$base_sha\.\.\.\$sha")|compare/$base_sha...$base_sha")|' ck_files_pinned
 mutant base-by-name 's|^files_json="\$(gh api "repos/\$nwo/compare/\$base_sha|files_json="$(gh api "repos/$nwo/compare/$base|' ck_files_pinned
 mutant git-env 's/^unset GIT_DIR GIT_WORK_TREE.*$/:/' ck_env_dropped
+mutant threads-gh-fail 's/^  out="\$(human_threads)" || exit \$?$/  out="$(human_threads)" || true/' ck_threads_gh_fail
 mutant threads-bot 's/!= "Bot")\]/!= "Nobody")]/' ck_threads
 # "more" is also refused by the numeric test that follows (a non-number fails
 # -eq), so both are broken together.

@@ -39,16 +39,17 @@ set -euo pipefail
 # pinned with -R (or spelled out in the API path) on every later call.
 #
 # Changed files come from the REST endpoint repos/<nwo>/compare/<B>...<SHA>
-# (per_page=100), where <B> is the base branch's commit resolved through
+# where <B> is the base branch's commit resolved through
 # branches/<base> (a bare name would also resolve a tag of the same name), read
 # only after the head is confirmed to be <SHA>: the list is
 # pinned to that commit, so a head that moves and comes back (A -> B -> A)
 # cannot make the list of one commit be judged for another. `gh pr view --json
 # files` carries no previous path for a rename (measured with gh 2.105.0: a
 # RENAMED entry has only path, additions, deletions, changeType), while the
-# REST entry has previous_filename. One page of 100 is read; a full page is
-# refused rather than paginated, so a path cut off by a page boundary can never
-# pass unchecked (compare itself caps files at 300, beyond that limit).
+# REST entry has previous_filename. Only the first page is read, and compare
+# lists at most 300 files there (per_page/page page the commits, not the files).
+# 100 or more files are refused as a size cap, so a list that compare itself
+# truncates at 300 can never pass unchecked.
 #
 # Path list: ${XDG_CONFIG_HOME:-$HOME/.config}/dotrc/admin-merge-paths/OWNER/NAME,
 # spelled as in ADMIN_MERGE_REPOS. It lives next to the dotrc config, outside
@@ -220,7 +221,7 @@ pr_out="$(gh pr view "$pr" -R "$nwo" --json author,isCrossRepository,baseRefName
 base_sha="$(gh api "repos/$nwo/branches/$base" --jq .commit.sha)" \
   || die 1 "gh api branches/$base failed"
 [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || die 1 "unexpected branches/$base response: $base_sha"
-files_json="$(gh api "repos/$nwo/compare/$base_sha...$sha?per_page=100")" \
+files_json="$(gh api "repos/$nwo/compare/$base_sha...$sha")" \
   || die 1 "gh api compare/$base_sha...$sha failed"
 nfiles="$(jq 'if (.files | type) == "array" then .files | length else error("no files array") end' <<<"$files_json")" \
   || die 1 "unexpected compare/$base_sha...$sha response"
@@ -305,8 +306,10 @@ human_threads() {
     || die 1 "unexpected review threads response for #$pr"
 }
 check_threads() {
-  local n r
-  read -r n r <<<"$(human_threads)"
+  local n r out
+  # not read -r <<<"$(...)": that would swallow human_threads' die 1
+  out="$(human_threads)" || exit $?
+  read -r n r <<<"$out"
   [ "$n" != more ] || die 4 "#$pr has more than 100 review threads or reviews; refusing to judge a truncated list"
   [ "$n" -eq 0 ] || die 4 "#$pr has $n unresolved review thread(s) started by a human"
   [ "$r" -eq 0 ] || die 4 "#$pr has $r CHANGES_REQUESTED review(s) by a human"
