@@ -17,8 +17,9 @@ CI について見るのは「その PR のチェックが全部通っている�
 ## ゲートを機械と判断で分ける
 
 ラッパーが確かめるのは、機械的に決まるものである: repo の許可リスト、author が token の本人で fork でなく
-base が default branch であること、変更パスの許可リスト、人間が起こした未解決 thread が無いこと、head の
-一致、チェックの結果。差分が委譲した範囲に収まっているか、振る舞いの変更にテストがあるか、設計・契約を
+base が default branch であること、変更パスの許可リスト、head の一致、人間が起こした未解決 thread と人間の
+CHANGES_REQUESTED review が無いこと（`--admin` は required approval も迂回するので、thread を持たない
+review の差し戻しもラッパーが見る）、チェックの結果。差分が委譲した範囲に収まっているか、振る舞いの変更にテストがあるか、設計・契約を
 決める変更でないか、は判断を要するので、`pr-review-loop` の判定役が収束時に `bypass_gate=ok|ng:<理由>`
 として出し、`pr-automerge` がそれを見てからラッパーを呼ぶ。満たさなければ `gh-automerge` にも落とさず、
 通常の PR として残す。
@@ -35,6 +36,9 @@ base が default branch であること、変更パスの許可リスト、人�
   `git check-ignore --no-index`）に任せる。自前の glob 実装は、gitignore と細部が食い違ったときに
   黙って許可を広げうるため。gitignore の制約から、`dir/` を許可するとその下を `!` で外せない（外したい
   ときは `dir/*` で書く）。
+- 変更ファイル一覧は、head が渡された SHA と一致すると確かめた後に `compare/<base>...<SHA>` から読む。
+  PR の現在の head から読むと、head が A -> B -> A と動いたときに B の一覧を判定して A を merge しうる。
+  SHA に固定すれば一覧と merge 対象が同じ commit になり、動きを検出する再読込が要らない。
 - `.github/`（PR が自分を判定する CI を書き換えられる）と `.claude/`（permission の grant）は、リストに
   何が書かれていても対象外にする。repo ごとの他の grant の置き場所は、その repo のリストから外す。
 - ラッパーの gh は mise を経由せず hosts.yml の login で呼び、呼び出し側の GitHub 関係の env を落とし、

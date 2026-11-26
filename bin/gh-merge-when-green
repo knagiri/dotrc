@@ -22,11 +22,14 @@ set -euo pipefail
 #   2. PR gate: the PR's author is the token's own login (`gh api user`), the
 #      head is not from a fork (isCrossRepository false), the base is the repo's
 #      default branch, and 1 to 99 files changed.
-#   3. path allowlist: every changed path -- both sides of a rename, deleted
+#   3. the PR head is <SHA>.
+#   4. path allowlist: every changed path -- both sides of a rename, deleted
 #      files included -- is allowed by the repo's path list (see below).
-#   4. no unresolved review thread was started by a human (its first comment's
-#      author is not a Bot), checked here and again right before merging.
-#   5. the PR head is <SHA>.
+#   5. no unresolved review thread was started by a human (its first comment's
+#      author is not a Bot), and no human's latest opinionated review is
+#      CHANGES_REQUESTED (--admin bypasses required approvals, so a review that
+#      has no thread would otherwise be bypassed), checked here and again right
+#      before merging.
 #   6. every check on the PR passes (see "CI wait").
 #
 # gh: every call is a plain `gh` with the hosts.yml login -- not bin/lib/
@@ -35,13 +38,15 @@ set -euo pipefail
 # environment is dropped first. The repo is resolved once from the cwd and then
 # pinned with -R (or spelled out in the API path) on every later call.
 #
-# Changed files come from the REST endpoint pulls/<N>/files?per_page=100: `gh
-# pr view --json files` carries no previous path for a rename (measured with gh
-# 2.105.0: a RENAMED entry has only path, additions, deletions, changeType),
-# while the REST entry has previous_filename. One page of 100 is read; a full
-# page is refused rather than paginated, so a path cut off by a page boundary
-# can never pass unchecked. The head is read again after the list, and a head
-# that moved in between stops the run (5).
+# Changed files come from the REST endpoint repos/<nwo>/compare/<base>...<SHA>
+# (per_page=100), read only after the head is confirmed to be <SHA>: the list is
+# pinned to that commit, so a head that moves and comes back (A -> B -> A)
+# cannot make the list of one commit be judged for another. `gh pr view --json
+# files` carries no previous path for a rename (measured with gh 2.105.0: a
+# RENAMED entry has only path, additions, deletions, changeType), while the
+# REST entry has previous_filename. One page of 100 is read; a full page is
+# refused rather than paginated, so a path cut off by a page boundary can never
+# pass unchecked (compare itself caps files at 300, beyond that limit).
 #
 # Path list: ${XDG_CONFIG_HOME:-$HOME/.config}/dotrc/admin-merge-paths/OWNER/NAME,
 # spelled as in ADMIN_MERGE_REPOS. It lives next to the dotrc config, outside
@@ -111,8 +116,9 @@ set -euo pipefail
 #      base is not (or stopped being) the default branch, no or 100+ changed
 #      files, a path outside the list or always refused, the list is missing /
 #      empty / unreadable or cannot be evaluated, an unresolved thread started
-#      by a human (or more than 100 threads to check)
-#   5  the head is not <SHA>, or moved while the PR was being read or waited on
+#      by a human, a human's CHANGES_REQUESTED review (or more than 100
+#      threads / reviews to check)
+#   5  the head is not <SHA>, or moved while the checks were waited on
 #   6  a check failed or was cancelled
 #   7  no check appeared within the grace period
 #   8  timed out waiting for checks
@@ -203,21 +209,17 @@ pr_out="$(gh pr view "$pr" -R "$nwo" --json author,isCrossRepository,baseRefName
 [ -n "$default_branch" ] && [ "$base" = "$default_branch" ] \
   || die 4 "#$pr targets '$base', not the default branch '${default_branch:-(unknown)}'"
 
-files_json="$(gh api "repos/$nwo/pulls/$pr/files?per_page=100")" \
-  || die 1 "gh api pulls/$pr/files failed"
-nfiles="$(jq 'if type == "array" then length else error("not an array") end' <<<"$files_json")" \
-  || die 1 "unexpected pulls/$pr/files response"
+# --- 3. head -----------------------------------------------------------------
+[ "$head" = "$sha" ] || die 5 "#$pr head is $head, not $sha"
+
+files_json="$(gh api "repos/$nwo/compare/$base...$sha?per_page=100")" \
+  || die 1 "gh api compare/$base...$sha failed"
+nfiles="$(jq 'if (.files | type) == "array" then .files | length else error("no files array") end' <<<"$files_json")" \
+  || die 1 "unexpected compare/$base...$sha response"
 [ "$nfiles" -lt 100 ] || die 4 "#$pr changes 100 or more files; refusing to judge a truncated list"
 [ "$nfiles" -gt 0 ] || die 4 "#$pr lists no changed files"
-# The file list is of whatever the head was when it was read. If the head moved
-# meanwhile, the list may belong to another commit than the one step 5 compares
-# with <SHA>, so stop rather than judge it.
-head_after="$(gh pr view "$pr" -R "$nwo" --json headRefOid --jq .headRefOid)" \
-  || die 1 "gh pr view #$pr failed"
-[ "$head_after" = "$head" ] \
-  || die 5 "#$pr head moved from $head to $head_after while its files were read"
 
-# --- 3. path allowlist -------------------------------------------------------
+# --- 4. path allowlist -------------------------------------------------------
 paths_file="${XDG_CONFIG_HOME:-$HOME/.config}/dotrc/admin-merge-paths/$listed"
 [ -f "$paths_file" ] || die 4 "no path list at $paths_file; nothing is merged"
 [ -r "$paths_file" ] || die 4 "cannot read $paths_file"
@@ -227,8 +229,8 @@ grep -qvE '^[[:space:]]*(#.*)?$' "$paths_file" 2>/dev/null \
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 # Both sides of a rename; NUL-separated so any byte in a path survives.
-jq -j '.[] | (.filename, "\u0000"), (.previous_filename // empty | (., "\u0000"))' \
-  <<<"$files_json" >"$scratch/paths" || die 1 "unexpected pulls/$pr/files response"
+jq -j '.files[] | (.filename, "\u0000"), (.previous_filename // empty | (., "\u0000"))' \
+  <<<"$files_json" >"$scratch/paths" || die 1 "unexpected compare/$base...$sha response"
 
 while IFS= read -r -d '' p; do
   case "/${p,,}/" in
@@ -267,9 +269,10 @@ expected="$(tr -cd '\0' <"$scratch/paths" | wc -c)"
 [ "$checked" -eq "$expected" ] \
   || die 4 "git check-ignore judged $checked of $expected paths; refusing"
 
-# --- 4. human threads --------------------------------------------------------
-# Unresolved threads whose first comment is not by a Bot (a deleted author
-# counts as human). More than one page is refused rather than paginated.
+# --- 5. human threads and reviews --------------------------------------------
+# Prints "<unresolved threads whose first comment is not by a Bot> <latest
+# CHANGES_REQUESTED reviews not by a Bot>" (a deleted author counts as human),
+# or "more 0" when either list needs a second page: refused, not paginated.
 human_threads() {
   local out
   # shellcheck disable=SC2016  # $owner etc. are GraphQL variables
@@ -277,26 +280,30 @@ human_threads() {
     -f query='query($owner:String!,$name:String!,$pr:Int!){
       repository(owner:$owner,name:$name){ pullRequest(number:$pr){
         reviewThreads(first:100){ pageInfo{ hasNextPage }
-          nodes{ isResolved comments(first:1){ nodes{ author{ __typename } } } } } } } }' \
+          nodes{ isResolved comments(first:1){ nodes{ author{ __typename } } } } }
+        latestOpinionatedReviews(first:100){ pageInfo{ hasNextPage }
+          nodes{ state author{ __typename } } } } } }' \
     -f owner="$owner" -f name="$name" -F pr="$pr")" \
     || die 1 "gh api graphql (review threads of #$pr) failed"
-  jq -er '.data.repository.pullRequest.reviewThreads
-      | if .pageInfo.hasNextPage then "more"
-        else [.nodes[] | select(.isResolved | not)
-              | select((.comments.nodes[0].author.__typename // "") != "Bot")] | length
+  jq -er '.data.repository.pullRequest as $p
+      | if $p.reviewThreads.pageInfo.hasNextPage
+           or ($p.latestOpinionatedReviews.pageInfo.hasNextPage // false) then "more 0"
+        else ([$p.reviewThreads.nodes[] | select(.isResolved | not)
+               | select((.comments.nodes[0].author.__typename // "") != "Bot")] | length) as $t
+             | ([$p.latestOpinionatedReviews.nodes[] | select(.state == "CHANGES_REQUESTED")
+                 | select((.author.__typename // "") != "Bot")] | length) as $r
+             | "\($t) \($r)"
         end' <<<"$out" \
     || die 1 "unexpected review threads response for #$pr"
 }
 check_threads() {
-  local n
-  n="$(human_threads)"
-  [ "$n" != more ] || die 4 "#$pr has more than 100 review threads; refusing to judge a truncated list"
+  local n r
+  read -r n r <<<"$(human_threads)"
+  [ "$n" != more ] || die 4 "#$pr has more than 100 review threads or reviews; refusing to judge a truncated list"
   [ "$n" -eq 0 ] || die 4 "#$pr has $n unresolved review thread(s) started by a human"
+  [ "$r" -eq 0 ] || die 4 "#$pr has $r CHANGES_REQUESTED review(s) by a human"
 }
 check_threads
-
-# --- 5. head -----------------------------------------------------------------
-[ "$head" = "$sha" ] || die 5 "#$pr head is $head, not $sha"
 
 # --- 6. CI wait --------------------------------------------------------------
 knob() {  # knob <name> <default> -- a non-negative integer from the environment
@@ -356,7 +363,7 @@ while :; do
 done
 
 # --- merge -------------------------------------------------------------------
-# A human may have opened a thread while the checks ran.
+# A human may have opened a thread or requested changes while the checks ran.
 check_threads
 gh pr merge "$pr" -R "$nwo" --admin --merge --match-head-commit "$sha" \
   || die 10 "gh pr merge --admin failed for #$pr at $sha"

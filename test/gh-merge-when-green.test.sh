@@ -21,12 +21,19 @@ sha="$(printf '%040d' 0 | tr 0 a)"
 other_sha="$(printf '%040d' 0 | tr 0 b)"
 pass_json='[{"name":"build","bucket":"pass","state":"SUCCESS"},{"name":"lint","bucket":"skipping","state":"SKIPPED"}]'
 pending_json='[{"name":"build","bucket":"pending","state":"IN_PROGRESS"}]'
-no_threads='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}'
+no_threads='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]},"latestOpinionatedReviews":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}'
 # thread_json <isResolved> <__typename of the first comment's author>
 thread_json() {
   jq -cn --argjson r "$1" --arg t "$2" \
     '{data:{repository:{pullRequest:{reviewThreads:{pageInfo:{hasNextPage:false},
-      nodes:[{isResolved:$r, comments:{nodes:[{author:{__typename:$t}}]}}]}}}}}'
+      nodes:[{isResolved:$r, comments:{nodes:[{author:{__typename:$t}}]}}]},
+      latestOpinionatedReviews:{pageInfo:{hasNextPage:false},nodes:[]}}}}}'
+}
+# review_json <state> <author __typename, or "null" for a deleted author>
+review_json() {
+  jq -cn --arg s "$1" --arg t "$2" --argjson ns "$no_threads" \
+    '$ns | .data.repository.pullRequest.latestOpinionatedReviews.nodes
+       = [{state:$s, author:(if $t == "null" then null else {__typename:$t} end)}]'
 }
 
 stubdir="$tmp/stub"; mkdir -p "$stubdir"
@@ -37,6 +44,10 @@ printf '%s\n' "$*" >>"$MWG_LOG"
 # Any GitHub token or selector reaching gh from the caller's environment.
 for v in $(compgen -v GH_) $(compgen -v GITHUB_); do
   case "$v" in GH_MERGE_WHEN_GREEN_*) ;; *) echo "LEAKED_ENV=$v" >>"$MWG_LOG" ;; esac
+done
+# Git's repo selectors reaching gh from the caller's environment.
+for v in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_CEILING_DIRECTORIES; do
+  [ -z "${!v+x}" ] || echo "LEAKED_ENV=$v" >>"$MWG_LOG"
 done
 jqexpr=""; prev=""
 for a in "$@"; do [ "$prev" = --jq ] && jqexpr="$a"; prev="$a"; done
@@ -52,7 +63,7 @@ case "$1 $2" in
   "repo view") emit "$(cat "$MWG_STATE/repo.json")" ;;
   "api user") emit "{\"login\":\"$(cat "$MWG_STATE/login")\"}" ;;
   "api graphql") pop threads ;;
-  "api repos/"*) cat "$MWG_STATE/files.json" ;;
+  "api repos/"*compare/*) jq -c '{files: .}' "$MWG_STATE/files.json" ;;
   "pr view")
     emit "$(jq -c --arg h "$(pop heads)" --arg b "$(pop bases)" \
       '.headRefOid = $h | .baseRefName = $b' "$MWG_STATE/pr.json")" ;;
@@ -181,7 +192,9 @@ ck_enabled() {  # --enabled: 0 / 4 / 3, never touches the PR
 ck_env_dropped() {  # GitHub tokens / selectors and git selectors from the caller do not reach gh
   reset_state
   mwg "$1" GH_REPO=example-org/elsewhere GH_HOST=example.invalid GH_TOKEN=x \
-    GH_CONFIG_DIR="$tmp/nowhere" GITHUB_TOKEN=y "GIT_DIR=$tmp/nowhere" -- 42 "$sha"
+    GH_CONFIG_DIR="$tmp/nowhere" GITHUB_TOKEN=y "GIT_DIR=$tmp/nowhere" \
+    "GIT_WORK_TREE=$tmp/nowhere" "GIT_COMMON_DIR=$tmp/nowhere" "GIT_INDEX_FILE=$tmp/nowhere" \
+    "GIT_CEILING_DIRECTORIES=$tmp/nowhere" -- 42 "$sha"
   [ "$rc" -eq 0 ] && ! grep -q '^LEAKED_ENV=' "$tmp/log"
 }
 ck_no_mise() {  # gh is called directly, never through mise
@@ -300,9 +313,29 @@ ck_threads() {  # an unresolved thread started by a human blocks; bots and resol
     <<<"$no_threads" >"$state/threads"
   mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged
 }
+ck_reviews() {  # a human's CHANGES_REQUESTED review blocks; a Bot's, or a human's approval, does not
+  reset_state; review_json CHANGES_REQUESTED User >"$state/threads"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 4 ] && ! merged && [ "$(calls 'pr checks')" -eq 0 ] || return 1
+  reset_state; review_json CHANGES_REQUESTED Bot >"$state/threads"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] && merged || return 1
+  reset_state; review_json APPROVED User >"$state/threads"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] || return 1
+  reset_state; review_json CHANGES_REQUESTED null >"$state/threads"; mwg "$1" -- 42 "$sha"  # deleted author: human
+  [ "$rc" -eq 4 ] && ! merged || return 1
+  reset_state  # requested while the checks ran
+  { printf '%s\n' "$no_threads"; review_json CHANGES_REQUESTED User; } >"$state/threads"
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged && [ "$(calls 'pr checks')" -eq 2 ]
+}
+ck_files_pinned() {  # the file list is read for <SHA>, not for the PR's moving head
+  reset_state; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] && grep -qx "api repos/example-org/example-repo/compare/main...$sha?per_page=100" "$tmp/log"
+}
 ck_threads_page() {  # more than one page of threads is refused
   reset_state
   jq -c '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage = true' <<<"$no_threads" >"$state/threads"
+  mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged || return 1
+  reset_state  # likewise for reviews
+  jq -c '.data.repository.pullRequest.latestOpinionatedReviews.pageInfo.hasNextPage = true' <<<"$no_threads" >"$state/threads"
   mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged
 }
 ck_threads_before_merge() {  # a human thread opened while the checks ran
@@ -310,17 +343,14 @@ ck_threads_before_merge() {  # a human thread opened while the checks ran
   mwg "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! merged && [ "$(calls 'pr checks')" -eq 2 ]
 }
 ck_head_before() {
-  # Two `pr view`s (gate, re-read after the files): the head is judged before
-  # the wait starts, not by its first poll.
+  # One `pr view` (the gate): the head is judged before the files are read and
+  # before the wait starts, not by its first poll.
   reset_state; heads_seq "$other_sha"; mwg "$1" -- 42 "$sha"
-  [ "$rc" -eq 5 ] && ! merged && [ "$(calls 'pr checks')" -eq 0 ] && [ "$(calls 'pr view')" -eq 2 ]
-}
-ck_head_while_files() {  # a push between the gate read and the file list
-  reset_state; heads_seq "$sha" "$other_sha"; mwg "$1" -- 42 "$sha"
-  [ "$rc" -eq 5 ] && ! merged && [ "$(calls 'pr view')" -eq 2 ]
+  [ "$rc" -eq 5 ] && ! merged && [ "$(calls 'pr checks')" -eq 0 ] \
+    && [ "$(calls 'pr view')" -eq 1 ] && [ "$(calls 'api repos/')" -eq 0 ]
 }
 ck_head_during() {
-  reset_state; heads_seq "$sha" "$sha" "$other_sha"; checks_seq "$pending_json"
+  reset_state; heads_seq "$sha" "$other_sha"; checks_seq "$pending_json"
   mwg "$1" -- 42 "$sha"; [ "$rc" -eq 5 ] && ! merged
 }
 ck_fail() {
@@ -376,7 +406,7 @@ checks=(ck_args ck_config ck_config_env_ignored ck_repo ck_enabled ck_env_droppe
   ck_list_missing ck_list_not_in_checkout ck_paths_outside ck_paths_forms
   ck_paths_negation ck_always_denied ck_always_denied_case ck_rename
   ck_default_ignore ck_global_config ck_env_config ck_threads ck_threads_page
-  ck_threads_before_merge ck_head_before ck_head_while_files ck_head_during
+  ck_reviews ck_files_pinned ck_threads_before_merge ck_head_before ck_head_during
   ck_fail ck_pending_then_pass ck_two_in_a_row ck_no_checks ck_no_checks_grace
   ck_timeout ck_unknown_bucket ck_denied ck_merge_fails ck_knobs)
 for c in "${checks[@]}"; do
@@ -447,13 +477,18 @@ mutant excludesfile "$home_through; s| -c core.excludesFile=/dev/null -c core.ig
 mutant global-config "$home_through; s/GIT_CONFIG_GLOBAL=\\/dev\\/null/GIT_CONFIG_GLOBAL_X=/; s/ -c core.ignoreCase=false \"\\\$@\"/ \"\$@\"/" ck_global_config
 mutant env-config 's/  env -i PATH="\$PATH" HOME="\$scratch"/  env HOME="$scratch"/; s/ -c core.ignoreCase=false "\$@"/ "$@"/' ck_env_config
 mutant threads 's/\[ "\$n" -eq 0 \] || die 4/true || die 4/' ck_threads
+mutant reviews 's/\[ "\$r" -eq 0 \] || die 4/true || die 4/' ck_reviews
+mutant reviews-bot 's/(.author.__typename \/\/ "") != "Bot")\] | length) as \$r/(.author.__typename \/\/ "") != "Nobody")] | length) as $r/' ck_reviews
+mutant reviews-state 's/select(.state == "CHANGES_REQUESTED")/select(.state != "CHANGES_REQUESTED")/' ck_reviews
+mutant reviews-page 's/ or (\$p.latestOpinionatedReviews.pageInfo.hasNextPage \/\/ false)//' ck_threads_page
+mutant files-pin 's|compare/\$base\.\.\.\$sha?|compare/$base...$base?|' ck_files_pinned
+mutant git-env 's/^unset GIT_DIR GIT_WORK_TREE.*$/:/' ck_env_dropped
 mutant threads-bot 's/!= "Bot")\]/!= "Nobody")]/' ck_threads
 # "more" is also refused by the numeric test that follows (a non-number fails
 # -eq), so both are broken together.
 mutant threads-page 's/\[ "\$n" != more \] || die 4/true || die 4/; s/\[ "\$n" -eq 0 \] || die 4/true || die 4/' ck_threads_page
-mutant threads-final '/^# A human may have opened a thread while the checks ran\.$/{n;s/^check_threads$/:/}' ck_threads_before_merge
+mutant threads-final '/^# A human may have opened a thread or requested changes while the checks ran\.$/{n;s/^check_threads$/:/}' ck_threads_before_merge
 mutant head-before 's/\[ "\$head" = "\$sha" \] || die 5 "#\$pr head is/true || die 5 "#$pr head is/' ck_head_before
-mutant head-while-files 's/\[ "\$head_after" = "\$head" \]/true/' ck_head_while_files
 mutant head-during 's/\[ "\$head" = "\$sha" \] || die 5 "#\$pr head moved/true || die 5 "#$pr head moved/' ck_head_during
 mutant fail 's/if \[ "\$failed" -gt 0 \]/if false/' ck_fail
 mutant pending 's/\[ "\$pending" -eq 0 \]/true/' ck_pending_then_pass

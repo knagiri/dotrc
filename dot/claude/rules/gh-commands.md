@@ -151,8 +151,9 @@ prompt injection / 権限バイパスの経路になる。
   通ったときに限る: repo がマシンローカル設定 `ADMIN_MERGE_REPOS`（env は無視し config ファイル
   からだけ読む）に載っている、PR の author が token の本人・fork でない・base が default branch・
   変更 100 件未満、全変更パス（rename の両側を含む）が `~/.config/dotrc/admin-merge-paths/<OWNER>/<NAME>`
-  に収まり `.github/`・`.claude/` に触れない、人間が起こした未解決 thread が無い、head が渡した SHA、
-  全チェックが pass / skipping。branch protection の approve 要件も required check も迂回するので、
+  に収まり `.github/`・`.claude/` に触れない、head が渡した SHA、人間が起こした未解決 thread と人間の
+  CHANGES_REQUESTED review（`--admin` は required approval も迂回するので thread の無い review も見る）が
+  無い、全チェックが pass / skipping。branch protection の approve 要件も required check も迂回するので、
   許可リストは checkout の外（`~/.config/dotrc/`）にだけ置き、agent は書かない。CI は `gh pr checks`
   で読むので、hosts.yml の token が fine-grained PAT のホストでは常に exit 9 で止まり、admin 経路は
   使えない。各ゲートと終了コードの正典は

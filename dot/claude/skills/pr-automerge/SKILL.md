@@ -143,4 +143,8 @@ A2. 通常経路の手順 2 に書いた、PR 本文と HEAD の整合確認を�
 A3. `gh-merge-when-green <PR> <HEAD_SHA>` を実行する。人間が起こした未解決 thread の有無も含め、
     機械的なゲートはラッパーが確かめる。exit 0 なら終端は `MERGED`（手順 4 で「admin 経路で merge
     した」と書く）。非 0 なら merge せず手順 5 へ抜け、終了コードの意味（`bin/gh-merge-when-green` の
-    ヘッダの表）と stderr の 1 行を報告する。CI の完了を待つので数分〜数十分ブロックしうる。
+    ヘッダの表）と stderr の 1 行を報告する。CI の完了を待つので数分〜数十分
+    （上限は既定で 1 時間）ブロックしうる。Bash tool は既定 120 秒・最大 600 秒で打ち切るので、
+    `run_in_background: true` で起動し、終了コードと stderr は完了通知から読む。前景で打ち切られたときは
+    merge 済みかどうかが分からないので、`gh pr view <PR> --json state` で状態を確かめて報告する
+    （ラッパーを撃ち直す前に確かめる）。
