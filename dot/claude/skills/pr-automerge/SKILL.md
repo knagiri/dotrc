@@ -14,19 +14,18 @@ allowed-tools: Read, Grep, Glob
 `$ARGUMENTS` に PR 番号と、`pr-review-loop` が収束時に出した `head_sha` / `last_seen`、任意で
 `approve_gate=<値>` が入る（例: `/pr-automerge 42 head_sha=<sha> last_seen=<timestamp> [approve_gate=<値>]`）。以降 `<PR>` / `<HEAD_SHA>` /
 `<LAST_SEEN>` と表記する。同じ session で `pr-review-loop` から続けて呼ぶときは、その収束
-メッセージの `収束: head_sha=... last_seen=...` 行から読んでよい。`approve_gate` は以降 `<APPROVE_GATE>` と表記し、手順 0.5 の approve 経路でだけ使う。同じ session で
+メッセージの `収束: head_sha=... last_seen=...` 行から読んでよい。`approve_gate` は以降 `<APPROVE_GATE>` と表記し、手順 0.5 の経路の選択にだけ使う。同じ session で
 収束行から読むときも、同じ行の `approve_gate=<値>` があれば入力とする。
 
 ## 不変条件（厳守）
 
-- **この skill の終端状態は「auto-merge を有効化したこと（clean な PR では `gh-automerge` / `gh-request-approval` の fallback による直接 merge）」であって「PR が merge されたこと」ではない。** 実際に merge されるかは repo の branch protection（required checks / required approvals）が決める。**merge されていないことを異常とみなして調査してはならない。** 裏返しに、**既に merge が成立している状態も等しく正常な終端**である（required check の無い repo では `--auto` がその場で merge を成立させ、clean 拒否のときは手順 2 / 2-A の fallback が直接 merge する）。終端は「有効化されて待っている」か「もう merge された」かのどちらかで、後者も異常とみなさない（手順 3）。
+- **この skill の終端状態は「auto-merge を有効化したこと（clean な PR では `gh-automerge` の fallback による直接 merge）」であって「PR が merge されたこと」ではない。** 実際に merge されるかは repo の branch protection（required checks / required approvals）が決める。**merge されていないことを異常とみなして調査してはならない。** 裏返しに、**既に merge が成立している状態も等しく正常な終端**である（required check の無い repo では `--auto` がその場で merge を成立させ、clean 拒否のときは手順 2 の fallback が直接 merge する）。終端は「有効化されて待っている」か「もう merge された」かのどちらかで、後者も異常とみなさない（手順 3）。
 - **review を経ていない HEAD を merge しない。** 手順 0 のゲートを通らなければ、それ以降の手順へ進まない。
-- 従来の経路では、auto-merge の有効化は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。同じラッパーの `--disable` 形（無効化）はこの skill では使わない（既存 PR へ修正を積む間の一時停止として `implement-and-review` が使う）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
-- **approve 経路**（手順 0.5 で `gh-request-approval --enabled` が 0 の repo）では、auto-merge の有効化は
-  **`gh-request-approval <PR> <HEAD_SHA>`** だけで行い、`gh-automerge` は呼ばない。approve を依頼する
-  条件を満たさないとき（`<APPROVE_GATE>` が `ok` でない、ラッパーがゲートで止まった等）も `gh-automerge` へ
-  落とさず、人間の approve を待つ通常の PR として残す。auto-merge を張っておくと、後で人が approve した
-  時点で条件を満たしていない PR が merge されるため。
+- auto-merge の有効化は **`gh-automerge <PR> <HEAD_SHA>`** ラッパーのみ（内部で `gh pr merge --auto --merge --match-head-commit <HEAD_SHA>`。有効化した後に push された head を merge させないため SHA を渡す）。同じラッパーの `--disable` 形（無効化）はこの skill では使わない（既存 PR へ修正を積む間の一時停止として `implement-and-review` が使う）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
+- **approve の依頼**（手順 0.5 で approve 経路になった PR）は **`gh-request-approval <PR> <HEAD_SHA>`** で
+  repo の approve 用ワークフローを起動するだけで、merge の可否は決めない。App の approve は人の approve と
+  同じく auto-merge が待つ条件の 1 つで、依頼しなかった・依頼が失敗したときも auto-merge は同じく
+  `gh-automerge` で張り、人の approve を待つ通常の流れになる。
 - 結果は **PR に投稿しない**。**session の最終メッセージとして出力するだけ**にする。raw `gh pr comment` は使わない。
 
 ## 手順
@@ -44,10 +43,11 @@ allowed-tools: Read, Grep, Glob
 
    review を経ない merge を手順側で塞ぐためのゲートである。呼び出し側が `pr-review-loop` を
    飛ばしても、ここで止まる。
-0.5. **経路の選択**: `gh-request-approval --enabled` を実行する。
-   - exit 0 → **approve 経路**。手順 1 の後、手順 2 の代わりに手順 2-A を行う
-   - exit 3 / 4 → 従来の経路（手順 1 → 2）
-   - それ以外 → 手順 5 へ抜け、停止理由に終了コードと stderr を書く
+0.5. **経路の選択**: `gh-request-approval --enabled` を実行する。exit 0 で、かつ `<APPROVE_GATE>` が `ok`
+   なら **approve 経路**（手順 2 で approve を依頼してから auto-merge を張る）。それ以外（exit が 0 でない、
+   `<APPROVE_GATE>` が `ng:<理由>`、または未受領）は従来の経路で、approve は依頼しない。どちらの経路に
+   なったかと、従来の経路ならその理由（終了コードと stderr の 1 行、または `<APPROVE_GATE>` の値）を
+   手順 4 / 5 の報告に書く。
 1. **CI 確認**: `gh-pr-checks <PR>` を実行する（raw `gh pr checks` は使わない。fine-grained PAT では
    必ず失敗する）。返る JSON の **`has_failure` が `true` なら auto-merge を有効化しない** → 手順 5 へ
    （`checks[]` の fail した項目を報告に使う）。**チェックの確定は待たない**（`pending_count` が
@@ -83,8 +83,12 @@ allowed-tools: Read, Grep, Glob
    再実行の手段を将来足す場合も **上限 1 回**に切る。無制限に撃ち直すと、本当に落ちている check を
    「いつか通る」まで再実行して押し通す方向へ倒れる。1 回で直らないなら一過性ではないので、
    そこで人間へ返すのが正しい。
-2. **auto-merge 有効化**: `has_failure` が `false` なら `gh-automerge <PR>` を実行する（内部で `gh pr merge --auto --merge`。
-   clean 拒否のときだけ `gh pr merge --merge` へ fallback する）。
+2. **auto-merge 有効化**: `has_failure` が `false` なら、下の PR 本文の確認を済ませたうえで、approve 経路では
+   まず `gh-request-approval <PR> <HEAD_SHA>` を実行する（ワークフローを起動したら返る）。非 0 なら終了コードの
+   意味（ラッパーのヘッダの Exit codes）と stderr の 1 行を手順 4 / 5 の報告に書き、そのまま先へ進む。
+   続けて、経路と `gh-request-approval` の終了コードに関わらず `gh-automerge <PR> <HEAD_SHA>` を実行する
+   （内部で `gh pr merge --auto --merge --match-head-commit <HEAD_SHA>`。clean 拒否のときだけ同じ SHA 固定の
+   `gh pr merge --merge` へ fallback する）。
    **撃つ前に、PR 本文が現在の HEAD と整合しているかを確かめる。** 本文は PR 作成時点の状態を
    記述しており、`pr-review-loop` の修正役は diff だけを直して本文には触れない。修正 commit が入っていなくても、
    base 側の PR が merge される等で本文の前提は動く。`gh-automerge` は即時 merge が成立しうる
@@ -102,16 +106,6 @@ allowed-tools: Read, Grep, Glob
    該当箇所だけを直して `gh-pr-edit-body <PR> <body-file>` で置き換える（追記のモードは無い）。
    raw `gh pr edit` は使わない（未許可で、撃てば人間不在の session は承認プロンプトで凍結
    する）。直した箇所は 手順 4 の最終サマリに載せる。
-2-A. **approve を依頼して auto-merge（approve 経路）**: 次を順に行う。
-   1. `<APPROVE_GATE>` が `ok` であることを確かめる。キーが無い・`ng:<理由>` なら、approve は依頼せず
-      `gh-automerge` も呼ばずに手順 5 へ抜け、停止理由に「approve を依頼する条件を満たさない」と
-      `<APPROVE_GATE>` の値を書く（通常の PR として人間の approve を待つ）
-   2. 手順 2 の「PR 本文が現在の HEAD と整合しているか」の確認と修正を同じ要領で行う
-      （`gh-automerge` は撃たない）
-   3. `gh-request-approval <PR> <HEAD_SHA>` を実行する。approve を待つので数分かかる（最悪の所要時間は
-      ラッパーのヘッダにある）。Bash tool の timeout を最大（600000）にして呼ぶ
-   4. exit 0 なら手順 3 へ進む。非 0 なら手順 5 へ抜け、停止理由に終了コードとその意味（ラッパーの
-      ヘッダの Exit codes）と stderr の 1 行を書く。どの終了コードでも `gh-automerge` へ落とさない
 3. **終端判定**: 次を実行し、**終端種別を機械的に判定できる文字列**（`MERGED` / `AUTO_MERGE_PENDING` /
    `NOT_TERMINAL`）を得る（散文での判定ではなく、コマンド自体が判定値を返す形にする）。
 
@@ -123,7 +117,7 @@ allowed-tools: Read, Grep, Glob
    required check を待っている）なら終端に達している（手順 4 はこの値で書き分ける）。
    `NOT_TERMINAL` なら auto-merge が有効化できていないので、手順 5（停止・報告）へ抜ける。
    3 分岐にするのは、`MERGED` に達する経路が 2 つあり（required check の無い repo で `--auto` が
-   即時 merge を成立させた場合と、手順 2 / 2-A の fallback が直接 merge した場合）、どちらも成立した時点で
+   即時 merge を成立させた場合と、手順 2 の fallback が直接 merge した場合）、どちらも成立した時点で
    `autoMergeRequest` が null に戻るため。`autoMergeRequest` の非 null だけを終端条件にすると、
    **最も順当に終わった happy path を失敗と判定してしまう**。実測（review→merge のループ自身が
    merge した PR）:
@@ -135,12 +129,12 @@ allowed-tools: Read, Grep, Glob
 
    `state` を引くのは終端判定のためで、`state` が `OPEN`（`AUTO_MERGE_PENDING`）でも異常ではない。
    merge されていないという結果を異常視しないのであって、merge 状態を観測しないのではない。
-4. **最終サマリ出力**: 手順 0 で照合した `head_sha`、手順 1 の CI 状態、手順 2 / 2-A で PR 本文を直したならその箇所、
+4. **最終サマリ出力**: 手順 0 で照合した `head_sha`、手順 1 の CI 状態、手順 0.5 の経路（従来の経路ならその理由）、手順 2 の `gh-request-approval` の
+   結果（approve 経路のとき）、手順 2 で PR 本文を直したならその箇所、
    最終結果を **session の最終メッセージとして出力**する。PR には投稿しない。最終結果は手順 3 の**終端種別**で書き分ける —
    **auto-merge を有効化して待機中**（`AUTO_MERGE_PENDING`）か、**その場で merge が成立した**
-   （`MERGED`。`--auto` の即時成立でも手順 2 / 2-A の fallback でも同じ値になる）か。「有効化済み」と
+   （`MERGED`。`--auto` の即時成立でも手順 2 の fallback でも同じ値になる）か。「有効化済み」と
    決め打ちで書くと、後者に達した場合に報告文が実際の結果を表せない。
-5. **停止・報告**（auto-merge を有効化しなかった場合）: 停止理由（手順 0 のゲート、手順 0.5 の
-   予期しない終了コード、手順 1 の CI の fail とその cancelled のみ切り分け、手順 2-A の
-   `approve_gate` 不成立・`gh-request-approval` の非 0、手順 3 の `NOT_TERMINAL`）と残課題を箇条書きで要約し、
+5. **停止・報告**（auto-merge を有効化しなかった場合）: 停止理由（手順 0 のゲート、手順 1 の CI の
+   fail とその cancelled のみ切り分け、手順 3 の `NOT_TERMINAL`）と残課題、手順 0.5 の経路とその理由を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿はしない（人間が引き取る）。

@@ -209,7 +209,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    実例: dotrc/docs/incidents/automerge-fired-during-followup-review.md
 
    このループで修正 commit が入ると、手順 3 で確定させた実測値は無効になる。測り直しは
-   `pr-automerge` 手順 2 / 2-A（approve 経路）が auto-merge を有効化する呼び出しの直前に行い、PR 本文との食い違いは
+   `pr-automerge` 手順 2 が `gh-automerge` の直前に行い、PR 本文との食い違いは
    `gh-pr-edit-body` で直して、直した箇所を最終サマリに載せる。戻った時点では既に
    merge 済みでありうるので、ここで直せる前提に立たない。
 5. **自己内省（末尾ハーネス）**: 手順 4 から戻ったら（`pr-review-loop` が収束せず停止した場合、
