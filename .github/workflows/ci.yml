@@ -58,6 +58,7 @@ jobs:
             bin/gh-issue-file \
             bin/gh-issue-group \
             bin/gh-issue-mark-delegated \
+            bin/gh-merge-when-green \
             bin/issue-crawl \
             bin/gh-list-threads \
             bin/gh-pr-checks \
@@ -85,6 +86,7 @@ jobs:
             test/dotrc-config.test.sh \
             test/gh-issue-file.test.sh \
             test/gh-issue-group.test.sh \
+            test/gh-merge-when-green.test.sh \
             test/gh-wrappers.test.sh \
             test/issue-crawl.test.sh \
             test/git-reap-gone.test.sh \

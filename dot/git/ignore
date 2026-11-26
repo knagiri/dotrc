@@ -13,6 +13,10 @@ mise.*.local.toml
 .mise.local.toml
 .mise.*.local.toml
 
+# Machine-local dotfiles that dotrc's tools read from a checkout (e.g.
+# .dotrc-admin-merge-paths); `.dotrc-` is the prefix for them.
+.dotrc-*
+
 # git worktrees created by bin/claude-worktree live inside the main checkout at
 # <repo>/.worktrees/<name>; keep them out of the main working tree's status.
 /.worktrees/
