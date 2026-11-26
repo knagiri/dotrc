@@ -270,12 +270,17 @@ ck_repoview() {  # an unusable repo view -> 1 before anything else
     [ "$rc" -eq 1 ] && ! started || return 1
   done
 }
+ck_pr_short() {  # a pr view output without a state line is unexpected output -> 1, no workflow
+  reset_state; printf '%s\n' '{"author":{"login":"example-bot"}}' >"$state/gate1"
+  gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 1 ] && ! started
+}
 ck_graphql_null() {  # a null pullRequest is no review state -> 1, no workflow
   reset_state; printf '%s\n' '{"data":{"repository":{"pullRequest":null}}}' >"$state/threads"
   gra "$1" -- 42 "$sha"
   [ "$rc" -eq 1 ] && ! started
 }
-checks="ck_mainroot ck_args ck_enabled ck_notenabled ck_pr_gate ck_human ck_paths ck_head ck_workflow_fail ck_stops ck_calls ck_compare_pin ck_login ck_repoview ck_graphql_null"
+checks="ck_mainroot ck_args ck_enabled ck_notenabled ck_pr_gate ck_human ck_paths ck_head ck_workflow_fail ck_stops ck_calls ck_compare_pin ck_login ck_repoview ck_graphql_null ck_pr_short"
 for c in $checks; do
   if "$c" "$bindir/lib"; then echo "ok: $c"
   else echo "FAIL: $c rc=$rc log=$(cat "$tmp/log") err=$(cat "$tmp/err")"; fail=1; fi
@@ -306,6 +311,7 @@ expect_broken noargsha 's|\[\[ "\$sha" =~ ^\[0-9a-f\]{40}\$ \]\] \|\||true \|\||
 expect_broken noenabledexit '/echo "\$gra_me: \$nwo is enabled/{n;s|exit 0|:|}' ck_enabled
 expect_broken nowfcheck 's|\[\[ "\$workflow" =~ ^\[A-Za-z0-9_.-\]+\\.ya?ml\$ \]\]|true|' ck_enabled
 expect_broken nobothfiles 's|\[ -e "\$workflow" \] && \[ -e "\$paths_file" \]|true|' ck_notenabled
+expect_broken noshort 's|^  \[ -n "\$state" \] \|\| gra_die 1 "unexpected gh pr view output for #\$pr"$|  true|' ck_pr_short
 expect_broken nostate 's|\[ "\$state" = OPEN \] \|\| gra_die 4 "#\$pr is|true \|\| gra_die 4 "#$pr is|' ck_pr_gate
 expect_broken noauthor 's|\[ "\$author" = "\$me_login" \]|true|' ck_pr_gate
 expect_broken nocross 's|\[ "\$cross" = false \]|true|' ck_pr_gate

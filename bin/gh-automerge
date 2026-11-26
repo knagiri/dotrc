@@ -20,10 +20,13 @@ set -euo pipefail
 # conflict, ...) is passed back to the caller untouched.
 #
 # <SHA> (optional, 40 lower-case hex digits): both the auto-merge call and the
-# clean-status fallback get `--match-head-commit <SHA>`, so GitHub merges the PR
-# only while its head is <SHA>. Without it, a head pushed after auto-merge was
-# enabled is merged once the remaining conditions are met -- including an
-# approval left over from an older commit where approvals survive a push.
+# clean-status fallback get `--match-head-commit <SHA>`. GitHub checks it when
+# auto-merge is enabled (expectedHeadOid of enablePullRequestAutoMerge) and when
+# the fallback merges directly (expectedHeadOid of mergePullRequest); an enabled
+# auto-merge request does not store the expected head, so it is not checked again
+# when the merge fires. A head pushed after enabling is therefore kept out by
+# `--disable` (stop auto-merge before pushing fixes) and, where the repo enables
+# it, by dismissing stale reviews on push -- not by <SHA>.
 # Without <SHA> the calls are exactly as above.
 #
 # gh runs through gh_mise anchored at the MAIN working tree of the cwd's repo
@@ -38,7 +41,7 @@ set -euo pipefail
 # (implement-and-review, "既存 PR への対応"). Without it, auto-merge enabled in an
 # earlier round fires as soon as the required conditions (approval, CI, ...)
 # are met by one of those pushes, before the new review round has finished.
-# Re-enabling is the normal `gh-automerge <PR#>` call that pr-automerge makes once the review converges.
+# Re-enabling is done in the enabling form, `gh-automerge <PR#> [<SHA>]`.
 #   - state MERGED / CLOSED -> exit 3, nothing issued (also when the re-read
 #     after --disable-auto shows it, i.e. auto-merge fired in between). Pushing more commits to
 #     that branch would land nowhere, so the caller must stop rather than push;

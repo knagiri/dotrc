@@ -16,10 +16,11 @@ auto-merge にも触れない。auto-merge は `pr-automerge` がほかの PR �
 人の approve を待つ。依頼のどこで失敗しても（ゲートで拒否・起動失敗・App が approve しない）、行き着く
 先はこの通常の流れであり、ラッパーが失敗を取り繕う必要は無い。
 
-`gh-automerge` に SHA を渡すのは、auto-merge を張った後の push を merge させないためである。approve 後の
-push で approve が消えるのは、ruleset で dismiss_stale_reviews_on_push が有効なときだけである。無効な
-場合、ほかの approve が残っていると、App が確かめていない head でも merge されうる。この経路は
-`--match-head-commit` と、修正を積む前の `gh-automerge --disable` で塞ぐ。
+`gh-automerge` に渡す SHA は `--match-head-commit` になり、auto-merge の有効化時（と clean 拒否 fallback の
+直接 merge 時）に head がその SHA であることを確かめる。有効化の後に push された head を防ぐのは、修正を
+積む前の `gh-automerge --disable` の規約と、有効な repo では dismiss stale reviews である。approve 後の
+push で approve が消えるのは ruleset で dismiss_stale_reviews_on_push が有効なときだけで、無効な場合は
+ほかの approve が残っていると、App が確かめていない head でも merge されうる。
 
 ## repo 側ワークフローとの契約
 
