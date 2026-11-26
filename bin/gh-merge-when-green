@@ -122,6 +122,11 @@ case "${1:-}" in
     ;;
 esac
 
+# Which repo gh and git act on must come from the cwd alone: GH_REPO / GH_HOST
+# would point gh at another repo than the checkout whose path list is read,
+# and the GIT_* selectors would point git at another checkout than the cwd.
+unset GH_REPO GH_HOST GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_PREFIX
+
 here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 # shellcheck source=bin/lib/dotrc-config.sh
 . "$here/lib/dotrc-config.sh"
@@ -180,6 +185,13 @@ nfiles="$(jq 'if type == "array" then length else error("not an array") end' <<<
   || die 1 "unexpected pulls/$pr/files response"
 [ "$nfiles" -lt 100 ] || die 4 "#$pr changes 100 or more files; refusing to judge a truncated list"
 [ "$nfiles" -gt 0 ] || die 4 "#$pr lists no changed files"
+# The file list is of whatever the head was when it was read. Re-read the head
+# afterwards: if it moved, the list may belong to another commit than the one
+# step 4 compares with <SHA>, so stop rather than judge it.
+head_after="$(gh_mise pr view "$pr" --json headRefOid --jq .headRefOid)" \
+  || die 1 "gh pr view #$pr failed"
+[ "$head_after" = "$head" ] \
+  || die 5 "#$pr head moved from $head to $head_after while its files were read"
 
 # --- 3. path allowlist -------------------------------------------------------
 common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \

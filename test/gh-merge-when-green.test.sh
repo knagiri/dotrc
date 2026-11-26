@@ -29,6 +29,7 @@ state="$tmp/state"
 cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_LOG"
+[ -z "${GH_REPO:-}" ] || echo "GH_REPO_SEEN=$GH_REPO" >>"$GH_LOG"
 jqexpr=""; prev=""
 for a in "$@"; do [ "$prev" = --jq ] && jqexpr="$a"; prev="$a"; done
 emit() { if [ -n "$jqexpr" ]; then jq -r "$jqexpr" <<<"$1"; else printf '%s\n' "$1"; fi; }
@@ -261,9 +262,20 @@ ck_global_config() {  # ~/.gitconfig (ignoreCase, excludesFile) does not leak in
   rm -f "$HOME/.gitconfig"; return "$r"
 }
 ck_head_before() {
-  # One `pr view`: the head is judged before the wait starts, not by its first poll.
+  # Two `pr view`s (gate, re-read after the files): the head is judged before
+  # the wait starts, not by its first poll.
   reset_state; heads_seq "$other_sha"; mwg "$1" -- 42 "$sha"
-  [ "$rc" -eq 5 ] && ! merged && [ "$(calls 'pr checks')" -eq 0 ] && [ "$(calls 'pr view')" -eq 1 ]
+  [ "$rc" -eq 5 ] && ! merged && [ "$(calls 'pr checks')" -eq 0 ] && [ "$(calls 'pr view')" -eq 2 ]
+}
+ck_head_while_files() {  # a push between the gate read and the file list
+  reset_state; heads_seq "$sha" "$other_sha"; mwg "$1" -- 42 "$sha"
+  [ "$rc" -eq 5 ] && ! merged && [ "$(calls 'pr view')" -eq 2 ]
+}
+ck_env_redirect() {  # GH_REPO / GIT_DIR from the caller are dropped
+  reset_state; mwg "$1" GH_REPO=example-org/elsewhere "GIT_DIR=$tmp/nowhere" -- 42 "$sha"
+  [ "$rc" -eq 0 ] || return 1
+  # the stub would see GH_REPO if it leaked
+  ! grep -q GH_REPO_SEEN "$tmp/log"
 }
 ck_head_during() {
   reset_state; heads_seq "$sha" "$sha" "$other_sha"; checks_seq "$pending_json"
@@ -313,7 +325,7 @@ ck_knobs() {
 checks=(ck_args ck_config ck_config_file ck_repo ck_enabled ck_author ck_fork ck_base
   ck_file_count ck_list_missing ck_paths_outside ck_paths_forms ck_paths_negation
   ck_always_denied ck_rename ck_main_tree_list ck_default_ignore ck_global_config
-  ck_head_before ck_head_during ck_fail ck_pending_then_pass ck_two_in_a_row
+  ck_head_before ck_head_while_files ck_env_redirect ck_head_during ck_fail ck_pending_then_pass ck_two_in_a_row
   ck_no_checks ck_no_checks_grace ck_timeout ck_denied ck_merge_fails ck_knobs)
 for c in "${checks[@]}"; do
   if "$c" "$bindir"; then echo "ok: $c"
@@ -360,6 +372,9 @@ mutant worktree-list 's|paths_file="\$(dirname "\$common_dir")/|paths_file="$rep
 mutant excludesfile 's| -c core.excludesFile=/dev/null "\$@"| "$@"|' ck_default_ignore
 mutant global-config 's/GIT_CONFIG_GLOBAL=\/dev\/null/GIT_CONFIG_GLOBAL_X=/' ck_global_config
 mutant head-before 's/\[ "\$head" = "\$sha" \] || die 5 "#\$pr head is/true || die 5 "#$pr head is/' ck_head_before
+mutant head-while-files 's/\[ "\$head_after" = "\$head" \]/true/' ck_head_while_files
+mutant env-ghrepo 's/^unset GH_REPO GH_HOST /unset GH_HOST /' ck_env_redirect
+mutant env-gitdir 's/ GIT_DIR GIT_WORK_TREE/ GIT_WORK_TREE/' ck_env_redirect
 mutant head-during 's/\[ "\$head" = "\$sha" \] || die 5 "#\$pr head moved/true || die 5 "#$pr head moved/' ck_head_during
 mutant fail 's/if \[ "\$failed" -gt 0 \]/if false/' ck_fail
 mutant pending 's/\[ "\$pending" -eq 0 \]/true/' ck_pending_then_pass
