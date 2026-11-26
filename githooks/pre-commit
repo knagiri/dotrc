@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# pre-commit: refuse a commit Claude Code makes straight onto the integration
+# branch of a main working tree.
+#
+# Runs only when CLAUDECODE is non-empty (Claude Code sets it in the shells it
+# starts); a commit from a shell where it is empty passes. That includes a
+# human's, but a commit typed from a shell that inherited CLAUDECODE (e.g. a
+# `!` command inside Claude Code) is refused too. Otherwise the commit is refused
+# (stderr message, exit 1) when all of these hold, and passes when any fails:
+#   a. the repo the commit runs in is a main working tree: --git-common-dir
+#      equals --git-dir, and <toplevel>/.git is a directory (a submodule's
+#      .git is a file even though the two dirs match)
+#   b. the current branch is the integration branch: the one
+#      refs/remotes/origin/HEAD points at, `main` when that is unset
+#   c. a remote named origin exists
+#   d. HEAD exists (the first commit of a new repo is not refused)
+# git runs the hook inside the repo the commit lands in, so these are judged
+# there; nothing is inferred from how the commit was invoked.
+#
+# Known limit: only `git commit` (including --amend) runs this hook.
+# cherry-pick / revert (the sequencer does not verify), merge (pre-merge-commit)
+# and am (pre-applypatch) pass through; the server-side ruleset blocks those.
+#
+# There is no approval or override path: the hook has no case in which it
+# lets such a commit through. `git commit --no-verify` skips it, as it skips
+# every pre-commit hook.
+#
+# It assumes it sits in git's hooks dir under the name pre-commit. A git
+# failure while judging (rev-parse cannot answer) lets the commit pass.
+set -u
+
+[ -n "${CLAUDECODE:-}" ] || exit 0
+
+common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
+gitdir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)" || exit 0
+[ "$common" = "$gitdir" ] || exit 0
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -d "$top/.git" ] || exit 0
+
+branch="$(git symbolic-ref -q HEAD 2>/dev/null)" || exit 0
+branch="${branch#refs/heads/}"
+target="$(git symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null)"
+target="${target#refs/remotes/origin/}"
+[ -n "$target" ] || target=main
+[ "$branch" = "$target" ] || exit 0
+
+git remote get-url origin >/dev/null 2>&1 || exit 0
+git rev-parse -q --verify HEAD >/dev/null 2>&1 || exit 0
+
+cat >&2 <<EOF
+pre-commit: commit を止めた: main working tree の統合先 branch '$branch' への直接 commit。
+main working tree での実装は delegate-to-worktree で worktree へ委譲するのが既定
+（~/.claude/rules/worktree-scope.md §5）。この場で進めるよう明示されているなら、
+\`git switch -c <branch>\` で branch を切ってから commit し、PR を出す。
+\`git commit --no-verify\` でこの hook を回避しない。
+EOF
+exit 1

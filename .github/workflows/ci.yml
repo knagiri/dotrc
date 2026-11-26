@@ -73,6 +73,7 @@ jobs:
             bin/lib/gh-mise.sh \
             bin/lib/issue-repo.sh \
             githooks/post-merge \
+            githooks/pre-commit \
             test/claude-digest.test.sh \
             test/claude-hook-git-guard.test.sh \
             test/claude-review.test.sh \
@@ -89,6 +90,7 @@ jobs:
             test/issue-crawl.test.sh \
             test/git-reap-gone.test.sh \
             test/post-merge-hook.test.sh \
+            test/pre-commit-hook.test.sh \
             test/lib/sandbox.sh \
             test/sandbox-usage.test.sh \
             test/skill-permissions.test.sh
