@@ -56,63 +56,7 @@ clone_with_remote() {
   git clone -q "$d/remote.git" "$d/work"
 }
 
-# ============================== git commit (#182) ==============================
-clone_with_remote "$tmp/c1" main
-main="$tmp/c1/work"
-git -C "$main" worktree add -q -b feat "$tmp/c1/wt"
 mkdir -p "$tmp/elsewhere"
-
-expect "commit: main working tree on main -> ask" ask "$main" "git commit -m x"
-expect "commit: git -C <main> from another dir -> ask" ask "$tmp/elsewhere" "git -C $main commit -m x"
-expect "commit: git -C relative path -> ask" ask "$tmp/c1" "git -C work commit -m x"
-expect "commit: compound add && commit -> ask" ask "$main" "git add . && git commit -m x"
-expect "commit: global opts before subcommand -> ask" ask "$main" "git -c commit.gpgsign=false --no-pager commit -m x"
-expect "commit: linked worktree -> none" none "$tmp/c1/wt" "git commit -m x"
-expect "commit: git -C <linked wt> from main -> none" none "$main" "git -C $tmp/c1/wt commit -m x"
-expect "commit: log --grep commit -> none" none "$main" "git log --grep commit"
-expect "commit: non-git command -> none" none "$main" "ls -la"
-
-clone_with_remote "$tmp/c2" main
-git -C "$tmp/c2/work" checkout -q -b feature
-expect "commit: feature branch in main working tree -> none" none "$tmp/c2/work" "git commit -m x"
-
-mkdir -p "$tmp/c3"
-git init -q -b main "$tmp/c3/r"
-commit_in "$tmp/c3/r" a.txt a
-expect "commit: no remote -> none" none "$tmp/c3/r" "git commit -m x"
-
-mkdir -p "$tmp/c4"
-git init -q -b main "$tmp/c4/r"
-git -C "$tmp/c4/r" remote add origin "$tmp/c1/remote.git"
-expect "commit: zero commits -> none" none "$tmp/c4/r" "git commit -m x"
-
-# origin/HEAD names the integration branch: here it is trunk, not main.
-clone_with_remote "$tmp/c5" trunk
-expect "commit: on origin/HEAD's branch (trunk) -> ask" ask "$tmp/c5/work" "git commit -m x"
-git -C "$tmp/c5/work" checkout -q -b main
-expect "commit: on main while origin/HEAD is trunk -> none" none "$tmp/c5/work" "git commit -m x"
-
-# No origin/HEAD at all: fall back to main.
-mkdir -p "$tmp/c6"
-git init -q -b main "$tmp/c6/r"
-commit_in "$tmp/c6/r" a.txt a
-git -C "$tmp/c6/r" remote add origin "$tmp/c1/remote.git"
-expect "commit: origin/HEAD unset, on main -> ask" ask "$tmp/c6/r" "git commit -m x"
-
-# A linked worktree that has the integration branch checked out (the main
-# working tree moved off it): only condition 1 excludes it.
-clone_with_remote "$tmp/c8" main
-git -C "$tmp/c8/work" checkout -q -b elsewhere
-git -C "$tmp/c8/work" worktree add -q "$tmp/c8/wt" main
-expect "commit: linked worktree on main -> none" none "$tmp/c8/wt" "git commit -m x"
-
-# A submodule: --git-common-dir and --git-dir match, but .git is a file.
-mkdir -p "$tmp/c7"
-git init -q -b main "$tmp/c7/super"
-commit_in "$tmp/c7/super" s.txt s
-git -C "$tmp/c7/super" -c protocol.file.allow=always submodule add -q "$tmp/c1/remote.git" sub
-git -C "$tmp/c7/super/sub" checkout -q main
-expect "commit: submodule on main -> none" none "$tmp/c7/super/sub" "git commit -m x"
 
 # ============================== git stash (#126) ===============================
 clone_with_remote "$tmp/s1" main
@@ -156,7 +100,10 @@ expect "stash: fd number is not taken as the ref -> deny" deny "$sm" "git stash 
 expect "stash: spaced redirect target is not taken as the ref -> deny" deny "$sm" "git stash pop 2> /dev/null"
 expect "stash: &>file redirect is not taken as the ref -> deny" deny "$sm" "git stash pop &>/dev/null"
 expect "stash: spaced &> redirect is not taken as the ref -> deny" deny "$sm" "git stash pop &> /dev/null"
-expect "stash: deny beats ask in one line" deny "$sm" "git stash pop; git commit -m x"
+# git commit is not judged here (githooks/pre-commit does it), even in a main
+# working tree on the integration branch.
+expect "commit: main working tree on main -> none" none "$sm" "git commit -m x"
+expect "stash: pop then commit -> deny" deny "$sm" "git stash pop; git commit -m x"
 expect "stash: quoted stash ref (other's) -> deny" deny "$sm" 'git stash pop "stash@{0}"'
 expect "stash: single-quoted stash ref (other's) drop -> deny" deny "$sm" "git stash drop 'stash@{0}'"
 expect "stash: single-quoted stash ref (own) -> none" none "$sw" "git stash pop 'stash@{0}'"
@@ -166,7 +113,7 @@ expect "stash: trailing & is not taken as the ref -> deny" deny "$sm" "git stash
 expect "stash: space-separated --git-dir skipped -> deny" deny "$sm" "git --git-dir .git stash pop"
 
 # Only a git at the start of a part counts.
-expect "commit: rg \"git commit\" docs -> none" none "$main" 'rg "git commit" docs'
+expect "stash: rg \"git stash pop\" docs -> none" none "$sm" 'rg "git stash pop" docs'
 expect "stash: echo \"git stash pop\" -> none" none "$sm" 'echo "git stash pop"'
 expect "stash: git log --grep stash -> none" none "$sm" "git log --grep stash"
 expect "stash: echo git stash pop (unquoted) -> none" none "$sm" "echo git stash pop"
@@ -186,7 +133,6 @@ expect "stash: WIP-on entry, other -> deny" deny "$tmp/s5/wt" "git stash pop"
 
 # Env assignments and wrappers before git.
 expect "stash: env assignment before git -> deny" deny "$sm" "GIT_PAGER=cat git stash pop"
-expect "commit: env assignment before git -> ask" ask "$main" "FOO=1 git commit -m x"
 expect "stash: timeout wrapper -> deny" deny "$sm" "timeout 30 git stash pop"
 expect "stash: timeout -k wrapper -> deny" deny "$sm" "timeout -k 5 30 git stash pop"
 expect "stash: nice -n wrapper -> deny" deny "$sm" "nice -n 10 git stash pop"
@@ -201,7 +147,6 @@ expect "stash: xargs wrapper -> deny" deny "$sm" "echo x | xargs -n 1 git stash 
 expect "stash: wrapper around own pop -> none" none "$sw" "timeout 30 git stash pop"
 expect "stash: wrapped non-git command -> none" none "$sm" "timeout 30 ls"
 
-# deny wins even when the ask comes first.
 expect "stash: commit then pop -> deny" deny "$sm" "git commit -m x; git stash pop"
 
 # -C values apply in order, each relative to the previous dir.
@@ -222,10 +167,6 @@ expect "stash: -C \"\$PWD\" -> deny" deny "$m6" 'git -C "$PWD" stash pop'
 expect "stash: -C \$(pwd) -> deny" deny "$m6" 'git -C $(pwd) stash pop'
 expect "stash: -C missing dir -> deny" deny "$m6" "git -C $tmp/nonexistent stash pop"
 expect "stash: unresolved dir, push -> none" none "$m6" 'git -C "$PWD" stash push -m x'
-expect "commit: unresolved -C falls back to cwd (non-repo) -> none" none "$tmp/elsewhere" 'git -C "$PWD" commit -m x'
-expect "commit: unresolved -C falls back to cwd (main working tree on main) -> ask" ask "$main" 'git -C "$PWD" commit -m x'
-# A part that left dir_unknown set must not leak into the next part.
-expect "stash: dir_unknown resets per part" none "$sw" 'git -C "$PWD" commit -m x; git stash pop stash@{0}'
 
 # Branch names that collide with a tag name.
 clone_with_remote "$tmp/s7" main
@@ -233,9 +174,6 @@ git -C "$tmp/s7/work" worktree add -q -b feat7 "$tmp/s7/wt"
 git -C "$tmp/s7/work" tag feat7 2>/dev/null
 echo a >>"$tmp/s7/wt/init.txt"; git -C "$tmp/s7/wt" stash push -q -m own
 expect "stash: branch with a same-named tag, own entry -> none" none "$tmp/s7/wt" "git stash pop"
-clone_with_remote "$tmp/s8" main
-git -C "$tmp/s8/work" tag main 2>/dev/null
-expect "commit: tag named like the integration branch -> ask" ask "$tmp/s8/work" "git commit -m x"
 
 # Not stash-like / path forms / options with an argument.
 expect "stash: apply HEAD (not a stash entry) -> none" none "$sm" "git stash apply HEAD"
@@ -247,9 +185,10 @@ out="$(cd "$sm" && jq -n --arg c "git stash pop" '{tool_name:"Bash",tool_input:{
 if [ "$out" = deny ]; then echo "ok: stash: no cwd in input falls back to \$PWD"; else echo "FAIL: stash: no cwd fallback (got '$out')"; fail=1; fi
 
 # ~ in a -C value resolves against $HOME.
-out="$(jq -n --arg c "git -C ~/work commit -m x" --arg d "$tmp/elsewhere" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' \
-  | HOME="$tmp/c1" "$src" | jq -r '.hookSpecificOutput.permissionDecision')"
-if [ "$out" = ask ]; then echo "ok: commit: -C ~/<main> resolves HOME -> ask"; else echo "FAIL: commit: -C ~ (got '$out')"; fail=1; fi
+# The top entry of $sm's stash is feat's, i.e. $sw's own: none only when ~ resolved.
+out="$(jq -n --arg c "git -C ~/wt stash pop" --arg d "$tmp/elsewhere" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' \
+  | HOME="$tmp/s1" "$src")"
+if [ -z "$out" ]; then echo "ok: stash: -C ~/<wt> resolves HOME -> none"; else echo "FAIL: stash: -C ~ (got '$out')"; fail=1; fi
 
 # Known limit: a -C value containing a space is not seen, so the call passes.
 clone_with_remote "$tmp/sp ace" main
@@ -273,9 +212,6 @@ for missing in jq git; do
     echo "FAIL: missing $missing (rc=$rc, err=$err)"; fail=1
   fi
 done
-
-# Typical commit heredoc.
-expect "commit: heredoc message via \$(cat <<EOF) -> ask" ask "$main" $'git commit -m "$(cat <<\'EOF\'\nfix thing\nEOF\n)"'
 
 # clear with only own entries / with none.
 clone_with_remote "$tmp/s2" main
