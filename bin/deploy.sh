@@ -109,6 +109,30 @@ if command -v mise >/dev/null 2>&1; then
     fi
 fi
 
+# mise: put corepack's yarn / pnpm shims into every mise node's bin/. A repo
+# that pins its package manager with `packageManager` runs `yarn` from git
+# hooks and scripts; the node bin/ is on PATH even in a non-interactive shell
+# (a background session inherits it from the daemon or `mise exec`), so a shim
+# there resolves without per-session PATH fixes. node.corepack makes mise run
+# `corepack enable` after each node install, but only at install time, so the
+# versions already installed are enabled here. corepack is `#!/usr/bin/env
+# node`, hence its own bin/ first on PATH; it puts the shims beside itself.
+if command -v mise >/dev/null 2>&1; then
+    if [ "$(mise settings get node.corepack 2>/dev/null)" != "true" ]; then
+        mise settings set node.corepack true
+    fi
+    if command -v jq >/dev/null 2>&1; then
+        while IFS= read -r __node_dir; do
+            [ -n "${__node_dir}" ] || continue
+            [ -x "${__node_dir}/bin/corepack" ] || continue
+            [ -e "${__node_dir}/bin/yarn" ] && continue
+            if ! PATH="${__node_dir}/bin:${PATH}" "${__node_dir}/bin/corepack" enable; then
+                echo "deploy.sh: corepack enable failed in ${__node_dir}" >&2
+            fi
+        done < <(mise ls node --installed --json 2>/dev/null | jq -r '.[].install_path' 2>/dev/null)
+    fi
+fi
+
 # Personal GitHub PAT. mise.gh.local.toml (gitignored, read only under
 # MISE_ENV=gh -- see bin/lib/gh-mise.sh) loads ~/.config/gh/personal.env. Both
 # are created only when absent, so a re-run never touches a filled-in token.

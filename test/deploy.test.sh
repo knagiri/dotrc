@@ -234,6 +234,63 @@ else
   echo "skip: mise not available; trusted_config_paths not exercised"
 fi
 
+# --- Case J: corepack shims for mise's node installs --------------------------
+# node.corepack is set (once) for future installs, and installs already present
+# get `corepack enable` unless they already have a yarn shim. The installs are
+# fakes under the sandbox HOME's mise data dir; their corepack is a stub that
+# records the call and creates bin/yarn, never forwarding to a real corepack.
+if command -v mise >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  fake_node() {  # fake_node <home> <version> [with-yarn]
+    local d="$1/.local/share/mise/installs/node/$2/bin"
+    mkdir -p "$d"
+    printf '#!/bin/sh\necho "$*" >>"$(dirname "$0")/corepack.calls"\ntouch "$(dirname "$0")/yarn"\n' >"$d/corepack"
+    chmod +x "$d/corepack"
+    if [ "${3-}" = with-yarn ]; then : >"$d/yarn"; fi
+  }
+  nbin() { printf '%s\n' "$1/.local/share/mise/installs/node/$2/bin"; }
+  corepack_lines() {  # corepack_lines <home>
+    grep -c '^corepack = true$' "$1/.config/mise/config.toml" 2>/dev/null || true
+  }
+
+  home_j="$sandbox/home_j"; mkdir -p "$home_j"
+  fake_node "$home_j" 98.0.0
+  fake_node "$home_j" 99.0.0 with-yarn
+  run "$repo/bin/deploy.sh" "$home_j"
+  run "$repo/bin/deploy.sh" "$home_j"
+  check "node.corepack is set to true, once across two runs" \
+    "$(if [ "$(sandboxed "$home_j" mise settings get node.corepack 2>/dev/null)" = true ] \
+         && [ "$(corepack_lines "$home_j")" -eq 1 ]
+       then echo 0; else echo 1; fi)"
+  check "an install without a yarn shim gets exactly one corepack enable" \
+    "$(if [ -e "$(nbin "$home_j" 98.0.0)/yarn" ] \
+         && [ "$(cat "$(nbin "$home_j" 98.0.0)/corepack.calls" 2>/dev/null)" = enable ]
+       then echo 0; else echo 1; fi)"
+  check "an install that already has a yarn shim is left alone" \
+    "$(if [ ! -e "$(nbin "$home_j" 99.0.0)/corepack.calls" ]; then echo 0; else echo 1; fi)"
+
+  # Controls: drop the setting, and drop the already-enabled check.
+  grep -v 'mise settings set node.corepack true' "$repo/bin/deploy.sh" >"$repo/bin/deploy-nocp.sh"
+  sed 's|^            \[ -e "${__node_dir}/bin/yarn" \] && continue$|            :|' \
+    "$repo/bin/deploy.sh" >"$repo/bin/deploy-reenable.sh"
+  chmod +x "$repo/bin/deploy-nocp.sh" "$repo/bin/deploy-reenable.sh"
+  check "the controls really differ from the script under test" \
+    "$(if ! cmp -s "$repo/bin/deploy.sh" "$repo/bin/deploy-nocp.sh" \
+         && ! cmp -s "$repo/bin/deploy.sh" "$repo/bin/deploy-reenable.sh"
+       then echo 0; else echo 1; fi)"
+  home_j2="$sandbox/home_j2"; mkdir -p "$home_j2"
+  run "$repo/bin/deploy-nocp.sh" "$home_j2"
+  check "without the setting line, node.corepack stays off" \
+    "$(if [ "$(sandboxed "$home_j2" mise settings get node.corepack 2>/dev/null)" != true ]
+       then echo 0; else echo 1; fi)"
+  home_j3="$sandbox/home_j3"; mkdir -p "$home_j3"
+  fake_node "$home_j3" 99.0.0 with-yarn
+  run "$repo/bin/deploy-reenable.sh" "$home_j3"
+  check "without the yarn check, an enabled install would be enabled again" \
+    "$(if [ -e "$(nbin "$home_j3" 99.0.0)/corepack.calls" ]; then echo 0; else echo 1; fi)"
+else
+  echo "skip: mise or jq not available; corepack shims not exercised"
+fi
+
 # --- Case I: githooks/post-merge is linked into the checkout's hooks/ --------
 # Only in a git checkout (the minimal one above has no .git, so the block is a
 # no-op there; that holds because sandbox.sh unsets GIT_DIR, which would

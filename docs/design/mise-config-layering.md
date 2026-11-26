@@ -32,6 +32,17 @@ dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を
 新しいマシンでは `bin/deploy.sh` を実行し、雛形として作られた `~/.config/gh/personal.env`
 （権限 600）の `GH_TOKEN` に個人 PAT を入れる。
 
+## node の package manager（corepack の yarn / pnpm）
+
+`packageManager` で yarn 等を固定した repo は、git hook や script から `yarn` を直接呼ぶ。
+`mise activate` が発火しない非対話 shell（background 委譲先を含む）でも、mise の node の `bin/` は
+daemon や `mise exec` 経由で PATH に載るので、corepack の shim がその `bin/` にあれば `yarn` は
+解決する。そこで `bin/deploy.sh` は mise の global setting `node.corepack` を `true` にし、以後の
+node の install で mise が `corepack enable` を走らせるようにする。この setting は install 時に
+しか効かないので、既に入っている version のうち `bin/yarn` が無いものには deploy が
+`corepack enable` を撃つ。shim を session ごとの一時ディレクトリに作って PATH に足す形は、PATH を
+整える手当てが session ごとに要るので採らない。
+
 ## 他 repo の DB 接続（`mise.db.local.toml`）
 
 `bin/db-query` は同じ二重ゲートを各 repo の DB 接続に当てる。値（usql の version、
