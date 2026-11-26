@@ -2,29 +2,21 @@
 #
 # gh-request-approval.sh -- gra_main <PR-number> <head-SHA> | --enabled
 #
-# For a PR whose head is <SHA>: check the gates, start the repo's approve
-# workflow, wait until an App has approved <SHA>, then enable auto-merge on the
-# PR. --enabled only reports whether the repo's settings exist and are usable.
+# For a PR whose head is <SHA>: check the gates, then start the repo's approve
+# workflow. It stops there: it neither waits for the approval nor merges.
+# --enabled only reports whether the repo's settings exist and are usable.
 #
 # Prerequisites: bin/lib/gh-mise.sh is sourced; jq and git are on PATH; the
-# caller has set gra_config_root (plain shell variables, not read from the
-# environment):
-#   gra_config_root   directory holding <OWNER>/<NAME>/{paths,workflow}; required
-#   gra_wait_timeout  seconds after which the wait for the approval gives up
-#                     (default 480; a poll started before the limit and one
-#                     interval of sleep can follow, so the worst case is about
-#                     500s plus the gh calls, under a 600s tool timeout)
-#   gra_wait_interval seconds between polls while waiting (default 15)
+# caller has set gra_config_root (a plain shell variable, not read from the
+# environment): the directory holding <OWNER>/<NAME>/{paths,workflow}.
 #
 # Every failure goes through gra_die, which prints one line to stderr and exits
 # with its code: 1 unexpected (arguments, gh failure or output), 3 settings
-# unusable, 4 a gate refused, 5 the head is not <SHA> or moved, 6 the workflow
-# did not start, 7 no approval within the limit, 8 enabling auto-merge failed.
+# unusable, 4 a gate refused, 5 the head is not <SHA>, 6 the workflow did not
+# start.
 
 gra_me=gh-request-approval
 gra_config_root=""
-gra_wait_timeout=480
-gra_wait_interval=15
 
 gra_die() { echo "$gra_me: $2" >&2; exit "$1"; }
 
@@ -163,48 +155,9 @@ gra_check_paths() {
     || gra_die 4 "git check-ignore judged $checked of $expected paths; refusing"
 }
 
-# gra_app_approvals <nwo> <pr> <sha> <author> -- prints how many Apps (review
-# author of type Bot, not <author>) have, as their latest review on <sha>, an
-# APPROVED one. Reviews are matched by commit_id, not by reviewDecision: in a
-# repo that keeps approvals after a push, reviewDecision stays APPROVED on an
-# approval of an older commit, which would let the wait pass for content that
-# was never approved.
-gra_app_approvals() {
-  local nwo="$1" pr="$2" sha="$3" author="$4" out
-  out="$(gh_mise api "repos/$nwo/pulls/$pr/reviews?per_page=100" --paginate \
-    --jq '.[] | {login: (.user.login // ""), type: (.user.type // ""), state, commit_id}')" \
-    || gra_die 1 "gh api pulls/$pr/reviews failed"
-  # Reviews come oldest first, so the last one per login on <sha> is its latest.
-  jq -ers --arg sha "$sha" --arg author "$author" \
-    '[.[] | select(.commit_id == $sha and .type == "Bot" and .login != "" and .login != $author)]
-     | group_by(.login) | map(last | select(.state == "APPROVED")) | length' <<<"$out" \
-    || gra_die 1 "unexpected pulls/$pr/reviews response"
-}
-
-# gra_enable_automerge <nwo> <pr> <sha> -- the gh-automerge contract, pinned to
-# <nwo> and <sha>: `gh pr merge --auto --merge`, and only when GitHub refuses
-# that because the PR is in clean status, a direct `gh pr merge --merge`.
-# --admin is never passed. Dies with 8 on any other failure.
-gra_enable_automerge() {
-  local nwo="$1" pr="$2" sha="$3" err rc=0
-  err="$(gh_mise pr merge "$pr" -R "$nwo" --auto --merge --match-head-commit "$sha" 2>&1)" || rc=$?
-  [ -z "$err" ] || printf '%s\n' "$err" >&2
-  if [ "$rc" -eq 0 ]; then
-    echo "$gra_me: enabled auto-merge on #$pr at $sha" >&2
-    return 0
-  fi
-  grep -qi 'clean status' <<<"$err" \
-    || gra_die 8 "enabling auto-merge on #$pr failed ($rc)"
-  echo "$gra_me: auto-merge refused (#$pr is in clean status); merging directly" >&2
-  gh_mise pr merge "$pr" -R "$nwo" --merge --match-head-commit "$sha" \
-    || gra_die 8 "merging #$pr directly failed"
-  echo "$gra_me: merged #$pr at $sha" >&2
-}
-
 # gra_check_pr_gate <nwo> <pr> <token login> <default branch> -- the PR is OPEN,
 # its author is the token's own login, it is not from a fork and its base is the
-# default branch. Sets gra_pr_author. Dies with 4 on a refusal.
-gra_pr_author=""
+# default branch. Dies with 4 on a refusal.
 gra_check_pr_gate() {
   local nwo="$1" pr="$2" me_login="$3" default_branch="$4"
   local pr_out author cross base state
@@ -216,12 +169,11 @@ gra_check_pr_gate() {
   [ "$author" = "$me_login" ] || gra_die 4 "#$pr is by '$author', not by the token's login $me_login"
   [ "$cross" = false ] || gra_die 4 "#$pr comes from a fork (isCrossRepository: $cross)"
   [ "$base" = "$default_branch" ] || gra_die 4 "#$pr targets '$base', not the default branch '$default_branch'"
-  gra_pr_author="$author"
 }
 
 gra_main() {
   local enabled_only=0 pr="" sha="" root repo_out nwo default_branch dir workflow paths_file
-  local me_login pr_out head state scratch started now elapsed approvals
+  local me_login head scratch
 
   case "${1:-}" in
     -h|--help) [ $# -eq 1 ] || gra_usage 1; gra_usage 0 ;;
@@ -285,31 +237,9 @@ gra_main() {
   [ "$head" = "$sha" ] || gra_die 5 "#$pr head is ${head:-unknown}, not $sha"
 
   # --- 5. approve workflow -------------------------------------------------
-  gh_mise workflow run "$workflow" -R "$nwo" --ref "$default_branch" -f pr="$pr" -f head_sha="$sha" \
+  # Fully qualified ref: a bare name is also resolved as a tag, and a same-named
+  # tag (which a pusher can create) would supply the workflow file and its secrets.
+  gh_mise workflow run "$workflow" -R "$nwo" --ref "refs/heads/$default_branch" -f pr="$pr" -f head_sha="$sha" \
     || gra_die 6 "starting $workflow for #$pr failed"
-  echo "$gra_me: started $workflow for #$pr at $sha; waiting for the approval" >&2
-
-  # --- 6. wait for the approval ---------------------------------------------
-  started=$(date -u +%s)
-  while :; do
-    pr_out="$(gh_mise pr view "$pr" -R "$nwo" --json headRefOid,state \
-      --jq '(.headRefOid // ""), (.state // "")')" \
-      || gra_die 1 "gh pr view #$pr failed while waiting"
-    { read -r head; read -r state; } <<<"$pr_out" || true
-    [ "$head" = "$sha" ] || gra_die 5 "#$pr head moved to ${head:-unknown} while waiting for the approval of $sha"
-    [ "$state" = OPEN ] || gra_die 4 "#$pr became ${state:-unknown} while waiting for the approval"
-    approvals="$(gra_app_approvals "$nwo" "$pr" "$sha" "$gra_pr_author")" || exit $?
-    [ "$approvals" -eq 0 ] || break
-    now=$(date -u +%s); elapsed=$((now - started))
-    [ "$elapsed" -lt "$gra_wait_timeout" ] \
-      || gra_die 7 "no App approval of $sha on #$pr after ${elapsed}s"
-    sleep "$gra_wait_interval"
-  done
-
-  # --- 7. auto-merge ---------------------------------------------------------
-  # A human may have opened a thread or requested changes while we waited.
-  gra_check_human_reviews "${nwo%%/*}" "${nwo#*/}" "$pr"
-  # The PR may have been retargeted or closed while we waited.
-  gra_check_pr_gate "$nwo" "$pr" "$me_login" "$default_branch"
-  gra_enable_automerge "$nwo" "$pr" "$sha"
+  echo "$gra_me: started $workflow for #$pr at $sha" >&2
 }
