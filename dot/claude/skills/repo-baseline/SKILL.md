@@ -35,6 +35,7 @@ doc の役割分担は `~/.claude/rules/repo-docs.md` が正典で、この skil
 | bypass list | 空（個人 repo） | owner が bypass できると、同じ identity の agent も bypass できる |
 | CI | 言語に合わせた lint + test の GitHub Actions。テスト対象が無くても空に近い workflow を置く | |
 | CD | deploy 先があれば方針を design doc に書く（実装はしない）。無ければ「CD 無し」と書く | 決めた結果として残すため |
+| main への直接 commit の早期検出 | その clone の `.git/hooks/pre-commit` に dotrc の `githooks/pre-commit` を symlink する | ruleset はサーバー側で塞ぐが、agent が気づくのは push で弾かれた時点になる。手元の hook なら commit した時点で気づかせられる |
 
 ## 手順
 
@@ -132,7 +133,27 @@ repo の言語に合わせた lint と test の workflow を `.github/workflows/
 無ければ、checkout だけの空に近い workflow でよい。CD は baseline の表のとおり design doc に
 方針か「CD 無し」を書く。
 
-### 6. doc
+### 6. pre-commit hook
+
+`.git/hooks/` は git 管理外なので、GitHub 側の設定とは別に clone ごとに入れる。手元の変更で外からは
+見えないが、他の項目と同じく差分（置き先と参照先）を提示し、承認された場合だけ入れる。
+
+```
+hooks="$(git rev-parse --path-format=absolute --git-path hooks)"
+dotrc="$(dirname "$(dirname "$(dirname "$(readlink -f ~/.claude/skills)")")")"
+ls -l "$hooks/pre-commit"   # 既にあるかを確かめる
+mkdir -p "$hooks" && ln -s "$dotrc/githooks/pre-commit" "$hooks/pre-commit"
+```
+
+- 置き先は `--git-path hooks` で解決する。linked worktree から実行しても共有の hooks dir を、
+  `core.hooksPath` が設定されていればその dir を指す
+- dotrc の checkout は `~/.claude/skills` の symlink の実体から辿る（`<dotrc>/dot/claude/skills`）。
+  `git rev-parse --show-toplevel` は対象 repo の root を返し、dotrc を指さない
+- `pre-commit` が既にあれば上書きせず、何があるか（通常ファイル・どこへの symlink か）を報告して
+  skip する。git-lfs や hook manager の hook を壊さないため。dotrc の `githooks/pre-commit` を指す
+  symlink が既にあれば入れ済みとして扱う
+
+### 7. doc
 
 - **新規 repo**: `README.md` / `CLAUDE.md` / `docs/design/` / `docs/incidents/` を短い雛形で作り、
   `docs/superpowers/`（作業中の spec / plan）を `.gitignore` に入れる。各 doc の中身は
@@ -140,7 +161,7 @@ repo の言語に合わせた lint と test の workflow を `.github/workflows/
 - **既存 repo**: 配置は動かさない。`repo-docs.md` の役割とずれている箇所（README に設計判断や
   経緯が入っている等）を指摘し、移す先の候補を示す。移すかどうかはユーザーが決める
 
-### 7. 委譲先用の allow
+### 8. 委譲先用の allow
 
 テスト実行など、委譲先でも要る定型の検証コマンドの allow を `<repo>/.claude/settings.json`
 （tracked）に置くことを提案する。置き場所の考え方は `claude-settings.md` の「3 層の使い分け」。
