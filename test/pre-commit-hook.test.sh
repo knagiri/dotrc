@@ -28,14 +28,15 @@ check() {  # check <description> <0-or-1>
   if [ "$2" = 0 ]; then echo "ok: $1"; else echo "FAIL: $1"; fail=1; fi
 }
 
-# Mutants, one condition removed each.
+# Mutants. Most remove one condition's line; the exceptions: nocommon removes
+# only the git-dir comparison (an intermediate for nolinked); nolinked removes
+# both halves of a (a double guard: a linked worktree fails each half, so
+# removing one changes nothing there); nofallback replaces the main fallback
+# with a no-op instead of deleting it.
 mut="$tmp/mutants"; mkdir -p "$mut"
 grep -v '^\[ -n "\${CLAUDECODE:-}" \] || exit 0$' "$hook" >"$mut/noenv"
 grep -v '^\[ "\$common" = "\$gitdir" \] || exit 0$' "$hook" >"$mut/nocommon"
 grep -v '^\[ -d "\$top/.git" \] || exit 0$' "$hook" >"$mut/nodotgit"
-# A linked worktree fails both a's halves (the git dirs differ and its .git is
-# a file), so removing one half alone changes nothing there: a double guard,
-# checked by removing both.
 grep -v '^\[ -d "\$top/.git" \] || exit 0$' "$mut/nocommon" >"$mut/nolinked"
 grep -v '^\[ "\$branch" = "\$target" \] || exit 0$' "$hook" >"$mut/nobranch"
 sed 's|^\[ -n "\$target" \] \|\| target=main$|:|' "$hook" >"$mut/nofallback"
@@ -72,11 +73,15 @@ clone_with_remote() {
   git clone -q "$d/remote.git" "$d/work"
 }
 
-# try_commit <cwd> <claudecode> [command]: runs <command> (default
-# `git commit -m x` after staging a change) from <cwd> with CLAUDECODE set to
-# <claudecode> (empty: unset). Prints "landed" or "refused"; stderr goes to
-# $tmp/last.err. The repo whose HEAD is watched is the dir the command commits
-# in, given as <repo> in the 4th argument (default <cwd>).
+# try_commit <cwd> <claudecode> [command] [repo]: runs <command> (default
+# `git commit -q -m x` after staging a change) from <cwd> with CLAUDECODE set
+# to <claudecode> (empty: unset). Prints one of:
+#   landed   HEAD moved
+#   refused  HEAD did not move and stderr carries the hook's refusal message
+#   failed   HEAD did not move for any other reason (a broken fixture or
+#            mutant), so a "refused" expectation cannot pass on it by accident
+# stderr goes to $tmp/last.err. The repo whose HEAD is watched is the dir the
+# command commits in, given as [repo] (default <cwd>).
 try_commit() {
   local cwd="$1" cc="$2" cmd="${3:-git commit -q -m x}" repo="${4:-$1}" before after
   echo "$RANDOM" >>"$repo/change.txt"
@@ -88,7 +93,9 @@ try_commit() {
     (cd "$cwd" && bash -c "$cmd") >/dev/null 2>"$tmp/last.err"
   fi
   after="$(git -C "$repo" rev-parse -q --verify HEAD)"
-  if [ -n "$after" ] && [ "$after" != "$before" ]; then echo landed; else echo refused; fi
+  if [ -n "$after" ] && [ "$after" != "$before" ]; then echo landed
+  elif grep -qF 'pre-commit: commit を止めた' "$tmp/last.err"; then echo refused
+  else echo failed; fi
 }
 
 # --- scenarios: each prints landed/refused ---------------------------------
@@ -133,9 +140,10 @@ s_linked_main() {
   try_commit "$tmp/lm-$1/wt" 1
 }
 
-# The false positive of the PreToolUse guard: the session's cwd is the main
-# checkout (on main), and the commit runs after `cd` into a linked worktree
-# on a feature branch.
+# The session's cwd is the main checkout (on main), and the commit runs after
+# `cd` into a linked worktree on a feature branch: it lands, because the hook
+# judges the repo the commit runs in, not the cwd. Background:
+# docs/incidents/pre-tool-use-commit-guard-misses-cd.md.
 s_cd_into_linked() {
   clone_with_remote "$tmp/cd-$1" main
   git -C "$tmp/cd-$1/work" worktree add -q -b feat "$tmp/cd-$1/wt"

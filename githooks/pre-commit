@@ -3,7 +3,9 @@
 # branch of a main working tree.
 #
 # Runs only when CLAUDECODE is non-empty (Claude Code sets it in the shells it
-# starts); a human's commit always passes. Otherwise the commit is refused
+# starts); a commit from a shell where it is empty passes. That includes a
+# human's, but a commit typed from a shell that inherited CLAUDECODE (e.g. a
+# `!` command inside Claude Code) is refused too. Otherwise the commit is refused
 # (stderr message, exit 1) when all of these hold, and passes when any fails:
 #   a. the repo the commit runs in is a main working tree: --git-common-dir
 #      equals --git-dir, and <toplevel>/.git is a directory (a submodule's
@@ -14,6 +16,10 @@
 #   d. HEAD exists (the first commit of a new repo is not refused)
 # git runs the hook inside the repo the commit lands in, so these are judged
 # there; nothing is inferred from how the commit was invoked.
+#
+# Known limit: only `git commit` (including --amend) runs this hook.
+# cherry-pick / revert (the sequencer does not verify), merge (pre-merge-commit)
+# and am (pre-applypatch) pass through; the server-side ruleset blocks those.
 #
 # There is no approval or override path: the hook has no case in which it
 # lets such a commit through. `git commit --no-verify` skips it, as it skips

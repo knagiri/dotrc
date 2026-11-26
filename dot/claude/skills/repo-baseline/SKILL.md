@@ -141,12 +141,21 @@ repo の言語に合わせた lint と test の workflow を `.github/workflows/
 ```
 hooks="$(git rev-parse --path-format=absolute --git-path hooks)"
 dotrc="$(dirname "$(dirname "$(dirname "$(readlink -f ~/.claude/skills)")")")"
+git config --show-origin core.hooksPath   # 設定されていれば symlink しない（下記）
+git symbolic-ref -q refs/remotes/origin/HEAD || git remote set-head origin --auto
 ls -l "$hooks/pre-commit"   # 既にあるかを確かめる
 mkdir -p "$hooks" && ln -s "$dotrc/githooks/pre-commit" "$hooks/pre-commit"
 ```
 
-- 置き先は `--git-path hooks` で解決する。linked worktree から実行しても共有の hooks dir を、
-  `core.hooksPath` が設定されていればその dir を指す
+- 置き先は `--git-path hooks` で解決する。linked worktree から実行しても共有の hooks dir を指す
+- `git config --show-origin core.hooksPath` が値を返す（設定されている）なら symlink せず、設定元と
+  値を報告して skip する。global や repo 外の共有 dir を指していると、baseline を当てていない全 repo
+  の agent commit が拒否される。repo 内の tracked dir（`.githooks/` や husky 等）なら working tree 内に
+  untracked な symlink ができ誤 commit されうる。`bin/deploy.sh` の post-merge は無害な hook なので共有
+  dir でも許容しているが、pre-commit は commit を拒否する hook なので当てはまらない
+- `origin/HEAD` が未設定（`git symbolic-ref -q refs/remotes/origin/HEAD` が失敗）の repo では、hook が
+  統合先を `main` に固定して判定し、統合先が `main` 以外だと黙って素通りする。先に
+  `git remote set-head origin --auto` で設定する（上の例に含めてある）
 - dotrc の checkout は `~/.claude/skills` の symlink の実体から辿る（`<dotrc>/dot/claude/skills`）。
   `git rev-parse --show-toplevel` は対象 repo の root を返し、dotrc を指さない
 - `pre-commit` が既にあれば上書きせず、何があるか（通常ファイル・どこへの symlink か）を報告して

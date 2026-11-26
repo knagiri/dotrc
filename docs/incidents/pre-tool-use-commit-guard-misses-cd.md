@@ -17,7 +17,7 @@ commit 先は linked worktree の feature branch なのに「main に直接 comm
 ## 観測
 
 使い捨て repo（`r` は main を checkout した main working tree、`r/.worktrees/wt` は feat を
-checkout した linked worktree）で、旧 hook（`git show origin/main:bin/claude-hook-git-guard`）に
+checkout した linked worktree）で、旧 hook（commit 判定を持つ最後の commit f5eaa70 の `git show f5eaa70:bin/claude-hook-git-guard`）に
 PreToolUse の入力を与えた。
 
 ```
@@ -41,8 +41,9 @@ exit=1
 
 検出を git の pre-commit hook（`githooks/pre-commit`）へ移した。git は hook を commit 先の repo の
 中で実行するので、判定条件（main working tree・統合先 branch・origin がある・HEAD がある）は
-旧 hook と同じまま、dir の推測だけが無くなる。`CLAUDECODE` が空なら何もしないので、人間の commit
-は妨げない。
+旧 hook と同じまま、dir の推測だけが無くなる。`CLAUDECODE` が空なら何もしない。判定は環境変数だけなので、`CLAUDECODE` が空の shell からの
+commit（通常の人間の commit）は妨げないが、Claude Code の `!` 実行など `CLAUDECODE` が載った
+shell からの commit は人間のものでも拒否される。
 
 承認を求める形をやめ、拒否（exit 1）にした。pre-commit には承認プロンプトを出す経路が無く、
 main への直接 commit を許す正当な場面も無いため。§5 の例外（「この場でやって」）でも branch を
@@ -50,7 +51,8 @@ main への直接 commit を許す正当な場面も無いため。§5 の例外
 
 main への混入そのものは repo-baseline の ruleset（PR 必須・直接 push 不可）がサーバー側で塞いで
 いる。pre-commit の役割は push で弾かれる前に commit の時点で気づかせることだけなので、
-`--no-verify` で回避できることは許容する。導入範囲は baseline を当てた repo の clone とし、
+`--no-verify` で回避できることは許容する。同じく `git commit`（`--amend` 含む）でしか走らないので、
+cherry-pick / revert・merge・am 経由で main に積まれる commit は通る（これも ruleset が塞ぐ）。導入範囲は baseline を当てた repo の clone とし、
 repo-baseline skill の手順で clone ごとに `.git/hooks/pre-commit` へ symlink する。
 
 global な `core.hooksPath` に置く案は採らなかった。global に設定すると各 repo の `.git/hooks` を
