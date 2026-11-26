@@ -49,7 +49,7 @@ set -euo pipefail
 #             (`src/` then `!src/x` still allows src/x); write `src/*` for the
 #             negation to take effect.
 # The repo counts as enabled only when both files exist. The workflow takes the
-# inputs `pr` and `head_sha` and is started on the default branch.
+# inputs `pr` and `head_sha` and is started on the default branch (`refs/heads/<default>`, not a bare name a tag could shadow).
 #
 # Gates, in this order (all before the workflow is started):
 #   1. the PR is OPEN, its author is the token's own login, it is not from a
@@ -65,7 +65,7 @@ set -euo pipefail
 #      or a `.claude/` at any depth, is a root or `docs/` CODEOWNERS, or starts
 #      with ':' (all case-insensitive), whatever `paths` says
 #   4. the PR head is <SHA>
-# Then: `gh workflow run <workflow> -R <nwo> --ref <default> -f pr=<PR>
+# Then: `gh workflow run <workflow> -R <nwo> --ref refs/heads/<default> -f pr=<PR>
 # -f head_sha=<SHA>`; wait, polling every 15s and giving up once 480s have
 # passed (at most about 500s plus the gh calls, under the Bash tool's 600s), until an App
 # (a review author of type Bot other than the PR author) has an APPROVED review

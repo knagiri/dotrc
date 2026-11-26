@@ -285,7 +285,9 @@ gra_main() {
   [ "$head" = "$sha" ] || gra_die 5 "#$pr head is ${head:-unknown}, not $sha"
 
   # --- 5. approve workflow -------------------------------------------------
-  gh_mise workflow run "$workflow" -R "$nwo" --ref "$default_branch" -f pr="$pr" -f head_sha="$sha" \
+  # Fully qualified ref: a bare name is also resolved as a tag, and a same-named
+  # tag (which a pusher can create) would supply the workflow file and its secrets.
+  gh_mise workflow run "$workflow" -R "$nwo" --ref "refs/heads/$default_branch" -f pr="$pr" -f head_sha="$sha" \
     || gra_die 6 "starting $workflow for #$pr failed"
   echo "$gra_me: started $workflow for #$pr at $sha; waiting for the approval" >&2
 

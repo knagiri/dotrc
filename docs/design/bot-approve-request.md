@@ -9,7 +9,7 @@ approve を 1 件必須にしている repo では、agent が作った PR は `
 
 ## repo 側ワークフローとの契約
 
-ワークフローは inputs に `pr`（PR 番号）と `head_sha`（40 桁）を取り、default branch の ref から起動される。
+ワークフローは inputs に `pr`（PR 番号）と `head_sha`（40 桁）を取り、default branch の ref（`refs/heads/<default>`。裸の名前だと同名の tag に解決されうる）から起動される。
 起動者の allowlist、起動者 = PR author、open / base が default branch / fork でない、head が `head_sha` と
 一致、`.github/` `.claude/` を含まない、を検査し、通れば `head_sha` に固定して APPROVE する。dotrc 側の
 ゲートはこれと重なるが、ワークフロー側の検査は dotrc が手を出せない最後の砦なので、どちらか一方に寄せない。

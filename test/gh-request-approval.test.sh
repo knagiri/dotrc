@@ -150,7 +150,7 @@ started() { called 'workflow run'; }
 reset_state
 gra "$bindir/lib" -- 42 "$sha"
 if [ "$rc" -eq 0 ] \
-  && [ "$(grep '^workflow run' "$tmp/log")" = "workflow run approve.yml -R $nwo --ref main -f pr=42 -f head_sha=$sha" ] \
+  && [ "$(grep '^workflow run' "$tmp/log")" = "workflow run approve.yml -R $nwo --ref refs/heads/main -f pr=42 -f head_sha=$sha" ] \
   && [ "$(grep '^pr merge' "$tmp/log")" = "pr merge 42 -R $nwo --auto --merge --match-head-commit $sha" ] \
   && ! grep -q -- '--admin' "$tmp/log" \
   && grep -qFx "api repos/$nwo/branches/main --jq .commit.sha" "$tmp/log" \
