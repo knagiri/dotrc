@@ -135,6 +135,8 @@ gra_check_paths() {
       git -c core.excludesFile=/dev/null -c core.ignoreCase=false "$@"
   }
   gra_scratch_git init -q "$scratch/repo" || gra_die 1 "git init failed in the scratch dir"
+  # A git without a template dir does not create info/.
+  mkdir -p "$scratch/repo/.git/info" || gra_die 1 "cannot create info/ in the scratch repo"
   cp "$list" "$scratch/repo/.git/info/exclude" || gra_die 3 "cannot read $list"
 
   rc=0

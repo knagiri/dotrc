@@ -9,9 +9,8 @@ set -euo pipefail
 #   they are unusable. Resolves the repo with `gh repo view`; touches no PR.
 #
 # These two forms (and -h/--help, which prints the usage and exits 0) are all it
-# accepts: <PR#> is a number, <SHA> 40
-# lower-case hex digits, and no option is passed through to gh. It never passes
-# --admin: the approval comes from the repo's own workflow (a GitHub App
+# accepts: <PR#> is a number, <SHA> 40 lower-case hex digits, and no option is
+# passed through to gh. It never passes --admin: the approval comes from the repo's own workflow (a GitHub App
 # approving <SHA>), and the merge is left to GitHub's auto-merge, so required
 # checks and every other branch protection rule still apply.
 #

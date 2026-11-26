@@ -37,7 +37,7 @@ auto-merge を張っておくと、後で人が approve した時点でゲート
 - **env を空にして自分を re-exec する。** 冒頭で `env -i` により `HOME`（getent 由来）・固定の `PATH`・
   re-exec 済みの印だけを渡して自分を起動し直す。`XDG_CONFIG_HOME`、`PATH` の前置、`GH_*`、`GIT_*`、
   `MISE_*` などは効かない。shebang は `#!/bin/bash -p` で、caller の PATH から bash を引かず、privileged
-  mode が export された関数（`BASH_FUNC_*`）の取り込みと `BASH_ENV` / `ENV` / `SHELLOPS` などの読み込みを
+  mode が export された関数（`BASH_FUNC_*`）の取り込みと `BASH_ENV` / `ENV` / `SHELLOPTS` などの読み込みを
   止める。印があるのに他の export 変数が残っていれば止まる。印を偽れば掃除は飛ばせるが、その場合も
   読まれる変数は残らない。待機の上限を env で変えられないのはこの帰結で、定数にしている（480 秒。最後の
   poll と 1 interval を足しても Bash tool の上限 600 秒に収まる）。
