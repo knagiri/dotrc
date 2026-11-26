@@ -25,6 +25,7 @@ tmp="$(cd "$tmp" && pwd -P)"
 
 sha="$(printf '%040d' 0 | tr 0 a)"
 other_sha="$(printf '%040d' 0 | tr 0 b)"
+base_sha="$(printf '%040d' 0 | tr 0 c)"
 nwo=example-org/example-repo
 no_threads='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]},"latestOpinionatedReviews":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}'
 thread_json() {  # thread_json <isResolved> <__typename of the first comment's author>
@@ -67,17 +68,18 @@ case "$1 $2" in
   "api user") emit "{\"login\":\"$(cat "$GRA_STATE/login")\"}" ;;
   "api graphql") pop threads ;;
   "api repos/"*/pulls/*/reviews*) emit "$(pop reviews)" ;;
-  "api repos/"*/branches/*) emit "{\"commit\":{\"sha\":\"$(printf "%040d" 0 | tr 0 c)\"}}" ;;
+  "api repos/"*/branches/*) emit "{\"commit\":{\"sha\":\"$(cat "$GRA_STATE/branch_sha")\"}}" ;;
   "api repos/"*compare/*) jq -c '{files: .}' "$GRA_STATE/files.json" ;;
   "pr view")
-    pr="$(cat "$GRA_STATE/pr.json")"
-    case "$*" in *headRefOid*) pr="$(jq -c --arg h "$(pop heads)" '.headRefOid = $h' <<<"$pr")" ;; esac
-    emit "$pr" ;;
+    case "$*" in
+      *headRefOid*) emit "$(jq -cn --arg h "$(pop heads)" --arg s "$(pop states)" '{headRefOid: $h, state: $s}')" ;;
+      *) emit "$(pop gate1)" ;;
+    esac ;;
   "workflow run") exit "$(cat "$GRA_STATE/workflow_rc")" ;;
   "pr merge")
     case "$*" in
       *--auto*) m="$(cat "$GRA_STATE/auto_msg")"; [ -z "$m" ] || echo "$m" >&2; exit "$(cat "$GRA_STATE/auto_rc")" ;;
-      *) exit 0 ;;
+      *) exit "$(cat "$GRA_STATE/direct_rc")" ;;
     esac ;;
   *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;
 esac
@@ -106,8 +108,9 @@ reset_state() {
   printf 'docs/\n' >"$conf/paths"
   printf '%s\n' "{\"nameWithOwner\":\"$nwo\",\"defaultBranchRef\":{\"name\":\"main\"}}" >"$state/repo.json"
   echo example-bot >"$state/login"
-  printf '%s\n' '{"author":{"login":"example-bot"},"isCrossRepository":false,"baseRefName":"main","state":"OPEN"}' >"$state/pr.json"
-  echo "$sha" >"$state/heads"
+  printf '%s\n' '{"author":{"login":"example-bot"},"isCrossRepository":false,"baseRefName":"main","state":"OPEN"}' >"$state/gate1"
+  echo "$sha" >"$state/heads"; echo OPEN >"$state/states"
+  echo "$base_sha" >"$state/branch_sha"; echo 0 >"$state/direct_rc"
   printf '[]\n%s\n' "$(app_review APPROVED "$sha")" >"$state/reviews"
   printf '%s\n' "$no_threads" >"$state/threads"
   echo 0 >"$state/workflow_rc"
@@ -117,10 +120,11 @@ reset_state() {
 # app_review <state> <commit_id> [<login> [<type>]] -> a one-review JSON array as
 # the REST pulls/<N>/reviews endpoint returns it (the App by default).
 app_review() {
-  jq -cn --arg s "$1" --arg c "$2" --arg l "${3:-example-approver[bot]}" --arg t "${4:-Bot}" \
+  jq -cn --arg s "$1" --arg c "$2" --arg l "${3-example-approver[bot]}" --arg t "${4:-Bot}" \
     '[{user:{login:$l, type:$t}, state:$s, commit_id:$c}]'
 }
-pr_set() { jq -c "$1" "$state/pr.json" >"$state/pr.next" && mv "$state/pr.next" "$state/pr.json"; }
+# pr_set <jq filter>: applies it to every queued PR-gate response (the PR fields gate 1 reads).
+pr_set() { jq -c "$1" "$state/gate1" >"$state/gate1.next" && mv "$state/gate1.next" "$state/gate1"; }
 
 # gra <libdir> -- <args...>: runs gra_main from the worktree; rc in $rc, stderr in $tmp/err.
 # timeout: a mutant without a working wait limit would otherwise poll forever.
@@ -148,8 +152,10 @@ gra "$bindir/lib" -- 42 "$sha"
 if [ "$rc" -eq 0 ] \
   && [ "$(grep '^workflow run' "$tmp/log")" = "workflow run approve.yml -R $nwo --ref main -f pr=42 -f head_sha=$sha" ] \
   && [ "$(grep '^pr merge' "$tmp/log")" = "pr merge 42 -R $nwo --auto --merge --match-head-commit $sha" ] \
-  && ! grep -q -- '--admin' "$tmp/log"; then
-  echo "ok: happy path starts the workflow and enables auto-merge through the stub, pinned to -R and the SHA, no --admin"
+  && ! grep -q -- '--admin' "$tmp/log" \
+  && grep -qFx "api repos/$nwo/branches/main --jq .commit.sha" "$tmp/log" \
+  && grep -qFx "api repos/$nwo/compare/$base_sha...$sha" "$tmp/log"; then
+  echo "ok: happy path starts the workflow and enables auto-merge through the stub, pinned to -R and the SHA, no --admin; the compare is base-commit...SHA"
 else echo "FAIL: happy path rc=$rc log=$(cat "$tmp/log") err=$(cat "$tmp/err")"; fail=1; fi
 
 # --- checks, as functions so mutants can rerun them ---------------------------
@@ -179,6 +185,10 @@ ck_enabled() {  # --enabled: 0 with both files, 4 without, 3 unusable; never tou
     reset_state; printf '%s\n' "$w" >"$conf/workflow"; gra "$1" -- --enabled
     [ "$rc" -eq 3 ] || return 1
   done
+  reset_state; chmod 000 "$conf"; gra "$1" -- --enabled; local r3=$rc; chmod 700 "$conf"
+  [ "$r3" -eq 3 ] || return 1
+  reset_state; rm "$conf/paths"; mkdir "$conf/paths"; gra "$1" -- --enabled
+  [ "$rc" -eq 3 ] || return 1
   reset_state; printf '# the approve workflow\n\napprove.yaml\n' >"$conf/workflow"
   gra "$1" -- --enabled; [ "$rc" -eq 0 ]
 }
@@ -197,12 +207,13 @@ ck_pr_gate() {  # state / author / fork / base -> 4 before the workflow
 ck_human() {  # human threads / CHANGES_REQUESTED -> 4; bot ones and resolved ones pass
   local t
   for t in "$(thread_json false User)" "$(review_json CHANGES_REQUESTED User)" \
-           "$(review_json CHANGES_REQUESTED null)" \
+           "$(review_json CHANGES_REQUESTED null)" "$(review_json CHANGES_REQUESTED Bot)" \
+           "$(jq -c '.data.repository.pullRequest.latestOpinionatedReviews.pageInfo.hasNextPage = true' <<<"$no_threads")" \
            "$(jq -c '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage = true' <<<"$no_threads")"; do
     reset_state; printf '%s\n' "$t" >"$state/threads"; gra "$1" -- 42 "$sha"
     [ "$rc" -eq 4 ] && ! started || return 1
   done
-  for t in "$(thread_json false Bot)" "$(thread_json true User)" "$(review_json CHANGES_REQUESTED Bot)"; do
+  for t in "$(thread_json false Bot)" "$(thread_json true User)" "$(review_json APPROVED Bot)"; do
     reset_state; printf '%s\n' "$t" >"$state/threads"; gra "$1" -- 42 "$sha"
     [ "$rc" -eq 0 ] || return 1
   done
@@ -214,7 +225,8 @@ ck_human_late() {  # a human thread that appears while waiting stops the merge
 }
 ck_paths() {  # changed files outside the list, or under .github/ .claude/ -> 4
   local p
-  for p in src/a.sh .github/workflows/ci.yml .GitHub/x docs/.claude/settings.json; do
+  for p in src/a.sh .github/workflows/ci.yml .GitHub/x docs/.claude/settings.json .claude/settings.json \
+           CODEOWNERS docs/CODEOWNERS docs/codeowners; do
     reset_state; printf 'docs/\n.github/\n*\n' >"$conf/paths"
     [ "$p" = src/a.sh ] && printf 'docs/\n' >"$conf/paths"
     files_of docs/a.md "$p"; gra "$1" -- 42 "$sha"
@@ -223,6 +235,11 @@ ck_paths() {  # changed files outside the list, or under .github/ .claude/ -> 4
   reset_state; jq -c '. + [{filename: "docs/b.md", previous_filename: "src/b.md", status: "renamed"}]' \
     "$state/files.json" >"$state/f" && mv "$state/f" "$state/files.json"
   gra "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! started || return 1
+  for p in ':/docs/x' ':(top)docs/y'; do
+    reset_state; printf '/docs/\n' >"$conf/paths"; files_of "$p"; gra "$1" -- 42 "$sha"
+    [ "$rc" -eq 4 ] && ! started || return 1
+  done
+  reset_state; printf '[]\n' >"$state/files.json"; gra "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! started || return 1
   reset_state; printf 'docs/*\n!docs/secret.md\n' >"$conf/paths"; files_of docs/secret.md
   gra "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! started || return 1
   reset_state; printf '# nothing yet\n\n' >"$conf/paths"
@@ -253,6 +270,7 @@ ck_wait() {  # merge only after an App approves <SHA> itself; otherwise -> 7, no
   for r in '[]' "$(app_review APPROVED "$other_sha")" \
            "$(app_review APPROVED "$sha" someone User)" \
            "$(app_review APPROVED "$sha" example-bot Bot)" \
+           "$(app_review APPROVED "$sha" "" Bot)" \
            "$(app_review DISMISSED "$sha")" \
            "$(jq -c '. + $n' --argjson n "$(app_review CHANGES_REQUESTED "$sha")" <<<"$(app_review APPROVED "$sha")")"; do
     reset_state; printf '%s\n' "$r" >"$state/reviews"; gra "$1" -- 42 "$sha"
@@ -271,10 +289,53 @@ ck_merge() {  # clean refusal -> direct merge pinned to the SHA; other failures 
   reset_state; echo 1 >"$state/auto_rc"
   echo 'X GraphQL: Required status check "build" is expected' >"$state/auto_msg"
   gra "$1" -- 42 "$sha"
-  [ "$rc" -eq 8 ] && [ "$(grep -c '^pr merge' "$tmp/log")" -eq 1 ]
+  [ "$rc" -eq 8 ] && [ "$(grep -c '^pr merge' "$tmp/log")" -eq 1 ] || return 1
+  reset_state; echo 1 >"$state/auto_rc"; echo 1 >"$state/direct_rc"
+  echo 'X GraphQL: Pull request is in clean status (enablePullRequestAutoMerge)' >"$state/auto_msg"
+  gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 8 ] && [ "$(grep -c '^pr merge' "$tmp/log")" -eq 2 ]
 }
 
-checks="ck_mainroot ck_args ck_enabled ck_notenabled ck_pr_gate ck_human ck_human_late ck_paths ck_head ck_workflow_fail ck_wait ck_merge"
+ck_calls() {  # owner/name/pr reach the graphql query; every pr view is pinned with -R
+  reset_state; gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] && grep -qF -- "-f owner=example-org -f name=example-repo -F pr=42" "$tmp/log" \
+    && [ "$(grep -c '^pr view' "$tmp/log")" -gt 0 ] \
+    && [ -z "$(grep '^pr view' "$tmp/log" | grep -vF -- "-R $nwo")" ]
+}
+ck_compare_pin() {  # the compare is base-commit...SHA; a branch response that is no commit is refused
+  reset_state; gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 0 ] && grep -qFx "api repos/$nwo/branches/main --jq .commit.sha" "$tmp/log" \
+    && grep -qFx "api repos/$nwo/compare/$base_sha...$sha" "$tmp/log" || return 1
+  reset_state; echo main >"$state/branch_sha"; gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 1 ] && ! called 'api repos/.*/compare/' && ! started
+}
+ck_login() {  # no token login and a deleted PR author must not match each other
+  reset_state; echo >"$state/login"; pr_set '.author = null'; gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 1 ] && ! started
+}
+ck_repoview() {  # an unusable repo view -> 1 before anything else
+  local j
+  for j in "{\"nameWithOwner\":\"example-org/..\",\"defaultBranchRef\":{\"name\":\"main\"}}" \
+           "{\"nameWithOwner\":\"$nwo\",\"defaultBranchRef\":null}"; do
+    reset_state; printf '%s\n' "$j" >"$state/repo.json"; gra "$1" -- 42 "$sha"
+    [ "$rc" -eq 1 ] && ! started || return 1
+  done
+}
+ck_graphql_null() {  # a null pullRequest is no review state -> 1, no workflow
+  reset_state; printf '%s\n' '{"data":{"repository":{"pullRequest":null}}}' >"$state/threads"
+  gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 1 ] && ! started
+}
+ck_gate_late() {  # the PR gate is checked again after the wait: retargeted or closed meanwhile -> 4, no merge
+  reset_state
+  printf '%s\n%s\n' "$(cat "$state/gate1")" "$(jq -c '.baseRefName = "release"' "$state/gate1")" >"$state/gate1"
+  gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 4 ] && started && ! merged || return 1
+  reset_state; printf 'OPEN\nCLOSED\n' >"$state/states"; gra "$1" -- 42 "$sha"
+  [ "$rc" -eq 4 ] && started && ! merged
+}
+
+checks="ck_mainroot ck_args ck_enabled ck_notenabled ck_pr_gate ck_human ck_human_late ck_paths ck_head ck_workflow_fail ck_wait ck_merge ck_calls ck_compare_pin ck_login ck_repoview ck_graphql_null ck_gate_late"
 for c in $checks; do
   if "$c" "$bindir/lib"; then echo "ok: $c"
   else echo "FAIL: $c rc=$rc log=$(cat "$tmp/log") err=$(cat "$tmp/err")"; fail=1; fi
@@ -325,6 +386,20 @@ expect_broken nocommitpin 's|select(.commit_id == \$sha and |select(|' ck_wait
 expect_broken nobottype 's| and .type == "Bot"||' ck_wait
 expect_broken noauthorlogin 's| and .login != \$author||' ck_wait
 expect_broken nolatest 's|map(last \| select|map(.[] \| select|' ck_wait
+expect_broken nocolon 's|^      :\*) gra_die 4|      :nothing*) gra_die 4|' ck_paths
+expect_broken nocodeowners 's/^      codeowners|docs\/codeowners) gra_die 4/      codeowners-nothing) gra_die 4/' ck_paths
+expect_broken nodocscodeowners 's/codeowners|docs\/codeowners) gra_die 4/codeowners) gra_die 4/' ck_paths
+expect_broken nozerofiles 's|\[ "\$nfiles" -gt 0 \]|true|' ck_paths
+expect_broken nobotcr 's|select(.state == "CHANGES_REQUESTED")\]|select(.state == "CHANGES_REQUESTED" and .author.__typename != "Bot")]|' ck_human
+expect_broken nocompareban 's|api "repos/\$nwo/compare/\$base_sha\.\.\.\$sha"|api "repos/$nwo/compare/$base...$sha"|' ck_compare_pin
+expect_broken nobasehex 's|\[\[ "\$base_sha" =~ ^\[0-9a-f\]{40}\$ \]\] \|\||true \|\||' ck_compare_pin
+expect_broken nodirectrc 's,|| gra_die 8 "merging #\$pr directly failed",|| true,' ck_merge
+expect_broken nogaterecheck '/# The PR may have been retargeted/{n;s|^|: |}' ck_gate_late
+expect_broken norinpr 's|gh_mise pr view "\$pr" -R "\$nwo" --json headRefOid,state|gh_mise pr view "$pr" --json headRefOid,state|' ck_calls
+expect_broken nologin 's|\[ -n "\$me_login" \] \|\| gra_die 1|true \|\| gra_die 1|' ck_login
+expect_broken nodotdot 's,|\*/\.\./\*) gra_die,|*/.nothing/*) gra_die,' ck_repoview
+expect_broken nodefaultbranch 's|\[ -n "\$default_branch" \] \|\| gra_die 1|true \|\| gra_die 1|' ck_repoview
+expect_broken nobotlogin 's| and \.login != "" and \.login != \$author| and .login != $author|' ck_wait
 expect_broken nocleanonly "s|grep -qi 'clean status' <<<\"\\\$err\"|true|" ck_merge
 
 # --- token resolution with the real mise --------------------------------------
@@ -405,7 +480,19 @@ ck_entry_forged() {  # a forged marker with a dirty environment is refused befor
     "$1/gh-request-approval" -h) >/dev/null 2>"$tmp/err" || rc=$?
   [ "$clean_rc" -eq 0 ] && [ "$rc" -eq 1 ] && grep -q 'despite DOTRC_GH_REQUEST_APPROVAL_CLEAN' "$tmp/err"
 }
-for c in ck_entry_help ck_entry_path ck_entry_forged; do
+ck_entry_bashhooks() {  # an exported function (even with a forged marker) and BASH_ENV never run in either bash
+  local fixed="$real_home/.local/bin:$real_home/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin"
+  : >"$tmp/leak.log"; rc=0
+  (cd "$tmp/nogit" && env -i DOTRC_GH_REQUEST_APPROVAL_CLEAN=1 HOME="$real_home" PATH="$fixed" \
+    "BASH_FUNC_dirname%%=() { echo LEAKED dirname >>\"$tmp/leak.log\"; }" \
+    "$1/gh-request-approval" -h) >/dev/null 2>"$tmp/err" || rc=$?
+  [ "$rc" -eq 0 ] && [ ! -s "$tmp/leak.log" ] || return 1
+  printf 'echo LEAKED BASH_ENV >>"%s"\n' "$tmp/leak.log" >"$tmp/bashenv"
+  : >"$tmp/leak.log"; rc=0
+  (cd "$tmp/nogit" && env BASH_ENV="$tmp/bashenv" "$1/gh-request-approval" -h) >/dev/null 2>"$tmp/err" || rc=$?
+  [ "$rc" -eq 0 ] && [ ! -s "$tmp/leak.log" ]
+}
+for c in ck_entry_help ck_entry_path ck_entry_forged ck_entry_bashhooks; do
   if "$c" "$bindir"; then echo "ok: $c"
   else echo "FAIL: $c rc=$rc err=$(cat "$tmp/err") leak=$(cat "$tmp/leak.log" 2>/dev/null)"; fail=1; fi
 done
@@ -420,6 +507,10 @@ entry_mutant() {  # entry_mutant <name> <sed expression>; the mutant's bin dir i
   fi
   bash -n "$d/gh-request-approval" || { echo "FAIL: entry mutant '$1' does not parse"; fail=1; }
 }
+entry_mutant nopriv '1s|^#!/bin/bash -p$|#!/usr/bin/env bash|'; d="$tmp/emutant-nopriv"
+if ! ck_entry_bashhooks "$d"; then
+  echo "ok: entry mutant 'nopriv' runs an exported function or BASH_ENV (ck_entry_bashhooks is discriminating)"
+else echo "FAIL: entry mutant 'nopriv' still passed ck_entry_bashhooks"; fail=1; fi
 # Without the re-exec the dirty-environment refusal is the remaining guard; the
 # two are a double guard, so the mutant removes both.
 entry_mutant noreexec '/^if \[ "\${!marker:-}" != 1 \]; then/,/^done$/d'; d="$tmp/emutant-noreexec"
