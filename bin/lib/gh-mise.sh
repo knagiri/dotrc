@@ -35,11 +35,22 @@
 # directory, so which repo a wrapper targets never depends on whether mise is
 # installed. `cd` in a subshell rather than `env -C`, which is GNU-only.
 
-# Directory gh runs in. Set with gh_mise_use; resolved lazily from cwd if not.
+# Directory gh runs in. Set with gh_mise_use; gh_mise refuses to run while it
+# is empty (there is no lazy default: a silent fallback to the cwd's checkout
+# would read exactly the config a caller may have meant to keep out).
 gh_mise_dir=""
 
-# gh_mise_use <dir> -- run every later gh_mise call in <dir>.
-gh_mise_use() { gh_mise_dir="$1"; }
+# gh_mise_use <dir> -- run every later gh_mise call in <dir>. An empty <dir>
+# (e.g. a failed `$(gh_mise_main_root)`) is rejected with rc 1 and leaves
+# gh_mise_dir empty, so gh_mise then refuses instead of picking a directory.
+gh_mise_use() {
+  if [ -z "${1:-}" ]; then
+    gh_mise_dir=""
+    echo "gh_mise_use: empty directory" >&2
+    return 1
+  fi
+  gh_mise_dir="$1"
+}
 
 # gh_mise_repo_root [<dir>] -- toplevel of the checkout holding <dir> (cwd by
 # default). Outside a checkout it yields <dir> itself, so gh still reports the
@@ -56,19 +67,32 @@ gh_mise_repo_root() {
 # gh_mise_main_root [<dir>] -- the MAIN working tree of the repo holding <dir>
 # (cwd by default): the parent of `git rev-parse --git-common-dir`, which is the
 # same for the main working tree and every linked worktree of it.
-# `gh_mise_use "$(gh_mise_main_root)"` makes mise read only the main checkout's
-# config (and the global one), never a linked worktree's: a worktree's tracked
+# Anchoring gh_mise there makes mise read the main checkout's config, its
+# ancestors' and the global one, never a linked worktree's: a worktree's tracked
 # mise.toml -- which any branch can change -- then cannot inject a GH_TOKEN or
 # another GH_* into gh. The token is still resolved as for any wrapper: the
 # main checkout's mise.gh.local.toml if it has one, otherwise hosts.yml.
-# Returns 1 without output when <dir> is not in a checkout, or when that parent
-# is not a working tree's toplevel (a submodule or a bare repo, whose common dir
-# is not `<toplevel>/.git`); there is no fallback, since falling back to <dir>
-# would read exactly the config this function exists to keep out.
+# Call it so that a failure stops the caller; `gh_mise_use "$(...)"` would hide
+# the rc (gh_mise_use rejects the empty result, but only the explicit form can
+# report why):
+#   root="$(gh_mise_main_root)" || { echo "<why>" >&2; exit 1; }
+#   gh_mise_use "$root"
+# gh then also runs in the main checkout, not the worktree: a `gh pr view`
+# without a PR number targets the main checkout's branch, and a relative path is
+# resolved against the main root, so callers pass the PR number explicitly and
+# absolutise paths.
+# Returns 1 without output when <dir> is not in a checkout, or when the common
+# dir is not `<toplevel>/.git` of a working tree: a submodule, a bare repo
+# (even one inside a checkout, or its linked worktree) and a --separate-git-dir
+# checkout all fail. There is no fallback, since falling back to <dir> would
+# read exactly the config this function exists to keep out.
+# The argument is optional by design: a caller in another file may pass one,
+# which shellcheck cannot see from here.
 # shellcheck disable=SC2120
 gh_mise_main_root() {
   local d="${1:-$PWD}" common main top
   common="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ "$(basename "$common")" = .git ] || return 1
   main="$(dirname "$common")"
   top="$(git -C "$main" rev-parse --show-toplevel 2>/dev/null)" || return 1
   [ "$top" = "$main" ] || return 1
@@ -79,7 +103,10 @@ gh_mise_main_root() {
 # gh's exit code is propagated unchanged through both branches, which
 # dot/claude/rules/issue-workflow.md §2 relies on for gh-issue-file.
 gh_mise() {
-  [ -n "$gh_mise_dir" ] || gh_mise_dir="$(gh_mise_repo_root)"
+  if [ -z "$gh_mise_dir" ]; then
+    echo "gh_mise: no directory set; call gh_mise_use first" >&2
+    return 1
+  fi
   if command -v mise >/dev/null 2>&1; then
     MISE_ENV=gh mise exec -C "$gh_mise_dir" -- gh "$@"
   else
