@@ -83,6 +83,7 @@
       "Bash(gh-reply-thread *)",
       "Bash(gh-pr-checks *)",
       "Bash(gh-automerge *)",
+      "Bash(gh-request-approval *)",
       "Bash(gh-issue-file *)",
       "Bash(gh-pr-create *)",
       "Bash(gh-pr-edit-body *)",

@@ -1,0 +1,252 @@
+# shellcheck shell=bash
+#
+# gh-request-approval.sh -- the logic of bin/gh-request-approval: check the
+# gates, start the repo's approve workflow, wait for the approval, then enable
+# auto-merge. bin/gh-request-approval only clears the environment and calls
+# gra_main; the contract (arguments, gates, exit codes) is documented there.
+#
+# Requires bin/lib/gh-mise.sh to be sourced first, and jq and git on PATH.
+#
+# Settings the caller sets after sourcing (plain shell variables, not read from
+# the environment):
+#   gra_config_root  directory holding <OWNER>/<NAME>/{paths,workflow}; required
+#   gra_wait_timeout seconds to wait for the approval (default 600)
+#   gra_wait_interval seconds between polls while waiting (default 15)
+
+gra_me=gh-request-approval
+gra_config_root=""
+gra_wait_timeout=600
+gra_wait_interval=15
+
+gra_die() { echo "$gra_me: $2" >&2; exit "$1"; }
+
+gra_usage() {
+  {
+    echo "usage: $gra_me <PR-number> <head-SHA>"
+    echo "       $gra_me --enabled"
+    echo "settings: ${gra_config_root:-<unset>}/<OWNER>/<NAME>/{paths,workflow}"
+  } >&2
+  exit "${1:-1}"
+}
+
+# gra_human_review_state <owner> <name> <pr> -- prints "<unresolved threads
+# started by a non-Bot> <latest CHANGES_REQUESTED reviews by a non-Bot>" (a
+# deleted author counts as human), or "more 0" when either list needs a second
+# page: refused rather than paginated.
+gra_human_review_state() {
+  local out
+  # shellcheck disable=SC2016  # $owner etc. are GraphQL variables
+  out="$(gh_mise api graphql \
+    -f query='query($owner:String!,$name:String!,$pr:Int!){
+      repository(owner:$owner,name:$name){ pullRequest(number:$pr){
+        reviewThreads(first:100){ pageInfo{ hasNextPage }
+          nodes{ isResolved comments(first:1){ nodes{ author{ __typename } } } } }
+        latestOpinionatedReviews(first:100){ pageInfo{ hasNextPage }
+          nodes{ state author{ __typename } } } } } }' \
+    -f owner="$1" -f name="$2" -F pr="$3")" \
+    || gra_die 1 "gh api graphql (review threads of #$3) failed"
+  jq -er '.data.repository.pullRequest as $p
+      | if $p.reviewThreads.pageInfo.hasNextPage
+           or ($p.latestOpinionatedReviews.pageInfo.hasNextPage // false) then "more 0"
+        else ([$p.reviewThreads.nodes[] | select(.isResolved | not)
+               | select((.comments.nodes[0].author.__typename // "") != "Bot")] | length) as $t
+             | ([$p.latestOpinionatedReviews.nodes[] | select(.state == "CHANGES_REQUESTED")
+                 | select((.author.__typename // "") != "Bot")] | length) as $r
+             | "\($t) \($r)"
+        end' <<<"$out" \
+    || gra_die 1 "unexpected review threads response for #$3"
+}
+
+gra_check_human_reviews() {  # <owner> <name> <pr>
+  local out n r
+  # not read <<<"$(...)": that would swallow gra_human_review_state's exit
+  out="$(gra_human_review_state "$@")" || exit $?
+  read -r n r <<<"$out"
+  [ "$n" != more ] || gra_die 4 "#$3 has more than 100 review threads or reviews; refusing to judge a truncated list"
+  [ "$n" -eq 0 ] || gra_die 4 "#$3 has $n unresolved review thread(s) started by a human"
+  [ "$r" -eq 0 ] || gra_die 4 "#$3 has $r CHANGES_REQUESTED review(s) by a human"
+}
+
+# gra_check_paths <nwo> <base branch> <sha> <paths file> <scratch dir> --
+# every file changed between the base branch and <sha> (both sides of a
+# rename) is allowed by <paths file> (.gitignore format) and none is under
+# .github/ or .claude/. Dies with 4 otherwise.
+gra_check_paths() {
+  local nwo="$1" base="$2" sha="$3" list="$4" scratch="$5"
+  local base_sha files_json nfiles p rc src _line pat checked expected
+
+  [ -r "$list" ] || gra_die 3 "cannot read $list"
+  grep -qvE '^[[:space:]]*(#.*)?$' "$list" 2>/dev/null \
+    || gra_die 4 "$list has no patterns; no path is allowed"
+
+  # The base is resolved to a commit through the branches endpoint first: given
+  # a bare name, compare would also resolve a tag of the same name.
+  base_sha="$(gh_mise api "repos/$nwo/branches/$base" --jq .commit.sha)" \
+    || gra_die 1 "gh api branches/$base failed"
+  [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || gra_die 1 "unexpected branches/$base response: $base_sha"
+  files_json="$(gh_mise api "repos/$nwo/compare/$base_sha...$sha")" \
+    || gra_die 1 "gh api compare/$base_sha...$sha failed"
+  nfiles="$(jq 'if (.files | type) == "array" then .files | length else error("no files array") end' <<<"$files_json")" \
+    || gra_die 1 "unexpected compare/$base_sha...$sha response"
+  # compare lists at most 300 files; refusing well below that means a list it
+  # truncated can never pass unchecked.
+  [ "$nfiles" -lt 100 ] || gra_die 4 "$sha changes 100 or more files; refusing to judge a truncated list"
+  [ "$nfiles" -gt 0 ] || gra_die 4 "$sha changes no files"
+
+  # NUL-separated so any byte in a path survives.
+  jq -j '.files[] | (.filename, "\u0000"), (.previous_filename // empty | (., "\u0000"))' \
+    <<<"$files_json" >"$scratch/paths" || gra_die 1 "unexpected compare/$base_sha...$sha response"
+
+  while IFS= read -r -d '' p; do
+    case "/${p,,}/" in
+      /.github/*) gra_die 4 "$p is under .github/, which is never approved this way" ;;
+      */.claude/*) gra_die 4 "$p is under .claude/, which is never approved this way" ;;
+    esac
+  done <"$scratch/paths"
+
+  # git evaluates the list as the info/exclude of an empty scratch repo, with no
+  # config of the caller, user or system taking part. "Ignored" reads as
+  # "allowed"; a path whose last matching pattern is a negation, or that
+  # matches nothing, is refused.
+  gra_scratch_git() {
+    env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+      git -c core.excludesFile=/dev/null -c core.ignoreCase=false "$@"
+  }
+  gra_scratch_git init -q "$scratch/repo" || gra_die 4 "git init failed in the scratch dir"
+  cp "$list" "$scratch/repo/.git/info/exclude" || gra_die 3 "cannot read $list"
+
+  rc=0
+  (cd "$scratch/repo" && gra_scratch_git check-ignore --no-index --stdin -z -v -n) \
+    <"$scratch/paths" >"$scratch/verdict" || rc=$?
+  # 0: some path matched, 1: none did; anything else is git failing.
+  [ "$rc" -le 1 ] || gra_die 4 "git check-ignore failed ($rc); cannot judge the paths"
+
+  # -z -v -n prints four fields per path: source, line number, pattern, path.
+  checked=0
+  while IFS= read -r -d '' src && IFS= read -r -d '' _line \
+    && IFS= read -r -d '' pat && IFS= read -r -d '' p; do
+    checked=$((checked + 1))
+    if [ -z "$src" ] || [ -z "$pat" ]; then
+      gra_die 4 "$p is not in the path list $list"
+    fi
+    case "$pat" in
+      '!'*) gra_die 4 "$p is excluded by '$pat' in $list" ;;
+    esac
+  done <"$scratch/verdict"
+  expected="$(tr -cd '\0' <"$scratch/paths" | wc -c)"
+  [ "$checked" -eq "$expected" ] \
+    || gra_die 4 "git check-ignore judged $checked of $expected paths; refusing"
+}
+
+# gra_enable_automerge <nwo> <pr> <sha> -- the gh-automerge contract, pinned to
+# <nwo> and <sha>: `gh pr merge --auto --merge`, and only when GitHub refuses
+# that because the PR is in clean status, a direct `gh pr merge --merge`.
+# --admin is never passed. Dies with 8 on any other failure.
+gra_enable_automerge() {
+  local nwo="$1" pr="$2" sha="$3" err rc=0
+  err="$(gh_mise pr merge "$pr" -R "$nwo" --auto --merge --match-head-commit "$sha" 2>&1)" || rc=$?
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  if [ "$rc" -eq 0 ]; then
+    echo "$gra_me: enabled auto-merge on #$pr at $sha" >&2
+    return 0
+  fi
+  grep -qi 'clean status' <<<"$err" \
+    || gra_die 8 "enabling auto-merge on #$pr failed ($rc)"
+  echo "$gra_me: auto-merge refused (#$pr is in clean status); merging directly" >&2
+  gh_mise pr merge "$pr" -R "$nwo" --merge --match-head-commit "$sha" \
+    || gra_die 8 "merging #$pr directly failed"
+  echo "$gra_me: merged #$pr at $sha" >&2
+}
+
+gra_main() {
+  local enabled_only=0 pr="" sha="" root repo_out nwo default_branch dir workflow paths_file
+  local me_login pr_out author cross base head state scratch started now elapsed decision
+
+  case "${1:-}" in
+    -h|--help) [ $# -eq 1 ] || gra_usage 1; gra_usage 0 ;;
+    --enabled) [ $# -eq 1 ] || gra_usage 1; enabled_only=1 ;;
+    *)
+      [ $# -eq 2 ] || gra_usage 1
+      pr="$1"; sha="$2"
+      [[ "$pr" =~ ^[0-9]+$ ]] || gra_die 1 "PR number must be numeric (got: $pr)"
+      [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || gra_die 1 "SHA must be 40 lower-case hex digits (got: $sha)"
+      ;;
+  esac
+  [ -n "$gra_config_root" ] || gra_die 1 "gra_config_root is not set"
+
+  # --- 1. repo -------------------------------------------------------------
+  # gh runs in the main working tree, so mise reads only the main checkout's
+  # config (and the global one); see gh_mise_main_root.
+  root="$(gh_mise_main_root)" || gra_die 1 "$PWD is not in a git working tree"
+  gh_mise_use "$root"
+  repo_out="$(gh_mise repo view --json nameWithOwner,defaultBranchRef \
+    --jq '.nameWithOwner, (.defaultBranchRef.name // "")')" \
+    || gra_die 1 "gh repo view failed"
+  { read -r nwo; read -r default_branch; } <<<"$repo_out" || true
+  [[ "${nwo:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || gra_die 1 "gh repo view returned no usable repository (got: ${nwo:-})"
+  case "/$nwo/" in */./*|*/../*) gra_die 1 "repository name has a . or .. component: $nwo" ;; esac
+  [ -n "$default_branch" ] || gra_die 1 "gh repo view returned no default branch for $nwo"
+
+  # --- 2. settings ---------------------------------------------------------
+  dir="$gra_config_root/$nwo"
+  workflow="$dir/workflow"; paths_file="$dir/paths"
+  [ -e "$workflow" ] && [ -e "$paths_file" ] \
+    || gra_die 4 "$nwo is not enabled: $dir needs both 'workflow' and 'paths'"
+  [ -f "$workflow" ] && [ -r "$workflow" ] || gra_die 3 "cannot read $workflow"
+  [ -f "$paths_file" ] && [ -r "$paths_file" ] || gra_die 3 "cannot read $paths_file"
+  workflow="$(grep -vE '^[[:space:]]*(#.*)?$' "$workflow")" || workflow=""
+  [[ "$workflow" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] \
+    || gra_die 3 "$dir/workflow must hold one workflow file name (got: ${workflow:-<empty>})"
+  if [ "$enabled_only" -eq 1 ]; then
+    echo "$gra_me: $nwo is enabled (workflow $workflow)" >&2
+    exit 0
+  fi
+
+  # --- 3. PR gates ---------------------------------------------------------
+  me_login="$(gh_mise api user --jq .login)" || gra_die 1 "gh api user failed"
+  [ -n "$me_login" ] || gra_die 1 "gh api user returned no login"
+  pr_out="$(gh_mise pr view "$pr" -R "$nwo" --json author,isCrossRepository,baseRefName,state \
+    --jq '(.author.login // ""), (.isCrossRepository | tostring), (.baseRefName // ""), (.state // "")')" \
+    || gra_die 1 "gh pr view #$pr failed"
+  { read -r author; read -r cross; read -r base; read -r state; } <<<"$pr_out" || true
+  [ "$state" = OPEN ] || gra_die 4 "#$pr is ${state:-in an unknown state}, not OPEN"
+  [ "$author" = "$me_login" ] || gra_die 4 "#$pr is by '$author', not by the token's login $me_login"
+  [ "$cross" = false ] || gra_die 4 "#$pr comes from a fork (isCrossRepository: $cross)"
+  [ "$base" = "$default_branch" ] || gra_die 4 "#$pr targets '$base', not the default branch '$default_branch'"
+  gra_check_human_reviews "${nwo%%/*}" "${nwo#*/}" "$pr"
+  scratch="$(mktemp -d)" || gra_die 1 "mktemp -d failed"
+  # shellcheck disable=SC2064  # expand now: $scratch is local
+  trap "rm -rf '$scratch'" EXIT
+  gra_check_paths "$nwo" "$default_branch" "$sha" "$paths_file" "$scratch"
+
+  # --- 4. head -------------------------------------------------------------
+  head="$(gh_mise pr view "$pr" -R "$nwo" --json headRefOid --jq '.headRefOid // ""')" \
+    || gra_die 1 "gh pr view #$pr failed"
+  [ "$head" = "$sha" ] || gra_die 5 "#$pr head is ${head:-unknown}, not $sha"
+
+  # --- 5. approve workflow -------------------------------------------------
+  gh_mise workflow run "$workflow" -R "$nwo" --ref "$default_branch" -f pr="$pr" -f head_sha="$sha" \
+    || gra_die 6 "starting $workflow for #$pr failed"
+  echo "$gra_me: started $workflow for #$pr at $sha; waiting for the approval" >&2
+
+  # --- 6. wait for the approval ---------------------------------------------
+  started=$(date -u +%s)
+  while :; do
+    pr_out="$(gh_mise pr view "$pr" -R "$nwo" --json headRefOid,reviewDecision,state \
+      --jq '(.headRefOid // ""), (.reviewDecision // ""), (.state // "")')" \
+      || gra_die 1 "gh pr view #$pr failed while waiting"
+    { read -r head; read -r decision; read -r state; } <<<"$pr_out" || true
+    [ "$head" = "$sha" ] || gra_die 5 "#$pr head moved to ${head:-unknown} while waiting for the approval of $sha"
+    [ "$state" = OPEN ] || gra_die 4 "#$pr became ${state:-unknown} while waiting for the approval"
+    [ "$decision" != APPROVED ] || break
+    now=$(date -u +%s); elapsed=$((now - started))
+    [ "$elapsed" -lt "$gra_wait_timeout" ] \
+      || gra_die 7 "no approval on #$pr after ${elapsed}s (reviewDecision: ${decision:-none})"
+    sleep "$gra_wait_interval"
+  done
+
+  # --- 7. auto-merge ---------------------------------------------------------
+  # A human may have opened a thread or requested changes while we waited.
+  gra_check_human_reviews "${nwo%%/*}" "${nwo#*/}" "$pr"
+  gra_enable_automerge "$nwo" "$pr" "$sha"
+}
