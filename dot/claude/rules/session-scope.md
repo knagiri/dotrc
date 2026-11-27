@@ -76,8 +76,10 @@ worktree のディレクトリ外（絶対パスで他 worktree や main checkou
 stash は `git-wt-stash`（`push [-u] [-m msg]` / `list` / `show|pop|apply|drop [N]`）を使う。生の
 `git stash` は permission で deny している。`git stash` のスタックは main checkout と全 linked
 worktree で共有され、ある session の `pop` が別 worktree の entry を持っていくためで、
-`git-wt-stash` は entry を worktree ごとの ref に置くので他 worktree からは見えない。同じ worktree
-を共有する session（親と subagent 等）同士は区別しない。
+`git-wt-stash` は entry を worktree ごとの ref に置き、`refs/worktree/stash` という名前は各
+worktree で自分の ref に解決されるので、`git-wt-stash` からは他 worktree の entry は見えない。同じ
+worktree を共有する session（親と subagent 等）同士は区別しない。worktree を消す前に
+`git-wt-stash list` を確認する（`git worktree remove` は entry を警告無しに消す）。
 
 実例: dotrc/docs/incidents/shared-stash-popped-by-subagent.md
 

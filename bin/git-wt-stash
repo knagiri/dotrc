@@ -11,36 +11,50 @@
 # N is the entry index, newest first, 0 when omitted (as `list` numbers them).
 # No other flag or argument is accepted, and nothing is passed through to git.
 #
-# Entries are stored in the per-worktree ref refs/worktree/stash and its reflog,
-# so they are visible only from the worktree that pushed them (the main working
-# tree has its own, too). The plain `git stash` stack (refs/stash) lives in the
-# common git dir and is shared by every worktree of the repo; this script uses
-# it only for a moment while pushing:
+# Entries are stored in the per-worktree ref refs/worktree/stash and its reflog.
+# The name refs/worktree/stash resolves to each worktree's own ref, so this
+# script only ever sees the current worktree's entries (the main working tree
+# has its own, too). It is not an access control: another worktree's ref can
+# still be named explicitly (worktrees/<id>/refs/worktree/stash,
+# main-worktree/refs/worktree/stash). The plain `git stash` stack (refs/stash)
+# lives in the common git dir and is shared by every worktree of the repo; this
+# script uses it only for a moment while pushing:
 #
 #   1. `git stash push` with a unique tag appended to the message, which lands
-#      the entry on top of the shared refs/stash (-u is passed on);
-#   2. stash@{0}'s subject must contain that tag, else another session pushed in
-#      between: exit 1 without dropping anything (the entry stays in refs/stash);
-#   3. the entry's commit is appended to refs/worktree/stash
+#      the entry on top of the shared refs/stash (-u is passed on). The tag is
+#      then looked up in the refs/stash reflog: absent means nothing was saved
+#      (exit 0); present but not on top means another session pushed in between
+#      (exit 1, nothing dropped, the entry's tag and commit go to stderr);
+#   2. the entry's commit is appended to refs/worktree/stash
 #      (`git update-ref --create-reflog`);
-#   4. it is dropped from refs/stash. `git stash drop` reports the commit it
-#      dropped; if that is not ours (another push slipped in after step 2), the
-#      dropped commit is put back with `git stash store` and the script exits 1.
+#   3. it is dropped from refs/stash, but only when refs/stash still points at
+#      that commit; otherwise another push slipped in and dropping would take
+#      its entry, so nothing is dropped (exit 1, the entry stays in both
+#      places and its commit goes to stderr). No git output is parsed, so the
+#      result does not depend on the locale.
 #
-# Step 3 runs before step 4 so that a failure in between leaves the entry in
+# Step 2 runs before step 3 so that a failure in between leaves the entry in
 # both places rather than in neither. `git stash store` (writes refs/stash only)
 # and `git stash create` (no -u) cannot do this job.
 #
-# pop/apply/show hand refs/worktree/stash@{N} to `git stash apply` / `show`.
-# drop (and pop after a clean apply) remove the entry with
-# `git reflog delete --updateref --rewrite`; when that leaves the reflog empty
-# the ref itself would stay behind, so it is deleted with `git update-ref -d`.
+# Before pushing, the gc.*.reflogExpire(Unreachable)=never settings for this ref
+# are written to the repo config (see keep_reflog): refs/stash is exempt from
+# reflog expiry but refs/worktree/stash is not, and `git gc` would drop entries
+# after 30 days.
+#
+# pop/apply/show resolve refs/worktree/stash@{N} to a commit once and hand that
+# commit to `git stash apply` / `show`. drop (and pop after a clean apply)
+# re-resolve @{N} just before removing it and refuse (exit 1) if it no longer
+# is that commit (a push into this worktree in between moved the index). The
+# removal is `git reflog delete --updateref --rewrite`; when that leaves the
+# reflog empty the ref itself would stay behind, so it is deleted with
+# `git update-ref -d`.
 #
 # Ownership is the worktree, not the session: sessions sharing one worktree see
 # and can take each other's entries.
 #
 # Exit: 0 on success (including push with nothing to save, and list with no
-# entries), 2 on a usage error or a missing entry, 1 on the push race above,
+# entries), 2 on a usage error or a missing entry, 1 on a race detected above,
 # otherwise git's own status.
 set -u
 
@@ -51,6 +65,10 @@ usage() {
   exit 2
 }
 
+# Everything below assumes a git repo; without this, `count` would read a
+# fatal as "0 entries".
+git rev-parse --git-dir >/dev/null || exit
+
 count() { # number of entries
   if git rev-parse -q --verify "$ref" >/dev/null; then
     git reflog show --format=%H "$ref" -- | wc -l
@@ -59,25 +77,69 @@ count() { # number of entries
   fi
 }
 
-# entry_arg [N] -> sets $entry to refs/worktree/stash@{N}, exits 2 when absent.
+# entry_arg [N] -> sets $idx (N), $entry (refs/worktree/stash@{N}) and $sha (the
+# commit it is now); exits 2 when the entry is absent.
 entry_arg() {
   [ $# -le 1 ] || usage
   local n="${1:-0}" c
   case "$n" in '' | *[!0-9]*) usage ;; esac
+  # Bound the length first: bash arithmetic wraps on overflow.
+  [ "${#n}" -le 9 ] || usage
   n=$((10#$n))
-  c="$(count)" || exit 1
+  c="$(count)"
   if [ "$n" -ge "$c" ]; then
     echo "git-wt-stash: no entry $n (this worktree has $c)" >&2
     exit 2
   fi
+  idx="$n"
   entry="$ref@{$n}"
+  sha="$(git rev-parse "$entry")" || exit
 }
 
-drop_entry() { # $entry
+# drop_entry: removes $entry, but only while it still is $sha. Another push
+# into this worktree since entry_arg would have shifted the index, and the
+# delete would take a different entry.
+drop_entry() {
+  local now
+  now="$(git rev-parse "$entry")" || exit
+  if [ "$now" != "$sha" ]; then
+    echo "git-wt-stash: $entry is no longer $sha (the worktree stash changed in between); nothing was removed. Run list to see the current entries." >&2
+    exit 1
+  fi
   git reflog delete --updateref --rewrite "$entry" || exit
   if [ "$(count)" -eq 0 ]; then
     git update-ref -d "$ref" || exit
   fi
+}
+
+# keep_reflog: git expires reflogs older than gc.reflogExpire(Unreachable)
+# (30 days by default) on `git gc` / `git reflog expire`, and refs/stash is the
+# only ref exempt from that. Without this the worktree stash silently loses
+# entries. The same ref seen from the main working tree is named
+# worktrees/<id>/refs/worktree/stash, hence the wildcard pair. Written to the
+# repo config (not a global one) so it holds wherever the entry is pushed.
+keep_reflog() {
+  local pat var
+  for pat in refs/worktree/stash 'worktrees/*/refs/worktree/stash'; do
+    for var in reflogExpire reflogExpireUnreachable; do
+      if [ "$(git config --local --get "gc.$pat.$var")" != never ]; then
+        git config --local "gc.$pat.$var" never || exit
+      fi
+    done
+  done
+}
+
+# find_tagged <tag> -> "<index> <commit>" of the refs/stash entry whose message
+# carries the tag; prints nothing when there is none.
+find_tagged() {
+  local i=0 c subj
+  git rev-parse -q --verify refs/stash >/dev/null || return 0
+  while read -r c subj; do
+    case "$subj" in
+      *"$1"*) echo "$i $c"; return 0 ;;
+    esac
+    i=$((i + 1))
+  done < <(git reflog show --format='%H %gs' refs/stash --)
 }
 
 do_push() {
@@ -96,33 +158,35 @@ do_push() {
   # which is only the first line.
   case "$msg" in *$'\n'*) echo "git-wt-stash: -m must be one line" >&2; exit 2 ;; esac
 
-  local tag before after subject sha dropped
+  local tag found idx sha subject top
   tag="[git-wt-stash:$$.$(date +%s%N).$RANDOM]"
-  before="$(git rev-parse -q --verify refs/stash)"
+  keep_reflog
   git stash push -q "${untracked[@]}" -m "$msg $tag" || exit
-  after="$(git rev-parse -q --verify refs/stash)"
-  if [ "$after" = "$before" ]; then
+  found="$(find_tagged "$tag")"
+  if [ -z "$found" ]; then
     echo "No local changes to save"
     return 0
   fi
+  idx="${found%% *}"
+  sha="${found#* }"
+  if [ "$idx" -ne 0 ]; then
+    echo "git-wt-stash: another push came in between; nothing was moved or dropped. The entry $tag (commit $sha) was pushed to the shared git stash and may still be there; ask a human to recover it (raw git stash is denied)." >&2
+    exit 1
+  fi
+  subject="$(git log -1 --format=%s "$sha")" || exit
 
-  subject="$(git log -1 --format=%s refs/stash)" || exit
-  case "$subject" in
-    *"$tag"*) ;;
-    *)
-      echo "git-wt-stash: stash@{0} is not the entry just pushed (another push came in between); it was left in the shared git stash. Find it with: git stash list | grep -F '$tag'" >&2
-      exit 1 ;;
-  esac
-  sha="$(git rev-parse refs/stash)" || exit
+  if ! git update-ref --create-reflog -m "${subject% "$tag"}" "$ref" "$sha"; then
+    echo "git-wt-stash: could not save to the worktree stash. The entry $tag (commit $sha) is on top of the shared git stash; ask a human to recover it." >&2
+    exit 1
+  fi
 
-  git update-ref --create-reflog -m "${subject% "$tag"}" "$ref" "$sha" || exit
-
-  dropped="$(git stash drop 'stash@{0}')" || exit
-  dropped="${dropped##*(}"
-  dropped="${dropped%)}"
-  if [ "$dropped" != "$sha" ]; then
-    git stash store -m "$(git log -1 --format=%s "$dropped")" "$dropped"
-    echo "git-wt-stash: another push came in before the drop; put its entry back on the shared git stash. Ours is saved in this worktree; a copy of it may remain in the shared git stash (commit $sha)." >&2
+  top="$(git rev-parse -q --verify refs/stash)"
+  if [ "$top" != "$sha" ]; then
+    echo "git-wt-stash: another push came in before the drop, so nothing was dropped from the shared git stash. Ours is saved in this worktree; a copy $tag (commit $sha) also remains in the shared git stash, where it may be gone if someone popped it; ask a human to remove the copy." >&2
+    exit 1
+  fi
+  if ! git stash drop -q 'stash@{0}'; then
+    echo "git-wt-stash: saved in this worktree, but dropping it from the shared git stash failed; a copy $tag (commit $sha) may remain there; ask a human to remove it." >&2
     exit 1
   fi
   echo "Saved to the worktree stash: ${subject% "$tag"}"
@@ -143,20 +207,19 @@ case "$cmd" in
     ;;
   show)
     entry_arg "$@"
-    git stash show "$entry"
+    git stash show "$sha"
     ;;
   apply)
     entry_arg "$@"
-    git stash apply "$entry"
+    git stash apply "$sha"
     ;;
   pop)
     entry_arg "$@"
-    git stash apply "$entry" || exit
+    git stash apply "$sha" || exit
     drop_entry
     ;;
   drop)
     entry_arg "$@"
-    sha="$(git rev-parse "$entry")" || exit
     drop_entry
     echo "Dropped $entry ($sha)"
     ;;
