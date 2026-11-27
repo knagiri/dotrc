@@ -16,7 +16,7 @@ set -euo pipefail
 # exactly one label, status/ready. `gh issue edit` itself does not look at the
 # current labels, so without that check the wrapper could mark a status/triage
 # issue delegated and skip the human gate. A triage issue (the same-turn path of
-# issue-workflow.md §6.2) is deliberately not handled here: the wrapper cannot
+# issue-workflow.md §6) is deliberately not handled here: the wrapper cannot
 # tell whether the user asked for it in the same turn, so that transition goes
 # through an approval prompt instead.
 #

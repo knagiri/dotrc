@@ -109,6 +109,43 @@ if command -v mise >/dev/null 2>&1; then
     fi
 fi
 
+# mise: put corepack's yarn / pnpm shims into the bin/ of every mise node that
+# ships corepack. A repo that pins its package manager with `packageManager`
+# runs `yarn` from git hooks and scripts; the node bin/ is on PATH even in a
+# non-interactive shell (a background session inherits it from the daemon or
+# `mise exec`), so a shim there resolves without per-session PATH fixes.
+# node.corepack makes mise run `corepack enable` after each node install, but
+# only at install time, so the versions already installed are enabled here. A
+# node without corepack (every Node 25+ install) is reported and skipped. The node's own bin/ goes first
+# on PATH for two reasons: corepack is `#!/usr/bin/env node`, and it writes the
+# shims beside the first corepack found on PATH.
+if command -v mise >/dev/null 2>&1; then
+    if [ "$(mise settings get node.corepack 2>/dev/null)" != "true" ]; then
+        mise settings set node.corepack true
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "deploy.sh: jq not found; corepack not enabled in installed node versions" >&2
+    elif ! __node_json="$(mise ls node --installed --json 2>/dev/null)"; then
+        echo "deploy.sh: 'mise ls node' failed; corepack not enabled in installed node versions" >&2
+    elif ! __node_dirs="$(printf '%s' "${__node_json}" | jq -r '.[].install_path' 2>/dev/null)"; then
+        echo "deploy.sh: could not parse 'mise ls node' output; corepack not enabled in installed node versions" >&2
+    else
+        while IFS= read -r __node_dir; do
+            [ -n "${__node_dir}" ] || continue
+            if [ ! -x "${__node_dir}/bin/corepack" ]; then
+                echo "deploy.sh: no corepack in ${__node_dir}; yarn/pnpm shims not installed (Node 25+ does not ship corepack)" >&2
+                continue
+            fi
+            if [ -e "${__node_dir}/bin/yarn" ] && [ -e "${__node_dir}/bin/pnpm" ]; then
+                continue
+            fi
+            if ! PATH="${__node_dir}/bin:${PATH}" "${__node_dir}/bin/corepack" enable; then
+                echo "deploy.sh: corepack enable failed in ${__node_dir}" >&2
+            fi
+        done <<<"${__node_dirs}"
+    fi
+fi
+
 # Personal GitHub PAT. mise.gh.local.toml (gitignored, read only under
 # MISE_ENV=gh -- see bin/lib/gh-mise.sh) loads ~/.config/gh/personal.env. Both
 # are created only when absent, so a re-run never touches a filled-in token.

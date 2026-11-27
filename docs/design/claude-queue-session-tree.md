@@ -8,7 +8,7 @@
 ようにする。
 
 委譲先は完遂しても `idle` のまま残り、委譲元が `claude-stop-bg` で閉じる（作業を done にする）
-（`dot/claude/rules/worktree-scope.md` §6）。委譲元が閉じずに先に done になれば cascade で委譲先も
+（`dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6）。委譲元が閉じずに先に done になれば cascade で委譲先も
 done になる。閉じ忘れた委譲先は最後のターンが完了報告の `SendMessage` なので、委譲元が done になるまで
 休眠しない。どちらも親子関係が無いと判別できない。
 
@@ -98,3 +98,41 @@ idle であることの検査は孤児でも変えない。
 旧 session を done にし、cascade で子も done にする（running の background 子は reconcile が止める）。
 新しい session は委譲の文脈を引き継がないので、子の閉じ手はもう居ない。compact は session id を
 変えないので、長く動く委譲元が compact を挟んでも link は切れない。
+
+## 休眠の運用
+
+常駐する claude プロセスは 1 本あたり数百 MB を使い、閉じられずに残った session が数十本になると
+十数 GB を占める。`systemd-user` の timer（`claude-queue-watch.timer`）が数分おきに `claude-queue watch`
+を 1 回起動し、しばらく動いていない session のプロセスを止めてメモリを返す。止めても作業は open のまま
+gone として一覧に残り、resume すれば同じ session id で戻る。
+
+```
+claude-queue watch [--idle-minutes <n>] [--dry-run]
+```
+
+- **作業は done にしない**。interactive は claude プロセスに SIGTERM を送り、`claude agents` の一覧から
+  消えたらその tmux pane を閉じる。background は `claude stop` で止める。どちらも `SessionEnd`
+  （reason `other`）になり gone として記録される。done にするのは `claude-stop-bg` や picker の完了操作
+  など、明示的な操作だけである。
+- **止めてよい条件**は [claude-queue-lifecycle.md](claude-queue-lifecycle.md)「休眠」節と、上の
+  「休眠での扱い」の孤児の例外に従う。`idle_done` からの閾値は `--idle-minutes`（既定 120）、`claude agents`
+  の一覧で `status` が `idle` であることも要る。確認そのものができないもの（一覧が読めない・transcript が
+  読めない／parse できない）は止めずに skip する。
+- **人が見ている session は止めない**。interactive は、pane の window が attach 中の tmux client のどれかで
+  表示中なら skip する。pane が見つからない（tmux 外で起動した等）ものも skip する。SIGTERM 後 10 秒で
+  一覧から消えなければ pane は閉じずに失敗として report する（SIGKILL へは上げない）。
+- pin は休眠を妨げない。外部待ちの session こそ、待ちが解けるまでプロセスを持つ理由が無い。
+- 同じ timer の pass は、委譲先の branch から PR 番号を引いて記録もする（picker で PR 番号・branch 名から
+  委譲 tree を引くため）。休眠とは独立で、gh が失敗してもその組を次の pass に回すだけ。PR 監視の配送も
+  同じ pass が行う（[claude-queue-lifecycle.md](claude-queue-lifecycle.md)「PR 監視と自動再開」節）。
+- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。`--dry-run` は
+  reconcile・PR 監視・PR 番号の解決・停止をせず、pane の解決と表示中の判定までを行って対象を report する。
+  ただし DB を開くことによる書き込みは止めないので、実データで確かめるときは DB のコピーを指す
+  （`dot/claude/rules/dotrc-deploy.md` §6）。
+- 判定は推測を含むが、外れても失うのはプロセスだけで作業は残る。だから無人の timer で回してよい。逆に、
+  作業を done にする判定は無人で回さない。
+- `systemd-user` の timer はもう 1 本、日次で観測 issue を束ねて委譲する `issue-crawl.timer` がある。
+  こちらも claude の daemon を自分では起動せず、既に動いている daemon があるときだけ委譲する
+  （[agent-issue-workflow.md](agent-issue-workflow.md)）。
+
+経緯: `docs/incidents/claude-queue-reboot-closes-wip.md`

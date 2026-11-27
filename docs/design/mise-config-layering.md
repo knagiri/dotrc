@@ -17,7 +17,7 @@ dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を
 
 `GH_TOKEN` は `gh` の呼び出しにしか要らない。常時ロードすると checkout 内の全プロセス
 （background 委譲先を含む）の env に載ってしまうので、`gh-*` wrapper が `MISE_ENV=gh` で
-呼ぶときだけ読む（`bin/lib/gh-mise.sh`、経緯は `dot/claude/rules/worktree-scope.md` §6）。
+呼ぶときだけ読む（`bin/lib/gh-mise.sh`、仕組みは `claude-tmux-worktree.md`「委譲先の env と token」）。
 
 結果として `mise.gh.local.toml` は「tracked から外す」と「読み込みを絞る」の二重ゲートになる。
 
@@ -26,22 +26,53 @@ dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を
 `bin/deploy.sh` は雛形生成と同時に checkout を `trusted_config_paths` に path prefix で
 登録するので、`mise.gh.local.toml` にも、worktree が自分で持つ config（tracked な `mise.toml`
 等）にも trust が効く。`mise trust` は subdirectory の config を覆わないので、prefix での登録が
-要る。worktree から親の config がどう解決されるかは `dot/claude/rules/worktree-scope.md` §6 を
+要る。worktree から親の config がどう解決されるかは `claude-tmux-worktree.md`「委譲先の env と token」を
 参照。
 
 新しいマシンでは `bin/deploy.sh` を実行し、雛形として作られた `~/.config/gh/personal.env`
 （権限 600）の `GH_TOKEN` に個人 PAT を入れる。
 
+## node の package manager（corepack の yarn / pnpm）
+
+`packageManager` で yarn 等を固定した repo は、git hook や script から `yarn` を直接呼ぶ。
+`mise activate` が発火しない非対話 shell（background 委譲先を含む）でも、mise の node の `bin/` は
+daemon や `mise exec` 経由で PATH に載るので、corepack の shim がその `bin/` にあれば `yarn` は
+解決する。そこで `bin/deploy.sh` は mise の global setting `node.corepack` を `true` にし、以後の
+node の install で mise が `corepack enable` を走らせるようにする。この setting は install 時に
+しか効かないので、既に入っている version のうち corepack を同梱し、`bin/yarn` と `bin/pnpm` の
+どちらかが無いものには deploy が `corepack enable` を撃つ。Node 25 以降は
+corepack を同梱しない（[Node.js v25.0.0 のリリースノート](https://nodejs.org/en/blog/release/v25.0.0)
+の "build: stop distributing Corepack"）ので、mise の setting も deploy の enable も効かず、その
+version には yarn / pnpm の shim が置かれない（既知の限界）。deploy は corepack の無い install を
+stderr に報告して先へ進む。既存 install の列挙に `jq` を使うので、
+`jq` が無い（または `mise ls` が失敗した）ときは既存 install への enable をせず、stderr に理由を
+出す。shim を session ごとの一時ディレクトリに作って PATH に足す形は、PATH を整える手当てが
+session ごとに要るので採らない。
+
 ## 他 repo の DB 接続（`mise.db.local.toml`）
 
 `bin/db-query` は同じ二重ゲートを各 repo の DB 接続に当てる。値（usql の version、
 `DATABASE_URL`）はその repo の root に置く untracked な `mise.db.local.toml` に書き、`db-query` が
-`MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml` で呼ぶ mise の中でだけ読む。運用の規約は `dot/claude/rules/db-access.md`。
+`MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml` で呼ぶ mise の中でだけ読む。agent 側の規約は `dot/claude/rules/db-access.md`。
+
+```toml
+[tools]
+usql = "0.21.6"
+
+[env]
+DATABASE_URL = "postgres://readonly@localhost:5432/example"
+```
+
+置いたら repo root で後述の `mise trust` を実行する。ファイルを編集するたびに再 trust が要る。
 
 `DATABASE_URL` を絞る理由は `GH_TOKEN` より強い。`GH_TOKEN` が常時載っても読むのは gh だけだが、
 `DATABASE_URL` は app framework・ORM・migration ツールが既定で読むので、常時ロードすると
 その repo の app・test・migration がエラー無しにその DB へ向く。同じ理由で `db-query` は
-呼び出し側の env にある `DATABASE_URL` を捨て、mise config の値だけを使う。
+呼び出し側の env にある `DATABASE_URL` を捨て、mise config の値だけを使う。常時ロードされる
+`mise.local.toml` に置くと、`claude-worktree` が `mise exec -C <worktree>` で委譲先を起こすので
+その env に載る。shell の rc に置くと、daemon を起動した呼び出し元の env 経由で background 委譲先へ
+配られうる（`mise activate` は非対話 shell では発火しないので、経路はそれではない。
+`docs/design/claude-tmux-worktree.md`「委譲先の env と token」）。
 
 業務 repo には dotrc の `.gitignore` が効かないので、`mise.local.toml` / `mise.*.local.toml` は
 global な git ignore（`dot/git/ignore`）で無視する（先頭に `.` の付く形も mise は読むので含める）。
@@ -64,7 +95,7 @@ agent がこのファイルを書き換えると、allow 済みの `db-query` �
 hash に結びつき、trust 後の書き換えは `Config files in .../mise.db.local.toml are not trusted.` で
 失敗する（実測）。`mise trust` は allowlist に無いので再 trust は人の承認になる。trust は repo root で
 `MISE_TRUSTED_CONFIG_PATHS= MISE_PARANOID=1 MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust`
-を実行して与える。`MISE_PARANOID=1` が無いと path 単位の trust になり、paranoid の呼び出しでは通らない
+を実行して与える。環境変数なしの `mise trust` は `mise.db.local.toml` を対象にしない。`MISE_PARANOID=1` が無いと path 単位の trust になり、paranoid の呼び出しでは通らない
 （実測）。`MISE_TRUSTED_CONFIG_PATHS` を空にするのは、信頼済み path の prefix が paranoid 下でも効いて
 hash を迂回するため（実測: env でも `trusted_config_paths` setting でも）。prefix が覆っていると
 `mise trust` は hash を書かず "No untrusted config files found" で終わる。`db-query` も同じ変数を空にして
@@ -76,10 +107,15 @@ stdin は `/dev/null` にして読まない。usql の meta-command は shell �
 `\w`）ができ、`-c`・`-f`・stdin のどれからでも、SQL の後ろに続けても実行される（実測: `-c 'select 1;
 \! echo X'` で `X` が出る）。素通しすると `Bash(db-query *)` の allow が承認なしの任意コマンド実行に
 なる。一方 SQL の中身は wrapper では縛らず、DB に対して agent に何を許すかは `DATABASE_URL` の
-DB user の権限で決める。これは network 越しの server 型 DB でだけ成り立つ。sqlite・duckdb 等の埋め込み型は
+DB user の権限で決める。したがって `mise.db.local.toml` に書く接続は、一般に read-only 権限の DB user にする。この境界は network 越しの server 型 DB でだけ成り立つ。sqlite・duckdb 等の埋め込み型は
 usql のプロセス内でローカル user の権限のまま動き、SQL だけで任意のファイルを読み書きできる（`ATTACH`、
 `COPY ... TO`）ので、DB user という境界が無い。`db-query` は scheme を server 型の許可リストと照合し、
 外れれば exit 5 で止める。拒否リストにしないのは、usql の scheme alias が多く、漏れが素通りになるため。
+
+password は URL に直書きせず、usql の password file（権限 600）に置く。`db-query` は URL を usql の
+引数として渡すので、URL に書いた password はプロセス一覧に出る。`db-query` は `-w` で prompt を止めるが
+password file は読まれる（実測: `USQLPASS` で指した file の password が `-w` 付きでも送られた。HOME 配下の
+既定位置に置いた file は同じ環境で読まれなかったので、置き場所は環境ごとに確かめる）。
 
 接続先が複数（dev / stg 等）ある場合は扱わない。override するファイル名を接続ごとに分けるか、`db-query` に
 接続名の引数を持たせるかは、必要になった時点で決める。

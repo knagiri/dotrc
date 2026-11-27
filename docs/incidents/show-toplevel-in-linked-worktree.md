@@ -28,4 +28,4 @@ main working tree で実行すると両者は一致するので、そこで試�
 
 ## 反映先
 
-- `dot/claude/rules/worktree-scope.md` §1「deploy 済みの checkout と比べるときは `--show-toplevel` を使わない」
+- `.claude/rules/deployed-checkout-toplevel.md`「deploy 済みの checkout と比べるときは `--show-toplevel` を使わない」

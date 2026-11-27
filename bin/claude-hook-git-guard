@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # claude-hook-git-guard -- Claude Code PreToolUse hook (matcher "Bash") that
-# inspects the git invocations in tool_input.command and returns a permission
-# decision for two cases:
+# inspects the git invocations in tool_input.command and denies one case:
 #
 #   git stash pop|apply|drop|branch|clear
 #     The stash stack lives in the common git dir, so the main checkout and
@@ -23,21 +22,6 @@
 #     `git stash` pass. An entry that does not resolve passes too: git fails on
 #     its own and nothing is taken.
 #
-#   git commit
-#     -> ask when all of these hold, otherwise nothing:
-#       1. the target dir is a main working tree (--git-common-dir equals
-#          --git-dir, and <toplevel>/.git is a directory -- a submodule's
-#          .git is a file even though the two dirs match)
-#       2. the current branch is the integration branch (the one
-#          refs/remotes/origin/HEAD points at; `main` when that is unset)
-#       3. a remote named origin exists
-#       4. HEAD exists (the first commit of a new repo has nowhere else to go)
-#     When the -C value contains $ or a backquote the commit check uses the
-#     dir as it stands without that -C, usually the cwd. When it names a dir
-#     that does not exist the commit is not checked and passes (git itself
-#     fails there). Neither falls to ask, so a delegated session's
-#     `git -C "$WT" commit` is not frozen on an approval prompt.
-#
 # Detection is deliberately naive: the aim is catching accidental calls, not an
 # adversary. The command string is cut into parts on ; && || | and newlines,
 # without reading quotes, here-documents, comments, ( ) or $( ). A part counts
@@ -58,13 +42,11 @@
 # Text inside quotes can be seen (a commit message line reading
 # `git stash pop`). That is accepted: nothing is taken in that case, and a hit
 # is denied only when git says the target entry belongs to another branch or
-# cannot say who owns it (or the target dir cannot be resolved); a commit hit
-# costs one extra approval prompt.
+# cannot say who owns it (or the target dir cannot be resolved).
 #
-# Output: a PreToolUse hookSpecificOutput JSON object on stdout when a decision
-# is made (deny wins over ask when one command line holds both), nothing
-# otherwise, exit 0. A missing prerequisite (jq or git) prints one line to
-# stderr and exits 1 (a non-blocking error, so the call proceeds but the
+# Output: a PreToolUse hookSpecificOutput JSON object on stdout when a call is
+# denied, nothing otherwise, exit 0. A missing prerequisite (jq or git) prints
+# one line to stderr and exits 1 (a non-blocking error, so the call proceeds but the
 # transcript shows it). An unreadable input or a case that cannot be judged
 # otherwise passes silently; set -u aborts exit non-zero.
 set -u
@@ -72,8 +54,8 @@ set -u
 decision=""
 reasons=()
 
-add_decision() { # <ask|deny> <reason>
-  if [ "$1" = deny ]; then decision=deny; elif [ -z "$decision" ]; then decision=ask; fi
+add_decision() { # <deny> <reason>
+  decision="$1"
   reasons+=("$2")
 }
 
@@ -170,39 +152,21 @@ check_stash_clear() { # <dir>
   fi
 }
 
-check_commit() { # <dir>
-  local dir="$1" common gitdir top branch target
-  common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return
-  gitdir="$(git -C "$dir" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return
-  [ "$common" = "$gitdir" ] || return
-  top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || return
-  [ -d "$top/.git" ] || return
-  branch="$(cur_branch "$dir")"
-  [ -n "$branch" ] || return
-  target="$(git -C "$dir" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null)"
-  target="${target#refs/remotes/origin/}"
-  [ -n "$target" ] || target=main
-  [ "$branch" = "$target" ] || return
-  git -C "$dir" remote get-url origin >/dev/null 2>&1 || return
-  git -C "$dir" rev-parse -q --verify HEAD >/dev/null 2>&1 || return
-  add_decision ask "worktree-scope.md §5: main working tree での実装は delegate-to-worktree へ委譲するのが既定。この場で統合先 branch '$branch' に直接 commit するなら、ユーザーが承認する。"
-}
-
 dir_unknown=0   # the target dir of the git call being checked is unknown
 
-# git_re captures: 11 = the global options, 16 = the stash subcommand (empty
-# for commit), 18 = the arguments after the subcommand. Renumber when a group
-# is added before them.
+# git_re captures: 11 = the global options, 15 = the stash subcommand, 17 =
+# the arguments after the subcommand. Renumber when a group is added before
+# them.
 ws='[[:space:]]+'
 arg='[^[:space:]]+'
 name='[A-Za-z_][A-Za-z0-9_]*'
 wrapper="($name=$arg|timeout($ws-[ks]$ws$arg|$ws-$arg)*$ws$arg|nice($ws-n$ws$arg|$ws-$arg)?|nohup|stdbuf($ws-$arg)*|time($ws-p)?|command($ws-p)?|env($ws-[uCS]$ws$arg|$ws-$arg|$ws$name=$arg)*|xargs($ws-[nPILsdEa]$ws$arg|$ws-$arg)*)$ws"
 gopt="(-[Cc]$ws$arg|--(git-dir|work-tree|namespace|config-env|super-prefix)$ws$arg|-$arg)$ws"
-git_re="^[[:space:]]*($wrapper)*([^[:space:]]*/)?git$ws(($gopt)*)(stash$ws(pop|apply|drop|branch|clear)|commit)([[:space:]]+(.*))?$"
+git_re="^[[:space:]]*($wrapper)*([^[:space:]]*/)?git$ws(($gopt)*)stash$ws(pop|apply|drop|branch|clear)([[:space:]]+(.*))?$"
 
 check_part() { # <cwd> <part>
   [[ $2 =~ $git_re ]] || return 0
-  local opts="${BASH_REMATCH[11]}" sub="${BASH_REMATCH[16]}" rest="${BASH_REMATCH[18]}"
+  local opts="${BASH_REMATCH[11]}" sub="${BASH_REMATCH[15]}" rest="${BASH_REMATCH[17]}"
   local dir="$1" i skip=0 a
   local -a o r args=()
   dir_unknown=0
@@ -213,7 +177,6 @@ check_part() { # <cwd> <part>
     if [[ $a == *[\$\`]* ]]; then dir_unknown=1; else dir="$(resolve_path "$dir" "$a")"; fi
   done
   [ -d "$dir" ] || dir_unknown=1
-  if [ -z "$sub" ]; then check_commit "$dir"; return; fi
   # Drop redirections (2>&1, >/dev/null, > file, &>file) and a trailing &.
   read -ra r <<<"$rest"
   for a in "${r[@]}"; do

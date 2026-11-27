@@ -56,16 +56,6 @@ STUB
 }
 install_mise_stub "$stubdir"
 
-# gh-automerge: numeric PR issues `gh pr merge --auto --merge <PR>`, no --admin.
-GH_ARGS_FILE="$stubdir/args" PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] \
-  && grep -qxF '[pr]' "$stubdir/args" && grep -qxF '[merge]' "$stubdir/args" \
-  && grep -qxF '[--auto]' "$stubdir/args" && grep -qxF '[--merge]' "$stubdir/args" \
-  && grep -qxF '[42]' "$stubdir/args" \
-  && ! grep -qxF '[--admin]' "$stubdir/args"; then
-  echo "ok: gh-automerge issues gh pr merge --auto --merge <PR>, no --admin"
-else echo "FAIL: gh-automerge rc=$rc args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
-
 # gh-automerge: missing / non-numeric arg fail.
 PATH="$stubdir:$PATH" "$bindir/gh-automerge" >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-automerge missing arg fails" || { echo "FAIL: gh-automerge missing arg"; fail=1; }
@@ -81,9 +71,20 @@ PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 --admin >/dev/null 2>&1; [ $? -n
 # CLEAN pull request ("Pull request is in clean status"), which a repo with no
 # CI workflows hits almost immediately -- so that one refusal, and only it, must
 # fall through to a direct merge.
+#
+# The grant gate (test/gh-automerge.test.sh) reads the PR before merging, so the
+# stub answers `pr view` with a base branch and a head commit id, the base tip (`api .../git/ref/heads/...`) and the compare diff (`api .../compare/...`)
+# with a diff that has no grant change; only `pr merge` calls are logged.
 amdir="$stubdir/am"; mkdir -p "$amdir"
 cat >"$amdir/gh" <<'STUB'
 #!/usr/bin/env bash
+case "$1 $2" in
+  "pr view")
+    echo "main $(printf 'c%.0s' {1..40}) 1" | tr c a
+    exit 0 ;;
+  "api repos/{owner}/{repo}/git/ref/heads/"*) printf '0%.0s' {1..40}; echo; exit 0 ;;
+  "api repos/{owner}/{repo}/compare/"*) printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-a' '+b'; exit 0 ;;
+esac
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$*" in
   *--auto*)
@@ -103,12 +104,23 @@ amrun() {  # $1 = --auto failure message ("" = succeed), $2 = its exit code
 }
 amcount() { grep -cxF "$1" "$amdir/args"; }  # occurrences of one argv element
 
-# Case A: the clean refusal falls back to a plain `gh pr merge --merge <PR>`
+# gh-automerge: numeric PR issues `gh pr merge --auto --merge --match-head-commit <head> <PR>`,
+# no --admin.
+amrun '' >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] \
+  && grep -qxF '[pr]' "$amdir/args" && grep -qxF '[merge]' "$amdir/args" \
+  && grep -qxF '[--auto]' "$amdir/args" && grep -qxF '[--merge]' "$amdir/args" \
+  && grep -qxF '[42]' "$amdir/args" && grep -qxF '[--match-head-commit]' "$amdir/args" \
+  && ! grep -qxF '[--admin]' "$amdir/args"; then
+  echo "ok: gh-automerge issues gh pr merge --auto --merge --match-head-commit <head> <PR>, no --admin"
+else echo "FAIL: gh-automerge rc=$rc args=$(cat "$amdir/args" 2>/dev/null)"; fail=1; fi
+
+# Case A: the clean refusal falls back to `gh pr merge --merge --match-head-commit <head> <PR>`
 # (two --merge, one --auto), still without --admin.
 amrun 'X GraphQL: Pull request is in clean status (enablePullRequestAutoMerge)' 1 >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ] \
   && [ "$(amcount '[--auto]')" -eq 1 ] && [ "$(amcount '[--merge]')" -eq 2 ] \
-  && [ "$(amcount '[42]')" -eq 2 ] \
+  && [ "$(amcount '[42]')" -eq 2 ] && [ "$(amcount '[--match-head-commit]')" -eq 2 ] \
   && ! grep -qxF '[--admin]' "$amdir/args"; then
   echo "ok: gh-automerge falls back to a direct merge when auto-merge is refused for clean status"
 else echo "FAIL: gh-automerge clean fallback rc=$rc args=$(cat "$amdir/args" 2>/dev/null)"; fail=1; fi
@@ -237,12 +249,22 @@ da_mutant falsefirst '0,/"MERGED "\*|"CLOSED "\*)/s//*" false")\n      exit 0 ;;
 da_mutant anyflag 's/  --disable) disable=1/  --*) disable=1/' da_check_rejects
 da_mutant noargc 's/^\[ \$# -eq 1 \] || \[ \$# -eq 2 \] /true /' da_check_rejects
 
-# gh-automerge <PR> <SHA>. This stub logs each call's argv as one line, so the
-# assertions see exactly which call carried which flags, and fails the `--auto`
-# call with GH_AUTO_FAIL_MSG like the stub above. It never runs the real gh.
+# gh-automerge <PR> <SHA>. This stub answers the grant gate's reads like the
+# `am` stub above (`pr view` with base branch, head commit $am_sha and one
+# changed file; the base tip; a compare diff without a grant change), logs every
+# call's argv as one line to GH_CALLS_FILE and each `pr merge` call to
+# GH_ARGS_FILE, so the assertions see exactly which merge call carried which
+# flags. It fails the `--auto` call with GH_AUTO_FAIL_MSG like the stub above
+# and never runs the real gh.
 amsdir="$stubdir/ams"; mkdir -p "$amsdir"
 cat >"$amsdir/gh" <<'STUB'
 #!/usr/bin/env bash
+[ -z "${GH_CALLS_FILE:-}" ] || printf '%s\n' "$*" >>"$GH_CALLS_FILE"
+case "$1 $2" in
+  "pr view") echo "main $(printf 'a%.0s' {1..40}) 1"; exit 0 ;;
+  "api repos/{owner}/{repo}/git/ref/heads/"*) printf '0%.0s' {1..40}; echo; exit 0 ;;
+  "api repos/{owner}/{repo}/compare/"*) printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-a' '+b'; exit 0 ;;
+esac
 printf '%s\n' "$*" >>"$GH_ARGS_FILE"
 case "$*" in
   *--auto*)
@@ -254,28 +276,34 @@ exit 0
 STUB
 chmod +x "$amsdir/gh"
 install_mise_stub "$amsdir"
-am_sha="$(printf '%040d' 0 | tr 0 a)"
+am_sha="$(printf '%040d' 0 | tr 0 a)"   # the head the stub serves
+am_other="$(printf '%040d' 0 | tr 0 b)" # a well-formed SHA that is not the head
 am_clean='X GraphQL: Pull request is in clean status (enablePullRequestAutoMerge)'
-amsrun() {  # amsrun <bindir> <--auto failure message, "" = succeed> <args...>
-  : >"$amsdir/args"
-  env GH_ARGS_FILE="$amsdir/args" GH_AUTO_FAIL_MSG="$2" PATH="$amsdir:$PATH" \
-    "$1/gh-automerge" "${@:3}" >/dev/null 2>&1
+amsrun() {  # amsrun <bindir> <--auto failure message, "" = succeed> <args...>; rc of gh-automerge
+  : >"$amsdir/args"; : >"$amsdir/calls"
+  env GH_ARGS_FILE="$amsdir/args" GH_CALLS_FILE="$amsdir/calls" GH_AUTO_FAIL_MSG="$2" \
+    PATH="$amsdir:$PATH" "$1/gh-automerge" "${@:3}" >/dev/null 2>&1
 }
 ams_log_is() { [ "$(cat "$amsdir/args")" = "$1" ]; }
 
-am_check_sha() {  # with a SHA, the --auto call and the clean fallback both pin it
+am_check_sha() {  # with a SHA equal to the head, the --auto call and the clean fallback both pin it
   amsrun "$1" '' 42 "$am_sha" || return 1
-  ams_log_is "pr merge --auto --merge 42 --match-head-commit $am_sha" || return 1
+  ams_log_is "pr merge --auto --merge --match-head-commit $am_sha 42" || return 1
   amsrun "$1" "$am_clean" 42 "$am_sha" || return 1
-  ams_log_is "pr merge --auto --merge 42 --match-head-commit $am_sha
-pr merge --merge 42 --match-head-commit $am_sha"
+  ams_log_is "pr merge --auto --merge --match-head-commit $am_sha 42
+pr merge --merge --match-head-commit $am_sha 42"
 }
-am_check_nosha() {  # without a SHA, the argv is exactly as before the SHA existed
+am_check_shamismatch() {  # a SHA that is not the head -> 6, no merge call
+  amsrun "$1" '' 42 "$am_other"; [ $? -eq 6 ] || return 1
+  [ ! -s "$amsdir/args" ] || return 1
+  grep -q '^pr view ' "$amsdir/calls"  # it did read the head (not refused earlier)
+}
+am_check_nosha() {  # without a SHA, the argv is exactly that of the head-pinned form
   amsrun "$1" '' 42 || return 1
-  ams_log_is "pr merge --auto --merge 42" || return 1
+  ams_log_is "pr merge --auto --merge --match-head-commit $am_sha 42" || return 1
   amsrun "$1" "$am_clean" 42 || return 1
-  ams_log_is "pr merge --auto --merge 42
-pr merge --merge 42"
+  ams_log_is "pr merge --auto --merge --match-head-commit $am_sha 42
+pr merge --merge --match-head-commit $am_sha 42"
 }
 am_check_badsha() {  # a malformed SHA is rejected before any gh call
   local a
@@ -283,7 +311,7 @@ am_check_badsha() {  # a malformed SHA is rejected before any gh call
            "42 $am_sha extra" "--disable 42 $am_sha" "42 ${am_sha:0:39}g"; do
     # shellcheck disable=SC2086
     amsrun "$1" '' $a && return 1
-    [ ! -s "$amsdir/args" ] || return 1
+    [ ! -s "$amsdir/calls" ] || return 1
   done
 }
 # A main checkout with a linked worktree inside it; run from the worktree, gh
@@ -296,11 +324,11 @@ am_main_real="$(cd "$am_main" && pwd -P)"
 am_check_mainroot() {  # every mise -C names the main checkout, for both forms
   local m="$amsdir/mise-args" form
   for form in "42 $am_sha" "--disable 42"; do
-    : >"$m"; : >"$amsdir/args"
+    : >"$m"; : >"$amsdir/args"; : >"$amsdir/calls"
     # shellcheck disable=SC2086
     ( cd "$am_main/.worktrees/wt" && env MISE_ARGS_FILE="$m" GH_ARGS_FILE="$amsdir/args" \
-        PATH="$amsdir:$PATH" "$1/gh-automerge" $form ) >/dev/null 2>&1
-    [ -s "$amsdir/args" ] || return 1
+        GH_CALLS_FILE="$amsdir/calls" PATH="$amsdir:$PATH" "$1/gh-automerge" $form ) >/dev/null 2>&1
+    [ -s "$amsdir/calls" ] || return 1
     [ "$(grep -cxF '[mise:-C]' "$m")" -ge 1 ] || return 1
     [ "$(grep -A1 -xF '[mise:-C]' "$m" | grep -vxF -e '[mise:-C]' -e '--' | sort -u)" = "[mise:$am_main_real]" ] \
       || return 1
@@ -308,20 +336,23 @@ am_check_mainroot() {  # every mise -C names the main checkout, for both forms
 }
 am_check_outside() {  # outside a working tree -> 1 before any gh call
   local d="$stubdir/am-nogit"; mkdir -p "$d"
-  : >"$amsdir/args"
-  ( cd "$d" && env GH_ARGS_FILE="$amsdir/args" PATH="$amsdir:$PATH" \
+  : >"$amsdir/args"; : >"$amsdir/calls"
+  ( cd "$d" && env GH_ARGS_FILE="$amsdir/args" GH_CALLS_FILE="$amsdir/calls" PATH="$amsdir:$PATH" \
       GIT_CEILING_DIRECTORIES="$stubdir" "$1/gh-automerge" 42 ) >/dev/null 2>&1
-  [ $? -eq 1 ] && [ ! -s "$amsdir/args" ]
+  [ $? -eq 1 ] && [ ! -s "$amsdir/calls" ]
 }
 
-for c in am_check_sha am_check_nosha am_check_badsha am_check_mainroot am_check_outside; do
+for c in am_check_sha am_check_shamismatch am_check_nosha am_check_badsha am_check_mainroot \
+         am_check_outside; do
   if "$c" "$bindir"; then echo "ok: gh-automerge $c"
   else echo "FAIL: gh-automerge $c args=$(cat "$amsdir/args" 2>/dev/null)"; fail=1; fi
 done
 # Discrimination: each new guard is mutated on its own and must be caught.
-da_mutant nomatchauto 's/--auto --merge "\$pr" \${match\[@\]+"\${match\[@\]}"}/--auto --merge "$pr"/' am_check_sha
-da_mutant nomatchdirect 's/^gh_mise pr merge --merge "\$pr" \${match\[@\]+"\${match\[@\]}"}$/gh_mise pr merge --merge "$pr"/' am_check_sha
-da_mutant alwaysmatch "s/^match=()\$/match=(--match-head-commit $am_sha)/" am_check_nosha
+da_mutant nomatchauto 's/--auto --merge --match-head-commit "\$head_oid" "\$pr"/--auto --merge "$pr"/' am_check_sha
+da_mutant nomatchdirect 's/^gh_mise pr merge --merge --match-head-commit "\$head_oid" "\$pr"$/gh_mise pr merge --merge "$pr"/' am_check_sha
+da_mutant noshaeq 's/\[ "\$head_oid" != "\$want_sha" \]/false/' am_check_shamismatch
+da_mutant shaexit1 's/^  exit 6$/  exit 1/' am_check_shamismatch
+da_mutant shaignored 's/^  want_sha="\$2"$/  :/' am_check_shamismatch
 da_mutant noshacheck 's/\[\[ ! "\$2" =~ \^\[0-9a-f\]{40}\$ \]\]/false/' am_check_badsha
 da_mutant reporoot 's/root="\$(gh_mise_main_root)"/root="$(gh_mise_repo_root)"/' am_check_mainroot
 

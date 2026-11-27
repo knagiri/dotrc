@@ -11,7 +11,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
 畳み、`claude-worktree` を直接起動して委譲する。委譲先は実装 → `pr-review-loop` で review → `pr-automerge` で自律マージする。
 
 設計の全体像は `docs/superpowers/specs/2026-06-30-harness-from-feedback-design.md`、worktree 運用は
-`dot/claude/rules/worktree-scope.md`、rules の書き方は `dot/claude/rules/rule-authoring.md` を参照。
+`dot/claude/rules/session-scope.md`、rules の書き方は `dot/claude/rules/rule-authoring.md` を参照。
 
 ## Pre-fetched context
 
@@ -31,7 +31,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
 - この skill が扱う artifact は rule / CLAUDE.md 追記 / lint / test / hook / allowlist（grant）。
   **grant を含む変更は委譲してよいが、委譲先に auto-merge させず人間の approve を待つ**。委譲
   プロンプトでは `pr-review-loop` までは回させ、`pr-automerge` は呼ばせない（上の「マージは委譲先の
-  `pr-automerge` が行う」の例外はここだけ）。条件と理由の正典は `gh-commands.md` §5
+  `pr-automerge` が行う」の例外はここだけ）。条件と理由の正典は `pr-automerge` skill
   「grant 変更を含む PR は auto-merge させない」。ここへ再掲せず参照に留めるのは、規約の出所を
   1 つに保つため。
 
@@ -60,7 +60,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - 参照ファイルは worktree 内で完結させる。通常は本文へ畳み込む。畳めない未 commit・gitignore
      済みファイル（spec 等）は `--seed <path>` で worktree へ入れ相対パスで参照させる（新 worktree
      は指定 branch を checkout するだけで起動元の gitignore 済み・未 commit ファイルは伝播せず、
-     承認待ちに落ちれば人間不在の委譲先が固まる。詳細は `worktree-scope.md` §6）
+     承認待ちに落ちれば人間不在の委譲先が固まる。詳細は `delegate-to-worktree` 手順 2）
    - artifact 種別（rule / CLAUDE.md 追記 / lint / test / hook / allowlist）・配置パス・対象 repo
    - allowlist（grant）を含む場合は、**`pr-review-loop` までは回し、`pr-automerge` は呼ばない**旨を
      明記する（不変条件のとおり。人間の approve を待つ）
@@ -105,7 +105,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
 
    手順 4 の観測は、その場で直した指摘も直近 30 日の件数に数えさせるためにある。局所修正の後も
    同じ系統の観測が増えるなら、それ自体が構造的な改善が要る信号になり、日次の crawler が
-   グループとして委譲する（`dot/claude/rules/issue-workflow.md`）。
+   グループとして委譲する（`docs/design/agent-issue-workflow.md`「流れ」）。
 
 5. **起動**: `claude-worktree` を直接呼ぶ。branch は `harness/<slug>`、name は `harness-<slug>`
    （`[A-Za-z0-9_-]+`、pre-fetch した worktree 一覧と衝突しない名に）。
@@ -119,7 +119,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    名前も PR 本文・title・commit message・差分に書かず、PR の title に勤務先由来の具体名を入れないことを
    明記する（手順 4 の観測の起票は、issue 起点でも行う）。起票は `gh-issue-file` 経由で行い、生の `gh issue create` は使わない
    （`dot/claude/rules/issue-workflow.md`）。merge 後の close は crawler が行う。dotrc 以外の repo が
-   対象なら人が close する（同 §6.2）。
+   対象なら人が close する（同 §6）。
 
 6. **報告して終了**（fire-and-forget）: `claude-worktree` の出力（worktree / branch / session /
    model / report-to / attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:
@@ -130,7 +130,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
      ただし allowlist（grant）を含む場合は pr-review-loop の終了（収束または停止）で止まるので、**人間の approve と merge が
      要る**旨を報告する）
    - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
-     保守的に reap。詳細は worktree-scope.md §7）
+     保守的に reap。詳細は dotrc/docs/design/claude-tmux-worktree.md「委譲 worktree の後片付け」）
 
 7. **報告を受け取ったら**: 委譲先は `implement-and-review` 手順 6 に従い、完了・不足・中断を
    SendMessage で送ってくる。扱いは `delegate-to-worktree` 手順 6 と同じ（返信・完了報告を受けた

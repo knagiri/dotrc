@@ -15,7 +15,7 @@
 | 範囲外タスクの切り出し | `bin/claude-spinoff`（判断は `dot/claude/skills/spin-off-session/`） |
 | 委譲先の停止 | `bin/claude-stop-bg` |
 | idle な session の休眠 | `claude-queue watch`（`dot/systemd-user/claude-queue-watch.timer`） |
-| エージェント運用ルール | `dot/claude/rules/worktree-scope.md` |
+| エージェント運用ルール | `dot/claude/rules/session-scope.md` |
 
 ## レイヤ構成
 
@@ -124,6 +124,18 @@ claude-worktree [--tmux] <name> [-b <branch>] [-- <prompt...>]
   委譲に使う
 - `settings.json` で `claude-worktree` / `claude-worktree *` を allow 済み（承認不要）
 
+オプションの一覧と委譲手順は `dot/claude/skills/delegate-to-worktree/SKILL.md` が持つ。
+
+worktree をメイン checkout の**内側**に置くのは 2 つの理由による。ghq が repo として列挙しないので
+`gts` の候補が repo 本体だけになる。また mise が親方向へ config を辿るので、checkout 自身の mise
+config（`mise.local.toml` 等）を worktree でも拾い、seed が要らない（trust は後述の「委譲先の env と
+token」）。
+
+worktree 作成時に `.delegate/`（委譲先が報告に添える成果物の置き場所）を repo の exclude へ登録する。
+登録先は `git rev-parse --git-path info/exclude` が返す common dir 側の `info/exclude` である。`info/`
+は worktree 間で共有される領域なので、git は linked worktree でも common dir 側だけを読み、
+`.git/worktrees/<name>/info/exclude` へ書いても読まれない。
+
 ## エンドツーエンドの流れ（作業を分岐する）
 
 1. worktree A の tmux pane で claude 作業中（③が pane 単位で追跡、status-right に状態表示）
@@ -198,19 +210,18 @@ prompt` とは別状態）で次の入力を待ち続ける。放置すると完
 ならないので、作業を done にするのは明示的な操作だけである。委譲先の場合、その操作が
 `claude-stop-bg`（done を台帳に書いてから stop する）になる。素の `claude stop` は reason `other` で
 終わり gone になるだけで、作業は open のまま一覧に残る。したがって委譲元は、完了報告を受けたら質問へ
-返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（`delegate-to-worktree` 手順 6 /
-`worktree-scope.md` §6）。
+返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（`delegate-to-worktree` 手順 6）。
 
 委譲元が閉じ損なう経路は残る。報告が届かない、委譲元の session が先に消える、人間が素の shell から
 `claude-worktree` を叩いて閉じ手が誰もいない — いずれでも `idle` の委譲先が居座る。休眠
-（`claude-queue watch`、`worktree-scope.md` §8）は `idle_done` から閾値以上経った session のプロセスを
+（`claude-queue watch`、`claude-queue-session-tree.md`「休眠の運用」）は `idle_done` から閾値以上経った session のプロセスを
 止めて gone にするが、返信待ちの session（最後のターンに `SendMessage` がある、承認待ち）は止めない。
 止めると返信や承認の受け手が居なくなる。完了報告も `SendMessage` なので、閉じ忘れた委譲先は委譲元が
 done になるまで休眠しない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による cascade である。逆向きに、running かつ open な委譲先を持つ委譲元も報告の受け手なので
 休眠しない。休眠は作業を終わらせないので、判定が外れても失うのはプロセスだけで、resume すれば戻る。
 
 worktree の滞留も同様に残る — ①はどちらの経路でも走り、誰も消さないので、後片付けは
-`worktree-scope.md` §7 の `git-reap-gone`（manual 運用）が担う。tmux session を作る経路は
+後述の「委譲 worktree の後片付け」の `git-reap-gone`（manual 運用）が担う。tmux session を作る経路は
 `--tmux` として残してある — 人間が同席して設計を詰めるような、interactivity を要求する
 委譲のためで、退避路ではない。
 
@@ -288,6 +299,74 @@ ledger の pane を信用する（roster が読めないことは session の死
 worktree の中から `claude-worktree` を実行しても `dotrc/.worktrees/a/.worktrees/b` のようには
 ネストせず、常に `dotrc/.worktrees/<name>` のフラットな一段になる。`.worktrees/` を挟むように
 なってもこの性質は変わらない。①の `git wa` も同じ基準に揃えた。
+
+### 委譲先の env と token
+
+background 委譲先の env は、依頼元（`claude-worktree` を叩いた session）のものではなく、**その config
+dir の daemon を on-demand 起動した `claude --bg` 呼び出し元のもの**である。依頼元の env は届かず cwd
+だけが渡り、daemon は最後の client が切れるまで生きる（実測: 依頼元で付けた probe 変数は委譲先に無く、
+`GH_TOKEN` は daemon と同じローテーション前の値だった）。env に token を載せると、それを起動した一回の
+呼び出しの値が以降の全委譲先へ配られ、mise config を持たない repo への委譲にも紛れ込む。
+
+したがって dotrc の個人 PAT は `MISE_ENV=gh` のときだけ読まれる `mise.gh.local.toml` に置いて shell の
+env には載せず、`gh-*` wrapper が呼び出し時にだけ `MISE_ENV=gh mise exec` で読む（`bin/lib/gh-mise.sh`）。
+wrapper を通らない素の `gh` は hosts.yml の token に落ちる。shell の env に token が無いのはこの設計の
+結果であり、意図した状態である。
+
+`mise activate` は非対話 shell では発火しないので、親 config の env は委譲先に届かない（path レイアウト
+とは独立の gap）。`rc/bashrc` に activate 自体はあるが、`~/.bashrc` は非対話 shell で早期 return する
+うえ、activate が仕込むのは prompt hook である。実測でも、委譲先を起こすときの
+`(cd "$wt_path" && claude ...)` 相当の subshell・`bash -c`・`bash -lc` のいずれでも親 config の env は
+載らず、`mise exec` を明示したときだけ載った。そこで `claude-worktree` は background・`--tmux` の両経路で
+`mise exec -C <worktree> -- claude ...` の形で起動する。`--tmux` では pane の claude にその env が載る。
+background では、前置の env が委譲先に届くのはその呼び出しが daemon を on-demand 起動したときだけで、
+既に動いている daemon の下では cwd しか渡らない。
+
+worktree は `<repo>/.worktrees/<name>` にあるので、mise が親方向へ辿って checkout 自身の mise config を
+拾う（実測: `<repo>` だけを `mise trust` した状態で `<repo>/.worktrees/foo` から `mise env` を引くと親の
+値が出る）。ただし worktree が**自分の** config を持つ場合（tracked な `mise.toml` は各 worktree に
+checkout される）は、`<repo>` の `mise trust` では覆われず untrusted になる（実測）。dotrc では
+`bin/deploy.sh` が checkout を `trusted_config_paths`（path prefix で一致する）に登録して覆う。
+
+委譲先が無いと動けない gitignore 済み設定は `.claude/worktree-seed` で供給するのが正規経路で、それが
+効かないなら seed 側の不具合として直す。秘密ファイルを直接 source する回避策は使わない
+（`dot/claude/rules/session-scope.md`「委譲まわりで常に守ること」）。
+
+### 委譲 worktree の後片付け（`git-reap-gone`）
+
+```
+git-reap-gone [--no-fetch] [<branch>...]
+```
+
+merge 済みの委譲 worktree とブランチは、手作業の `git worktree remove` / `git branch -d` ではなく
+`git-reap-gone`（`bin/`）を保守的な predicate で回して消す。
+
+- **トリガーは推論せず `[gone]` 状態**。リモートが merge 時にブランチを削除 → `git fetch --prune`
+  （スクリプト冒頭で自動実行）で local が `[gone]` 化する、という権威ある外部イベントだけを完了の
+  合図にする。`--no-fetch` で冒頭 fetch を抑制できる（呼び出し側／cron が fetch を制御する場合）。
+- **統合先のローカルブランチ（通常 `main`）を checkout した状態で実行する**。そうでなければブランチ・
+  worktree・working tree のいずれも触らず exit 1 し（冒頭の fetch は既に走っている）、どのブランチへ
+  switch すればよいかを案内する（既に別 worktree で checkout 済みならそちらの path を案内する）。
+  `git branch -d` は「upstream があればそれ、無ければ HEAD」の 2 択でしか判定できず base を渡せない。
+  `[gone]` は upstream が消えた状態なので必ず HEAD 基準に落ち、HEAD が統合先でないと下の gate と別の
+  起点を測ることになるため。続けて `origin/HEAD` への `git merge --ff-only` を試み、古いローカル統合先を
+  追随させる（失敗しても abort せず警告して続行する。gate の安全性は ff に依存せず、失敗の帰結は skip が
+  増えるだけで誤削除方向には倒れない）。linked worktree からは統合先を switch できない（main working
+  tree が checkout 済みで、git が二重 checkout を拒否する）ので、main working tree 側で実行する。
+- **reap してよい条件（全通過のみ削除）**: ①統合先（`origin/HEAD` = 通常 `origin/main`）に対し未統合
+  コミットが無い、②HEAD から到達可能（`git branch -d` が実際に使う判定の先取り。worktree を消す前に
+  確認するので「worktree だけ消えてブランチが残る」中途半端な状態が構造的に生じない）、③worktree が
+  紐づくならそれが clean、④その worktree が今いる worktree でない。裸ブランチ（worktree 無し）は①②のみで
+  判定する。
+- **削除は安全形だけ**: `git worktree remove`（`--force` 無し）＋ `git branch -d`（`-D` ではない）。条件を
+  欠くもの・git が拒否したものは skip し、何が blocking か report する。force にはエスカレートしない。
+  これにより dirty／別ブランチへ切替済み（→ `[gone]` ブランチに worktree が紐づかない）等で使用中の
+  worktree は自動的に対象外になる。`.delegate/` は exclude 済みなので③を塞がない。
+- 引数でブランチ名を指定するとその対象だけを（同じゲートを通して）reap する。無指定なら全 `[gone]` を
+  sweep する。
+- **manual 運用**。cron/janitor の常駐は作っていないが、全 `[gone]` を sweep できる形なので、そのまま
+  cron/loop に挿せる。
+- settings.json で allow 済み（`git-reap-gone` / `git-reap-gone *`）。
 
 ## 既知の差分・今後の論点
 
