@@ -27,10 +27,10 @@ repo の外の任意のパス（`~/.claude/` など）は対象に入ってい�
 repo の外への書き込みを扱う記述を探した。
 
 ```
-$ git grep -n -E 'repo 外|リポジトリ外|working directory の外|ディレクトリ外' <当時の commit> -- 'dot/claude/rules/*.md' dot/claude/CLAUDE.md
-dot/claude/rules/working-directory.md:79:- **cwd の巻き戻し**: working directory の外へ `cd` しても、その cwd は次のコマンドへ
-dot/claude/rules/working-directory.md:89:上の 2 つはいずれも working directory の外へ出る `cd` の話で、**repo 内**のサブディレクトリへの
-dot/claude/rules/worktree-scope.md:93:worktree のディレクトリ外（絶対パスで他 worktree や main checkout を指すパス）への**書き込み**は、原則スコープ外とみなす。
+$ git grep -n -E 'repo 外|リポジトリ外|working directory の外|ディレクトリ外' 7e591e6^ -- 'dot/claude/rules/*.md' dot/claude/CLAUDE.md
+7e591e6^:dot/claude/rules/working-directory.md:79:- **cwd の巻き戻し**: working directory の外へ `cd` しても、その cwd は次のコマンドへ
+7e591e6^:dot/claude/rules/working-directory.md:89:上の 2 つはいずれも working directory の外へ出る `cd` の話で、**repo 内**のサブディレクトリへの
+7e591e6^:dot/claude/rules/worktree-scope.md:93:worktree のディレクトリ外（絶対パスで他 worktree や main checkout を指すパス）への**書き込み**は、原則スコープ外とみなす。
 ```
 
 該当したのは、別 worktree・main checkout を対象にした記述と、`cd` の挙動の記述だけだった。
