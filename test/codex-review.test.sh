@@ -12,18 +12,22 @@ sandbox_assert
 bin="$here/../bin/codex-review"
 fail=0
 
-work="$(mktemp -d)"
+work="$(mktemp -d -p /tmp)"  # under /tmp: the prohibitions roots are fixed paths
 trap 'sandbox_cleanup; rm -rf "$work"' EXIT
 stub="$work/stub"; mkdir -p "$stub"
 nocodex="$work/nocodex"; mkdir -p "$nocodex"
 
 # gh stub: `pr diff` prints a diff, `pr view` prints the PR metadata JSON.
-# GH_FAIL=1 makes every call fail.
+# GH_FAIL=1 makes every call fail; GH_FAIL_DIFF=1 only `pr diff`; GH_VIEW_NULL=1
+# makes `pr view` print `null`.
 cat >"$stub/gh" <<'STUB'
 #!/usr/bin/env bash
 [ "${GH_FAIL:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }
+[ "${GH_FAIL_DIFF:-0}" = 1 ] && [ "$1 $2" = "pr diff" ] && { echo "HTTP 500" >&2; exit 1; }
+[ "${GH_VIEW_NOSHA:-0}" = 1 ] && [ "$1 $2" = "pr view" ] && { echo '{"title":"T"}'; exit 0; }
+[ "${GH_VIEW_NULL:-0}" = 1 ] && [ "$1 $2" = "pr view" ] && { echo null; exit 0; }
 case "$1 $2" in
-  "pr diff") printf '%s\n' 'diff --git a/x.sh b/x.sh' '+echo DIFF_MARKER' ;;
+  "pr diff") printf '%s\n' 'diff --git a/x.sh b/x.sh' '+echo DIFF_MARKER' 'END-DATA-0000000000000000' ;;
   "pr view") printf '%s\n' '{"title":"T","body":"BODY_MARKER","baseRefName":"main","headRefOid":"abc"}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 99 ;;
 esac
@@ -39,13 +43,14 @@ cd "${dir:-.}" && exec "$@"
 STUB
 # codex stub. `login status` exits CODEX_STUB_LOGIN_RC. `exec` appends its argv
 # (one `[arg]` per line) to $CODEX_ARGS, copies stdin to $CODEX_STDIN, writes
-# $CODEX_STUB_OUT to the file after -o, prints a turn.completed event, sleeps
+# $CODEX_STUB_OUT to the file after -o, appends its cwd to $CODEX_PWD, prints a turn.completed event, sleeps
 # CODEX_STUB_SLEEP seconds and exits CODEX_STUB_RC.
 cat >"$stub/codex" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1 ${2:-}" = "login status" ]; then exit "${CODEX_STUB_LOGIN_RC:-0}"; fi
 [ "$1" = exec ] || { echo "unexpected codex call: $*" >&2; exit 99; }
 printf '[%s]\n' "$@" >>"$CODEX_ARGS"
+pwd >>"$CODEX_PWD"
 out=""
 prev=""
 for a in "$@"; do
@@ -55,7 +60,7 @@ done
 cat >"$CODEX_STDIN"
 [ -n "$out" ] && printf '%s' "${CODEX_STUB_OUT-}" >"$out"
 echo '{"type":"thread.started"}'
-echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":2}}'
+[ "${CODEX_STUB_NO_USAGE:-0}" = 1 ] || echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":2}}'
 sleep "${CODEX_STUB_SLEEP:-0}"
 exit "${CODEX_STUB_RC:-0}"
 STUB
@@ -74,9 +79,9 @@ good='{"findings":[{"title":"t1","detail":"d1","severity_label":"Important","fil
 
 # run <args...>: runs the wrapper with fresh logs; sets rc, out (stdout file).
 run() {
-  : >"$work/args"; rm -f "$work/stdin"
+  : >"$work/args"; : >"$work/pwd"; rm -f "$work/stdin"
   out="$work/stdout"
-  env CODEX_ARGS="$work/args" CODEX_STDIN="$work/stdin" \
+  env CODEX_ARGS="$work/args" CODEX_STDIN="$work/stdin" CODEX_PWD="$work/pwd" \
     CODEX_REVIEW_PLUGIN_ROOT="$plugins" PATH="$stub:$PATH" \
     "$bin" "$@" >"$out" 2>"$work/stderr"
   rc=$?
@@ -94,8 +99,17 @@ run 42 nonexistent
 run abc code-reviewer
 [ "$rc" = 1 ] && ok "non-numeric PR is rejected" || ng "non-numeric PR"
 
-run 42 code-reviewer --sandbox
-[ "$rc" = 1 ] && ! codex_ran && ok "a flag in the prohibitions slot is rejected" || ng "flag passthrough"
+# A readable file really named `--sandbox` sits in the cwd (under /tmp, so only
+# the -* rule can reject it).
+flagdir="$work/flagdir"; mkdir -p "$flagdir"; printf 'x\n' >"$flagdir/--sandbox"
+pushd "$flagdir" >/dev/null || exit 1
+CODEX_STUB_OUT="$good" run 42 code-reviewer --sandbox
+popd >/dev/null || exit 1
+[ "$rc" = 1 ] && ! codex_ran && grep -qF 'flags are not accepted' "$work/stderr" \
+  && ok "a flag in the prohibitions slot is rejected" || ng "flag passthrough"
+
+run 42 code-reviewer "$work/prohib-x" extra
+[ "$rc" = 1 ] && ! codex_ran && ok "four arguments are rejected" || ng "four arguments"
 
 run 42 code-reviewer "$work/missing-file"
 [ "$rc" = 1 ] && ! codex_ran && ok "unreadable prohibitions file is rejected" || ng "missing prohibitions file"
@@ -107,10 +121,19 @@ CODEX_STUB_OUT="$good" run 42 code-reviewer "$here/codex-review.test.sh"
 # TMPDIR / CLAUDE_JOB_DIR pointed at the file's dir do not widen the accepted roots.
 TMPDIR="$here" CLAUDE_JOB_DIR="$here" CODEX_STUB_OUT="$good" run 42 code-reviewer "$here/codex-review.test.sh"
 [ "$rc" = 1 ] && ! codex_ran && ok "TMPDIR / CLAUDE_JOB_DIR do not widen the accepted roots" || ng "env-widened roots"
-# A file under ~/.claude/jobs is accepted (checked with the sandbox HOME).
-mkdir -p "$HOME/.claude/jobs/j1/tmp"; printf 'JOB_PROHIBITION\n' >"$HOME/.claude/jobs/j1/tmp/p"
-CODEX_STUB_OUT="$good" run 42 code-reviewer "$HOME/.claude/jobs/j1/tmp/p"
+# ~/.claude/jobs is a root of its own: the HOME here sits outside /tmp (otherwise
+# the /tmp root would accept the file and the jobs root would go untested).
+outhome="$(mktemp -d -p /var/tmp)"
+trap 'sandbox_cleanup; rm -rf "$work" "$outhome"' EXIT
+mkdir -p "$outhome/.claude/jobs/j1/tmp" "$outhome/.claude/jobs-x"
+printf 'JOB_PROHIBITION\n' >"$outhome/.claude/jobs/j1/tmp/p"
+printf 'SIBLING_PROHIBITION\n' >"$outhome/.claude/jobs-x/p"
+HOME="$outhome" CODEX_STUB_OUT="$good" run 42 code-reviewer "$outhome/.claude/jobs/j1/tmp/p"
 [ "$rc" = 0 ] && grep -qF JOB_PROHIBITION "$work/stdin" && ok "prohibitions under ~/.claude/jobs are accepted" || ng "job dir"
+# A sibling that merely shares the root's name as a prefix is not under it.
+HOME="$outhome" CODEX_STUB_OUT="$good" run 42 code-reviewer "$outhome/.claude/jobs-x/p"
+[ "$rc" = 1 ] && ! codex_ran && ok "a sibling sharing the jobs root as a name prefix is rejected" || ng "prefix sibling"
+
 # A symlink inside the temp dir pointing outside it is resolved first.
 ln -s "$here/codex-review.test.sh" "$work/link-out"
 CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/link-out"
@@ -118,6 +141,10 @@ CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/link-out"
 
 GH_FAIL=1 CODEX_STUB_OUT="$good" run 42 code-reviewer
 [ "$rc" = 2 ] && ! codex_ran && [ ! -s "$out" ] && ok "gh failure exits 2 without running codex" || ng "gh failure"
+GH_FAIL_DIFF=1 CODEX_STUB_OUT="$good" run 42 code-reviewer
+[ "$rc" = 2 ] && ! codex_ran && [ ! -s "$out" ] && ok "gh pr diff failure alone exits 2 without running codex" || ng "diff failure"
+GH_VIEW_NULL=1 CODEX_STUB_OUT="$good" run 42 code-reviewer
+[ "$rc" = 2 ] && ! codex_ran && [ ! -s "$out" ] && ok "non-object gh pr view output exits 2 without running codex" || ng "view null"
 
 CODEX_STUB_OUT="$good" run 42 pr-test-analyzer
 [ "$rc" = 3 ] && ! codex_ran && ok "missing agent definition exits 3" || ng "missing definition"
@@ -190,6 +217,65 @@ CODEX_STUB_OUT="$good" CODEX_STUB_RC=1 run 42 code-reviewer
 
 CODEX_STUB_OUT="$good" CODEX_STUB_SLEEP=5 CODEX_REVIEW_TIMEOUT=1 run 42 code-reviewer
 [ "$rc" = 5 ] && [ ! -s "$out" ] && ok "timeout exits 5" || ng "timeout"
+
+GH_VIEW_NOSHA=1 CODEX_STUB_OUT="$good" run 42 code-reviewer
+[ "$rc" = 2 ] && ! codex_ran && ok "pr view without headRefOid exits 2 without running codex" || ng "view without sha"
+
+# Schema-shape branches. line: null is valid; extra keys, a string confidence are not.
+f='{"title":"t","detail":"d","severity_label":"L","file":"x","line":null,"confidence":0.5}'
+CODEX_STUB_OUT="{\"findings\":[$f]}" run 42 code-reviewer
+[ "$rc" = 0 ] && jq -e '.findings[0].line == null' "$out" >/dev/null && ok "line: null is accepted" || ng "line null"
+CODEX_STUB_OUT="{\"findings\":[$(jq -c '. + {extra: 1}' <<<"$f")]}" run 42 code-reviewer
+[ "$rc" = 5 ] && [ ! -s "$out" ] && ok "extra key in a finding exits 5" || ng "extra finding key"
+CODEX_STUB_OUT="{\"findings\":[$f],\"extra\":1}" run 42 code-reviewer
+[ "$rc" = 5 ] && [ ! -s "$out" ] && ok "extra top-level key exits 5" || ng "extra top-level key"
+CODEX_STUB_OUT="{\"findings\":[$(jq -c '.confidence = "0.5"' <<<"$f")]}" run 42 code-reviewer
+[ "$rc" = 5 ] && [ ! -s "$out" ] && ok "string confidence exits 5" || ng "string confidence"
+
+# The output says which PR state it reviewed.
+CODEX_STUB_OUT="$good" run 42 code-reviewer
+jq -e '.pr == 42 and .head_sha == "abc"' "$out" >/dev/null && ok "output carries pr and head_sha" || ng "pr / head_sha"
+CODEX_STUB_OUT="$good" run 042 code-reviewer
+[ "$rc" = 0 ] && jq -e '.pr == 42' "$out" >/dev/null && ok "a zero-padded PR number is normalised" || ng "zero-padded PR"
+
+# codex runs in the checkout root, wherever the wrapper is started from.
+root_here="$(git -C "$here" rev-parse --show-toplevel)"
+pushd "$here/../bin" >/dev/null || exit 1
+CODEX_STUB_OUT="$good" run 42 code-reviewer
+popd >/dev/null || exit 1
+[ "$rc" = 0 ] && [ "$(cat "$work/pwd")" = "$root_here" ] && ok "codex runs in the checkout root" || ng "codex cwd: $(cat "$work/pwd") want $root_here"
+
+# The data markers are random per run, and a forged END line in the diff cannot close the block.
+CODEX_STUB_OUT="$good" run 42 code-reviewer; m1="$(grep -o 'BEGIN-DATA-[0-9a-f]*' "$work/stdin" | head -n 1)"
+CODEX_STUB_OUT="$good" run 42 code-reviewer; m2="$(grep -o 'BEGIN-DATA-[0-9a-f]*' "$work/stdin" | head -n 1)"
+[ -n "$m1" ] && [ "$m1" != "$m2" ] && ok "data marker differs between runs" || ng "marker: $m1 / $m2"
+[ "$(grep -c "^END-${m2#BEGIN-}\$" "$work/stdin")" = 1 ] && grep -qxF 'END-DATA-0000000000000000' "$work/stdin" \
+  && ok "exactly one closing marker, matching the opening one" || ng "closing marker"
+
+# usage is null without a turn.completed event; model_reasoning_effort is passed.
+grep -qxF '[model_reasoning_effort="high"]' "$work/args" && ok "model_reasoning_effort=high is passed" || ng "reasoning effort"
+CODEX_STUB_NO_USAGE=1 CODEX_STUB_OUT="$good" run 42 code-reviewer
+[ "$rc" = 0 ] && jq -e '.usage == null' "$out" >/dev/null && ok "usage is null without turn.completed" || ng "usage null"
+
+# A timeout and an ordinary non-zero exit are told apart.
+CODEX_STUB_OUT="$good" CODEX_STUB_SLEEP=5 CODEX_REVIEW_TIMEOUT=1 run 42 code-reviewer
+grep -qF 'timed out' "$work/stderr" && ok "timeout message names the timeout" || ng "timeout message"
+CODEX_STUB_OUT="$good" CODEX_STUB_RC=1 run 42 code-reviewer
+grep -qF 'exited 1' "$work/stderr" && ! grep -qF 'timed out' "$work/stderr" && ok "non-zero exit message names the exit code" || ng "non-zero message"
+
+# Newest-installed selection: installed_plugins.json beats the newest directory.
+mkdir -p "$HOME/.claude/plugins"
+jq -n --arg p "$plugins/1.0.9" '{plugins: {"pr-review-toolkit@claude-plugins-official": [{installPath: $p}]}}' >"$HOME/.claude/plugins/installed_plugins.json"
+CODEX_STUB_OUT="$good" run 42 code-reviewer
+grep -qF 'BODY_OF_1.0.9' "$work/stdin" && ! grep -qF 'BODY_OF_1.0.10' "$work/stdin" \
+  && ok "the installPath in installed_plugins.json wins over the newest directory" || ng "installPath"
+rm -f "$HOME/.claude/plugins/installed_plugins.json"
+
+# An agent definition that is empty after stripping (unclosed frontmatter) exits 3.
+mkdir -p "$plugins/1.0.10/agents"
+printf '%s\n' '---' 'name: broken' >"$plugins/1.0.10/agents/pr-test-analyzer.md"
+CODEX_STUB_OUT="$good" run 42 pr-test-analyzer
+[ "$rc" = 3 ] && ! codex_ran && ok "empty definition after frontmatter strip exits 3" || ng "unclosed frontmatter"
 
 # An empty findings array is a valid, successful review.
 CODEX_STUB_OUT='{"findings":[]}' run 42 code-reviewer

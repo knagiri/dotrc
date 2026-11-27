@@ -11,7 +11,7 @@ sandbox_assert
 bin="$here/../bin/codex-review-tally"
 fail=0
 
-work="$(mktemp -d)"
+work="$(mktemp -d -p /tmp)"
 trap 'sandbox_cleanup; rm -rf "$work"' EXIT
 stub="$work/stub"; mkdir -p "$stub"
 
@@ -20,6 +20,7 @@ stub="$work/stub"; mkdir -p "$stub"
 cat >"$stub/gh" <<'STUB'
 #!/usr/bin/env bash
 [ "${GH_FAIL:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }
+[ "${GH_FAIL_PRVIEW:-0}" = 1 ] && [ "$1 $2" = "pr view" ] && { echo "HTTP 500" >&2; exit 1; }
 case "$1 $2" in
   "repo view") echo "example-org/example-repo" ;;
   "pr view") echo "0123456789abcdef0123456789abcdef01234567" ;;
@@ -42,13 +43,22 @@ log="$XDG_STATE_HOME/codex-review/compare.jsonl"
 ok() { echo "ok: $1"; }
 ng() { echo "FAIL: $1 (rc=$rc stdout=$(cat "$work/stdout" 2>/dev/null) stderr=$(cat "$work/stderr" 2>/dev/null))"; fail=1; }
 
-# codex output dir: code-reviewer succeeded; pr-test-analyzer's file is empty
-# (what a failed codex-review leaves when its stdout is redirected to a file).
-cdir="$work/codex"; mkdir -p "$cdir"
-printf '%s\n' '{"perspective":"code-reviewer","findings":[],"usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":7}}' >"$cdir/code-reviewer.json"
-: >"$cdir/pr-test-analyzer.json"
+sha=0123456789abcdef0123456789abcdef01234567
+# cx_out <dir> <perspective> <pr> <sha> <input> <cached> <output>: a codex-review success output.
+cx_out() {
+  printf '{"perspective":"%s","pr":%s,"head_sha":"%s","findings":[],"usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":%s}}\n' \
+    "$2" "$3" "$4" "$5" "$6" "$7" >"$1/$2.json"
+}
+# mk_cdir <dir> <pr>: code-reviewer succeeded; pr-test-analyzer's file is empty
+# (what a failed codex-review leaves when its stdout is redirected to a file);
 # comment-analyzer: codex ran, toolkit did not succeed.
-printf '%s\n' '{"perspective":"comment-analyzer","findings":[],"usage":{"input_tokens":5,"cached_input_tokens":1,"output_tokens":3}}' >"$cdir/comment-analyzer.json"
+mk_cdir() {
+  mkdir -p "$1"
+  cx_out "$1" code-reviewer "$2" "$sha" 100 40 7
+  : >"$1/pr-test-analyzer.json"
+  cx_out "$1" comment-analyzer "$2" "$sha" 5 1 3
+}
+cdir="$work/codex"; mk_cdir "$cdir" 42
 
 verdict="$work/verdict.json"
 cat >"$verdict" <<'EOF'
@@ -112,6 +122,72 @@ before="$(wc -l <"$log")"
 GH_FAIL=1 run 42 "$verdict" code-reviewer "$cdir"
 [ "$rc" = 2 ] && [ "$(wc -l <"$log")" = "$before" ] && ok "gh failure exits 2 and appends nothing" || ng "gh failure"
 
+# A gh pr view failure alone (repo view fine) also exits 2 and appends nothing.
+before="$(wc -l <"$log")"
+GH_FAIL_PRVIEW=1 run 42 "$verdict" code-reviewer "$cdir"
+[ "$rc" = 2 ] && [ "$(wc -l <"$log")" = "$before" ] && ok "pr view failure alone exits 2 and appends nothing" || ng "pr view failure"
+
+# A verdict whose findings_gated is not an array is rejected.
+printf '%s\n' '{"findings_to_fix":[],"findings_gated":"x"}' >"$work/badshape.json"
+run 42 "$work/badshape.json" code-reviewer "$cdir"
+[ "$rc" = 1 ] && ok "verdict with non-array findings_gated is rejected" || ng "bad verdict shape"
+
+# Codex outputs that are not what codex-review prints for this PR and head
+# commit are failures, not completions.
+stale="$work/stale"; mkdir -p "$stale"
+cx_out "$stale" code-reviewer 41 "$sha" 1 1 1                                  # other PR
+cx_out "$stale" pr-test-analyzer 42 ffffffffffffffffffffffffffffffffffffffff 1 1 1  # other head commit
+printf '%s\n' '{"perspective":"comment-analyzer","findings":[]}' >"$stale/comment-analyzer.json"  # no pr / head_sha (old format)
+printf 'not json at all\n' >"$stale/silent-failure-hunter.json"                 # non-JSON, non-empty
+printf '%s\n' '{"perspective":"code-reviewer","pr":42,"head_sha":"'"$sha"'","findings":[]}' >"$stale/type-design-analyzer.json"  # perspective != file name
+run 42 "$verdict" code-reviewer,pr-test-analyzer,comment-analyzer,silent-failure-hunter,type-design-analyzer "$stale"
+rec="$(tail -n 1 "$log")"
+check '.pairs == [] and (.codex_failed | sort) == ["code-reviewer","comment-analyzer","pr-test-analyzer","silent-failure-hunter","type-design-analyzer"]' \
+  && ok "stale, other-PR, non-JSON and mislabelled codex outputs are codex_failed" || ng "stale outputs: $rec"
+printf '%s\n' '{"perspective":"code-reviewer","pr":42,"head_sha":"'"$sha"'","findings":"x"}' >"$stale/code-reviewer.json"
+run 42 "$verdict" code-reviewer "$stale"
+rec="$(tail -n 1 "$log")"
+check '.pairs == [] and .codex_failed == ["code-reviewer"]' \
+  && ok "codex output with non-array findings is codex_failed" || ng "non-array findings: $rec"
+
+# Classification of mixed origins (any, not all; paired origins only). code-reviewer
+# and silent-failure-hunter are paired; comment-analyzer's codex side failed.
+cdir2="$work/codex2"; mkdir -p "$cdir2"
+cx_out "$cdir2" code-reviewer 42 "$sha" 1 1 1
+cx_out "$cdir2" silent-failure-hunter 42 "$sha" 1 1 1
+verdict2="$work/verdict2.json"
+cat >"$verdict2" <<'JSON'
+{"findings_to_fix": [
+  {"summary": "m-a", "source": "pr-review-toolkit:code-reviewer, codex:comment-analyzer", "severity": "low"},
+  {"summary": "m-b", "source": "pr-review-toolkit:comment-analyzer, codex:code-reviewer", "severity": "low"},
+  {"summary": "m-c", "source": "pr-review-toolkit:code-reviewer, codex:silent-failure-hunter", "severity": "low"},
+  {"summary": "m-d", "source": "pr-review-toolkit:code-reviewer, pr-review-toolkit:comment-analyzer", "severity": "low"},
+  {"summary": "m-e", "source": "pr-review-toolkit:comment-analyzer, codex:comment-analyzer", "severity": "low"}
+], "findings_gated": []}
+JSON
+run 42 "$verdict2" code-reviewer,comment-analyzer,silent-failure-hunter "$cdir2"
+rec="$(tail -n 1 "$log")"
+check '.pairs == ["code-reviewer","silent-failure-hunter"] and .adopted == {"toolkit_only": 2, "codex_only": 1, "both": 1, "unpaired": 1}' \
+  && ok "mixed paired / unpaired and cross-perspective origins are classified by paired origins (any)" || ng "mixed origins: $rec"
+
+# Malformed sources: trimmed names and "/" separators still count; typos and bare
+# perspective names are reported, not silently bucketed or dropped.
+cdir3="$work/codex3"; mkdir -p "$cdir3"; cx_out "$cdir3" code-reviewer 42 "$sha" 1 1 1
+verdict3="$work/verdict3.json"
+cat >"$verdict3" <<'JSON'
+{"findings_to_fix": [
+  {"summary": "s-space", "source": "codex: code-reviewer", "severity": "low"},
+  {"summary": "s-typo", "source": "codex:code-reviewr, self", "severity": "low"},
+  {"summary": "s-bare", "source": "silent-failure-hunter", "severity": "low"},
+  {"summary": "s-slash", "source": "pr-review-toolkit:code-reviewer / codex:code-reviewer", "severity": "low"}
+], "findings_gated": []}
+JSON
+run 42 "$verdict3" code-reviewer "$cdir3"
+rec="$(tail -n 1 "$log")"
+check '.adopted == {"toolkit_only": 0, "codex_only": 1, "both": 1, "unpaired": 0} and .malformed == {"count": 2, "items": ["s-typo", "s-bare"]}' \
+  && grep -qF 'malformed' "$work/stderr" \
+  && ok "malformed sources are reported; spaced and slash-separated origins count" || ng "malformed: $rec"
+
 # An empty toolkit-ok list pairs nothing.
 run 42 "$verdict" "" "$cdir"
 [ "$rc" = 0 ] && jq -e '.pairs == [] and .adopted.both == 0 and .adopted.unpaired == 6' <<<"$(tail -n 1 "$log")" >/dev/null \
@@ -141,16 +217,26 @@ append_case "unterminated" nonewline
 
 # --summary totals every record.
 rm -rf "$XDG_STATE_HOME"
+cdir43="$work/codex43"; mk_cdir "$cdir43" 43
 run 42 "$verdict" code-reviewer,pr-test-analyzer "$cdir"
-run 43 "$verdict" code-reviewer,pr-test-analyzer "$cdir"
+run 43 "$verdict" code-reviewer,pr-test-analyzer "$cdir43"
 run --summary
-if [ "$rc" = 0 ] && jq -e '.prs == 2 and .adopted.both == 2 and .adopted.toolkit_only == 4
+if [ "$rc" = 0 ] && jq -e '.records == 2 and .prs == 2 and .adopted.both == 2 and .adopted.toolkit_only == 4
     and .not_adopted.codex_only == 2 and .codex_usage.output_tokens == 20
     and .toolkit_only_by_severity == {"high": 2, "medium": 2}' "$work/stdout" >/dev/null; then
   ok "--summary totals the records"
 else ng "--summary"; fi
+# Re-running a PR adds a record but not a PR.
+run 42 "$verdict" code-reviewer,pr-test-analyzer "$cdir"
+run --summary
+[ "$rc" = 0 ] && jq -e '.records == 3 and .prs == 2' "$work/stdout" >/dev/null \
+  && ok "--summary counts records and distinct PRs separately" || ng "--summary records vs prs"
+# A broken log line is a distinct failure, not a jq exit code.
+printf 'garbage\n' >>"$log"
+run --summary
+[ "$rc" = 3 ] && ok "--summary over a broken log line exits 3" || ng "--summary broken log"
 rm -rf "$XDG_STATE_HOME"
 run --summary
-[ "$rc" = 0 ] && jq -e '.prs == 0' "$work/stdout" >/dev/null && ok "--summary with no log reports zero" || ng "--summary empty"
+[ "$rc" = 0 ] && jq -e '.records == 0 and .prs == 0' "$work/stdout" >/dev/null && ok "--summary with no log reports zero" || ng "--summary empty"
 
 exit "$fail"

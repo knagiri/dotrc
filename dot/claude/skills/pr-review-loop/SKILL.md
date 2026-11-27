@@ -142,11 +142,14 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 
       **codex の並走**: 選んだ各 agent の観点（agent 名から `pr-review-toolkit:` を外したもの）ごとに、
       toolkit agent の dispatch と並べて `codex-review <PR> <観点> [<prohibitions-file>]` を Bash の
-      `run_in_background` で起動し、stdout を `$CLAUDE_JOB_DIR/tmp/codex-review/<観点>.json` へ保存する
-      （`$CLAUDE_JOB_DIR` が未定義なら、判定 subagent prompt の「一時ファイル」の段落と同じく
-      `mktemp -d` で作った dir の下に `codex-review/` を置く）。観点の選び方は上の toolkit の選び方を
-      そのまま使い、別に持たない。`<PROHIBITIONS>` が渡されていれば原文を一時ファイル（ラッパーは
-      `/tmp` か `~/.claude/jobs` の下しか受け付けない）に書いて第 3 引数に渡し、「なし」なら省く。それ以外（実装の意図・HOW・`<SCOPE>`）は渡さない（不変条件「author とは
+      `run_in_background` で起動し、stdout を `<CODEX_DIR>/<観点>.json` へ保存する。`<CODEX_DIR>` は
+      **実行ごとに新しく作る**（`mkdir -p "$CLAUDE_JOB_DIR/tmp" && mktemp -d -p "$CLAUDE_JOB_DIR/tmp" codex-review.XXXXXX`。
+      `$CLAUDE_JOB_DIR` が未定義なら `mktemp -d`）。固定パスを使い回すと、今回走らせなかった観点や
+      起動できなかった観点に前回の出力が残る。観点の選び方は上の toolkit の選び方を
+      そのまま使い、別に持たない。`<PROHIBITIONS>` が渡されていれば原文を一時ファイルに書いて第 3 引数に
+      渡し、「なし」なら省く。ラッパーは `/tmp` か `~/.claude/jobs` の下しか受け付けないので、
+      ファイルは必ず `mktemp -p /tmp` で `/tmp` 直下に作る（`$CLAUDE_JOB_DIR` や TMPDIR 任せの `mktemp` は
+      置き場所が外れうる）。集約が済んだら消す。それ以外（実装の意図・HOW・`<SCOPE>`）は渡さない（不変条件「author とは
       独立」。ラッパーは PR と観点の定義だけで prompt を組む）。
       toolkit agent と codex の全観点の終了を待ってから集約する。待たずに進むと遅い観点が恒常的に落ち、
       比較が偏るため。最大 5 並列になるが、プロセスはネットワーク待ちが支配的で CPU をほぼ使わないので
@@ -169,7 +172,7 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       読まない。
 
       **比較の記録**: a-1 でイテレーション 1 の判定 verdict を得た直後に、verdict JSON を一時ファイルへ
-      書き、`codex-review-tally <PR> <verdict-file> <toolkit-ok> <codex の出力 dir>` を実行する。
+      書き、`codex-review-tally <PR> <verdict-file> <toolkit-ok> <CODEX_DIR>` を実行する。
       `<toolkit-ok>` は成功した toolkit agent の観点名の `,` 区切り（全滅なら空文字）。専門レビューを
       丸ごと skip したときは呼ばない。失敗してもループは止めず、最終サマリに一言残す。
 

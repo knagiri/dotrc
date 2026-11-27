@@ -50,14 +50,23 @@ Claude 側の Bash 呼び出し数本の削減だけなので採らない。
 findings は判定役を経て PR 上の記録へ写りうる。同じ読み取り範囲は toolkit agent も持っているので
 並走で新たに開く経路ではないが、規約を読ませる設計上 home を隔離できず、塞いでもいない。
 同じ理由で、禁止事項ファイルの置き場所の制限も硬い境界ではない。呼び出し側が秘密を一時ディレクトリへ
-写してから渡せば通るので、任意のパスをそのまま送れないようにする摩擦に留まる。
+写してから渡せば通るので、任意のパスをそのまま送れないようにする摩擦に留まる。`~/.claude/jobs` は
+`CLAUDE_CONFIG_DIR` 未設定時の job の既定の置き場で、設定されていれば `/tmp` を使う。
+
+もう 1 つ、観点の定義を読む plugin ディレクトリは env `CODEX_REVIEW_PLUGIN_ROOT` で変えられる。
+`<dir>/<version>/agents/<観点>.md` の形のファイルなら codex へ送られうるので、環境を制御できる
+呼び出し側には任意のファイルを送る経路が残る。禁止事項の基準だけを固定しても、この入力は塞がっていない。
+
+観点の定義の版は、`~/.claude/plugins/installed_plugins.json` が記録する pr-review-toolkit の
+`installPath` を使う。それが無ければ plugin cache で `sort -V` の最大のディレクトリに落ちるが、cache には
+旧版が残りうるので installed の版と一致する保証は無い。
 
 ## 比較の数え方
 
 `codex-review-tally` は 1 巡目の判定 verdict から、採用された指摘（`findings_to_fix` の全件と、
 `findings_gated` のうち `blocker: true` のもの）を `source` の出所で分ける。判定役には、toolkit と
-codex が同じ問題を指摘したら 1 項目にまとめて `source` に両方を書かせる。この 1 文は並走期間だけの
-もので、置き換えの PR で外す。
+codex が同じ問題を指摘したら 1 項目にまとめて `source` に両方を書かせる。この指示は比較を `source`
+から数えるためのもので、比較を行わない構成では不要になる。
 
 比較は両側とも成功した観点の組だけで行う。片側が失敗した観点の指摘は `unpaired` として件数だけ数え、
 toolkit だけ / codex だけには入れない。codex の失敗が「codex の取りこぼし」に数えられて判断が
@@ -71,8 +80,18 @@ toolkit だけ / codex だけには入れない。codex の失敗が「codex の
 - `both` — どちらでも拾えるもの
 - `unpaired` — 片側の失敗で比べられなかったもの。多ければ比較の母数が欠けている
 
-ログは `${XDG_STATE_HOME:-$HOME/.local/state}/codex-review/compare.jsonl` に 1 PR 1 行で追記し、
-`codex-review-tally --summary` で全体を集計する。repo の外のローカルファイルなので業務 repo の名前を
+出所が paired と unpaired の観点にまたがる項目は、paired な観点の出所だけで分類する（片側の出所が
+paired でなければ、もう片側だけを持つ項目として数える）。`both` は paired な toolkit 出所と paired な
+codex 出所が 1 つずつあれば成り立ち、同じ観点である必要は無い。書式の崩れた `source`（未知の観点名、
+prefix の無い観点名）は分類に使わず、record の `malformed` に載せて警告する。
+
+codex の出力は `pr` と `head_sha` を持ち、`codex-review-tally` は今の PR・head commit と一致する
+出力だけを完了として数える。出力 dir は実行ごとに新しく作るが、前回の出力が混ざっても成功に
+数えないための二重の備えである。
+
+ログは `${XDG_STATE_HOME:-$HOME/.local/state}/codex-review/compare.jsonl` に、`pr-review-loop` の
+1 巡目 1 回につき 1 行で追記する（同じ PR を再実行すれば行が増える）。`codex-review-tally --summary` は
+行数 `records` と PR の一意数 `prs` を分けて集計する。repo の外のローカルファイルなので業務 repo の名前を
 含みうる。tracked ファイル・PR 本文へは写さない。
 
 ## 既定と前提
