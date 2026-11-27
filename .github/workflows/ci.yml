@@ -53,6 +53,7 @@ jobs:
             bin/claude-stop-bg \
             bin/claude-worktree \
             bin/codex-review \
+            bin/codex-review-tally \
             bin/db-query \
             bin/gh-automerge \
             bin/gh-await-reviews \
@@ -83,6 +84,7 @@ jobs:
             test/claude-stop-bg.test.sh \
             test/claude-worktree.test.sh \
             test/codex-review.test.sh \
+            test/codex-review-tally.test.sh \
             test/db-query.test.sh \
             test/deploy.test.sh \
             test/dotrc-config.test.sh \
