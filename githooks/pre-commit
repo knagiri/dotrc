@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# pre-commit: refuse a commit Claude Code makes straight onto the integration
+# pre-commit: refuse an agent commit straight onto the integration
 # branch of a main working tree.
 #
-# Runs only when CLAUDECODE is non-empty (Claude Code sets it in the shells it
-# starts); a commit from a shell where it is empty passes. That includes a
-# human's, but a commit typed from a shell that inherited CLAUDECODE (e.g. a
-# `!` command inside Claude Code) is refused too. Otherwise the commit is refused
-# (stderr message, exit 1) when all of these hold, and passes when any fails:
+# Runs when CLAUDECODE or CODEX_THREAD_ID is non-empty. The agents set these
+# variables in their tool shells. An ordinary shell without either marker
+# passes. A human command that inherits either marker is treated as an agent
+# command. The commit is refused (stderr message, exit 1) when all of these
+# hold, and passes when any fails:
 #   a. the repo the commit runs in is a main working tree: --git-common-dir
 #      equals --git-dir, and <toplevel>/.git is a directory (a submodule's
 #      .git is a file even though the two dirs match)
@@ -29,7 +29,7 @@
 # failure while judging (rev-parse cannot answer) lets the commit pass.
 set -u
 
-[ -n "${CLAUDECODE:-}" ] || exit 0
+[[ -n ${CLAUDECODE:-} || -n ${CODEX_THREAD_ID:-} ]] || exit 0 # agent-env@dotrc
 
 common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
 gitdir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)" || exit 0
@@ -47,11 +47,15 @@ target="${target#refs/remotes/origin/}"
 git remote get-url origin >/dev/null 2>&1 || exit 0
 git rev-parse -q --verify HEAD >/dev/null 2>&1 || exit 0
 
-cat >&2 <<EOF
-pre-commit: commit を止めた: main working tree の統合先 branch '$branch' への直接 commit。
+echo "pre-commit: commit を止めた: main working tree の統合先 branch '$branch' への直接 commit。" >&2
+if [ -n "${CODEX_THREAD_ID:-}" ]; then
+  echo '作業用の branch または linked worktree で commit する。' >&2
+else
+  cat >&2 <<EOF
 main working tree での実装は delegate-to-worktree で worktree へ委譲するのが既定
 （~/.claude/rules/session-scope.md §5）。この場で進めるよう明示されているなら、
 \`git switch -c <branch>\` で branch を切ってから commit し、PR を出す。
-\`git commit --no-verify\` でこの hook を回避しない。
 EOF
+fi
+echo '`git commit --no-verify` でこの hook を回避しない。' >&2
 exit 1
