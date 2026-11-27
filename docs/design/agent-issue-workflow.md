@@ -47,15 +47,15 @@ issue に autolink され、誤った誘導になるため。issue の template 
 
 一般的な事故管理（エラー監視の event / issue、ITIL の incident / problem）と同じく 2 層にする。
 
-- **観測**（label `observation`）: 1 つの気づき = 1 つの issue。中身は書き換えず、統合もしない。
-  束ねても個々の文脈を失わないため
-- **グループ**（label `group`）: 親 issue。観測を GitHub の sub-issue としてぶら下げる。本文には
-  共通する根本原因と束ねた理由を書く
+- **観測**: 1 つの気づき = 1 つの issue。中身は書き換えず、統合もしない。束ねても個々の文脈を
+  失わないため
+- **グループ**: 親 issue。観測を GitHub の sub-issue としてぶら下げる。本文には共通する根本原因と
+  束ねた理由を書く
 
 | label | 付く issue | 意味 |
 |---|---|---|
-| `observation` | 観測 | 1 つの気づき。`status/*` は付けない |
-| `group` | グループ（親 issue） | 根本原因を共有する観測を sub-issue として束ねる |
+| `observation` | 観測 | 観測。`status/*` は付けない |
+| `group` | グループ（親 issue） | 根本原因を共有する観測を束ねる |
 | `group/delegated` | グループ | 改善 PR を作る委譲先が走っている、または PR が open |
 | `group/rejected` | グループ | 改善 PR が merge されずに close された。新しい観測が付くまで再委譲しない |
 | `auto/structural` | PR | グループから自動で作られた改善 PR |
@@ -267,7 +267,7 @@ gh label create auto/structural --description "グループから自動で作ら
 
 `status/*` と `group/*` の description は `issue-workflow.md` §3 と本 doc「構成」の label 表（正典）と同じ語で
 揃える。GitHub の label description は GitHub 上に独立して表示される文言なので、意味の再掲
-そのものは避けられない。ズレたら rule 側に合わせて直す。
+そのものは避けられない。ズレたら `status/*` は rule §3、`group/*` は本 doc「構成」の表に合わせて直す。
 
 timer を有効にする。
 

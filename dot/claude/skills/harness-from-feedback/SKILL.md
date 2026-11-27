@@ -105,7 +105,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
 
    手順 4 の観測は、その場で直した指摘も直近 30 日の件数に数えさせるためにある。局所修正の後も
    同じ系統の観測が増えるなら、それ自体が構造的な改善が要る信号になり、日次の crawler が
-   グループとして委譲する（`dot/claude/rules/issue-workflow.md`）。
+   グループとして委譲する（`docs/design/agent-issue-workflow.md`「流れ」）。
 
 5. **起動**: `claude-worktree` を直接呼ぶ。branch は `harness/<slug>`、name は `harness-<slug>`
    （`[A-Za-z0-9_-]+`、pre-fetch した worktree 一覧と衝突しない名に）。

@@ -217,7 +217,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    自己内省をスキップする明示（例: 「harness-from-retrospective はスキップ」）が**無い限り**、
    `harness-from-retrospective` を呼ぶ。自分の作業を振り返り、恒久ハーネスに値する改善点を
    観測 issue として起票する（**起票まで・無ければ no-op**）。実装はしない — 観測の消化は
-   `dot/claude/rules/issue-workflow.md` の経路に乗る。
+   `docs/design/agent-issue-workflow.md`「流れ」の経路に乗る。
 6. **委譲元への報告**: プロンプト末尾に `## 委譲元` 節（`報告先 name: <name>`）があるときは、
    次の 3 つの事象で SendMessage を送る。**送信に失敗しても無視して自分の終了処理を続ける**
    （委譲元の session が既に消えていることがある）。
