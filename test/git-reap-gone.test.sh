@@ -224,4 +224,47 @@ else
   bad "H: rc=$rc branch_left=$branch_left"; sed 's/^/  out| /' <<<"$out"
 fi
 
+# --- I: worktree stash holds an entry -> skipped, entry kept ------------------
+# refs/worktree/stash (git-wt-stash) lives in the worktree's own git dir, so
+# `git worktree remove` would take it along. The worktree is otherwise
+# reapable (case A is the same setup without the entry).
+read -r bare work < <(new_case caseI)
+merged_gone "$work"
+git -C "$work" worktree add -q "$tmp/caseI/wt" feat
+git -C "$tmp/caseI/wt" update-ref --create-reflog -m kept refs/worktree/stash HEAD
+out="$(cd "$work" && "$src" 2>&1)"; rc=$?
+branch_left=$(git -C "$work" rev-parse --verify -q refs/heads/feat >/dev/null && echo yes || echo no)
+stash_left=$(git -C "$tmp/caseI/wt" rev-parse -q --verify refs/worktree/stash >/dev/null 2>&1 && echo yes || echo no)
+if [ "$rc" -eq 0 ] && [ "$branch_left" = yes ] && [ -d "$tmp/caseI/wt" ] && [ "$stash_left" = yes ] \
+   && grep -q 'worktree stash ref exists' <<<"$out" \
+   && grep -q 'git-wt-stash list' <<<"$out"; then
+  ok "I: a worktree with a worktree stash entry is skipped, entry intact"
+else
+  bad "I: rc=$rc branch_left=$branch_left stash_left=$stash_left worktree=$([ -d "$tmp/caseI/wt" ] && echo kept || echo gone)"
+  sed 's/^/  out| /' <<<"$out"
+fi
+
+# --- J: the stash check itself fails -> skipped, not treated as "no stash" ----
+# A stub git fails `show-ref --exists` (exit 128, as for an unreadable ref
+# store) and forwards everything else.
+read -r bare work < <(new_case caseJ)
+merged_gone "$work"
+git -C "$work" worktree add -q "$tmp/caseJ/wt" feat
+mkdir -p "$tmp/caseJ/stub"
+cat >"$tmp/caseJ/stub/git" <<STUB
+#!/usr/bin/env bash
+case "\$*" in *"show-ref --exists refs/worktree/stash"*) echo "fatal: stub failure" >&2; exit 128 ;; esac
+exec "$(command -v git)" "\$@"
+STUB
+chmod +x "$tmp/caseJ/stub/git"
+out="$(cd "$work" && PATH="$tmp/caseJ/stub:$PATH" "$src" 2>&1)"; rc=$?
+branch_left=$(git -C "$work" rev-parse --verify -q refs/heads/feat >/dev/null && echo yes || echo no)
+if [ "$rc" -eq 0 ] && [ "$branch_left" = yes ] && [ -d "$tmp/caseJ/wt" ] \
+   && grep -q 'could not check the worktree stash' <<<"$out"; then
+  ok "J: a failing stash check skips the worktree"
+else
+  bad "J: rc=$rc branch_left=$branch_left worktree=$([ -d "$tmp/caseJ/wt" ] && echo kept || echo gone)"
+  sed 's/^/  out| /' <<<"$out"
+fi
+
 exit "$fail"

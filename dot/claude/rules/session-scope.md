@@ -114,6 +114,19 @@ linked worktree にいる場合はこの節のトリガーに当たらず、そ�
 さらに別 worktree へ分岐するのも、独立した別ラインに割れるとき以外は避ける（隔離済みなので
 分岐で得るものが小さい）。
 
+### 6. stash は `git-wt-stash` で扱う
+
+stash は `git-wt-stash`（`push [-u] [-m msg]` / `list` / `show|pop|apply|drop [N]`）で扱い、生の
+`git stash` は permission で deny している。`git stash` のスタックは main checkout と全 linked
+worktree で共有され、ある session の `pop` が別 worktree の entry を持っていくためである。
+`git-wt-stash` は entry を worktree ごとの ref に置く。同じ worktree を共有する session（親と
+subagent 等）同士は区別しない。
+
+worktree を消す前に `git-wt-stash list` で残りを確認する（`git worktree remove` は entry を警告無しに
+消す）。仕組みと限界は `dotrc/docs/design/git-wt-stash.md`。
+
+実例: dotrc/docs/incidents/shared-stash-popped-by-subagent.md
+
 ### 委譲まわりで常に守ること
 
 委譲の手順（`claude-worktree` の使い方、委譲プロンプトの組み方、報告を受けた後の閉じ方・

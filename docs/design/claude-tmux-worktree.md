@@ -356,8 +356,13 @@ merge 済みの委譲 worktree とブランチは、手作業の `git worktree r
 - **reap してよい条件（全通過のみ削除）**: ①統合先（`origin/HEAD` = 通常 `origin/main`）に対し未統合
   コミットが無い、②HEAD から到達可能（`git branch -d` が実際に使う判定の先取り。worktree を消す前に
   確認するので「worktree だけ消えてブランチが残る」中途半端な状態が構造的に生じない）、③worktree が
-  紐づくならそれが clean、④その worktree が今いる worktree でない。裸ブランチ（worktree 無し）は①②のみで
-  判定する。
+  紐づくならそれが clean、④その worktree が今いる worktree でない、⑤その worktree の
+  `refs/worktree/stash`（`git-wt-stash` の entry。main working tree から見た名前は
+  `worktrees/<id>/refs/worktree/stash`）が無い。⑤は per-worktree ref が worktree の git dir に置かれ、
+  `git worktree remove` が警告無しに一緒に消すため。skip 時は `git-wt-stash list` で確かめるよう案内する。
+  ⑤は確認した時点の状態で、確認と `git worktree remove` の間に完了した push は守らない。後片付けと
+  stash 操作を並行させない前提である（`docs/design/git-wt-stash.md`）。
+  裸ブランチ（worktree 無し）は①②のみで判定する。
 - **削除は安全形だけ**: `git worktree remove`（`--force` 無し）＋ `git branch -d`（`-D` ではない）。条件を
   欠くもの・git が拒否したものは skip し、何が blocking か report する。force にはエスカレートしない。
   これにより dirty／別ブランチへ切替済み（→ `[gone]` ブランチに worktree が紐づかない）等で使用中の
