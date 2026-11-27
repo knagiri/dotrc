@@ -67,12 +67,14 @@ jobs:
             bin/gh-pr-create \
             bin/gh-pr-edit-body \
             bin/gh-reply-thread \
+            bin/gh-request-approval \
             bin/gh-resolve-thread \
             bin/git-reap-gone \
             bin/git-set-commit-sign \
             bin/lib/claude-queue-db.sh \
             bin/lib/dotrc-config.sh \
             bin/lib/gh-mise.sh \
+            bin/lib/gh-request-approval.sh \
             bin/lib/issue-repo.sh \
             githooks/post-merge \
             githooks/pre-commit \
@@ -92,6 +94,7 @@ jobs:
             test/gh-issue-file.test.sh \
             test/gh-issue-group.test.sh \
             test/gh-mise.test.sh \
+            test/gh-request-approval.test.sh \
             test/gh-wrappers.test.sh \
             test/issue-crawl.test.sh \
             test/git-reap-gone.test.sh \

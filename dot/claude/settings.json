@@ -85,6 +85,7 @@
       "Bash(codex-review *)",
       "Bash(codex-review-tally *)",
       "Bash(gh-automerge *)",
+      "Bash(gh-request-approval *)",
       "Bash(gh-issue-file *)",
       "Bash(gh-pr-create *)",
       "Bash(gh-pr-edit-body *)",

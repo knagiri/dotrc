@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# gh-automerge <PR#> -- merge a pull request, preferring auto-merge.
+# gh-automerge <PR#> [<SHA>] -- merge a pull request, preferring auto-merge.
 # gh-automerge --disable <PR#> -- turn its auto-merge off again (see below).
 #
 # The merge call is always `gh pr merge --auto --merge --match-head-commit <head> <PR>`
@@ -67,7 +67,15 @@ set -euo pipefail
 # enablePullRequestAutoMerge (--auto) and to mergePullRequest (fallback). For
 # mergePullRequest GitHub documents the check ("OID that the pull request head
 # ref must match to allow merge"); for enablePullRequestAutoMerge it documents
-# only "The expected head OID of the pull request", not what a later push does.
+# only "The expected head OID of the pull request", not what a later push does,
+# and an enabled auto-merge request does not store the expected head: the OID is
+# checked when auto-merge is enabled and when the fallback merges directly, not
+# again when the auto-merge fires.
+# <SHA> (optional, 40 lower-case hex digits, validated before any gh call): the head
+# the gate reads must equal it, else nothing is issued and the exit code is 6 (unused
+# elsewhere here and by gh's documented 0/1/2/4). So the head the gate judges and
+# the merge calls pin is exactly the caller's SHA; without <SHA> it is whatever
+# head was read.
 # Completeness of the diff: GitHub's docs give no guarantee for a large comparison, so
 # the file blocks judged must equal the PR's changedFiles (read in the same call as
 # the head SHA) and changedFiles must be below 300; otherwise the gate refuses.
@@ -75,14 +83,23 @@ set -euo pipefail
 # merge base, which is the range the merge brings in), not from the moving head
 # (`gh pr diff` takes no SHA), so the diff judged and the head pinned are the same
 # commit. The auto path does not guarantee anything for a push after auto-merge is
-# enabled; --disable (below) turns an enabled auto-merge off.
+# enabled: such a head is kept out by --disable (below; stop auto-merge before
+# pushing fixes) and, where the repo enables it, by dismissing stale reviews on
+# push -- not by the pin or by <SHA>.
+#
+# gh runs through gh_mise anchored at the MAIN working tree of the cwd's repo
+# (gh_mise_main_root in bin/lib/gh-mise.sh), so mise never reads a linked
+# worktree's own config: a worktree's tracked mise.toml, which any branch can
+# change, cannot inject a GH_TOKEN or another GH_* into the merge call. gh also
+# resolves the repository there. Outside a working tree (a submodule, a bare
+# repo or a separate git dir included) it exits 1 before any gh call.
 #
 # --disable: `gh-automerge --disable <PR#>` turns an already enabled auto-merge
 # off again, for the window in which more fix commits are pushed onto an open PR
 # (implement-and-review, "既存 PR への対応"). Without it, auto-merge enabled in an
 # earlier round fires as soon as the required conditions (approval, CI, ...)
 # are met by one of those pushes, before the new review round has finished.
-# Re-enabling is the normal `gh-automerge <PR#>` call.
+# Re-enabling is done in the enabling form, `gh-automerge <PR#> [<SHA>]`.
 #   - state MERGED / CLOSED -> exit 3, nothing issued (also when the re-read
 #     after --disable-auto shows it, i.e. auto-merge fired in between). Pushing
 #     more commits to that branch would land nowhere, so the caller must stop
@@ -96,11 +113,11 @@ set -euo pipefail
 # The accepted forms are exactly the two below; no other option is parsed or
 # passed through, so --admin stays unreachable in both.
 #
-# Usage: gh-automerge <PR-number>
+# Usage: gh-automerge <PR-number> [<head-SHA>]
 #        gh-automerge --disable <PR-number>
 
 usage() {
-  echo "usage: gh-automerge <PR-number>" >&2
+  echo "usage: gh-automerge <PR-number> [<head-SHA>]" >&2
   echo "       gh-automerge --disable <PR-number>" >&2
   exit "${1:-1}"
 }
@@ -108,19 +125,31 @@ usage() {
 disable=0
 case "${1:-}" in
   -h|--help) [ $# -eq 1 ] || usage 1; usage 0 ;;
-  --disable) disable=1; shift ;;
+  --disable) disable=1; shift; [ $# -eq 1 ] || usage 1 ;;
 esac
-[ $# -eq 1 ] || usage 1
+[ $# -eq 1 ] || [ $# -eq 2 ] || usage 1
 pr="$1"
 if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
   echo "gh-automerge: PR number must be numeric (got: $pr)" >&2
   exit 1
 fi
+want_sha=""
+if [ $# -eq 2 ]; then
+  if [[ ! "$2" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "gh-automerge: SHA must be 40 lower-case hex digits (got: $2)" >&2
+    exit 1
+  fi
+  want_sha="$2"
+fi
 
 # Every gh call goes through gh_mise so the repo's mise-provided env (GH_TOKEN)
 # is loaded even in a non-interactive process; see bin/lib/gh-mise.sh.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
-gh_mise_use "$(gh_mise_repo_root)"
+root="$(gh_mise_main_root)" || {
+  echo "gh-automerge: $PWD is not in a git working tree" >&2
+  exit 1
+}
+gh_mise_use "$root"
 
 if [ "$disable" -eq 1 ]; then
   # One line: "<state> <true|false>", the latter whether auto-merge is enabled.
@@ -222,6 +251,12 @@ view="$(gh_mise pr view "$pr" --json baseRefName,headRefOid,changedFiles \
 read -r base_ref head_oid changed_files <<<"$view"
 [[ "${head_oid:-}" =~ ^[0-9a-f]{40}$ ]] \
   || gate_refuse "unexpected head commit for #$pr: $view"
+# With <SHA>, judge and pin exactly the caller's head: a different head (pushed
+# after the caller looked) is refused here, before the gate and any merge call.
+if [ -n "$want_sha" ] && [ "$head_oid" != "$want_sha" ]; then
+  echo "gh-automerge: #$pr head is $head_oid, not the given $want_sha; not merging" >&2
+  exit 6
+fi
 # Narrow on purpose: a name outside it is refused instead of being put in a URL path.
 [[ "${base_ref:-}" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ && "$base_ref" != *..* ]] \
   || gate_refuse "unexpected base branch name for #$pr: $view"

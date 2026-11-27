@@ -1,0 +1,123 @@
+#!/bin/bash -p
+set -euo pipefail
+
+# gh-request-approval <PR#> <SHA> -- for a PR whose head is <SHA>, check the
+#   gates below and start the repo's approve workflow. That is all it does: it
+#   does not wait for the approval and does not merge or enable auto-merge.
+# gh-request-approval --enabled -- exit 0 if the cwd's repo has both settings
+#   files and the workflow name is well-formed, 4 if the files are missing, 3 if
+#   they are unusable. Resolves the repo with `gh repo view`; touches no PR.
+#
+# These two forms (and -h/--help, which prints the usage and exits 0) are all it
+# accepts: <PR#> is a number, <SHA> 40 lower-case hex digits, and no option is
+# passed through to gh. It issues no merge at all: the approval comes from the
+# repo's own workflow (a GitHub App approving <SHA>), and whether the PR merges
+# is left to GitHub's auto-merge (enabled separately) and the repo's rules.
+#
+# Environment: the caller's environment takes no part. The script first
+# re-executes itself under `env -i` with only
+#   HOME  the login's home directory from `getent passwd <uid>`
+#   PATH  $HOME/.local/bin:$HOME/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+#         ($HOME/.local/bin is where mise is installed, the shims carry any
+#         mise-managed gh/jq/git, the rest are the system locations)
+# and a marker that it has done so. XDG_CONFIG_HOME, a PATH prefix, GH_*,
+# GIT_*, MISE_*, ... are therefore all without effect. getent, id, readlink
+# and env are called by absolute path. The shebang is `/bin/bash -p` (not
+# `env bash`, which would take bash from the caller's PATH): privileged mode
+# imports no exported functions (BASH_FUNC_*) and reads neither BASH_ENV/ENV
+# nor SHELLOPTS/BASHOPTS/CDPATH/GLOBIGNORE, so none of them can run code in
+# either bash. When the marker is set but any other exported variable is present
+# (bash's own PWD, SHLVL, OLDPWD and _ aside), it exits 1 instead of running: a
+# forged marker gets no clean-up, but also no variable that would be read.
+#
+# gh: every call goes through gh_mise anchored at the MAIN working tree of the
+# cwd's repo (gh_mise_main_root in bin/lib/gh-mise.sh): mise reads the config of
+# the main checkout, its ancestor directories and the global one, never a linked
+# worktree's own. The token is
+# the main checkout's mise.gh.local.toml if it has one, otherwise hosts.yml.
+# The repo is resolved once (`gh repo view`) and pinned with -R on every later
+# call.
+#
+# Settings (outside every checkout; neither this script nor an agent writes
+# them): $HOME/.config/dotrc/bot-approve/<OWNER>/<NAME>/, with OWNER/NAME
+# spelled as `gh repo view` returns them, holding
+#   workflow  the file name of the approve workflow, one line (`*.yml`/`*.yaml`;
+#             blank and `#` lines are ignored)
+#   paths     the paths a PR may change, in .gitignore format. Empty (or only
+#             comments) allows nothing. gitignore semantics apply: a negation
+#             cannot re-include a file under an excluded parent directory
+#             (`src/` then `!src/x` still allows src/x); write `src/*` for the
+#             negation to take effect.
+# The repo counts as enabled only when both files exist. The workflow takes the
+# inputs `pr` and `head_sha` and is started on the default branch
+# (`refs/heads/<default>`, not a bare name a tag could shadow).
+# Precondition (not checked here): the repo's ruleset dismisses stale reviews
+# on push. Without it an approval of an older commit keeps counting, so a PR
+# can be merged on an App approval of content the App never checked. Confirm
+# it before placing the two files.
+#
+# Gates, in this order (all before the workflow is started):
+#   1. the PR is OPEN, its author is the token's own login, it is not from a
+#      fork, its base is the repo's default branch
+#   2. no unresolved review thread was started by a human (its first comment's
+#      author is not a Bot) and no latest opinionated review, by anyone, is
+#      CHANGES_REQUESTED (more than 100 of either -> refused)
+#   3. the files changed from the merge base of the base branch and <SHA> to
+#      <SHA> (REST three-dot compare, pinned to <SHA>; both sides of a rename;
+#      at least one and fewer than 100) are all allowed by `paths` -- git
+#      evaluates it with `git check-ignore --no-index` in an empty scratch repo,
+#      "ignored" reading as "allowed" -- and none is under the root `.github/`,
+#      `.codex/` or `.githooks/`, under a `.claude/` or `.agents/` at any depth
+#      (a whole path component: `foo.claude/` does not count), is the root
+#      `.mcp.json` or a root or `docs/` CODEOWNERS, or starts with ':' (all
+#      case-insensitive), whatever `paths` says
+#   4. the PR head is <SHA>
+# Then: `gh workflow run <workflow> -R <nwo> --ref refs/heads/<default> -f pr=<PR>
+# -f head_sha=<SHA>`, and exit 0 once gh reports the run as started.
+#
+# Exit codes (the reason is printed to stderr in one line):
+#   0  the approve workflow was started (--enabled: the repo is enabled)
+#   1  bad arguments, not in a git working tree (a submodule, a bare repo or a
+#      separate git dir included), an unexpected gh or git failure or output, a
+#      dirty environment despite the marker
+#   3  the settings are unusable (unreadable, not one workflow file name)
+#   4  a gate refused, including a repo that is not enabled or a `paths` that
+#      allows nothing
+#   5  the head is not <SHA>
+#   6  starting the workflow failed
+#
+# Requires jq and git (see bin/list-install.sh). The logic lives in
+# bin/lib/gh-request-approval.sh; this file only clears the environment.
+#
+# Usage: gh-request-approval <PR-number> <head-SHA>
+#        gh-request-approval --enabled
+
+marker=DOTRC_GH_REQUEST_APPROVAL_CLEAN
+
+pw="$(/usr/bin/getent passwd "$(/usr/bin/id -u)")" \
+  || { echo "gh-request-approval: getent passwd failed" >&2; exit 1; }
+IFS=: read -r _ _ _ _ _ home _ <<<"$pw"
+[ -n "$home" ] && [ "${home:0:1}" = / ] \
+  || { echo "gh-request-approval: no home directory in the passwd entry" >&2; exit 1; }
+fixed_path="$home/.local/bin:$home/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin"
+self="$(/usr/bin/readlink -f "${BASH_SOURCE[0]}")"
+
+if [ "${!marker:-}" != 1 ]; then
+  exec /usr/bin/env -i HOME="$home" PATH="$fixed_path" "$marker=1" "$self" "$@"
+fi
+for v in $(compgen -e); do
+  case "$v" in
+    HOME|PATH|PWD|SHLVL|OLDPWD|_|"$marker") ;;
+    *) echo "gh-request-approval: $v is set despite $marker; refusing" >&2; exit 1 ;;
+  esac
+done
+[ "$HOME" = "$home" ] && [ "$PATH" = "$fixed_path" ] \
+  || { echo "gh-request-approval: HOME or PATH differs from the clean values despite $marker; refusing" >&2; exit 1; }
+
+here="$(dirname "$self")"
+# shellcheck source=bin/lib/gh-mise.sh
+. "$here/lib/gh-mise.sh"
+# shellcheck source=bin/lib/gh-request-approval.sh
+. "$here/lib/gh-request-approval.sh"
+gra_config_root="$HOME/.config/dotrc/bot-approve"
+gra_main "$@"

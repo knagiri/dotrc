@@ -133,8 +133,8 @@ govern tools that are not listed."、<https://code.claude.com/docs/en/skills>）
   `gh repo view *`, `gh issue view *`, `gh issue list *`）、PR 作成（`gh pr create *`,
   `gh-pr-create *`）、`bin/` の各ラッパー（`gh-pr-comments *` / `gh-pr-checks *` /
   `gh-pr-edit-body *` / `gh-await-reviews *` / `gh-list-threads *` / `gh-resolve-thread *` /
-  `gh-reply-thread *` / `gh-automerge *` / `gh-issue-file *` / `gh-issue-mark-delegated *` /
-  `gh-issue-group *`）
+  `gh-reply-thread *` / `gh-automerge *` / `gh-request-approval *` / `gh-issue-file *` /
+  `gh-issue-mark-delegated *` / `gh-issue-group *`）
   - `gh-pr-create *` と素の `gh pr create *` は両方残す。ラッパーは env を載せるだけで、どちらが
     通っても grant の広さは変わらない
   - PR 本文の更新・thread への reply・issue の label 遷移は、それぞれラッパーだけを allow し、
