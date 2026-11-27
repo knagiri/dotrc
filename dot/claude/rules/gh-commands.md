@@ -20,8 +20,9 @@ GitHub CLI (`gh`) を使うときの方針。permission rule との整合性の�
 | Issue 操作 | 起票・label 遷移は [issue-workflow.md](./issue-workflow.md) のラッパー。閲覧は `gh issue view` / `gh issue list` に `-R <repo>`（repo は `gh-issue-file --repo`） |
 | Run・Repo 情報を見る | `gh run view *` / `gh repo view *` |
 
-`gh pr checks` と `gh pr view <N> --comments` は使わない。内部で読む statusCheckRollup を
-fine-grained PAT では読めず失敗するため（`--comments` はコメント本文が一切返らないことがある）。
+`gh pr checks` は使わない。内部で読む statusCheckRollup を fine-grained PAT では読めず必ず失敗する。
+`gh pr view <N> --comments` も同じ理由で失敗しうる（コメント本文が一切返らないことがある）ので、
+コメントは `gh-pr-comments` で読む。
 
 `gh api` を使うのは、高位コマンドに該当機能が無い場合に限る（例：特定エンドポイントの未対応フィールド取得、bulk 操作など）。
 

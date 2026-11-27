@@ -7,10 +7,19 @@
 |---|---|
 | `gh-pr-comments` / `gh-pr-checks` / `gh-pr-create` / `gh-pr-edit-body` | `dot/claude/rules/gh-commands.md` §1 |
 | `gh-await-reviews` / `gh-list-threads` / `gh-resolve-thread` / `gh-reply-thread` | `dot/claude/skills/pr-review-loop/SKILL.md`「使うラッパー」 |
-| `gh-automerge`（`--disable` を含む） | `dot/claude/skills/pr-automerge/SKILL.md`「`gh-automerge` の契約」 |
+| `gh-automerge <PR>` | `dot/claude/skills/pr-automerge/SKILL.md`「`gh-automerge` の契約」 |
+| `gh-automerge --disable <PR>` | `dot/claude/skills/implement-and-review/SKILL.md` 手順 4 |
 | `gh-issue-file` / `gh-issue-mark-delegated` / `gh-issue-group` | `dot/claude/rules/issue-workflow.md` |
 
 allowlist にどう載せるかは `dot/claude/rules/claude-settings.md`「gh コマンドの allow 方針」。
+
+## 書き込み用 token の供給
+
+`bin/` の gh ラッパーはすべて `bin/lib/gh-mise.sh` を source し、`MISE_ENV=gh` を付けた 1 回の
+`mise exec` で書き込み用の個人 PAT を載せて gh を呼ぶ。PAT を shell の env に置かないのは設計上の
+意図で、理由は `bin/lib/gh-mise.sh` のヘッダと `dotrc/docs/design/claude-tmux-worktree.md`
+「委譲先の env と token」にある。`gh-issue-file` の設計理由（起票経路を 1 つに絞る理由）は
+`docs/design/agent-issue-workflow.md` にある。
 
 ## grant を最小化するためにラッパーを置く
 

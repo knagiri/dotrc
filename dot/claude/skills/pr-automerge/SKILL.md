@@ -50,11 +50,7 @@ review の独立性（author とは別文脈の判定役）は grant 変更を�
   `gh pr merge --merge <PR>` へ fallback する。それ以外の失敗（required check 未達、conflict、repo で
   auto-merge が無効、など）は fallback せず終了コードごと返す。auto-merge が無効な repo では merge
   ステップが完了しないので、手順 5 で停止・報告する
-- `gh-automerge --disable <PR>`: auto-merge の一時停止（既存 PR へ修正を積む間。`implement-and-review`
-  手順 4）。merge 済み / close 済みなら exit 3（無効化中に発火した場合も含む）、既に無効なら何もせず
-  exit 0、有効なら `gh pr merge --disable-auto <PR>` を撃ち、読み直して無効になっていれば exit 0（それ以外は exit 1）。
-  **`--disable` を落とすと逆に有効化する**
-- どちらの形も `--admin` 等のフラグは付けられず、branch protection は fallback 後も GitHub 側で
+- `--admin` 等のフラグは付けられず、branch protection は fallback 後も GitHub 側で
   そのまま効く。ラッパーは特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）
 
 `gh-await-reviews` の契約は `pr-review-loop`「使うラッパー」、`gh-pr-checks` / `gh-pr-edit-body` は
