@@ -124,6 +124,31 @@ govern tools that are not listed."、<https://code.claude.com/docs/en/skills>）
 リストに理由付きで足す。裸の `Write` は意図的に検査しない。書き込み先が実行時に決まる
 `$CLAUDE_JOB_DIR` で、リテラルの `Edit(path)` に狭められないため（現状は `my-create-pr`）。
 
+### gh コマンドの allow 方針
+
+`gh` の grant は、使い方の規約（[gh-commands.md](./gh-commands.md)）と次の最小ポリシーで揃える。
+ラッパーの設計理由は `dotrc/docs/design/gh-wrappers.md`。
+
+- **allow する:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`,
+  `gh repo view *`, `gh issue view *`, `gh issue list *`）、PR 作成（`gh pr create *`,
+  `gh-pr-create *`）、`bin/` の各ラッパー（`gh-pr-comments *` / `gh-pr-checks *` /
+  `gh-pr-edit-body *` / `gh-await-reviews *` / `gh-list-threads *` / `gh-resolve-thread *` /
+  `gh-reply-thread *` / `gh-automerge *` / `gh-issue-file *` / `gh-issue-mark-delegated *` /
+  `gh-issue-group *`）
+  - `gh-pr-create *` と素の `gh pr create *` は両方残す。ラッパーは env を載せるだけで、どちらが
+    通っても grant の広さは変わらない
+  - PR 本文の更新・thread への reply・issue の label 遷移は、それぞれラッパーだけを allow し、
+    素の `gh pr edit *` / `gh api *` / `gh issue edit *` は allow しない。素の形は書き換えられる
+    範囲が広く（任意の field・endpoint・label）、ラッパーが固定している検査を迂回するため
+  - `gh pr checks *` は allow しない。pattern は正しくマッチするが、fine-grained PAT では実行
+    すれば必ず失敗するので許可する意味が無い（上の「pattern がマッチしない dead rule」とは別物）
+  - `gh pr view <N> --comments` も `gh pr view *` にマッチし、同じく失敗しうるが、`gh pr view *`
+    は他の read 用途で要るので allow は維持する（コメント取得は `gh-pr-comments` を使う）
+- **allow しない:** `gh api *`（`gh api graphql *` を含む）, `gh pr comment *`, `gh pr review *`,
+  `gh pr merge *` 等の書き込み・低レイヤ。呼び出し時に prompt が出るので、ユーザー確認経由で
+  実行できる
+- **deny:** 不要（hard-block は明示指示時の運用を阻害する）
+
 ### Hot-reload
 
 `.claude/settings.local.json` 等の編集は再起動なしに即時反映される（実測確認）。

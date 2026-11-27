@@ -23,6 +23,46 @@ allowed-tools: Read, Grep, Glob
 - auto-merge の有効化は **`gh-automerge <PR>`** ラッパーのみ（内部で `gh pr merge --auto --merge`）。同じラッパーの `--disable` 形（無効化）はこの skill では使わない（既存 PR へ修正を積む間の一時停止として `implement-and-review` が使う）。`mergeStateStatus` が `CLEAN` な PR は GitHub が auto-merge の有効化自体を拒否する（待つものが無いため）ので、そのときだけラッパーが `gh pr merge --merge` へ fallback する — branch protection は fallback 後も GitHub 側でそのまま効く。事前に CI に **fail が無いこと**を **`gh-pr-checks <PR>`** ラッパーで確認する（pending は可 — auto-merge が待つ）。raw `gh pr merge` は使わない。`gh pr checks` も使わない（fine-grained PAT では check runs を読む権限が存在せず必ず失敗する）。
 - 結果は **PR に投稿しない**。**session の最終メッセージとして出力するだけ**にする。raw `gh pr comment` は使わない。
 
+## grant 変更を含む PR は auto-merge させない
+
+allowlist（grant）の変更は agent に委譲してよい。ただし **grant 変更を含む PR にはこの skill を
+呼ばず、人間の approve を待つ**。委譲プロンプトでは `pr-review-loop` までは回させ、この skill は
+呼ばせない。merge は人間が approve してから行う。
+
+review まで止めないのは、merge を見送る理由は review を見送る理由にならないためである。
+review の独立性（author とは別文脈の判定役）は grant 変更を含む PR でも同じだけ要り、ここで
+止めると人間は review を経ていない差分を approve することになる。
+
+禁じたいのは agent が grant 行を書くこと自体ではなく、**権限を広げる変更が人間のレビューを
+通らずに main へ入ること**である。auto-merge を許すと、広い grant が人目を通らずそのまま main へ
+入る。approve を人間に残せば、grant の広さは merge 前に必ず一度は人目を通る。だから条件を
+「誰が書くか」ではなく merge ゲート側へ置く。
+
+実例: dotrc/docs/incidents/review-skipped-with-merge.md
+
+## `gh-automerge` の契約
+
+この skill の merge 操作の正典。理由（フラグを素通ししない、clean 拒否 fallback が要る理由）は
+`dotrc/docs/design/gh-wrappers.md`。
+
+- `gh-automerge <PR>`: `gh pr merge --auto --merge <PR>` を撃つ。失敗の stderr に `clean status` が
+  含まれるとき（待つものが無い PR に auto-merge は張れないと GitHub が拒否したとき）だけ
+  `gh pr merge --merge <PR>` へ fallback する。それ以外の失敗（required check 未達、conflict、repo で
+  auto-merge が無効、など）は fallback せず終了コードごと返す。auto-merge が無効な repo では merge
+  ステップが完了しないので、手順 5 で停止・報告する
+- `gh-automerge --disable <PR>`: auto-merge の一時停止（既存 PR へ修正を積む間。`implement-and-review`
+  手順 4）。merge 済み / close 済みなら exit 3（無効化中に発火した場合も含む）、既に無効なら何もせず
+  exit 0、有効なら `gh pr merge --disable-auto <PR>` を撃ち、読み直して無効になっていれば exit 0（それ以外は exit 1）。
+  **`--disable` を落とすと逆に有効化する**
+- どちらの形も `--admin` 等のフラグは付けられず、branch protection は fallback 後も GitHub 側で
+  そのまま効く。ラッパーは特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）
+
+`gh-await-reviews` の契約は `pr-review-loop`「使うラッパー」、`gh-pr-checks` / `gh-pr-edit-body` は
+`dot/claude/rules/gh-commands.md` §1 にある。
+
+実例: dotrc/docs/incidents/automerge-clean-status-unreachable.md
+実例: dotrc/docs/incidents/automerge-fired-during-followup-review.md
+
 ## 手順
 
 0. **review 済みかのゲート**: 次のいずれかに当たったら merge せず手順 5（停止・報告）へ抜け、
