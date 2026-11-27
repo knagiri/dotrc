@@ -35,4 +35,4 @@ wip
 
 ## 反映先
 
-- `dot/claude/rules/evidence-over-guesswork.md` §4「変異は退避したコピーから戻す」
+- `dot/claude/rules/test-discrimination.md`「5. 変異は退避したコピーから戻す」
