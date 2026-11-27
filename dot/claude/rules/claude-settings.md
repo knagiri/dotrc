@@ -14,7 +14,6 @@ paths:
 
 この rule は settings.json の permissions と skill の `allowed-tools` を触る作業でだけロードする
 （それ以外では要らないので、常時ロードのバイト数を抑えるため `paths` でスコープする）。
-cwd の外にある `~/.claude/` 配下でのロード漏れは、常時ロードの `bash-command-constraints.md` 冒頭の pointer が補う。
 
 ### Multi-wildcard pattern の罠（実測ベース）
 
