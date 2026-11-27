@@ -73,6 +73,14 @@ linked worktree で起動された場合、デフォルトは以下に従う。�
 
 worktree のディレクトリ外（絶対パスで他 worktree や main checkout を指すパス）への**書き込み**は、原則スコープ外とみなす。
 
+stash は `git-wt-stash`（`push [-u] [-m msg]` / `list` / `show|pop|apply|drop [N]`）を使う。生の
+`git stash` は permission で deny している。`git stash` のスタックは main checkout と全 linked
+worktree で共有され、ある session の `pop` が別 worktree の entry を持っていくためで、
+`git-wt-stash` は entry を worktree ごとの ref に置くので他 worktree からは見えない。同じ worktree
+を共有する session（親と subagent 等）同士は区別しない。
+
+実例: dotrc/docs/incidents/shared-stash-popped-by-subagent.md
+
 ### 3. read-only な参照は可
 
 スコープ制限は「書き込み」に限る。調査目的の read-only 操作はスコープ外を見てよい。別 repo・別 worktree のパスを Read / `rg` で見るのも可（`git -C` は承認が出る。[working-directory.md](./working-directory.md)）。git の次の 3 例は allow 済みで承認不要。

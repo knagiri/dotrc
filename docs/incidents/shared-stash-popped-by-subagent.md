@@ -37,27 +37,62 @@ entry の message には積んだときの branch が `On <branch>: …` / `WIP 
 
 ## 直し方
 
-PreToolUse hook（matcher `Bash`）で、Bash tool のコマンド中の `git stash pop|apply|drop|branch|clear`
-を見て、対象 entry の branch が対象 dir の現在 branch と違えば deny する。git は同一 branch を
-2 つの worktree で同時に checkout させないので、branch が worktree の識別子になる。
-持ち主が判定できない（detached HEAD、または entry の message から branch を読めない）ときや、対象 dir を判定できない（`-C` の引数が変数・
-`$(...)`・バッククォート・存在しないパス）ときも deny に倒す。積む操作と閲覧は通す。コマンド文字列の検出は
-`;` `&&` `||` `|` 改行で素朴に分割して各部分の先頭の git を見るだけで、quote や `cd` は
-解釈しない。誤検知（quote 内の文字列を拾う等）でも何も取られず、deny になるのは git が持ち主を他 branch と
-答えたとき、または持ち主・対象 dir を判定できないときだけである。
+entry の置き場所を worktree ごとに分け、共有スタックを直接触る経路を塞ぐ。
 
-hooks docs（https://code.claude.com/docs/en/hooks）には、settings 由来の hook は subagent の中でも
-動き、subagent が tool を呼ぶと PreToolUse が main conversation と同じ設定で発火するとある。
-実機での確認は未了で、PR の人間確認項目に入れている。
+- `bin/git-wt-stash`（`push [-u] [-m msg]` / `list` / `show|pop|apply|drop [N]`）は entry を
+  per-worktree ref の `refs/worktree/stash` とその reflog に置く。`refs/worktree/*` は worktree
+  ごとに別の ref なので、他 worktree（main working tree を含む）からは見えず、`pop` でも取れない。
+  受け付けるフラグを限定し、git へ引数を素通ししない
+- 積むときだけ共有の `refs/stash` を一瞬経由する。`git stash store` は保存先が `refs/stash` 固定で、
+  `git stash create` は `-u` を持たないため。message に一意な印を付けて `git stash push` し、
+  `stash@{0}` の subject に印があることを確かめてから per-worktree ref へ写し、`git stash drop` する。
+  間に別 session が積んでいたら drop せずに失敗する。drop が別の entry を落としたと出力から分かった
+  ときは、それを `git stash store` で戻して失敗する
+- `dot/claude/settings.json` で生の `git stash` を deny し、`git-wt-stash` を allow する
+
+以前は PreToolUse hook（`bin/claude-hook-git-guard`）が Bash のコマンド文字列から
+`git stash pop|apply|drop|branch|clear` を探し、対象 entry の message にある branch が現在 branch と
+違えば deny していた。これには穴が 2 つあった。持ち主を共有スタック上の entry の message から
+推測するので、branch を読めない entry（detached HEAD、`git stash store -m`）は判定できず、
+コマンド文字列の素朴な解析は `sh -c` や git alias 経由の呼び出しを見落とす。保存先を隔離すれば、他 worktree の
+entry はそもそも見えないので、持ち主の判定もコマンドの解析も要らない。hook は撤去した。
+
+per-worktree ref の挙動は使い捨て repo で確かめた（git 2.56.1。main repo `r`、branch `feat` の
+linked worktree `wt`）。
+
+```
+# wt で
+echo x>>f; echo u>untracked
+git stash push -q -u -m mine; sha=$(git rev-parse stash@{0}); git stash drop -q
+git update-ref --create-reflog -m mine refs/worktree/stash $sha
+git reflog show refs/worktree/stash        # 33059e8 refs/worktree/stash@{0}: mine
+# r で
+git reflog show refs/worktree/stash        # fatal: ambiguous argument
+git stash list | wc -l                     # 0
+# wt で
+git stash apply -q refs/worktree/stash@{0}; git status --short
+#  M f
+# ?? untracked
+git reflog delete --updateref --rewrite refs/worktree/stash@{0}
+git rev-parse refs/worktree/stash          # sha を返す（最後の 1 件を消しても ref は残る）
+```
+
+最後の 1 件を消すと reflog は空になるが ref は残り、`refs/worktree/stash@{0}` も ref の値に解決される。
+そのため `git-wt-stash` は reflog の件数で空を判定し、空になったら `git update-ref -d` で ref を消す。
 
 ## 既知の限界
 
 識別子になるのは worktree であって session ではない。同じ worktree を共有する複数の session
 （main working tree の interactive session と spin-off した session、親と Agent tool の subagent）
-は同じ branch を持つので、互いの entry を区別せず通す。
+は互いの entry を区別しない。
+
+deny の pattern `Bash(git stash *)` は先頭が `git stash` のコマンドに一致する。`git -C <dir> stash`
+のように git の global option が挟まる形はこの pattern の形からは一致しない（実機では未確認）。
+`git -C` は allow に無いので承認の対象にはなる。
 
 ## 反映先
 
-- `bin/claude-hook-git-guard`（stash の判定）
-- `dot/claude/settings.json` の `hooks.PreToolUse`
-- `test/claude-hook-git-guard.test.sh`
+- `bin/git-wt-stash`、`test/git-wt-stash.test.sh`
+- `dot/claude/settings.json` の `permissions.deny`（`git stash`）と `permissions.allow`（`git-wt-stash`）。
+  `hooks.PreToolUse` の `claude-hook-git-guard` は削除
+- `dot/claude/rules/session-scope.md` §2（stash は `git-wt-stash` を使う）
