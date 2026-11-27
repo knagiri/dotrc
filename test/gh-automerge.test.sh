@@ -25,13 +25,20 @@ HEAD=2222222222222222222222222222222222222222
 #   files/<sha>/<path> -- what `api repos/{owner}/{repo}/contents/<path>?ref=<sha>`
 #                      returns; a missing file is a 404
 # `pr view` prints the "<base> <head>" line the wrapper's --jq would produce.
-# `pr merge` appends its argv to $GH_MERGE_LOG and succeeds.
+# `pr merge` appends its argv to $GH_MERGE_LOG and succeeds
+# (one `[arg]` per line, so each call starts with `[pr]`).
 cat >"$stub/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
   "pr view") echo "$GH_BASE $GH_HEAD"; exit 0 ;;
   "pr diff") cat "$GH_FIX/diff"; [ "${GH_DIFF_FAIL:-0}" = 1 ] && { echo "HTTP 502" >&2; exit 1; }; exit 0 ;;
-  "pr merge") printf '[%s]\n' "$@" >>"$GH_MERGE_LOG"; exit 0 ;;
+  "pr merge")
+    printf '[%s]\n' "$@" >>"$GH_MERGE_LOG"
+    # GH_AUTO_CLEAN=1: refuse --auto the way GitHub does for a clean PR.
+    if [ "${GH_AUTO_CLEAN:-0}" = 1 ] && [[ " $* " == *" --auto "* ]]; then
+      echo "Pull request is in clean status" >&2; exit 1
+    fi
+    exit 0 ;;
 esac
 if [ "$1" = api ]; then
   ep="$2"; ep="${ep#repos/\{owner\}/\{repo\}/contents/}"
@@ -181,6 +188,18 @@ passed() {
     && grep -qxF '[--match-head-commit]' "$work/merges" && grep -qxF "[$HEAD]" "$work/merges"
 }
 
+# The clean-status fallback (direct merge) must pin the head too: two merge
+# calls, the second without --auto, each with --match-head-commit <head>.
+check_fallback_pin() {
+  : >"$work/merges"
+  out="$(env GH_FIX="$fix/unrelated" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" \
+    GH_AUTO_CLEAN=1 PATH="$stub:$PATH" "$1/gh-automerge" 42 2>&1 >/dev/null)"
+  rc=$?
+  [ "$rc" -eq 0 ] && [ "$(grep -cxF '[pr]' "$work/merges")" -eq 2 ] \
+    && [ "$(grep -cxF '[--auto]' "$work/merges")" -eq 1 ] \
+    && [ "$(grep -cxF '[--match-head-commit]' "$work/merges")" -eq 2 ] \
+    && [ "$(grep -cxF "[$HEAD]" "$work/merges")" -eq 2 ]
+}
 check_settings()      { stopped "$1" settings dot/claude/settings.json; }
 check_allowed_tools() { stopped "$1" allowed_tools "$skill: frontmatter changed"; }
 check_new_skill()     { stopped "$1" new_skill "$skill: new file"; }
@@ -196,7 +215,7 @@ if [ "$(PATH="$stub:$PATH" command -v gh)" = "$stub/gh" ] && check_unrelated "$b
   echo "ok: control: gh resolves to the stub and the merge call is captured by it"
 else echo "FAIL: control: gh=$(PATH="$stub:$PATH" command -v gh) rc=$rc out=$out"; fail=1; fi
 
-for c in settings allowed_tools new_skill body_only unrelated diff_fail agent empty; do
+for c in settings allowed_tools new_skill body_only unrelated diff_fail agent empty fallback_pin; do
   if "check_$c" "$bindir"; then echo "ok: gh-automerge gate: $c"
   else echo "FAIL: gh-automerge gate: $c rc=$rc out=$out merges=$(cat "$work/merges")"; fail=1; fi
 done
@@ -224,6 +243,7 @@ mutant nodifffail check_diff_fail 's/|| gate_refuse "could not read the diff/|| 
 mutant noempty check_empty 's/^\[ "\$nfiles" -gt 0 \] ||/true ||/'
 mutant exit1 check_settings 's/^  exit 5$/  exit 1/'
 mutant nopin check_unrelated 's/ --match-head-commit "\$head_oid" "\$pr" 2>/ "$pr" 2>/'
+mutant nopin_fallback check_fallback_pin 's/^gh_mise pr merge --merge --match-head-commit "\$head_oid" "\$pr"$/gh_mise pr merge --merge "$pr"/'
 # A new SKILL.md is stopped three ways: the created-file branch, the
 # path-mismatch branch (the old path is empty) and the base-side fetch failing
 # (fail closed). Breaking one leaves the PR stopped for another reason, which

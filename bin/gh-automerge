@@ -36,9 +36,20 @@ set -euo pipefail
 # The gate fails closed: an unreadable PR, diff or file, an empty diff, a
 # quoted path or a line it cannot parse all count as a grant change. The base
 # side is the base branch's current tip, not the merge base, so a frontmatter
-# change landed on the base meanwhile is over-detected, never missed. The head
-# read here is pinned with --match-head-commit, so a commit pushed after the
-# check makes GitHub refuse the merge rather than merge an unchecked diff.
+# change landed on the base meanwhile is over-detected, never missed.
+#
+# Head pinning: the gate judges the diff of the head it read, but auto-merge
+# merges whatever the head is when it fires, and GitHub keeps auto-merge enabled
+# when someone with write access pushes. Without a pin, a grant change pushed
+# after the gate passed would merge unchecked. Both merge calls therefore pass
+# --match-head-commit <head>, which gh sends as `expectedHeadOid` to
+# enablePullRequestAutoMerge (--auto) and to mergePullRequest (fallback). For
+# mergePullRequest GitHub documents the check ("OID that the pull request head
+# ref must match to allow merge"); for enablePullRequestAutoMerge it documents
+# only "The expected head OID of the pull request", not what a later push does.
+# So the pin is the best this wrapper can do on the auto path, not a guarantee;
+# callers that push onto a PR with auto-merge enabled disable it first
+# (--disable below).
 #
 # --disable: `gh-automerge --disable <PR#>` turns an already enabled auto-merge
 # off again, for the window in which more fix commits are pushed onto an open PR
@@ -165,8 +176,8 @@ fm_at() {  # fm_at <path> <sha> -> frontmatter of <path> at <sha>; non-0 on fail
   frontmatter <<<"$c"  # not a pipe: awk stops reading at the closer (SIGPIPE + pipefail)
 }
 
-# The head is pinned with --match-head-commit below, so the diff judged here is
-# the one that merges; a push after this read makes GitHub refuse the merge.
+# The head read here is pinned with --match-head-commit below (see "Head
+# pinning" in the header).
 oids="$(gh_mise pr view "$pr" --json baseRefOid,headRefOid --jq '"\(.baseRefOid) \(.headRefOid)"' 2>"$err")" \
   || gate_refuse "could not read the base/head commits of #$pr: $(head -c 300 "$err")"
 read -r base_oid head_oid <<<"$oids"

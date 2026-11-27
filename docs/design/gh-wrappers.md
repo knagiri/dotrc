@@ -78,8 +78,16 @@ grant 変更を含む PR を auto-merge させない規約の正典は `pr-autom
 frontmatter だけが grant に効くので、base と head の frontmatter を比べ、本文だけの変更は通す。
 hunk の位置で判定しないのは、frontmatter の長さが差分からは分からず、frontmatter をまたぐ
 hunk を取りこぼしうるため。差分や内容が読めないときは grant 変更とみなして止める（fail
-closed）。判定した head は `--match-head-commit` で固定し、判定後の push で未判定の差分が
-merge されないようにする。
+closed）。
+
+判定した head は `--match-head-commit` で固定する。ゲートが見るのは判定時点の head の差分だが、
+auto-merge は有効化後に push された commit ごと merge しうる（write 権限者の push では
+auto-merge は解除されない）。固定しないと、ゲート通過後に grant 変更を push すれば素通りする。
+gh はこの SHA を `expectedHeadOid` として auto-merge 有効化と直接 merge の両方の mutation に渡す。
+直接 merge では GitHub が head の一致を merge の条件として明記しているが、auto-merge 有効化では
+「期待する head OID」としか書かれておらず、後の push での挙動は文書化されていない。そのため
+auto 経路では保証ではなく打てる最善の手当てであり、auto-merge が有効な PR へ push する側は先に
+`--disable` で解除する（下記）。
 
 実例: dotrc/docs/incidents/convention-in-skill-not-invoked.md
 
