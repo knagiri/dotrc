@@ -3,7 +3,7 @@
 # `#` is a comment.
 # A listed path that does not exist here is skipped, so this list is safe to
 # keep even on a checkout that has none of it.
-# See dot/claude/rules/worktree-scope.md §6.
+# See dot/claude/skills/delegate-to-worktree/SKILL.md ("claude-worktree の使い方").
 
 # Worktrees live at <repo>/.worktrees/<name>, inside the main checkout, so mise
 # walks up and picks up the checkout's own mise.local.toml (already a trusted
