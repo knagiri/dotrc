@@ -79,8 +79,15 @@ frontmatter だけが grant に効くので、base と head の frontmatter を�
 hunk の位置で判定しないのは、frontmatter の長さが差分からは分からず、frontmatter をまたぐ
 hunk を取りこぼしうるため。差分や内容が読めないときは grant 変更とみなして止める（fail
 closed）。frontmatter を比べるファイルは、base と head のどちらかで frontmatter を検出できなければ
-（1 行目で開かない・閉じない・symlink への差し替え）比較できないので止める。検出できない同士を
+（1 行目で開かない・閉じない）比較できないので止める。検出できない同士を
 空文字列の一致として通すと、frontmatter の書き方を崩すだけで素通りするため。
+
+symlink（mode 120000）は、パスによらず差分のどこかに現れたら止める。`skills/<new>` や
+`agents/<dir>` に skill・agent を含むディレクトリへの link を足すと、ファイル名が一致しないまま
+deploy 後の frontmatter（grant）が増える。repo に symlink は無いので、過検出のコストはほぼ無い。
+差分は `gh pr diff`（SHA を取れない）ではなく `compare/<base>...<head>` を diff media type で取る。
+three-dot は merge base 起点なので PR の差分と同じ範囲になり、判定した diff と固定する head が
+同じ commit にそろう。
 
 ゲートが見るのは settings ファイルと frontmatter だけである。`bin/` の allowlist 済み wrapper の
 本体、スクリプトに書いた `--permission-mode` / `--allowedTools`、hook の実体、deploy の link map

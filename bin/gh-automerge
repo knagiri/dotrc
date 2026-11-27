@@ -8,8 +8,8 @@ set -euo pipefail
 # with no flag passthrough, so a caller (incl. a prompt-injected reviewer agent) cannot
 # append --admin or other protection-bypassing flags. This lets the merge grant be
 # allowlisted narrowly as `Bash(gh-automerge *)` instead of the broad `gh pr merge *`.
-# Before that call the grant gate below reads the PR (`gh pr view`, `gh pr diff` and
-# `gh api .../contents`, all read-only).
+# Before that call the grant gate below reads the PR (`gh pr view` and `gh api`
+# for the compare diff and the file contents, all read-only).
 #
 # Clean-status fallback: GitHub's enablePullRequestAutoMerge refuses a PR whose
 # mergeStateStatus is CLEAN with "Pull request is in clean status" -- there is
@@ -25,18 +25,23 @@ set -euo pipefail
 # if it has one nothing is issued and the exit code is 5 (no other path here
 # uses 5; gh itself documents 0/1/2/4). stderr names each offending file and
 # says the PR waits for a human approval. It is a grant change when the diff
-# (`gh pr diff`) touches
+# (`gh api repos/{owner}/{repo}/compare/<base>...<head>` with the diff media type, the
+# same range as the PR's diff) touches
 #   - a file named settings.json / settings.local.json / managed-settings.json,
 #     anywhere (the whole file: hooks and env act on what runs, not only
 #     permissions);
 #   - the frontmatter of a SKILL.md, an `agents/**/*.md` or a `claude/commands/**/*.md`
 #     (also `.claude/commands/`): added, deleted, renamed or copied such a file
-#     always counts, and so does one whose mode is 120000 (symlink) on either side;
+#     always counts;
 #     one modified in place counts when its frontmatter at the PR's base commit
 #     differs from the one at its head commit (read with `gh api .../contents`), or
 #     when either side has no frontmatter that opens on line 1 and closes, because
 #     then the two cannot be compared. Body-only edits of a file that has
-#     frontmatter pass.
+#     frontmatter pass;
+#   - any path with mode 120000 (symlink) on either side, whatever its name: a link
+#     named `skills/<new>` or `agents/<dir>` that points at a directory of skills or
+#     agents changes what is deployed without any file name matching the above, and
+#     the repo has no symlink to begin with, so over-detecting costs nothing.
 # The gate fails closed: an unreadable PR, diff or file, an empty diff, a quoted
 # path, a ---/+++ line or file header it cannot parse and text before the first
 # file header all count as a grant change. Other lines it does not know (index,
@@ -60,10 +65,11 @@ set -euo pipefail
 # mergePullRequest GitHub documents the check ("OID that the pull request head
 # ref must match to allow merge"); for enablePullRequestAutoMerge it documents
 # only "The expected head OID of the pull request", not what a later push does.
-# `gh pr diff` takes no SHA, so the head is read again after the diff and the gate
-# refuses (exit 5) when it moved in between. The auto path therefore does not
-# guarantee anything for a push after auto-merge is enabled; --disable (below)
-# turns an enabled auto-merge off.
+# The diff is taken between the two SHAs read together (`compare/<base>...<head>`;
+# three dots start at the merge base, like a PR diff), not from the moving head
+# (`gh pr diff` takes no SHA), so the diff judged and the head pinned are the same
+# commit. The auto path does not guarantee anything for a push after auto-merge is
+# enabled; --disable (below) turns an enabled auto-merge off.
 #
 # --disable: `gh-automerge --disable <PR#>` turns an already enabled auto-merge
 # off again, for the window in which more fix commits are pushed onto an open PR
@@ -207,19 +213,16 @@ oids="$(gh_mise pr view "$pr" --json baseRefOid,headRefOid \
 read -r base_oid head_oid <<<"$oids"
 [[ "${base_oid:-}" =~ ^[0-9a-f]{40}$ && "${head_oid:-}" =~ ^[0-9a-f]{40}$ ]] \
   || gate_refuse "unexpected base/head commits for #$pr: $oids"
-gh_mise pr diff "$pr" --color never >"$tmp/diff" 2>"$err" \
+# By SHA, so a push after the read above cannot change what is judged. A failure
+# (including 406 for a diff too large) fails closed.
+gh_mise api "repos/{owner}/{repo}/compare/$base_oid...$head_oid" \
+  -H 'Accept: application/vnd.github.diff' >"$tmp/diff" 2>"$err" \
   || gate_refuse "could not read the diff of #$pr: $(head -c 300 "$err")"
-# `pr diff` takes no SHA: a push between the two reads would leave the diff
-# describing another head than the one that gets pinned.
-head_now="$(gh_mise pr view "$pr" --json headRefOid --jq .headRefOid 2>"$err")" \
-  || gate_refuse "could not re-read the head commit of #$pr: $(head -c 300 "$err")"
-[ "$head_now" = "$head_oid" ] \
-  || gate_refuse "the head of #$pr moved while it was being judged ($head_oid -> $head_now)"
 
 reasons=()
 nfiles=0
 # One file block of the diff, collected by the loop below.
-f_hdr="" f_old="" f_new="" f_created=0 f_deleted=0 f_renamed=0 f_symlink=0
+f_hdr="" f_old="" f_new="" f_created=0 f_deleted=0 f_renamed=0
 flush_file() {
   [ -n "$f_hdr" ] || return 0
   nfiles=$((nfiles + 1))
@@ -250,9 +253,6 @@ flush_file() {
   if [ "$f_renamed" -eq 1 ] || [ "$old" != "$new" ]; then
     reasons+=("$old -> $new: renamed / copied file with frontmatter"); return 0
   fi
-  if [ "$f_symlink" -eq 1 ]; then
-    reasons+=("$new: symlink (mode 120000), frontmatter cannot be compared"); return 0
-  fi
   local fb fh
   if fb="$(fm_at "$old" "$base_oid")" && fh="$(fm_at "$new" "$head_oid")"; then
     [ "$fb" = "$fh" ] || reasons+=("$new: frontmatter changed")
@@ -266,7 +266,7 @@ in_hunk=0
 while IFS= read -r line || [ -n "$line" ]; do
   if [[ "$line" == "diff --git "* ]]; then
     flush_file
-    f_hdr="$line" f_old="" f_new="" f_created=0 f_deleted=0 f_renamed=0 f_symlink=0 in_hunk=0
+    f_hdr="$line" f_old="" f_new="" f_created=0 f_deleted=0 f_renamed=0 in_hunk=0
     continue
   fi
   [ -n "$f_hdr" ] || { reasons+=("unparseable diff: text before the first file header"); break; }
@@ -274,7 +274,8 @@ while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     "old mode 120000"|"new mode 120000"|"new file mode 120000"|"deleted file mode 120000"|\
     "index "*" 120000")
-      f_symlink=1 ;;
+      # whatever the path: see "any path with mode 120000" in the header
+      reasons+=("symlink (mode 120000): $f_hdr") ;;
   esac
   case "$line" in
     "@@ "*)              in_hunk=1 ;;

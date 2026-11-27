@@ -73,21 +73,16 @@ PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 --admin >/dev/null 2>&1; [ $? -n
 # fall through to a direct merge.
 #
 # The grant gate (test/gh-automerge.test.sh) reads the PR before merging, so the
-# stub answers `pr view` with two commit ids (and the head alone for the re-read
-# after the diff) and `pr diff` with a diff that has no grant change; only
-# `pr merge` calls are logged.
+# stub answers `pr view` with two commit ids and the compare diff (`api .../compare/...`)
+# with a diff that has no grant change; only `pr merge` calls are logged.
 amdir="$stubdir/am"; mkdir -p "$amdir"
 cat >"$amdir/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
   "pr view")
-    # the first read asks for base and head, the re-read after the diff for the head only
-    case "$*" in
-      *baseRefOid*) echo "$(printf 'b%.0s' {1..40}) $(printf 'c%.0s' {1..40})" | tr bc 0a ;;
-      *) printf 'c%.0s' {1..40} | tr c a; echo ;;
-    esac
+    echo "$(printf 'b%.0s' {1..40}) $(printf 'c%.0s' {1..40})" | tr bc 0a
     exit 0 ;;
-  "pr diff") printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-a' '+b'; exit 0 ;;
+  "api repos/{owner}/{repo}/compare/"*) printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-a' '+b'; exit 0 ;;
 esac
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$*" in

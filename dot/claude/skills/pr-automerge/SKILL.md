@@ -48,8 +48,8 @@ grant 変更があれば merge を撃たずに exit 5 で返す（判定条件�
 この skill の merge 操作の正典。理由（フラグを素通ししない、clean 拒否 fallback が要る理由）は
 `dotrc/docs/design/gh-wrappers.md`。
 
-- `gh-automerge <PR>`: merge の前に grant ゲートが PR を読む（`gh pr view` / `gh pr diff` /
-  `gh api` の contents。いずれも read-only）。通れば `gh pr merge --auto --merge --match-head-commit <head> <PR>`
+- `gh-automerge <PR>`: merge の前に grant ゲートが PR を読む（`gh pr view` /
+  `gh api` の compare diff と contents。いずれも read-only）。通れば `gh pr merge --auto --merge --match-head-commit <head> <PR>`
   を撃つ（`<head>` はゲートが判定した head）。失敗の stderr に `clean status` が含まれるとき
   （待つものが無い PR に auto-merge は張れないと GitHub が拒否したとき）だけ
   `gh pr merge --merge --match-head-commit <head> <PR>` へ fallback する。それ以外の失敗（required check 未達、conflict、repo で

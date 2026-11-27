@@ -22,12 +22,14 @@ BASE=1111111111111111111111111111111111111111
 HEAD=2222222222222222222222222222222222222222
 
 # gh stub. The PR is described by files under $GH_FIX:
-#   diff            -- what `pr diff` prints (GH_DIFF_FAIL=1: print it, exit 1)
+#   diff            -- what `api repos/{owner}/{repo}/compare/<base>...<head>` prints with the diff
+#                      media type (GH_DIFF_FAIL=1: print it, exit 1). Any other range is a 404,
+#                      so a diff that is not taken between $GH_BASE and $GH_HEAD cannot be read;
+#                      each compare endpoint is appended to $GH_API_LOG.
 #   files/<sha>/<path> -- what `api repos/{owner}/{repo}/contents/<path>?ref=<sha>`
 #                      returns; a missing file is a 404
-# `pr view` prints what the wrapper's --jq would produce: the "<base> <head>" line, or
-# for the re-read after the diff the head alone (GH_HEAD2 overrides it: a push in
-# between; GH_VIEW_FAIL=1: the call fails).
+# `pr view` prints what the wrapper's --jq would produce: the "<base> <head>" line
+# (GH_VIEW_FAIL=1: the call fails).
 # `pr merge` appends its argv to $GH_MERGE_LOG and succeeds
 # (one `[arg]` per line, so each call starts with `[pr]`).
 cat >"$stub/gh" <<'STUB'
@@ -35,13 +37,8 @@ cat >"$stub/gh" <<'STUB'
 case "$1 $2" in
   "pr view")
     [ "${GH_VIEW_FAIL:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }
-    # the first read asks for base and head; the re-read after the diff asks for the head only
-    case "$*" in
-      *baseRefOid*) echo "$GH_BASE $GH_HEAD" ;;
-      *) echo "${GH_HEAD2:-$GH_HEAD}" ;;
-    esac
+    echo "$GH_BASE $GH_HEAD"
     exit 0 ;;
-  "pr diff") cat "$GH_FIX/diff"; [ "${GH_DIFF_FAIL:-0}" = 1 ] && { echo "HTTP 502" >&2; exit 1; }; exit 0 ;;
   "pr merge")
     printf '[%s]\n' "$@" >>"$GH_MERGE_LOG"
     # GH_AUTO_CLEAN=1: refuse --auto the way GitHub does for a clean PR.
@@ -51,6 +48,13 @@ case "$1 $2" in
     exit 0 ;;
 esac
 if [ "$1" = api ]; then
+  case "$2" in
+    repos/\{owner\}/\{repo\}/compare/*)
+      echo "$2" >>"$GH_API_LOG"
+      [ "$2" = "repos/{owner}/{repo}/compare/$GH_BASE...$GH_HEAD" ] \
+        || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+      cat "$GH_FIX/diff"; [ "${GH_DIFF_FAIL:-0}" = 1 ] && { echo "HTTP 502" >&2; exit 1; }; exit 0 ;;
+  esac
   ep="$2"; ep="${ep#repos/\{owner\}/\{repo\}/contents/}"
   path="${ep%%\?ref=*}"; sha="${ep##*\?ref=}"
   f="$GH_FIX/files/$sha/$path"
@@ -156,7 +160,7 @@ index 1111111..2222222 100644
 +b
 EOF
 
-# `pr diff` fails after printing a harmless-looking partial diff, so only the
+# the diff read fails after printing a harmless-looking partial diff, so only the
 # exit status of the diff read can stop it.
 cp -r "$fix/unrelated" "$fix/diff_fail"
 
@@ -241,6 +245,28 @@ for n in symlink_mode symlink_index; do
   printf -- '---\nname: foo\n---\nbody\n' | put $n "$BASE" "$skill"
   printf -- '---\nname: foo\n---\nbody\n' | put $n "$HEAD" "$skill"
 done
+
+# A symlink whose path matches no frontmatter file name: only the mode can stop it. A link
+# named like a skill directory exposes every SKILL.md under its target.
+mkfix symlink_other <<'EOF2'
+diff --git a/dot/claude/skills/newlink b/dot/claude/skills/newlink
+new file mode 120000
+index 0000000..2222222
+--- /dev/null
++++ b/dot/claude/skills/newlink
+@@ -0,0 +1 @@
++../../../elsewhere/skills
+\ No newline at end of file
+EOF2
+mkfix symlink_other_idx <<'EOF2'
+diff --git a/dot/claude/agents/dirlink b/dot/claude/agents/dirlink
+index 1111111..2222222 120000
+--- a/dot/claude/agents/dirlink
++++ b/dot/claude/agents/dirlink
+@@ -1 +1 @@
+-old
++new
+EOF2
 
 # A grant change first and a harmless file last: the first block must be flushed when the
 # second header starts.
@@ -394,9 +420,9 @@ EOF
 # ---- runner -----------------------------------------------------------------
 run() {  # run <bindir> <fixture> -> sets rc, out (stderr), merge log in $work/merges
   # RUN_ENV (an array of VAR=value) adds to the stub's environment for one check.
-  : >"$work/merges"
+  : >"$work/merges"; : >"$work/api"
   out="$(env GH_FIX="$fix/$2" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" \
-    GH_DIFF_FAIL="$([ "$2" = diff_fail ] && echo 1 || echo 0)" "${RUN_ENV[@]}" \
+    GH_API_LOG="$work/api" GH_DIFF_FAIL="$([ "$2" = diff_fail ] && echo 1 || echo 0)" "${RUN_ENV[@]}" \
     PATH="$stub:$PATH" "$1/gh-automerge" 42 2>&1 >/dev/null)"
   rc=$?
 }
@@ -418,8 +444,8 @@ passed() {
 # The clean-status fallback (direct merge) must pin the head too: two merge
 # calls, the second without --auto, each with --match-head-commit <head>.
 check_fallback_pin() {
-  : >"$work/merges"
-  out="$(env GH_FIX="$fix/unrelated" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" \
+  : >"$work/merges"; : >"$work/api"
+  out="$(env GH_FIX="$fix/unrelated" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" GH_API_LOG="$work/api" \
     GH_AUTO_CLEAN=1 PATH="$stub:$PATH" "$1/gh-automerge" 42 2>&1 >/dev/null)"
   rc=$?
   [ "$rc" -eq 0 ] && [ "$(grep -cxF '[pr]' "$work/merges")" -eq 2 ] \
@@ -440,6 +466,9 @@ check_agent_sub()     { stopped "$1" agent_sub "$sub: frontmatter changed"; }
 check_blank_first()   { stopped "$1" blank_first "frontmatter could not be compared"; }
 check_symlink() {
   stopped "$1" symlink_mode "symlink (mode 120000)" && stopped "$1" symlink_index "symlink (mode 120000)"
+}
+check_symlink_other() {
+  stopped "$1" symlink_other "dot/claude/skills/newlink" && stopped "$1" symlink_other_idx "dot/claude/agents/dirlink"
 }
 check_multi()         { stopped "$1" multi dot/claude/settings.json; }
 check_rename_settings() { stopped "$1" rename_settings "dot/claude/settings.json: settings file"; }
@@ -469,10 +498,9 @@ check_view_null() {
   RUN_ENV=(GH_BASE=null GH_HEAD=null); stopped "$1" unrelated "unexpected base/head commits"
   local r=$?; RUN_ENV=(); return $r
 }
-check_head_moved() {
-  RUN_ENV=(GH_HEAD2=3333333333333333333333333333333333333333)
-  stopped "$1" unrelated "moved while it was being judged"
-  local r=$?; RUN_ENV=(); return $r
+# The diff is read between the SHAs that get pinned (the stub 404s any other range).
+check_compare_range() {
+  passed "$1" unrelated && [ "$(cat "$work/api")" = "repos/{owner}/{repo}/compare/$BASE...$HEAD" ]
 }
 
 # Control: the gh the wrapper reaches is the stub, and the merge call lands in
@@ -482,9 +510,9 @@ if [ "$(PATH="$stub:$PATH" command -v gh)" = "$stub/gh" ] && check_unrelated "$b
 else echo "FAIL: control: gh=$(PATH="$stub:$PATH" command -v gh) rc=$rc out=$out"; fail=1; fi
 
 for c in settings allowed_tools new_skill body_only unrelated diff_fail agent empty fallback_pin \
-  cmd_fm agent_sub blank_first symlink multi rename_settings rename_skill copy_skill head_404 \
+  cmd_fm agent_sub blank_first symlink symlink_other multi rename_settings rename_skill copy_skill head_404 \
   settings_names big_body deleted_skill mode_settings mode_readme binary quoted weird_line \
-  preamble hunk_dash view_fail view_null head_moved; do
+  preamble hunk_dash view_fail view_null compare_range; do
   if "check_$c" "$bindir"; then echo "ok: gh-automerge gate: $c"
   else echo "FAIL: gh-automerge gate: $c rc=$rc out=$out merges=$(cat "$work/merges")"; fail=1; fi
 done
@@ -537,7 +565,8 @@ mutant noagent_subdir check_agent_sub 's#agents/\.+\\\.md#agents/[^/]+\\.md#'
 # Frontmatter not found must not read as "equal". Not-found is stopped twice in awk (no
 # line 1 opener, then never closed), so both go.
 mutant nofm_failclosed check_blank_first 's/END { if (!open) exit 3; if (!closed) exit 2 }/END { }/'
-mutant nosymlink check_symlink 's/f_symlink=1 ;;/: ;;/'
+mutant nosymlink check_symlink 's/reasons+=("symlink (mode 120000): \$f_hdr") ;;/: ;;/'
+mutant nosymlink_other check_symlink_other 's/reasons+=("symlink (mode 120000): \$f_hdr") ;;/: ;;/'
 mutant noflush_on_header check_multi 's/^    flush_file$/    :/'
 mutant norename_to check_rename_settings 's/^    "rename to "\*) .*/    "rename to "*)       : ;;/'
 mutant norename_to_skill check_rename_skill 's/^    "rename to "\*) .*/    "rename to "*)       : ;;/'
@@ -564,6 +593,7 @@ mutant nopreamble check_preamble 's/^  \[ -n "\$f_hdr" \] || { reasons+=.*/  :/'
 mutant nohunk check_hunk_dash 's/^  \[ "\$in_hunk" -eq 1 \] && continue/  :/'
 mutant noviewfail check_view_fail 's/|| gate_refuse "could not read the base\/head commits/|| true "could not read the base\/head commits/'
 mutant nooid check_view_null 's/^\[\[ "\${base_oid:-}" =~ .* \\$/true \\/'
-mutant nomoved check_head_moved 's/^\[ "\$head_now" = "\$head_oid" \] \\$/true \\/'
+mutant twodot_compare check_compare_range 's#compare/\$base_oid\.\.\.\$head_oid#compare/$base_oid..$head_oid#'
+mutant swapped_compare check_compare_range 's#compare/\$base_oid\.\.\.\$head_oid#compare/$head_oid...$base_oid#'
 
 exit "$fail"
