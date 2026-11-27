@@ -1,21 +1,21 @@
 ## session のスコープのルール
 
-session のスコープは、起動した cwd のディレクトリ（repo。linked worktree ならその worktree ディレクトリ）である。
-**その外への書き込みは、明示的に指示されない限り行わない**。別 repo・別 worktree・main チェックアウトへ
-作業を波及させない。main working tree の session から見て、repo 配下に置かれた linked worktree
-（例: `<repo>/.worktrees/<name>`）もスコープ外である。
+session のスコープは、起動した cwd の repo（linked worktree ならその worktree ディレクトリ）である。
+**その外への書き込みは、明示的に指示されない限り行わない**。別 repo・別 worktree（repo 配下の
+`<repo>/.worktrees/<name>` を含む）・main チェックアウトへ作業を波及させない。
 
-- 例外として書き込んでよいもの: 作業用ディレクトリ（`/tmp`、session の scratchpad）と、Claude Code 自身が
-  管理する領域（auto-memory、`$CLAUDE_JOB_DIR` など、system prompt が書き込みを指示する場所）。
+- 作業用ディレクトリ（`/tmp`、scratchpad）と、system prompt が書き込みを指示する Claude Code の
+  管理領域（auto-memory 等）は例外。
 - read-only な参照は外を見てよい（§3）。
-- harness（`~/.claude/` のうち `dot/claude/` から展開される rules・skills・agents・settings.json・CLAUDE.md 等）の
-  変更は dotrc の session で、`~/.claude/` のパスではなく自 checkout の `dot/claude/` を編集して行う。
-  `~/.claude/` は main checkout への symlink なので、linked worktree の session でもパス経由では main
-  checkout への書き込みになり、`paths` の相対 glob も発火しない。他の repo の session からは
-  `~/.claude/` を直接編集しない。出口は、自分で気づいた改善なら `gh-issue-file` での観測の起票
-  （[issue-workflow.md](./issue-workflow.md)）、ユーザーに頼まれたなら `harness-from-feedback` での dotrc への委譲。
+- harness（`~/.claude/` のうち dotrc の `dot/claude/` から展開されるもの）の変更は dotrc の session で、
+  自 checkout の `dot/claude/` を編集して行う。`~/.claude/` のパス経由では main checkout への書き込みに
+  なる。他の repo の session では `~/.claude/` を編集せず、気づいた改善は `gh-issue-file` で観測として
+  起票する（[issue-workflow.md](./issue-workflow.md)）。ユーザーに頼まれたら `harness-from-feedback` で
+  dotrc へ委譲する。
 
-スコープの単位は **ディレクトリ（repo / worktree）であって、単一ブランチではない**。1 つの worktree 内でブランチを切り替えたり、新規ブランチを起こして PR を積み上げたりする運用は通常想定であり、妨げない。
+実例: dotrc/docs/incidents/out-of-scope-edit-workaround.md
+
+スコープの単位は **ディレクトリ（repo / worktree）であって、単一ブランチではない**。1 つの worktree 内でブランチを切り替えたり PR を積み上げたりするのは通常想定であり、妨げない。
 
 関連ルール: 許可設定の仕組みは [claude-settings.md](./claude-settings.md)、承認が要るコマンドの回避は [bash-command-constraints.md](./bash-command-constraints.md) を参照。作業対象の dir が cwd とズレて `cd`/`git -C` で渡り歩きたくなったら、[working-directory.md](./working-directory.md) に従い `/cd` で cwd 自体を移す（§3 の read-only 覗き見はその例外）。
 
@@ -23,7 +23,7 @@ session のスコープは、起動した cwd のディレクトリ（repo。lin
 
 ユーザーがある repo・worktree で Claude を起動した時点で、作業対象はそこだと表明している（worktree は並行作業を**隔離**するために切られる）。境界を越えると次の実害が出る。
 
-- **レビューと履歴を経ない変更**：`~/.claude/` の rule 等は main checkout への symlink なので、編集すると未 commit の変更が main checkout に残り、PR レビューも履歴も経ずに全 session へ即時に効く。他 repo への書き込みも、その repo のレビュー・履歴を通らない。
+- **レビューと履歴を経ない変更**：repo の外への変更は、その場所のレビューと履歴を通らない。`~/.claude/` の rule 等は main checkout への symlink なので、未 commit のまま全 session へ即時に効く。
 - **他作業ツリーへの巻き込み**：別 worktree は別ブランチを checkout しており、編集するとユーザーが並行作業中の場所に予期しない変更が混入する。
 - **意図の逸脱**：レビュー対象が他ツリーへ散らばって差分が追えなくなる。
 - **二重チェックアウトの破綻**：git は同一ブランチを 2 つの worktree で同時に checkout できないので、他 worktree が持つブランチへの `switch` は失敗する。
