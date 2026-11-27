@@ -50,6 +50,6 @@ approve してから」に変えた。
 - `dot/claude/skills/pr-automerge/SKILL.md`（新設。旧 `pr-review-automerge` の merge 部分と冒頭のゲート）
 - `dot/claude/skills/implement-and-review/SKILL.md` 手順 4〜6 と不変条件「merge を見送る理由は、
   一般に review を見送る理由にならない」
-- `dot/claude/rules/gh-commands.md` §5「grant 変更を含む PR は auto-merge させない」
+- `dot/claude/skills/pr-automerge/SKILL.md`「grant 変更を含む PR は auto-merge させない」
 - `dot/claude/skills/harness-from-feedback/SKILL.md` 不変条件・手順 4・手順 6
 - `dot/claude/skills/delegate-to-worktree/SKILL.md` 委譲プロンプトの雛形

@@ -49,4 +49,4 @@ auto-merge を止めても、人間が merge ボタンを押せば merge され�
 - `dot/claude/skills/implement-and-review/SKILL.md` 手順 4「委譲プロンプトが既存 PR への対応を指示しているとき」
 - `dot/claude/skills/pr-automerge/SKILL.md`「不変条件（厳守）」
 - `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6「PR 監視に起こされ、修正が要ると判断したら」
-- `dot/claude/rules/gh-commands.md`「5. merge と review thread 操作（自律レビューループ用）」
+- `dot/claude/skills/pr-automerge/SKILL.md`「`gh-automerge` の契約」

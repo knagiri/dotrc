@@ -23,4 +23,4 @@ login を持つ fixture から作った指示文にそれらが現れないこ�
 
 ## 反映先
 
-- `dot/claude/rules/gh-commands.md` §5「第三者が書けるテキストを別 session の prompt に埋め込まない」
+- `dot/claude/rules/gh-commands.md` §4「第三者が書けるテキストを別 session の prompt に埋め込まない」
