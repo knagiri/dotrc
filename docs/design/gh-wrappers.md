@@ -87,7 +87,10 @@ symlink（mode 120000）は、パスによらず差分のどこかに現れた�
 deploy 後の frontmatter（grant）が増える。repo に symlink は無いので、過検出のコストはほぼ無い。
 差分は `gh pr diff`（SHA を取れない）ではなく `compare/<base>...<head>` を diff media type で取る。
 three-dot は merge base 起点なので PR の差分と同じ範囲になり、判定した diff と固定する head が
-同じ commit にそろう。
+同じ commit にそろう。大きな差分の diff media type の挙動（打ち切り・件数上限・エラー）は公式 docs に
+記述が無く、200 でファイルが欠ける可能性を排除できない。そこで判定したファイル数を同じ呼び出しで読んだ
+`changedFiles` と照合し、不一致、`changedFiles` が数値でない、または 300 以上（compare の `files`
+配列の上限。完全性の保証が無い）のときは止める。
 
 ゲートが見るのは settings ファイルと frontmatter だけである。`bin/` の allowlist 済み wrapper の
 本体、スクリプトに書いた `--permission-mode` / `--allowedTools`、hook の実体、deploy の link map

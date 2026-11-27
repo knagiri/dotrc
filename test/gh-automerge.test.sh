@@ -28,7 +28,7 @@ HEAD=2222222222222222222222222222222222222222
 #                      each compare endpoint is appended to $GH_API_LOG.
 #   files/<sha>/<path> -- what `api repos/{owner}/{repo}/contents/<path>?ref=<sha>`
 #                      returns; a missing file is a 404
-# `pr view` prints what the wrapper's --jq would produce: the "<base> <head>" line
+# `pr view` prints what the wrapper's --jq would produce: the "<base> <head> <changedFiles>" line
 # (GH_VIEW_FAIL=1: the call fails).
 # `pr merge` appends its argv to $GH_MERGE_LOG and succeeds
 # (one `[arg]` per line, so each call starts with `[pr]`).
@@ -37,7 +37,8 @@ cat >"$stub/gh" <<'STUB'
 case "$1 $2" in
   "pr view")
     [ "${GH_VIEW_FAIL:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }
-    echo "$GH_BASE $GH_HEAD"
+    # changedFiles: GH_CHANGED, else the number of file blocks in the fixture diff
+    echo "$GH_BASE $GH_HEAD ${GH_CHANGED-$(grep -c '^diff --git ' "$GH_FIX/diff")}"
     exit 0 ;;
   "pr merge")
     printf '[%s]\n' "$@" >>"$GH_MERGE_LOG"
@@ -498,6 +499,19 @@ check_view_null() {
   RUN_ENV=(GH_BASE=null GH_HEAD=null); stopped "$1" unrelated "unexpected base/head commits"
   local r=$?; RUN_ENV=(); return $r
 }
+# The diff lacks a file the PR changes (a truncated diff): the count must stop it.
+check_truncated() {
+  RUN_ENV=(GH_CHANGED=2); stopped "$1" unrelated "may be truncated"
+  local r=$?; RUN_ENV=(); return $r
+}
+check_changed_nan() {
+  RUN_ENV=(GH_CHANGED=null); stopped "$1" unrelated "unexpected changed file count"
+  local r=$?; RUN_ENV=(); return $r
+}
+check_changed_300() {
+  RUN_ENV=(GH_CHANGED=300); stopped "$1" unrelated "300 or more"
+  local r=$?; RUN_ENV=(); return $r
+}
 # The diff is read between the SHAs that get pinned (the stub 404s any other range).
 check_compare_range() {
   passed "$1" unrelated && [ "$(cat "$work/api")" = "repos/{owner}/{repo}/compare/$BASE...$HEAD" ]
@@ -512,7 +526,7 @@ else echo "FAIL: control: gh=$(PATH="$stub:$PATH" command -v gh) rc=$rc out=$out
 for c in settings allowed_tools new_skill body_only unrelated diff_fail agent empty fallback_pin \
   cmd_fm agent_sub blank_first symlink symlink_other multi rename_settings rename_skill copy_skill head_404 \
   settings_names big_body deleted_skill mode_settings mode_readme binary quoted weird_line \
-  preamble hunk_dash view_fail view_null compare_range; do
+  preamble hunk_dash view_fail view_null compare_range truncated changed_nan changed_300; do
   if "check_$c" "$bindir"; then echo "ok: gh-automerge gate: $c"
   else echo "FAIL: gh-automerge gate: $c rc=$rc out=$out merges=$(cat "$work/merges")"; fail=1; fi
 done
@@ -593,6 +607,9 @@ mutant nopreamble check_preamble 's/^  \[ -n "\$f_hdr" \] || { reasons+=.*/  :/'
 mutant nohunk check_hunk_dash 's/^  \[ "\$in_hunk" -eq 1 \] && continue/  :/'
 mutant noviewfail check_view_fail 's/|| gate_refuse "could not read the base\/head commits/|| true "could not read the base\/head commits/'
 mutant nooid check_view_null 's/^\[\[ "\${base_oid:-}" =~ .* \\$/true \\/'
+mutant nocount check_truncated 's/^\[ "\$nfiles" -eq "\$changed_files" \] *\\$/true \\/'
+mutant nocap300 check_changed_300 's/^\[ "\$changed_files" -lt 300 \] *\\$/true \\/'
+mutant nonumeric check_changed_nan 's/^\[\[ "\${changed_files:-}" =~ \^\[0-9\]+\$ \]\] *\\$/true \\/'
 mutant twodot_compare check_compare_range 's#compare/\$base_oid\.\.\.\$head_oid#compare/$base_oid..$head_oid#'
 mutant swapped_compare check_compare_range 's#compare/\$base_oid\.\.\.\$head_oid#compare/$head_oid...$base_oid#'
 

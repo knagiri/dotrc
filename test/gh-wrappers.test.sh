@@ -80,7 +80,7 @@ cat >"$amdir/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
   "pr view")
-    echo "$(printf 'b%.0s' {1..40}) $(printf 'c%.0s' {1..40})" | tr bc 0a
+    echo "$(printf 'b%.0s' {1..40}) $(printf 'c%.0s' {1..40}) 1" | tr bc 0a
     exit 0 ;;
   "api repos/{owner}/{repo}/compare/"*) printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-a' '+b'; exit 0 ;;
 esac

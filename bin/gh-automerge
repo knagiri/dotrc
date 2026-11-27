@@ -65,6 +65,9 @@ set -euo pipefail
 # mergePullRequest GitHub documents the check ("OID that the pull request head
 # ref must match to allow merge"); for enablePullRequestAutoMerge it documents
 # only "The expected head OID of the pull request", not what a later push does.
+# Completeness of the diff: GitHub's docs give no guarantee for a large comparison, so
+# the file blocks judged must equal the PR's changedFiles (read in the same call as
+# the SHAs) and changedFiles must be below 300; otherwise the gate refuses.
 # The diff is taken between the two SHAs read together (`compare/<base>...<head>`;
 # three dots start at the merge base, like a PR diff), not from the moving head
 # (`gh pr diff` takes no SHA), so the diff judged and the head pinned are the same
@@ -207,14 +210,16 @@ fm_at() {
 
 # The head read here is pinned with --match-head-commit below (see "Head
 # pinning" in the header).
-oids="$(gh_mise pr view "$pr" --json baseRefOid,headRefOid \
-  --jq '"\(.baseRefOid) \(.headRefOid)"' 2>"$err")" \
+oids="$(gh_mise pr view "$pr" --json baseRefOid,headRefOid,changedFiles \
+  --jq '"\(.baseRefOid) \(.headRefOid) \(.changedFiles)"' 2>"$err")" \
   || gate_refuse "could not read the base/head commits of #$pr: $(head -c 300 "$err")"
-read -r base_oid head_oid <<<"$oids"
+read -r base_oid head_oid changed_files <<<"$oids"
 [[ "${base_oid:-}" =~ ^[0-9a-f]{40}$ && "${head_oid:-}" =~ ^[0-9a-f]{40}$ ]] \
   || gate_refuse "unexpected base/head commits for #$pr: $oids"
+[[ "${changed_files:-}" =~ ^[0-9]+$ ]] \
+  || gate_refuse "unexpected changed file count for #$pr: $oids"
 # By SHA, so a push after the read above cannot change what is judged. A failure
-# (including 406 for a diff too large) fails closed.
+# fails closed.
 gh_mise api "repos/{owner}/{repo}/compare/$base_oid...$head_oid" \
   -H 'Accept: application/vnd.github.diff' >"$tmp/diff" 2>"$err" \
   || gate_refuse "could not read the diff of #$pr: $(head -c 300 "$err")"
@@ -294,6 +299,15 @@ while IFS= read -r line || [ -n "$line" ]; do
 done <"$tmp/diff"
 flush_file
 [ "$nfiles" -gt 0 ] || reasons+=("the diff of #$pr has no file (empty or unparseable)")
+# Completeness: the docs do not say what the diff media type returns for a large
+# comparison (no documented limit, truncation or error), so a 200 with files
+# missing cannot be ruled out. The PR's own file count must match the file blocks
+# judged, and at 300 files (the documented cap of the compare `files` array) there
+# is no completeness guarantee, so that is refused too.
+[ "$nfiles" -eq "$changed_files" ] \
+  || reasons+=("the diff holds $nfiles file(s) but #$pr changes $changed_files; it may be truncated")
+[ "$changed_files" -lt 300 ] \
+  || reasons+=("#$pr changes $changed_files files (300 or more); the diff cannot be shown to be complete")
 [ "${#reasons[@]}" -eq 0 ] || gate_refuse "${reasons[@]}"
 # ---- end of grant gate -------------------------------------------------------
 
