@@ -57,7 +57,7 @@ autolink されて誤誘導になる）。対象の条件は dotrc の `CLAUDE.m
 | 3 | issue repo の設定を使えない。このマシンの dotrc 設定に `ISSUE_REPO` が無い、`OWNER/NAME` の形でない、または設定ファイルが読めない。gh は呼ばれず、何も起票されていない | 再実行しない。stderr をそのまま報告し、設定は人に任せる。stderr は、未設定なら設定ファイルのパスと書くべき行を名指しし、形が不正なら受け取った値を、読めないなら `cannot read <file>` を出す。agent が設定ファイルを書かない |
 | 4 | **起票は済んだ**が、`--resolved-by` の後処理（番号の読み取り・close）が失敗した | **再実行しない**（二重起票になる）。stderr の URL を報告し、close は人に任せる |
 | 5 | issue repo が private でない、または private かを確かめられなかった（`gh repo view` が失敗した・予期しない出力だった）。gh は 1 回だけ呼ばれ、何も読み書きされていない | 再実行しない。stderr（public か、確かめられなかった理由か）をそのまま報告し、設定は人に任せる |
-| 上記以外の非 0 | gh の失敗がそのまま伝播する（`set -e` は gh の実際の終了コードを返し、1 に丸めない。実測: 未認証の gh は exit 4） | stderr を読む。委譲 worktree では token 未供給を疑う（`worktree-scope.md` §6 の既知 gap） |
+| 上記以外の非 0 | gh の失敗がそのまま伝播する（`set -e` は gh の実際の終了コードを返し、1 に丸めない。実測: 未認証の gh は exit 4） | stderr を読む。委譲 worktree では token 未供給を疑う（`worktree-scope.md`「委譲まわりで常に守ること」） |
 
 code 1 は `bin/gh-issue-file` 自身の検証の失敗で、gh は起票前の呼び出しも含め呼ばれていても
 issue は作られていない。stderr が欠落見出しや引数を名指ししていれば body・引数の不備なので

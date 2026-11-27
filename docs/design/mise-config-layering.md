@@ -17,7 +17,7 @@ dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を
 
 `GH_TOKEN` は `gh` の呼び出しにしか要らない。常時ロードすると checkout 内の全プロセス
 （background 委譲先を含む）の env に載ってしまうので、`gh-*` wrapper が `MISE_ENV=gh` で
-呼ぶときだけ読む（`bin/lib/gh-mise.sh`、経緯は `dot/claude/rules/worktree-scope.md` §6）。
+呼ぶときだけ読む（`bin/lib/gh-mise.sh`、仕組みは `claude-tmux-worktree.md`「委譲先の env と token」）。
 
 結果として `mise.gh.local.toml` は「tracked から外す」と「読み込みを絞る」の二重ゲートになる。
 
@@ -26,7 +26,7 @@ dotrc は tracked な mise config を持たない。`bin/deploy.sh` が雛形を
 `bin/deploy.sh` は雛形生成と同時に checkout を `trusted_config_paths` に path prefix で
 登録するので、`mise.gh.local.toml` にも、worktree が自分で持つ config（tracked な `mise.toml`
 等）にも trust が効く。`mise trust` は subdirectory の config を覆わないので、prefix での登録が
-要る。worktree から親の config がどう解決されるかは `dot/claude/rules/worktree-scope.md` §6 を
+要る。worktree から親の config がどう解決されるかは `claude-tmux-worktree.md`「委譲先の env と token」を
 参照。
 
 新しいマシンでは `bin/deploy.sh` を実行し、雛形として作られた `~/.config/gh/personal.env`

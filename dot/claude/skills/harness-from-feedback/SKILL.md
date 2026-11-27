@@ -60,7 +60,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    - 参照ファイルは worktree 内で完結させる。通常は本文へ畳み込む。畳めない未 commit・gitignore
      済みファイル（spec 等）は `--seed <path>` で worktree へ入れ相対パスで参照させる（新 worktree
      は指定 branch を checkout するだけで起動元の gitignore 済み・未 commit ファイルは伝播せず、
-     承認待ちに落ちれば人間不在の委譲先が固まる。詳細は `worktree-scope.md` §6）
+     承認待ちに落ちれば人間不在の委譲先が固まる。詳細は `delegate-to-worktree` 手順 2）
    - artifact 種別（rule / CLAUDE.md 追記 / lint / test / hook / allowlist）・配置パス・対象 repo
    - allowlist（grant）を含む場合は、**`pr-review-loop` までは回し、`pr-automerge` は呼ばない**旨を
      明記する（不変条件のとおり。人間の approve を待つ）
@@ -130,7 +130,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
      ただし allowlist（grant）を含む場合は pr-review-loop の終了（収束または停止）で止まるので、**人間の approve と merge が
      要る**旨を報告する）
    - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
-     保守的に reap。詳細は worktree-scope.md §7）
+     保守的に reap。詳細は dotrc/docs/design/claude-tmux-worktree.md「委譲 worktree の後片付け」）
 
 7. **報告を受け取ったら**: 委譲先は `implement-and-review` 手順 6 に従い、完了・不足・中断を
    SendMessage で送ってくる。扱いは `delegate-to-worktree` 手順 6 と同じ（返信・完了報告を受けた

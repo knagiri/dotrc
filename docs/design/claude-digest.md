@@ -238,7 +238,7 @@ cwd が既に消えている場合（reap 済み worktree。2026-09-08 は 88 cw
 ので、2 段のフォールバックを持つ:
 
 1. 旧 worktree レイアウト `<repo>_<name>` — basename の末尾 `_<suffix>` を剥がす
-2. 現行レイアウト `<repo>/.worktrees/<name>`（`dot/claude/rules/worktree-scope.md` §6）—
+2. 現行レイアウト `<repo>/.worktrees/<name>`（`claude-tmux-worktree.md`「④ claude-worktree」）—
    実在する最初の祖先ディレクトリまで遡って git に訊く
 
 2 の遡りは 1 を包含しないので両方要る（旧レイアウトの worktree dir は repo の隣にあり、
@@ -248,7 +248,7 @@ cwd が既に消えている場合（reap 済み worktree。2026-09-08 は 88 cw
 ### 生成前に fetch。ただし `--prune` は付けない
 
 対象リポジトリごとに `git fetch --quiet --no-tags` を撃つ。**`--prune` は付けない。**
-`[gone]` を作るのは `git-reap-gone` のトリガーであり（`worktree-scope.md` §7）、日報が
+`[gone]` を作るのは `git-reap-gone` のトリガーであり（`claude-tmux-worktree.md`「委譲 worktree の後片付け」）、日報が
 勝手に握ってはいけない。日報は `[gone]` を観測して報告する側に留まる。
 
 ### 自分の識別はハードコードしない
@@ -382,8 +382,7 @@ OPEN   6 件  origin/main に未統合 → session の「残り」として出�
 はエラーにならず、**その id で空の新規 session を立ててしまう**。日報は transcript を読んで
 uuid を得ているので実在は構造的に保証されるが、この性質のせいで「間違った resume 行」は
 静かに壊れる（起動して、しかし何も残っていない）ため、経路として明示しておく。
-`claude attach` は background 専用で、interactive に投げると `No job matching` で落ちる
-（`worktree-scope.md` §6 / §8）。
+`claude attach` は background 専用で、interactive に投げると `No job matching` で落ちる。
 
 ラベルは `ai-title` entry（`{"type":"ai-title","aiTitle":"..."}`）の最後の値。実測で 30 session
 中 28 で取れる。取れないものは最初の人間プロンプトの先頭 60 文字で代用する。
