@@ -64,7 +64,7 @@ git 固有の一文が付く（次節末尾を参照）。
 関わらず出て、git ではこの理由に触れる一文が加わる）。
 
 したがって既定の対処は allowlist の工夫ではなく cwd を直すこと。[working-directory.md](./working-directory.md)
-に従い `/cd <dir>` を頼んで止まる。[worktree-scope.md](./worktree-scope.md) §3 が許す「別 repo の
+に従い `/cd <dir>` を頼んで止まる。[session-scope.md](./session-scope.md) §3 が許す「別 repo の
 一度きりの read-only 覗き見」で `git -C <絶対パス>` を使う場合は、承認プロンプトが出るのを
 受け入れる（一度きりなので摩擦が小さい）。
 

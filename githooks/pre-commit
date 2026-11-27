@@ -50,7 +50,7 @@ git rev-parse -q --verify HEAD >/dev/null 2>&1 || exit 0
 cat >&2 <<EOF
 pre-commit: commit を止めた: main working tree の統合先 branch '$branch' への直接 commit。
 main working tree での実装は delegate-to-worktree で worktree へ委譲するのが既定
-（~/.claude/rules/worktree-scope.md §5）。この場で進めるよう明示されているなら、
+（~/.claude/rules/session-scope.md §5）。この場で進めるよう明示されているなら、
 \`git switch -c <branch>\` で branch を切ってから commit し、PR を出す。
 \`git commit --no-verify\` でこの hook を回避しない。
 EOF

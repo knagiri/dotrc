@@ -10,7 +10,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
 **session 起動形式**（`--` 付き）で呼び、background agent（`claude --bg`, permission mode `auto`）を
 起こす。起動先は `implement-and-review` skill で**確定済みの設計を実行し**、merge する。
 
-運用ポリシーは `dot/claude/rules/worktree-scope.md` を参照。作業スコープを worktree に閉じる
+運用ポリシーは `dot/claude/rules/session-scope.md` を参照。作業スコープを worktree に閉じる
 原則は §2、main working tree にいるときの既定＝委譲は §5。分岐そのものの手順（`claude-worktree`
 の使い方、委譲プロンプトの自己完結、報告を受けた後の扱い）はこの skill が持つ。
 各層（git worktree・tmux・claude-queue・`claude-worktree`）の設計は
@@ -32,7 +32,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
 - **既定は background 起動**。`claude-worktree --model opus <name> -b <branch> -- "<prompt>"` は
   `claude --bg` で委譲先を起こす。委譲先は完遂しても session を終えず `idle` で残るので、
   手順 6 のとおり委譲元が `claude-stop-bg` で閉じる（**worktree も残る**。後片付けは
-  `git-reap-gone`。`worktree-scope.md`「委譲まわりで常に守ること」）。
+  `git-reap-gone`。`session-scope.md`「委譲まわりで常に守ること」）。
 - **`--tmux` は人間が同席する委譲にだけ使う**。HOW をその場で詰める、設計対話が要る等、
   interactivity を前提とする委譲は今後も一級のユースケースであり、退避路ではない。
   fire-and-forget の委譲に付けてはいけない。`--tmux` は `kind` が `background` ではない

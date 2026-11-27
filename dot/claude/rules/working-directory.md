@@ -8,7 +8,7 @@
 （[evidence-over-guesswork.md](./evidence-over-guesswork.md) と同じ扱い）。
 
 関連ルール: 承認が要るコマンドの回避一般は [bash-command-constraints.md](./bash-command-constraints.md)、
-別 worktree・別 repo を read-only で覗く許可は [worktree-scope.md](./worktree-scope.md) §3 を参照。
+別 worktree・別 repo を read-only で覗く許可は [session-scope.md](./session-scope.md) §3 を参照。
 
 ### 大前提
 
@@ -55,7 +55,7 @@ rg <pattern> /abs/path/to/other-repo      # cd しない。パスを引数で渡
 git -C /abs/path/to/other-repo log         # 一度きりの read-only 参照
 ```
 
-この read-only 覗き見は [worktree-scope.md](./worktree-scope.md) §3 が既に許可している。
+この read-only 覗き見は [session-scope.md](./session-scope.md) §3 が既に許可している。
 ただし §トリガーのとおり、同じ外部ディレクトリを 2 回以上覗くなら「一度きり」ではないので、
 `/cd` へ切り替える。
 

@@ -1,7 +1,16 @@
-## worktree 作業スコープのルール
+## session のスコープのルール
 
-git worktree（linked worktree）内で起動された Claude Code は、**明示的に指示されない限り、その worktree ディレクトリ内の作業に閉じる**。
-別 worktree・main チェックアウトへ作業を波及させない。
+session のスコープは、起動した cwd の repo（linked worktree ならその worktree ディレクトリ）である。
+**その外への書き込みは、明示的に指示されない限り行わない**。別 repo・別 worktree・main チェックアウトへ
+作業を波及させない。
+
+- 作業用ディレクトリ（`/tmp`、session の scratchpad）は例外で、書き込んでよい。
+- read-only な参照は外を見てよい（§3）。
+- harness（`~/.claude/` 配下。実体は dotrc の `dot/claude/`）の変更は dotrc の session で行う。他の
+  repo の session で気づいた改善は、その場で `~/.claude/` を編集せず、`gh-issue-file` で観測として
+  起票する（[issue-workflow.md](./issue-workflow.md)）。
+
+以下の §1〜§5 は、この原則を git worktree に当てはめたものである。
 
 スコープの単位は **worktree ディレクトリであって、単一ブランチではない**。1 つの worktree 内でブランチを切り替えたり、新規ブランチを起こして PR を積み上げたりする運用は通常想定であり、妨げない。
 
@@ -9,7 +18,9 @@ git worktree（linked worktree）内で起動された Claude Code は、**明�
 
 ### なぜ閉じるのか
 
-worktree は並行作業を**隔離**するために切られ、ユーザーがそこで Claude を起動した時点で、作業対象はこの worktree だと表明している。境界を越えると次の実害が出る。
+ユーザーがある repo・worktree で Claude を起動した時点で、作業対象はそこだと表明している（worktree は並行作業を**隔離**するために切られる）。境界を越えると次の実害が出る。
+
+- **持ち主の違う場所への無審査の変更**：repo の外（他 repo、`~/.claude/` 等）への変更は、その場所のレビューと履歴を通らない。
 
 - **他作業ツリーへの巻き込み**：別 worktree は別ブランチを checkout しており、編集するとユーザーが並行作業中の場所に予期しない変更が混入する。
 - **意図の逸脱**：レビュー対象が他ツリーへ散らばって差分が追えなくなる。
@@ -44,7 +55,7 @@ git rev-parse --git-path <name>        # 内部ファイルの実体パスが要
 main working tree と出たこと」ではない。submodule の working tree も §1 では一致を返すが、
 その `.git` はファイルである。`.git` の種別は `test -d .git` 等で別途確かめる。
 
-### 2. 原則：起動した worktree ディレクトリに閉じる
+### 2. linked worktree では起動した worktree ディレクトリに閉じる
 
 linked worktree で起動された場合、デフォルトは以下に従う。「permission」列は settings.json 上の扱い。
 
@@ -62,7 +73,7 @@ worktree のディレクトリ外（絶対パスで他 worktree や main checkou
 
 ### 3. read-only な参照は可
 
-スコープ制限は「書き込み」に限る。調査目的の read-only 操作は worktree 外を見てよい。下記はいずれも allow 済みで承認不要。
+スコープ制限は「書き込み」に限る。調査目的の read-only 操作はスコープ外を見てよい。下記はいずれも allow 済みで承認不要。
 
 - 他ブランチとの diff 確認（`git diff <other-branch>` … `git diff *`）
 - 履歴参照（`git log <other-branch>` … `git log *`）
@@ -70,9 +81,9 @@ worktree のディレクトリ外（絶対パスで他 worktree や main checkou
 
 ### 4. スコープを広げてよいケース
 
-以下のように **ユーザーが明示的に指示したときのみ**、対象を現在 worktree ディレクトリの外へ広げる。
+以下のように **ユーザーが明示的に指示したときのみ**、対象をスコープの外へ広げる。
 
-- 「main にも反映して」「別 worktree を直して」等、他ツリーを名指しした指示
+- 「main にも反映して」「別 worktree を直して」等、他ツリー・他 repo を名指しした指示
 - 「新しく worktree を切って」等、worktree 操作そのものの依頼
 
 曖昧な場合（どの worktree が対象か不明確）は、勝手に広げず確認する。

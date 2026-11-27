@@ -15,7 +15,7 @@ allowed-tools: Bash(claude-spinoff *), Read, Glob, Grep
 起こす。worktree も branch も作らず main working tree で動き、`## 委譲元` も親子 link も付かない
 （委譲元の done が cascade せず、元 session が報告待ちで生き残らない）。置き場所は tmux session
 `<repo basename>` の新しい window。実装が要る段になれば、切り出し先が
-`dot/claude/rules/worktree-scope.md` §5 に従って自分で委譲する。settings.json で allow 済み
+`dot/claude/rules/session-scope.md` §5 に従って自分で委譲する。settings.json で allow 済み
 （`claude-spinoff` / `claude-spinoff *`）。
 
 ## 発火と同意
