@@ -56,4 +56,4 @@ logout|1
 
 - `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6（委譲元が `claude-stop-bg` で閉じる理由を
   「作業を done にする明示的な操作だから」にした）
-- `docs/design/claude-queue-session-tree.md`「休眠の運用」（`claude-reap-bg` の節を休眠の節に置き換えた）
+- `docs/design/claude-queue-session-tree.md`「休眠の運用」（idle な session の休眠。廃止した `claude-reap-bg` に代わる仕組み。廃止は `docs/design/claude-queue-lifecycle.md` に記述）
