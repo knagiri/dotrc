@@ -64,7 +64,7 @@ sandboxed() {  # sandboxed <home> <cmd...>
   local h="$1"; shift
   env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
       -u MISE_GLOBAL_CONFIG_FILE -u MISE_CONFIG_DIR -u MISE_DATA_DIR -u MISE_STATE_DIR \
-      -u MISE_CACHE_DIR -u MISE_TRUSTED_CONFIG_PATHS -u MISE_ENV -u CLAUDE_CONFIG_DIR \
+      -u MISE_CACHE_DIR -u MISE_TRUSTED_CONFIG_PATHS -u MISE_ENV -u CLAUDE_CONFIG_DIR -u CODEX_HOME \
       HOME="$h" "$@"
 }
 
@@ -440,5 +440,43 @@ gwt="$(cd "$gwt" && pwd -P)"
 run "$gwt/bin/deploy.sh" "$home_i"
 check "from a linked worktree, the hook is linked into the common dir's hooks/" \
   "$(if links_to "$ghook" "$gwt/githooks/post-merge"; then echo 0; else echo 1; fi)"
+
+# Codex config and skills have different destinations and may already exist.
+codex_src="$repo/dot/codex"
+cp -R "$here/../dot/codex" "$codex_src"
+cp "$here/../dot/claude/rules/doc-authoring.md" "$repo/dot/claude/rules/"
+mkdir -p "$repo/dot/claude/skills/proofread-doc"
+cp "$here/../dot/claude/skills/proofread-doc/workflow.md" "$repo/dot/claude/skills/proofread-doc/"
+home_codex="$sandbox/home_codex"
+mkdir -p "$home_codex"
+run "$repo/bin/deploy.sh" "$home_codex"
+run "$repo/bin/deploy.sh" "$home_codex"
+check "Codex guidance, hooks and individual skills are linked on deploy and re-run" \
+  "$(if links_to "$home_codex/.codex/AGENTS.md" "$codex_src/AGENTS.md" \
+       && links_to "$home_codex/.codex/hooks.json" "$codex_src/hooks.json" \
+       && links_to "$home_codex/.agents/skills/my-commit" "$codex_src/skills/my-commit" \
+       && links_to "$home_codex/.agents/skills/my-create-pr" "$codex_src/skills/my-create-pr" \
+       && links_to "$home_codex/.agents/skills/proofread-doc" "$codex_src/skills/proofread-doc" \
+       && [ -r "$home_codex/.agents/skills/proofread-doc/doc-authoring.md" ] \
+       && [ -r "$home_codex/.agents/skills/proofread-doc/workflow.md" ]
+     then echo 0; else echo 1; fi)"
+
+home_custom="$sandbox/home_custom"
+custom_codex="$sandbox/custom codex"
+mkdir -p "$custom_codex" "$home_custom/.agents/skills/my-commit"
+printf 'user hooks\n' >"$custom_codex/hooks.json"
+printf 'user config\n' >"$custom_codex/config.toml"
+printf 'user skill\n' >"$home_custom/.agents/skills/my-commit/SKILL.md"
+stderr_codex="$sandbox/stderr_codex"
+sandboxed "$home_custom" env CODEX_HOME="$custom_codex" "$repo/bin/deploy.sh" >/dev/null 2>"$stderr_codex"
+check "a custom CODEX_HOME and existing user hooks, config and skills are preserved" \
+  "$(if links_to "$custom_codex/AGENTS.md" "$codex_src/AGENTS.md" \
+       && [ "$(cat "$custom_codex/hooks.json")" = 'user hooks' ] \
+       && [ "$(cat "$custom_codex/config.toml")" = 'user config' ] \
+       && [ "$(cat "$home_custom/.agents/skills/my-commit/SKILL.md")" = 'user skill' ] \
+       && ! [ -e "$home_custom/.codex" ] \
+       && grep -qF "$custom_codex/hooks.json already exists" "$stderr_codex" \
+       && grep -qF "$home_custom/.agents/skills/my-commit already exists" "$stderr_codex"
+     then echo 0; else echo 1; fi)"
 
 exit "$fail"

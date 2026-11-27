@@ -80,7 +80,29 @@ MergeLinkMap["claude"]="${HOME}/.claude"
 MergeLinkMap["systemd-user"]="${HOME}/.config/systemd/user"
 
 for dotname in $(ls "$__dotfiles_path"); do
-    if [ -n "${MergeLinkMap["${dotname}"]}" ]; then
+    if [ "$dotname" = codex ]; then
+        # Codex owns state and user settings in these directories. Install
+        # individual links without replacing any existing user files.
+        __codex_home="${CODEX_HOME:-$HOME/.codex}"
+        __codex_skills="$HOME/.agents/skills"
+        if mkdir -p -- "$__codex_home" "$__codex_skills"; then
+            for file in "$__dotfiles_path/codex/"{AGENTS.md,hooks.json,skills/*}; do
+                [ -e "$file" ] || continue
+                target="$__codex_home/${file##*/}"
+                case "${file#"$__dotfiles_path/codex/"}" in
+                    skills/*) target="$__codex_skills/${file##*/}" ;;
+                esac
+                if [ "$(readlink -- "$target")" = "$file" ]; then
+                    continue
+                fi
+                if [ -e "$target" ] || [ -L "$target" ]; then
+                    echo "deploy.sh: $target already exists; skipped linking $file" >&2
+                else
+                    ln -sT -- "$file" "$target"
+                fi
+            done
+        fi
+    elif [ -n "${MergeLinkMap["${dotname}"]}" ]; then
         IFS=: read -r -a merge_targets <<<"${MergeLinkMap["${dotname}"]}"
         for merge_target in "${merge_targets[@]}"; do
             mkdir -p "$merge_target"
