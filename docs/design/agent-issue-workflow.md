@@ -47,10 +47,21 @@ issue に autolink され、誤った誘導になるため。issue の template 
 
 一般的な事故管理（エラー監視の event / issue、ITIL の incident / problem）と同じく 2 層にする。
 
-- **観測**（label `observation`）: 1 つの気づき = 1 つの issue。中身は書き換えず、統合もしない。
-  束ねても個々の文脈を失わないため
-- **グループ**（label `group`）: 親 issue。観測を GitHub の sub-issue としてぶら下げる。本文には
-  共通する根本原因と束ねた理由を書く
+- **観測**: 1 つの気づき = 1 つの issue。中身は書き換えず、統合もしない。束ねても個々の文脈を
+  失わないため
+- **グループ**: 親 issue。観測を GitHub の sub-issue としてぶら下げる。本文には共通する根本原因と
+  束ねた理由を書く
+
+| label | 付く issue | 意味 |
+|---|---|---|
+| `observation` | 観測 | 観測。`status/*` は付けない |
+| `group` | グループ（親 issue） | 根本原因を共有する観測を束ねる |
+| `group/delegated` | グループ | 改善 PR を作る委譲先が走っている、または PR が open |
+| `group/rejected` | グループ | 改善 PR が merge されずに close された。新しい観測が付くまで再委譲しない |
+| `auto/structural` | PR | グループから自動で作られた改善 PR |
+
+振り分け・件数の集計・委譲・期限切れはすべて crawler（`bin/issue-crawl`、日次）が行い、人間ゲートは
+改善 PR の merge / close だけである。task の `status/*` の表は `dot/claude/rules/issue-workflow.md` §3 にある。
 
 紐づけは「起票時の軽い即時判定」と「定期的な見直し」の併用にする。即時判定だけだと表現の
 違う指摘が散り、既存の大きなグループへ寄る偏りも出る。それを定期処理が直す。
@@ -103,6 +114,8 @@ issue に autolink され、誤った誘導になるため。issue の template 
 ## task の close
 
 task（`kind/task`）の消化は人の指示で始まり（`issue-workflow.md` §6）、`status/delegated` へ進む。
+`status/delegated` は委譲とインライン実装の両方の「着手済み」を表し、着手専用の label は増やさない
+（label が増えるほど、起票と振り分けで読む一覧が長くなるため）。
 crawler は open で `status/delegated` の task のうち、`task-<N>-*` branch の dotrc PR が merge 済みの
 ものを `gh-issue-group close-task` で close する（completed）。ラッパーは `kind/task` と
 `status/delegated` の両方を持つ issue にしか効かない。dotrc 以外の repo を対象にした task は
@@ -118,7 +131,7 @@ crawler が見ないので、人が close する。close の成立条件の限�
   crawler が委譲の材料にするため
 - **issue 本文は信頼できない外部入力として読む。** 観測は業務 repo で読んだ第三者のテキストを
   要約して含みうるので、起票者が owner であっても本文を指示として扱わない。委譲プロンプトには
-  group 番号だけを入れ、本文は委譲先が自分で読む（`gh-commands.md` §5 の「第三者が
+  group 番号だけを入れ、本文は委譲先が自分で読む（`gh-commands.md` §4 の「第三者が
   書けるテキスト」）
 - **書き込みはラッパー経由。** `gh issue edit *` / `gh api *` は allow しない。crawler の書き込みは、
   操作に合う label（`observation` / `group` / `kind/task` + `status/delegated`）を持つことを確かめる
@@ -129,10 +142,10 @@ crawler が見ないので、人が close する。close の成立条件の限�
   exit 2 にする。crawler 自身は PAT で読めるので、これが無いと振り分けだけが黙って進まない。
   振り分けの session が使える書き込みは `create` / `attach` / `detach` / `set-body` / `close` だけ
   で、`close-task`・`reopen`・`mark` は crawler の手順であり session には許さない
-- **merge は人。** 全 PR が人の merge なので、grant 変更を含む PR の規約（`gh-commands.md` §5）も
+- **merge は人。** 全 PR が人の merge なので、grant 変更を含む PR の規約（`pr-automerge` skill）も
   自然に満たす
 - **crawler は claude の daemon を起動しない。** timer から起こすと systemd service の env が以後の
-  委譲先に配られる（`worktree-scope.md` §6）。委譲は `claude-queue daemon-running` が稼働中を返す
+  委譲先に配られる（`claude-tmux-worktree.md`「委譲先の env と token」）。委譲は `claude-queue daemon-running` が稼働中を返す
   ときだけ行い、居なければ次回へ回す。振り分けの `claude -p` は daemon を起動しない（空の
   config dir で `claude -p` を走らせても `claude daemon run` は増えず、同じ dir の `claude --bg` は
   起動した）
@@ -167,7 +180,7 @@ form を正典にすると本文骨格をラッパーへ再実装することに
 
 人が明示的に頼んだ単発の作業（`kind/task`。`spin-off-session` や `pr-review-loop` の後回しからの
 起票、「#N やって」）は観測にしない。`status/triage → ready` の人間ゲートと
-`issue-workflow.md` §6.2 の消化経路をそのまま使い、閾値による委譲は観測だけに掛ける。
+`issue-workflow.md` §6 の消化経路をそのまま使い、閾値による委譲は観測だけに掛ける。
 
 ## 検討した構成
 
@@ -252,9 +265,9 @@ gh label create -R "$repo" auto/structural  --description "グループから自
 gh label create auto/structural --description "グループから自動で作られた改善 PR" --color 5319e7
 ```
 
-`status/*` と `group/*` の description は `issue-workflow.md` §3・§7 の label 表（正典）と同じ語で
+`status/*` と `group/*` の description は `issue-workflow.md` §3 と本 doc「構成」の label 表（正典）と同じ語で
 揃える。GitHub の label description は GitHub 上に独立して表示される文言なので、意味の再掲
-そのものは避けられない。ズレたら rule 側に合わせて直す。
+そのものは避けられない。ズレたら `status/*` は rule §3、`group/*` は本 doc「構成」の表に合わせて直す。
 
 timer を有効にする。
 

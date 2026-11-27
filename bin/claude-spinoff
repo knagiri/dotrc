@@ -25,7 +25,7 @@ set -euo pipefail
 #
 # The session runs in the MAIN working tree, even when this is called from a
 # linked worktree: if the spun-off task turns into implementation, that session
-# delegates it to a worktree itself (worktree-scope.md §5), so there is no
+# delegates it to a worktree itself (session-scope.md §5), so there is no
 # --worktree option. It is placed in the tmux session named after the main
 # checkout -- the name gts and claude-queue's picker give that checkout -- as a
 # new detached window if the session exists, or as a new detached session if

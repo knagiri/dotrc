@@ -68,7 +68,7 @@ bot が起こした thread に限って reply するラッパー `bin/gh-reply-t
 ## 反映先
 
 - `bin/gh-reply-thread`（新設）と `test/gh-wrappers.test.sh`
-- `dot/claude/rules/gh-commands.md` §3（例外 — `pr-review-loop` の処置記録）・§4・§5 の表
+- `dot/claude/rules/gh-commands.md` §3（例外 — `pr-review-loop` の処置記録）、`dot/claude/rules/claude-settings.md`「gh コマンドの allow 方針」、`dot/claude/skills/pr-review-loop/SKILL.md`「使うラッパー」
 - `dot/claude/settings.json` の allow
 - `dot/claude/skills/pr-review-loop/SKILL.md`（冒頭・不変条件・手順 2.a-2 / 2.a-3 / 2.c・3.b・4、判定 subagent
   prompt の手順 2 / 4 / 5 / 5.5 と verdict、修正 subagent prompt の手順 5 と verdict、verdict スキーマ）

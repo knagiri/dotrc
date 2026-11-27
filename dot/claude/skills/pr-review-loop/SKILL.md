@@ -52,6 +52,22 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 - 最大 **5 イテレーション**（判定＋修正で 1 イテレーション）。API / tool 由来の失敗による判定役の再 dispatch はこれに数えない（別枠で 1 イテレーションあたり最大 2 回。手順 2.a-1）。修正役の同種の失敗は再 dispatch せず、1 イテレーションとして消費する（手順 2.a-2）。監査巡（手順 2.e）は、その verdict が収束条件（手順 2.c）を満たせば上限を消費せず、満たさなければ通常の 1 イテレーションとして数える（上限に達していて数えられなければ停止・報告）。未収束・CI 連続 fail・再 dispatch 上限到達・担当外の blocker のみ残存（手順 2.c）・修正役の API / tool 由来の失敗の 2 イテレーション連続（手順 2.a-2）なら **収束とせず停止・報告**（手順 4）。PR は閉じない。
 - 対応した review thread は resolve、意図的な箇所はソースコメントで理由を残す。
 
+## 使うラッパー
+
+PR への読み書きは `bin/` の次のラッパーだけで行い、raw な `gh api graphql` / `gh pr merge` /
+`gh pr edit` は使わない（理由は `dotrc/docs/design/gh-wrappers.md`）。`gh-pr-comments` / `gh-pr-checks` /
+`gh-pr-edit-body` は `dot/claude/rules/gh-commands.md` §1 にある。この表の 4 つの正典はこの skill。
+
+| ラッパー | 契約 |
+|---|---|
+| `gh-await-reviews <PR>` | 自動レビューを polling で待ち、現 HEAD 宛の activity だけを数えて `last_activity_at` 等を返す（read-only `gh pr view`） |
+| `gh-list-threads <PR>` | review thread を `isResolved` 付きで、envelope を剥がした配列で返す（read-only な reviewThreads query。未解決は `select(.isResolved == false)` で絞る） |
+| `gh-resolve-thread <id>` | `resolveReviewThread` mutation だけを撃つ |
+| `gh-reply-thread <id> <body-file>` | thread の起点コメントの author が `Bot` のときだけ `addPullRequestReviewThreadReply` を撃つ。thread でない id・引数不備は exit 1、起点が Bot でない thread は exit 2（いずれも mutation 前に拒否）。resolve はしない |
+
+thread の resolve は reply コメントの投稿とは別物で、`gh-commands.md` §3 の reply 禁止はそのまま
+効く。人間の議論待ち thread は resolve せず残してサマリで報告する。
+
 ## orchestrator ループ
 
 0. **自動レビューの待機と検出**: `gh-await-reviews <PR>` を実行する（内部で polling するので `sleep` は不要）。
@@ -762,7 +778,7 @@ PR 上にその記録を残す（判定 subagent prompt の手順 5.5）。直�
 >      見出しに沿って書き、`detail` の内容を入れる。起票してよい粒度は `issue-workflow.md` §5 に従い、
 >      その PR 限り・一過性で §5 を満たさないと見えたら起票せず `dispositions_failed` に理由を残す）。exit code の扱いは `dot/claude/rules/issue-workflow.md`
 >      §2 に従う。起票したらそれで完了で、issue の
->      消化はしない（同 §6.1）。template が無ければ、`detail` が示す箇所に TODO コメント（何を・なぜ後回しにしたか）を
+>      消化はしない（同 §6）。template が無ければ、`detail` が示す箇所に TODO コメント（何を・なぜ後回しにしたか）を
 >      置き、手順 2 と同じ要領で commit / push する。記録先は issue の URL か `<ファイル>:<行>` になる。
 >    - **thread 由来**（`origin` が `thread`）: reply の本文を一時ファイルに書き、`gh-reply-thread <thread_id> <file>` →
 >      exit 0 なら `gh-resolve-thread <thread_id>`。本文は処置名と理由（`defer` なら記録先、`stale` なら

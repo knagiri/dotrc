@@ -40,7 +40,6 @@ tmux capture-pane -p -t <pane>
 
 ## 反映先
 
-- `dot/claude/rules/worktree-scope.md` §6（委譲元が閉じる理由と、修正は新しい session で行う理由）
-- `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6
+- `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6（委譲元が閉じる理由と、修正は新しい session で行う理由）
 - `dot/claude/skills/implement-and-review/SKILL.md` 手順 4
 - `docs/design/claude-queue-lifecycle.md`「PR 監視と自動再開」

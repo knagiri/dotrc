@@ -50,7 +50,7 @@ global な rule の複写や開発準備の手順（README の役割）は書か
 remote・PR フロー・CI が欠けた repo で作業していると気づいたら、`repo-baseline` skill の適用を
 提案する。適用はユーザーの承認後に行う。
 
-欠けたままだと、PR を前提とする `worktree-scope.md` §5 の委譲も、CI の結果を見て merge する判断も
+欠けたままだと、PR を前提とする `session-scope.md` §5 の委譲も、CI の結果を見て merge する判断も
 成り立たない。agent はそれを前提が無いとは認識せず、main への直接 commit で作業を進めてしまう。
 
 実例: dotrc/docs/incidents/main-commit-without-pr-flow.md

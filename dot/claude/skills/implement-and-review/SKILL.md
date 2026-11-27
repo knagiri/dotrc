@@ -10,7 +10,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 プロンプト先頭の明示命令でこの skill に入る。
 
 作業スコープは起動された worktree ディレクトリ内に閉じる
-（`dot/claude/rules/worktree-scope.md` §2 参照）。
+（`dot/claude/rules/session-scope.md` §2 参照）。
 
 ## 入力
 
@@ -182,13 +182,13 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    委譲プロンプトに `## 禁止事項` 節があれば、同 skill の `<PROHIBITIONS>` に原文のまま渡す
    （差し込み先と規定は同 skill。理由は手順 2）。収束したら、merge を見送る理由が無ければ
    `pr-automerge` を呼び、収束時の `head_sha` / `last_seen` を渡して自律 merge する。merge を
-   見送る理由（委譲プロンプトの禁止事項、grant 変更を含む PR（`dot/claude/rules/gh-commands.md` §5）
+   見送る理由（委譲プロンプトの禁止事項、grant 変更を含む PR（`pr-automerge`「grant 変更を含む PR は auto-merge させない」）
    等）があれば `pr-automerge` は呼ばず、見送った理由を手順 6 で報告する。
 
    **委譲プロンプトが既存 PR への対応を指示しているとき**（「既存 PR #N の指摘への対応。新しい PR
    は作らない」）は PR を作らない。その PR の branch に push し、既存 PR #N に対して
    `pr-review-loop` → `pr-automerge` を同じ形で呼ぶ。委譲元は review で修正が要ると、同じ worktree・branch に新しい
-   委譲先を起こしてこの形で渡す（`dot/claude/rules/worktree-scope.md` §6）。ここで PR を新しく
+   委譲先を起こしてこの形で渡す（`delegate-to-worktree` 手順 6）。ここで PR を新しく
    作ろうとしても、同じ head / base の open PR があるので GitHub が拒否する。base を変えて別 PR に
    すると、PR 監視も review の指摘も元の PR に残ったままになる。
 
@@ -217,7 +217,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    自己内省をスキップする明示（例: 「harness-from-retrospective はスキップ」）が**無い限り**、
    `harness-from-retrospective` を呼ぶ。自分の作業を振り返り、恒久ハーネスに値する改善点を
    観測 issue として起票する（**起票まで・無ければ no-op**）。実装はしない — 観測の消化は
-   `dot/claude/rules/issue-workflow.md` の経路に乗る。
+   `docs/design/agent-issue-workflow.md`「流れ」の経路に乗る。
 6. **委譲元への報告**: プロンプト末尾に `## 委譲元` 節（`報告先 name: <name>`）があるときは、
    次の 3 つの事象で SendMessage を送る。**送信に失敗しても無視して自分の終了処理を続ける**
    （委譲元の session が既に消えていることがある）。
@@ -229,6 +229,16 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    - **中断**: `pr-review-loop` が収束せず停止したとき、または `pr-automerge` が auto-merge に至らず
      停止したとき（各 skill の停止・報告の手順）、その報告の停止理由をそのまま載せる。停止経路を
      ここで列挙しないのは、各 skill 側で停止経路が増えるたびに食い違うため。
+
+   **報告に添えるファイルは worktree 内の `.delegate/` に置き、報告には相対パスで書く**（PR 本文
+   ドラフト、調査結果、生成物）。委譲元が読めるのは worktree 内のファイルだけで、外に置いたものは
+   絶対パス Read の承認で固まるか、そもそも到達できない。`$CLAUDE_JOB_DIR` は job の削除で消える
+   ので報告を読む頃には無いことがあり、`/tmp` は寿命が不定で並行する別 job と名前が衝突しうる。
+   `.delegate/` は `claude-worktree` が worktree 作成時に repo の exclude
+   （`git rev-parse --git-path info/exclude`）へ登録するので、置いたままでも
+   `git status --porcelain` は空のままで、`git-reap-gone` の clean 判定も塞がない。exclude に
+   入れずに worktree 内へ置くと clean 判定が塞がって reap が skip され、worktree の外へ出すと
+   委譲元が読めない。
 
    **permission 承認はこの経路に乗らない。** 承認が要る tool call はブロックしたまま待てばよく、
    人間が `claude attach` で入って承認する。委譲元に承認を代行させようとしない

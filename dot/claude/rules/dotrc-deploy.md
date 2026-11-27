@@ -107,7 +107,7 @@ main の working tree）側で再ビルドするか、worktree の変更をそ�
 再ビルドする。
 
 **linked worktree で作業している agent は、この再ビルドを checkout を跨いで自分で行わない。**
-別 checkout の `bin/` への書き込みは worktree のスコープ外であり（`worktree-scope.md` §2）、
+別 checkout の `bin/` への書き込みは worktree のスコープ外であり（`session-scope.md` §2）、
 `cd` / `git -C` で checkout を渡り歩いて回避するのも承認プロンプトで詰まる
 （`working-directory.md`）。merge 後に再ビルドが要る旨を委譲元・人間へ報告し、そこで止まる。
 

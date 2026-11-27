@@ -1,7 +1,19 @@
+---
+paths:
+  - "**/settings.json"
+  - "**/settings.local.json"
+  - "**/.claude/settings.json"
+  - "**/.claude/settings.local.json"
+  - "**/skills/**/SKILL.md"
+---
+
 ## Claude Code settings.json 編集ルール
 
-`.claude/settings.json` や `~/.claude/settings.json` の `permissions` を編集するときの注意。
+`.claude/settings.json` や `~/.claude/settings.json` の `permissions`、および skill の `allowed-tools` を編集するときの注意。
 公式仕様: <https://code.claude.com/docs/en/permissions#bash>
+
+この rule は settings.json の permissions と skill の `allowed-tools` を触る作業でだけロードする
+（それ以外では要らないので、常時ロードのバイト数を抑えるため `paths` でスコープする）。
 
 ### Multi-wildcard pattern の罠（実測ベース）
 
@@ -52,7 +64,7 @@ git 固有の一文が付く（次節末尾を参照）。
 関わらず出て、git ではこの理由に触れる一文が加わる）。
 
 したがって既定の対処は allowlist の工夫ではなく cwd を直すこと。[working-directory.md](./working-directory.md)
-に従い `/cd <dir>` を頼んで止まる。[worktree-scope.md](./worktree-scope.md) §3 が許す「別 repo の
+に従い `/cd <dir>` を頼んで止まる。[session-scope.md](./session-scope.md) §3 が許す「別 repo の
 一度きりの read-only 覗き見」で `git -C <絶対パス>` を使う場合は、承認プロンプトが出るのを
 受け入れる（一度きりなので摩擦が小さい）。
 
@@ -83,7 +95,7 @@ permission rule の置き場所は 3 つあり、伝播の経路がそれぞれ�
 
 `git worktree add` は branch を checkout するだけなので、git 管理外の `settings.local.json` は
 新しい worktree に一切載らない。そして UI の「don't ask again」が書き込む先はこの
-`settings.local.json` である。つまり対話中に溜めた許可は、[worktree-scope.md](./worktree-scope.md) §6 の
+`settings.local.json` である。つまり対話中に溜めた許可は、`claude-worktree` で起こす
 委譲先にはまったく効かない。
 
 人間が同席していれば承認プロンプトはその場で捌けるが、background 委譲先は人間不在で走るので
@@ -111,6 +123,31 @@ govern tools that are not listed."、<https://code.claude.com/docs/en/skills>）
 の対応）は `test/skill-permissions.test.sh` が検査する。allow に載せない skill はテスト内の除外
 リストに理由付きで足す。裸の `Write` は意図的に検査しない。書き込み先が実行時に決まる
 `$CLAUDE_JOB_DIR` で、リテラルの `Edit(path)` に狭められないため（現状は `my-create-pr`）。
+
+### gh コマンドの allow 方針
+
+`gh` の grant は、使い方の規約（[gh-commands.md](./gh-commands.md)）と次の最小ポリシーで揃える。
+ラッパーの設計理由は `dotrc/docs/design/gh-wrappers.md`。
+
+- **allow する:** read 系の高位コマンド（`gh pr view *`, `gh pr diff *`, `gh run view *`,
+  `gh repo view *`, `gh issue view *`, `gh issue list *`）、PR 作成（`gh pr create *`,
+  `gh-pr-create *`）、`bin/` の各ラッパー（`gh-pr-comments *` / `gh-pr-checks *` /
+  `gh-pr-edit-body *` / `gh-await-reviews *` / `gh-list-threads *` / `gh-resolve-thread *` /
+  `gh-reply-thread *` / `gh-automerge *` / `gh-issue-file *` / `gh-issue-mark-delegated *` /
+  `gh-issue-group *`）
+  - `gh-pr-create *` と素の `gh pr create *` は両方残す。ラッパーは env を載せるだけで、どちらが
+    通っても grant の広さは変わらない
+  - PR 本文の更新・thread への reply・issue の label 遷移は、それぞれラッパーだけを allow し、
+    素の `gh pr edit *` / `gh api *` / `gh issue edit *` は allow しない。素の形は書き換えられる
+    範囲が広く（任意の field・endpoint・label）、ラッパーが固定している検査を迂回するため
+  - `gh pr checks *` は allow しない。pattern は正しくマッチするが、fine-grained PAT では実行
+    すれば必ず失敗するので許可する意味が無い（上の「pattern がマッチしない dead rule」とは別物）
+  - `gh pr view <N> --comments` も `gh pr view *` にマッチし、同じく失敗しうるが、`gh pr view *`
+    は他の read 用途で要るので allow は維持する（コメント取得は `gh-pr-comments` を使う）
+- **allow しない:** `gh api *`（`gh api graphql *` を含む）, `gh pr comment *`, `gh pr review *`,
+  `gh pr merge *` 等の書き込み・低レイヤ。呼び出し時に prompt が出るので、ユーザー確認経由で
+  実行できる
+- **deny:** 不要（hard-block は明示指示時の運用を阻害する）
 
 ### Hot-reload
 

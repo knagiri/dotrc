@@ -11,7 +11,7 @@ allowed-tools: Read, Glob, Grep, Bash(gh-issue-file *)
 
 harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill は**入口＝自己内省**。起票した
 観測は日次の crawler がグループへ束ね、件数が閾値に届いたグループだけが構造的な改善の PR まで
-自動で回る（`dot/claude/rules/issue-workflow.md`）。設計は
+自動で回る（`docs/design/agent-issue-workflow.md`「流れ」）。設計は
 `docs/superpowers/specs/2026-07-25-harness-from-retrospective-design.md` を参照。
 
 ## いつ呼ばれるか
@@ -67,12 +67,12 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 
 ## 起票の後（この skill の外）
 
-起票した観測をどう消化するかは `dot/claude/rules/issue-workflow.md` が持つ。この skill の task は
+起票した観測をどう消化するかは `docs/design/agent-issue-workflow.md`「流れ」が持つ（起票側の規範は `dot/claude/rules/issue-workflow.md` §6）。この skill の task は
 起票した時点で完了で、起票した観測を残タスクとして数えない。
 
 すぐに直したい学びは、ユーザーが `harness-from-feedback` を起動して即時に委譲できる。
 allowlist（grant）候補も渡してよい。ただし **grant を含む委譲は auto-merge させず、人間の
-approve を待つ**（条件と理由の正典は `gh-commands.md` §5「grant 変更を含む PR は auto-merge
+approve を待つ**（条件と理由の正典は `pr-automerge` skill「grant 変更を含む PR は auto-merge
 させない」）。この skill 自身が grant を書かないことは変わらない（下の不変条件）。
 
 ## 不変条件

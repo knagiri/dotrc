@@ -75,6 +75,7 @@ jobs:
             bin/lib/gh-request-approval.sh \
             bin/lib/issue-repo.sh \
             githooks/post-merge \
+            githooks/pre-commit \
             test/claude-digest.test.sh \
             test/claude-hook-git-guard.test.sh \
             test/claude-review.test.sh \
@@ -85,6 +86,7 @@ jobs:
             test/db-query.test.sh \
             test/deploy.test.sh \
             test/dotrc-config.test.sh \
+            test/gh-automerge.test.sh \
             test/gh-issue-file.test.sh \
             test/gh-issue-group.test.sh \
             test/gh-mise.test.sh \
@@ -93,6 +95,7 @@ jobs:
             test/issue-crawl.test.sh \
             test/git-reap-gone.test.sh \
             test/post-merge-hook.test.sh \
+            test/pre-commit-hook.test.sh \
             test/lib/sandbox.sh \
             test/sandbox-usage.test.sh \
             test/skill-permissions.test.sh

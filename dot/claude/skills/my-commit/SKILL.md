@@ -42,7 +42,7 @@ git diff --cached                        # この論理変更だけが stage さ
 patch は `git rev-parse --git-path` が返す `.git` 配下に置く。main working tree ではこれは
 repo 内だが、linked worktree では `<main>/.git/worktrees/<name>/` が返るので worktree の外への
 書き込みになる。Bash の allowlist とは別の permission family である Edit でも、この点は同じ。
-`--git-path` のパス解決が正しいこと（worktree-scope.md §1）と、書き込み先が worktree 内に
+`--git-path` のパス解決が正しいこと（session-scope.md §1）と、書き込み先が worktree 内に
 収まるかは別の話である。command substitution を `$VAR` に代入せず埋め込むのは
 bash-command-constraints.md の理由により、hunk の削除に `sed` でなく Edit を使うのは
 command-selection.md による。`--cached` は index にだけ適用するので working tree は変わらず、
