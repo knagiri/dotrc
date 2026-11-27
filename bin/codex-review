@@ -73,10 +73,14 @@ if [ -n "$prohib" ]; then
   # allowlisted, accepting any path would let a caller ship an arbitrary local
   # file (a token file, say) to a third party without approval. Only a file under
   # a temp dir -- $CLAUDE_JOB_DIR or ${TMPDIR:-/tmp} -- is accepted.
+  # Both bases come from the environment, so a base that is / or $HOME (or an
+  # ancestor of it) is ignored rather than trusted.
   prohib_real="$(readlink -f "$prohib")"
+  home_real="$(readlink -f "$HOME")"
   in_temp=0
   for base in "${TMPDIR:-/tmp}" ${CLAUDE_JOB_DIR:+"$CLAUDE_JOB_DIR"}; do
     base_real="$(readlink -f "$base" 2>/dev/null)" || continue
+    case "$home_real/" in "$base_real"/*) continue ;; esac
     case "$prohib_real" in "$base_real"/*) in_temp=1 ;; esac
   done
   [ "$in_temp" = 1 ] \
@@ -95,6 +99,11 @@ gh_mise_use "$root"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+# Read the prohibitions once, from the path that was checked, so swapping the
+# file after the check cannot change what is sent.
+if [ -n "$prohib" ]; then
+  cp -- "$prohib_real" "$tmp/prohib"
+fi
 
 # 1. Fetch the PR on the host. A gh failure must stop here rather than reach
 # codex as an empty diff.
@@ -160,7 +169,7 @@ the highest.
 EOF
   if [ -n "$prohib" ]; then
     printf '## Prohibitions\n\nThese are constraints you must keep, not information. Do not perform any operation listed here, not even to verify something.\n\n'
-    cat "$prohib"
+    cat "$tmp/prohib"
     printf '\n'
   fi
   printf '## Perspective\n\nThe following is the definition of the perspective to review from. Where it says to look at unstaged changes or `git diff`, review the attached PR diff instead.\n\n'

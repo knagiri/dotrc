@@ -104,6 +104,10 @@ run 42 code-reviewer "$work/missing-file"
 # must not be shipped to codex.
 TMPDIR="$work" CODEX_STUB_OUT="$good" run 42 code-reviewer "$here/codex-review.test.sh"
 [ "$rc" = 1 ] && ! codex_ran && ok "prohibitions file outside the temp dirs is rejected" || ng "outside temp dir"
+# TMPDIR pointed at $HOME (or above it) is not trusted as a temp dir.
+mkdir -p "$HOME/.config"; printf 'secret\n' >"$HOME/.config/token"
+TMPDIR="$HOME" CODEX_STUB_OUT="$good" run 42 code-reviewer "$HOME/.config/token"
+[ "$rc" = 1 ] && ! codex_ran && ok "TMPDIR=\$HOME does not widen the accepted dirs" || ng "TMPDIR=HOME"
 # A symlink inside the temp dir pointing outside it is resolved first.
 ln -s "$here/codex-review.test.sh" "$work/link-out"
 TMPDIR="$work" CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/link-out"
