@@ -143,10 +143,14 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       **codex の並走**: 選んだ各 agent の観点（agent 名から `pr-review-toolkit:` を外したもの）ごとに、
       toolkit agent の dispatch と並べて `codex-review <PR> <観点> [<prohibitions-file>]` を Bash の
       `run_in_background` で起動し、stdout を `<CODEX_DIR>/<観点>.json` へ保存する。`<CODEX_DIR>` は
-      **実行ごとに新しく作る**（`mkdir -p "$CLAUDE_JOB_DIR/tmp" && mktemp -d -p "$CLAUDE_JOB_DIR/tmp" codex-review.XXXXXX`。
-      `$CLAUDE_JOB_DIR` が未定義なら `mktemp -d`）。固定パスを使い回すと、今回走らせなかった観点や
-      起動できなかった観点に前回の出力が残る。観点の選び方は上の toolkit の選び方を
-      そのまま使い、別に持たない。`<PROHIBITIONS>` が渡されていれば原文を一時ファイルに書いて第 3 引数に
+      **実行ごとに新しく作る**。先に `printenv CLAUDE_JOB_DIR` で値を取り、展開済みのリテラルパスで
+      `mkdir -p <値>/tmp` と `mktemp -d -p <値>/tmp codex-review.XXXXXX` を撃つ（コマンドに `$VAR` の展開を
+      含めると allow 済みでも承認待ちで止まる）。job の dir は job が消えるときに一緒に消えるので、
+      後始末の `rm` は要らない（`rm` は allowlist に無く、auto mode では拒否される）。`printenv` が
+      何も返さない（`CLAUDE_JOB_DIR` 未定義。interactive session 等）ときだけ
+      `mktemp -d -p /tmp codex-review.XXXXXX` にする。この場合は後始末の手段が無く `/tmp` に残りうる（best-effort）。
+      固定パスを使い回すと、今回走らせなかった観点や起動できなかった観点に前回の出力が残る。
+      観点の選び方は上の toolkit の選び方をそのまま使い、別に持たない。`<PROHIBITIONS>` が渡されていれば原文を一時ファイルに書いて第 3 引数に
       渡し、「なし」なら省く。ラッパーは `/tmp` か `~/.claude/jobs` の下しか受け付けないので、
       ファイルは必ず `mktemp -p /tmp` で `/tmp` 直下に作る（`$CLAUDE_JOB_DIR` や TMPDIR 任せの `mktemp` は
       置き場所が外れうる）。集約が済んだら消す。それ以外（実装の意図・HOW・`<SCOPE>`）は渡さない（不変条件「author とは
@@ -155,6 +159,7 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       比較が偏るため。最大 5 並列になるが、プロセスはネットワーク待ちが支配的で CPU をほぼ使わないので
       `shared-machine-load.md` §1 の理由付きの例外に当たる。この並走は toolkit agent を codex へ置き換えて
       劣化しないかの比較データを貯めるためのもので、設計は `dotrc/docs/design/codex-specialist-review.md`。
+      実例: dotrc/docs/incidents/codex-dir-mktemp-approval-prompt.md
 
       **集約**: 返ってきた各 agent の最終メッセージを、agent 名を見出しにして連結し
       `<SPECIALIST_FINDINGS>` とする（a-1 が判定役へ渡す）。exit 0 で終わった `codex-review` の出力は

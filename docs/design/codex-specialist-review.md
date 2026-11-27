@@ -33,7 +33,13 @@ Claude 側の Bash 呼び出し数本の削減だけなので採らない。
   「PR の diff を read-only の codex に読ませる」に留めるため。素の `codex` / `codex exec` は allow
   しない
 - **PR はホスト側で取得してデータとして渡す。** read-only sandbox にはネットワークが無く、codex から
-  gh を叩けないため。gh の失敗は空の diff と取り違えないよう非 0 で止める
+  gh を叩けないため。gh の失敗は空の diff と取り違えないよう非 0 で止める。渡すのは title・base
+  branch・head commit・diff だけで、PR 本文は渡さない。本文は第三者が書けるテキストで、レビューには
+  要らず、仕込まれた指示に codex が従う入口を 1 つ減らせるため
+- **取得中の push・retarget を検出する。** head commit と base branch を diff の取得の前後で読み、
+  どちらかが食い違えば止める。食い違ったまま head commit を付けると、`codex-review-tally` が別の版
+  同士を比べうるため。保証は「取得の前後で観測した値が同じ」までで、diff がその sha のものである
+  ことまでは保証しない。リトライはせず、呼び出し側の再実行に任せる
 - **失敗を「指摘なし」として出さない。** codex の非 0・timeout・空出力・スキーマ不一致では stdout に
   何も出さず非 0 で終わる。空の findings 配列は、レビューが最後まで走ったときだけ意味を持つ
 - **規約は codex 自身に読ませる。** cwd の repo の `CLAUDE.md` / `.claude/rules/` と global の
@@ -41,11 +47,11 @@ Claude 側の Bash 呼び出し数本の削減だけなので採らない。
   内で global の規約も暗黙に読んでいるので、比較の条件を揃えるため（置き換え後の codex にもどのみち要る）
 - **独立性の不変条件は codex にも掛かる。** author の意図・HOW・担当領域は渡さない。禁止事項だけは
   制約として原文で渡す（ファイル引数）。その中身は codex へ送られるので、allow 済みのコマンドが任意の
-  ローカルファイルを外部へ送る経路にならないよう、受け付けるのは固定の一時ディレクトリ（`/tmp` と
-  `~/.claude/jobs`）の下のファイルに限る。`TMPDIR` 等の env から基準を取らないのは、呼び出し側が
+  ローカルファイルを外部へ送る経路にならないよう、受け付けるのは一時ディレクトリ（`/tmp` と
+  `$HOME/.claude/jobs`）の下のファイルに限る。`TMPDIR` 等の env から基準を取らないのは、呼び出し側が
   `~/.config` のような場所へ向けられるため
 
-既知の限界: read-only sandbox は書き込みを塞ぐが読み取りは塞がない。PR の本文や diff に仕込まれた
+既知の限界: read-only sandbox は書き込みを塞ぐが読み取りは塞がない。PR の title や diff に仕込まれた
 指示で codex がホストのファイル（認証情報を含む）を読み、その内容を findings に書く経路は残る。
 findings は判定役を経て PR 上の記録へ写りうる。同じ読み取り範囲は toolkit agent も持っているので
 並走で新たに開く経路ではないが、規約を読ませる設計上 home を隔離できず、塞いでもいない。
@@ -53,13 +59,23 @@ findings は判定役を経て PR 上の記録へ写りうる。同じ読み取�
 写してから渡せば通るので、任意のパスをそのまま送れないようにする摩擦に留まる。`~/.claude/jobs` は
 `CLAUDE_CONFIG_DIR` 未設定時の job の既定の置き場で、設定されていれば `/tmp` を使う。
 
-もう 1 つ、観点の定義を読む plugin ディレクトリは env `CODEX_REVIEW_PLUGIN_ROOT` で変えられる。
-`<dir>/<version>/agents/<観点>.md` の形のファイルなら codex へ送られうるので、環境を制御できる
-呼び出し側には任意のファイルを送る経路が残る。禁止事項の基準だけを固定しても、この入力は塞がっていない。
+もう 1 つ、観点の定義を読む plugin ディレクトリは env の 2 入力で変えられる。`CODEX_REVIEW_PLUGIN_ROOT`
+を設定すると `<dir>/<version>/agents/<観点>.md` が読まれる。`CLAUDE_CONFIG_DIR` を設定すると
+`<config>/plugins/installed_plugins.json` の `installPath`（任意の絶対パスを取れる）か既定の cache が
+使われ、`<installPath>/agents/<観点>.md` が codex へ送られうる。環境を制御できる呼び出し側には、どちらの
+入力でも任意のファイルを送る経路が残る。禁止事項の基準を固定しても、これらの入力は塞がっていない。
 
-観点の定義の版は、`~/.claude/plugins/installed_plugins.json` が記録する pr-review-toolkit の
-`installPath` を使う。それが無ければ plugin cache で `sort -V` の最大のディレクトリに落ちるが、cache には
-旧版が残りうるので installed の版と一致する保証は無い。
+また、head と base が取得の前後で一致しても、diff がその版のものとは限らない。head が A→B→A と動く
+場合や、GitHub が push の後で diff を非同期に再計算する間は、前後の値が同じまま diff が別の版でありうる。
+この窓は塞いでいない。
+
+観点の定義の版は、`${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/installed_plugins.json` が記録する
+pr-review-toolkit の `installPath` を使う。それが無ければ同じ設定ディレクトリの plugin cache で `sort -V`
+の最大のディレクトリに落ちるが、cache には旧版が残りうるので installed の版と一致する保証は無い。
+設定ディレクトリを実行中のものに合わせるのは、toolkit agent が読む定義と揃えるためで、揃うのは
+`installed_plugins.json` から有効な `installPath` を解決できた場合に限る（cache への fallback や
+`CODEX_REVIEW_PLUGIN_ROOT` の設定時は保証しない）。禁止事項の基準は `$HOME/.claude/jobs` で、
+`CLAUDE_CONFIG_DIR`・`TMPDIR`・`CLAUDE_JOB_DIR` には追従しない（`$HOME` からは導かれる）。
 
 ## 比較の数え方
 
