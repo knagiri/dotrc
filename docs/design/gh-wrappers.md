@@ -8,8 +8,9 @@
 |---|---|
 | `gh-pr-comments` / `gh-pr-checks` / `gh-pr-create` / `gh-pr-edit-body` | `dot/claude/rules/gh-commands.md` §1 |
 | `gh-await-reviews` / `gh-list-threads` / `gh-resolve-thread` / `gh-reply-thread` | `dot/claude/skills/pr-review-loop/SKILL.md`「使うラッパー」 |
-| `gh-automerge <PR>` | `dot/claude/skills/pr-automerge/SKILL.md`「`gh-automerge` の契約」 |
+| `gh-automerge <PR> [<SHA>]` | `dot/claude/skills/pr-automerge/SKILL.md`「`gh-automerge` の契約」 |
 | `gh-automerge --disable <PR>` | `dot/claude/skills/implement-and-review/SKILL.md` 手順 4 |
+| `gh-request-approval <PR> <SHA>` / `gh-request-approval --enabled` | `bin/gh-request-approval` のヘッダ（下の「`gh-request-approval`」） |
 | `gh-issue-file` / `gh-issue-mark-delegated` / `gh-issue-group` | `dot/claude/rules/issue-workflow.md` |
 
 allowlist にどう載せるかは `dot/claude/rules/claude-settings.md`「gh コマンドの allow 方針」。
@@ -110,7 +111,21 @@ gh はこの SHA を `expectedHeadOid` として auto-merge 有効化と直接 m
 直接 merge では GitHub が head の一致を merge の条件として明記しているが、auto-merge 有効化では
 「期待する head OID」としか書かれておらず、後の push での挙動は文書化されていない。そのため
 auto 経路では保証ではなく打てる最善の手当てであり、auto-merge が有効な PR へ push する側は先に
-`--disable` で解除する（下記）。
+`--disable` で解除する（下記）。`--match-head-commit` が確かめられるのは auto-merge の有効化時と
+fallback の直接 merge 時だけで、有効化された auto-merge の要求は期待する head を保持しない。有効化後に
+push された head を締め出すのは `--disable` の規約と、repo が有効にしていれば push 時の stale review の
+dismiss である。
+
+省略可能な `<SHA>`（40 桁の小文字 hex。gh を呼ぶ前に検証する）を渡すと、ゲートが読んだ head が
+`<SHA>` と一致することを確かめ、一致しなければ merge を撃たずに exit 6 で返す（3 は `--disable`、5 は
+ゲートが使い、gh 自身は 0/1/2/4 を文書化している）。これで判定・固定する head が呼び出し側の見た SHA
+そのものになる。`<SHA>` を省いた挙動は従来どおり（読んだ head を固定する）。`--disable` 形は `<SHA>` を
+受け付けない。
+
+gh は cwd の repo の main working tree を基準にした `gh_mise` で呼ぶ（`gh_mise_main_root`）。linked
+worktree の tracked な `mise.toml` はどの branch からでも変えられるので、そこを基準にすると merge の
+呼び出しへ `GH_TOKEN` 等の `GH_*` を注入されうる。working tree の外（submodule・bare repo・別置きの
+git dir を含む）では gh を呼ぶ前に exit 1 で返す。
 
 実例: dotrc/docs/incidents/convention-in-skill-not-invoked.md
 
@@ -119,6 +134,31 @@ auto 経路では保証ではなく打てる最善の手当てであり、auto-m
 
 実例: dotrc/docs/incidents/automerge-clean-status-unreachable.md
 実例: dotrc/docs/incidents/automerge-fired-during-followup-review.md
+
+## `gh-request-approval`
+
+設定を置いた repo で、repo 側の approve 用ワークフローを起動して approve を依頼するだけのラッパーである。
+approve を待たず、merge にも auto-merge の有効化にも触れない（`--admin` にも到達しない）。approve を
+出すのは repo 側のワークフロー（GitHub App）で、auto-merge は通常どおり `gh-automerge <PR> <SHA>` で
+張り、merge の成否は branch protection と auto-merge が決める。
+
+`gh-request-approval <PR> <SHA>` は env を空にして自分を re-exec し、main working tree 基準の `gh_mise` で
+repo を解決して `-R` に固定する。PR のゲート（OPEN・author が token の本人・fork でない・base が
+default branch・人間の未解決 thread と author を問わない CHANGES_REQUESTED が無い・変更パスが設定の
+許可リストに収まり、常に拒否するパスに触れない）と head の一致を確かめてから
+`gh workflow run <workflow> -R <nwo> --ref refs/heads/<default> -f pr=<PR> -f head_sha=<SHA>` を撃って
+終わる。常に拒否するパスは root の `.github/`・`.codex/`・`.githooks/`・`.mcp.json`、深さを問わず
+パスの 1 要素として現れる `.claude/`・`.agents/`、root と `docs/` の CODEOWNERS、`:` 始まりのパスで、
+rename 元も含めて見る。終了コードは 0 起動した・1 引数や gh の想定外・3 設定不備・4 ゲート拒否・
+5 head 不一致・6 起動失敗。
+
+`--enabled` は `gh repo view` で repo を解決し、設定の 2 ファイルがあることとワークフロー名の形を
+確かめるだけで、PR には触れない（2 ファイルが無ければ 4、読めない・ワークフロー名の形が不正なら 3）。
+
+設定（`~/.config/dotrc/bot-approve/<OWNER>/<NAME>/` の `workflow` と `paths`。HOME は getent 由来）は
+人が置き、agent もラッパーも書かない。設定を置くのは ruleset で push 時の stale review の dismiss が
+有効な repo に限る（前提条件で、ラッパーは確かめない）。ゲートと終了コードの正典は
+`bin/gh-request-approval` のヘッダ、設計の理由と限界は `docs/design/bot-approve-request.md`。
 
 ## fine-grained PAT では check runs を読めない
 

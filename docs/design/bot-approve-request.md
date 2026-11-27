@@ -16,8 +16,9 @@ auto-merge にも触れない。auto-merge は `pr-automerge` がほかの PR �
 人の approve を待つ。依頼のどこで失敗しても（ゲートで拒否・起動失敗・App が approve しない）、行き着く
 先はこの通常の流れであり、ラッパーが失敗を取り繕う必要は無い。
 
-`gh-automerge` に渡す SHA は `--match-head-commit` になり、auto-merge の有効化時（と clean 拒否 fallback の
-直接 merge 時）に head がその SHA であることを確かめる。有効化の後に push された head はこの SHA では
+`gh-automerge` は渡された SHA が自分の読んだ head と一致しなければ merge を撃たずに exit 6 で返し、一致すれば
+その SHA を grant ゲートで判定して `--match-head-commit` に渡す。GitHub は auto-merge の有効化時（と clean 拒否
+fallback の直接 merge 時）に head がその SHA であることを確かめる。有効化の後に push された head はこの SHA では
 止まらない。
 
 ## 前提条件: dismiss stale reviews が有効な repo
@@ -90,7 +91,7 @@ PR は人の approve を待つ。
 - `paths` は gitignore の意味論で照合されるので、除外した親 directory の下は否定パターンで戻せない
   （`src/` と `!src/x` の組では `src/x` も通る）。否定を効かせたいときは `src/*` と書く。
 - 人が起こした thread を agent が resolve すると、人間 thread の検査は通ってしまう（agent は利用者本人の
-  token を使うので `resolvedBy` では区別できない）。resolve しないことは規約（`gh-commands.md` §5）で
+  token を使うので `resolvedBy` では区別できない）。resolve しないことは規約（`dot/claude/skills/pr-review-loop/SKILL.md` の不変条件）で
   守っている。
 - `approve_gate` は判定役の自己申告で、ラッパーは検証しない。ラッパーは allowlist 済みなので、
   `pr-review-loop` を経ずに直接呼ばれれば機械的なゲートだけが残る。
