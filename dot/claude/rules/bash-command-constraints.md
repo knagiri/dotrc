@@ -3,6 +3,10 @@
 許可設定（allowlist）にマッチせず **毎回ユーザーの手動承認が必要になる** ケースを避ける。
 詳細仕様: <https://code.claude.com/docs/en/permissions>
 
+cwd の外にある `~/.claude/` 配下（`settings.json` の permissions・skills の `SKILL.md` の `allowed-tools`）を編集するときは、
+[claude-settings.md](./claude-settings.md) を先に Read する。paths 付き rule の glob は session の主 working directory 基準で
+解決されるため自動ではロードされない（<https://code.claude.com/docs/en/memory> の Path-specific rules 節）。
+
 作業対象の dir が cwd とズレていて `cd <dir> && …` や `git -C <dir>` を繰り返している場合は、
 allowlist の工夫ではなく cwd 自体を直す。[working-directory.md](./working-directory.md) を参照。
 

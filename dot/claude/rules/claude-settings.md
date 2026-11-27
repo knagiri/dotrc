@@ -1,7 +1,19 @@
+---
+paths:
+  - "**/settings.json"
+  - "**/settings.local.json"
+  - "**/.claude/settings.json"
+  - "**/.claude/settings.local.json"
+  - "**/skills/**/SKILL.md"
+---
+
 ## Claude Code settings.json 編集ルール
 
-`.claude/settings.json` や `~/.claude/settings.json` の `permissions` を編集するときの注意。
+`.claude/settings.json` や `~/.claude/settings.json` の `permissions`、および skill の `allowed-tools` を編集するときの注意。
 公式仕様: <https://code.claude.com/docs/en/permissions#bash>
+
+この rule は settings.json の permissions と skill の `allowed-tools` を触る作業でだけロードする
+（それ以外では要らないので、常時ロードのバイト数を抑えるため `paths` でスコープする）。
 
 ### Multi-wildcard pattern の罠（実測ベース）
 
