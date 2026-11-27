@@ -132,7 +132,7 @@ crawler が見ないので、人が close する。close の成立条件の限�
 - **merge は人。** 全 PR が人の merge なので、grant 変更を含む PR の規約（`gh-commands.md` §5）も
   自然に満たす
 - **crawler は claude の daemon を起動しない。** timer から起こすと systemd service の env が以後の
-  委譲先に配られる（`worktree-scope.md` §6）。委譲は `claude-queue daemon-running` が稼働中を返す
+  委譲先に配られる（`claude-tmux-worktree.md`「委譲先の env と token」）。委譲は `claude-queue daemon-running` が稼働中を返す
   ときだけ行い、居なければ次回へ回す。振り分けの `claude -p` は daemon を起動しない（空の
   config dir で `claude -p` を走らせても `claude daemon run` は増えず、同じ dir の `claude --bg` は
   起動した）

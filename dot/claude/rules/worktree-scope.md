@@ -9,72 +9,40 @@ git worktree（linked worktree）内で起動された Claude Code は、**明�
 
 ### なぜ閉じるのか
 
-worktree は「1 まとまりの作業 = 1 作業ツリー」で並行作業を**隔離**するために切られる。ユーザーがこの worktree で Claude を起動した時点で、作業対象はこの worktree だと表明している。ディレクトリ境界を越えてスコープを広げると次の実害が出る。
+worktree は並行作業を**隔離**するために切られ、ユーザーがそこで Claude を起動した時点で、作業対象はこの worktree だと表明している。境界を越えると次の実害が出る。
 
-- **他作業ツリーへの巻き込み**：別 worktree は別ブランチを同時にチェックアウトしている。そこを編集すると、ユーザーが並行作業中の場所に予期しない変更が混入する。
-- **意図の逸脱**：「この worktree でやって」という暗黙の指示に反し、レビュー対象が他ツリーへ散らばって差分が追えなくなる。
-- **二重チェックアウトの破綻**：git は同一ブランチを 2 つの worktree で同時チェックアウトできない。他 worktree が持つブランチへ `switch` しようとすると失敗する。
+- **他作業ツリーへの巻き込み**：別 worktree は別ブランチを checkout しており、編集するとユーザーが並行作業中の場所に予期しない変更が混入する。
+- **意図の逸脱**：レビュー対象が他ツリーへ散らばって差分が追えなくなる。
+- **二重チェックアウトの破綻**：git は同一ブランチを 2 つの worktree で同時に checkout できないので、他 worktree が持つブランチへの `switch` は失敗する。
 
 ### 1. 自分が linked worktree にいるかの判定
 
-`--git-common-dir` と `--git-dir` が **異なれば** linked worktree、一致すれば main working tree。現在ブランチは `--abbrev-ref HEAD` で取る。
-
 ```
-git rev-parse --git-common-dir --git-dir   # 不一致なら linked worktree
+git rev-parse --git-common-dir --git-dir   # 不一致なら linked worktree、一致なら main working tree
 git rev-parse --abbrev-ref HEAD            # 現在ブランチ
 git worktree list                          # worktree ↔ ブランチ対応
 ```
 
 いずれも settings.json の allow（`git rev-parse *` / `git worktree list`）に含まれ、承認なしで実行できる。
 
-#### deploy 済みの checkout と比べるときは `--show-toplevel` を使わない
-
-linked worktree では `git rev-parse --show-toplevel` は worktree 自身の root を返し、
-`bin/deploy.sh` を実行した checkout（PATH に載る `bin/`、`~/.claude` 配下の symlink の実体）を
-指さない。それらと比べる・PATH から外す処理では、main working tree を
-`git rev-parse --path-format=absolute --git-common-dir` の親ディレクトリから引く。これは
-deploy を main working tree から実行している前提で、linked worktree から deploy した場合は
-一致しない。前提が怪しいときは symlink の実体（例: `readlink -f ~/.claude/rules`）から引く。
-
-取り違えてもエラーにはならず、PATH から外したつもりの `bin/` が残る、symlink の実体と一致しない、
-という形で黙って壊れる。main working tree で試すと両者が一致するので、そこでのテストでも
-気づけない。
-
-実例: dotrc/docs/incidents/show-toplevel-in-linked-worktree.md
-
 #### 状態の確認は `.git/` のパスを直接見ず、git コマンドに問う
 
-linked worktree の `.git` は**ディレクトリではなくファイル**である（`gitdir: <path>` を書いた
-1 行のテキストファイルで、実体は main repo 側の `.git/worktrees/<name>/` にある）。したがって
-`ls .git/MERGE_HEAD` / `cat .git/HEAD` / `ls .git/rebase-merge` のようにパスを直接叩く確認は、
-一般にしない。
+linked worktree の `.git` はディレクトリではなく、`gitdir: <path>` を書いた 1 行のファイルである。
+したがって `ls .git/MERGE_HEAD` / `cat .git/HEAD` のようにパスを直接叩く確認は、一般にしない。
+配下のパスは解決できず "Not a directory" で落ちるが、存在チェックの文脈では「無い」と同義に
+読まれ、状態が実在していても誤りに気づかないまま結論へ直結する（false negative）。
 
-理由は、状態が実在していても「無い」と読めてしまう（false negative）ため。`.git` がファイル
-なので配下のパスは解決自体が成立せず、`ls` は "No such file" ではなく "Not a directory" で
-落ちる。だが存在チェックの文脈ではどちらも「無い」と同義に読まれ、しかもコマンドとしては
-ただの非ゼロ終了なので、誤りに気づかないまま結論へ直結する。
-
-代わりに git 自身に問う。git は worktree のレイアウトを知っているので、main working tree でも
-linked worktree でも同じ答えを返す（下記コマンドは `git status` のような porcelain と
-`git rev-parse` のような plumbing が混在するが、この区別はここでは関係ない。共通するのは
-`.git/` 配下へ直接パスを通さず git のコマンド層を経由する点）。
+代わりに、worktree のレイアウトを知っていてどちらの working tree でも同じ答えを返す git に問う。
 
 ```
 git rev-parse -q --verify MERGE_HEAD   # 中断中の merge があるか（exit 0 なら在る）
 git status                             # rebase / cherry-pick を含む中断状態の全般
-git rev-parse --git-path <name>        # 内部ファイルの実体パスが要るとき（例: MERGE_MSG）。worktree/submodule でも正しい実パスを返す
+git rev-parse --git-path <name>        # 内部ファイルの実体パスが要るとき（例: MERGE_MSG）
 ```
 
-`.git` が**ディレクトリだと確認できている**場面は、上の false negative の理由が当てはまらない
-ので縛られなくてよい。ただし判定基準は「linked worktree でないこと」ではない。§1 の
-`--git-common-dir` / `--git-dir` 一致判定は submodule の working tree でも「一致」を返し、
-これは分類として誤りではない（submodule はそれ自体が別 repo の main working tree であり、
-`--git-common-dir` と `--git-dir` は両方とも `<super>/.git/modules/<name>` を指すため）。破綻
-するのは「main working tree なら `.git` はディレクトリ」という**含意**のほうで、submodule の
-`.git` は `gitdir: <super>/.git/modules/<name>` を書いた 1 行のファイルである。つまり §1 の
-「main working tree」という結果だけで `.git` がディレクトリだと決め打つと、submodule で
-この例外がまさに防ごうとしている false negative を許すことになる。`.git` の種別は
-`test -d .git` 等で別途確かめてから縛りを外す。
+`.git` がディレクトリだと確認できている場面では縛られなくてよい。ただし判定基準は「§1 で
+main working tree と出たこと」ではない。submodule の working tree も §1 では一致を返すが、
+その `.git` はファイルである。`.git` の種別は `test -d .git` 等で別途確かめる。
 
 ### 2. 原則：起動した worktree ディレクトリに閉じる
 
@@ -111,22 +79,16 @@ worktree のディレクトリ外（絶対パスで他 worktree や main checkou
 
 ### 5. main working tree にいるなら、実装作業は既定で委譲する
 
-**トリガー**: §1 の判定で `--git-common-dir` と `--git-dir` が **一致** する（= linked worktree
-ではなく main working tree にいる）。かつ、WHAT の固まった、commit を伴う実装作業に着手しようと
-している。
+**トリガー**: §1 の判定で main working tree にいる。かつ、WHAT の固まった、commit を伴う実装作業に
+着手しようとしている。
 
 **既定の行動**: その場で `git switch -c` して編集を始めない。`delegate-to-worktree` skill 経由で
-`claude-worktree` に委譲し、実装は新しい worktree の中で走らせる（分岐の手順は §6）。
+`claude-worktree` に委譲し、実装は新しい worktree の中で走らせる。
 
-main checkout は「いつ来ても clean な main である」ことが期待される共有の起点だから、既定を
-委譲側に置く。feature branch を切って占有すると次の実害が出る。
-
-- **以降の作業がその feature branch 上で始まる**: 次の調査や別依頼をこの checkout で受けたとき、
-  無関係な feature branch を土台にしてしまう。
-- **手戻りをユーザーに要求する**: 「main に戻して」という後始末の指示が要る。委譲していれば
-  main checkout はそもそも動いていない。
-- **自走ラインに乗らない**: 委譲先は permission mode `auto` + `pr-review-loop` → `pr-automerge` で実装から
-  merge まで自律的に進む。main checkout でインラインに進めると、その仕組みに乗らず人間が逐一伴走する形になる。
+main checkout は「いつ来ても clean な main である」ことが期待される共有の起点だから。feature
+branch で占有すると、次の調査や別依頼が無関係な branch を土台に始まり、「main に戻して」という
+後始末をユーザーに求めることになる。委譲先は実装から merge まで自律で進むが、インラインでは
+その仕組みに乗らず人間が逐一伴走する形になる。
 
 **例外**（ソフト指針。当てはまるなら委譲せずこの場で進めてよい）:
 
@@ -135,123 +97,25 @@ main checkout は「いつ来ても clean な main である」ことが期待�
 - worktree を切るまでもない一手で終わる修正。ただし **PR を出して review → merge まで回す規模なら
   小さく見えても委譲側に倒す**（PR を伴う時点で、branch 占有が上記の実害を full に踏む）
 
-linked worktree にいる場合はこの節のトリガーに当たらない。既に隔離された作業ツリーにいるので、
-既定はその worktree 内で進める（§6 末尾）。
+linked worktree にいる場合はこの節のトリガーに当たらず、その worktree 内で進める。そこから
+さらに別 worktree へ分岐するのも、独立した別ラインに割れるとき以外は避ける（隔離済みなので
+分岐で得るものが小さい）。
 
-### 6. 作業を別 worktree へ分岐する（`claude-worktree`）
+### 委譲まわりで常に守ること
 
-今の worktree の作業を止めずに、独立した別ラインの作業を切り出したいときは `claude-worktree`（`bin/`）を使う。現在 worktree への変更はそのまま残り、分岐先は別ディレクトリ・別ブランチで進む。
+委譲の手順（`claude-worktree` の使い方、委譲プロンプトの組み方、報告を受けた後の閉じ方・
+PR 監視・再委譲）は `delegate-to-worktree` skill、担当範囲外のタスクの切り出しは
+`spin-off-session` skill、委譲先が返す成果物の置き場所は `implement-and-review` skill にある。
+どの session でも効かせたいものだけをここに置く。
 
-```
-claude-worktree [--global] [--tmux] [--model <alias>] [--seed <path>]... <name> [-b <branch>] [-- <prompt...>]
-```
-
-- worktree は `<メインリポジトリ toplevel>/.worktrees/<name>` に作られる（メイン基準なので worktree 内から切ってもパスがネストしない）。メイン checkout の**内側**に置くのは 2 つの理由による: ghq が repo として列挙しないので `gts` の候補が repo 本体だけになり、mise が親方向へ config を辿って checkout 自身の mise config（`mise.local.toml` 等）を拾うため seed が要らなくなる（trust は下記）。`.worktrees/` は `dot/git/ignore`（= `~/.config/git/ignore`、git 既定の global excludesFile）で無視するので、メイン checkout の `git status` は汚れない
-- tmux session 名の**正準規約**は `<basename(メインリポジトリ toplevel)>_<name>`。worktree dir の basename は `<name>` だけなので repo 名を合成し直している。`claude-worktree --tmux` と claude-queue picker（`picker.worktreeName`）が同じ規約を通すので、両者が同じ session を指す。区切りが tmux 安全な `_` なのは従来どおりで、`.` は `tmux -t` の `window.pane` 構文と衝突するため不可
-- `-b` 省略時はブランチ名 = `<name>`。ブランチ解決の前に `git fetch origin` する（失敗しても警告のみで abort しない。オフライン等で委譲の起動そのものを止めないため）。解決順はローカルブランチ優先 → 無ければ `origin/<branch>` を追跡 checkout → どちらにも無ければ新規作成。新規作成時の base は `origin/HEAD` → `origin/main` → cwd の HEAD の順で解決する（cwd の HEAD を既定にすると、長く放置された linked worktree から切った委譲先が origin から大きく遅れた base を掴み、repo 内の参照実装を古い版のまま読んでしまうため）。何を base にしたかは stdout の report に出る
-- `--` の後ろにプロンプトを渡すと、**既定では `claude --bg`（background agent, permission mode `auto`）が worktree dir で起動する**。`auto` なのは、人間不在の委譲先では allowlist 外の呼び出しが prompt を出しても誰も承認できず凍結するため。`auto` では allow/deny のどちらにも該当しない呼び出しを classifier が判断する。既存の allow/deny は依然として優先され、classifier が block を重ねると通常の prompt へ戻る（詳細は `bin/claude-worktree` の header）。tmux session も pane も作らない。委譲先はタスクを完遂しても session を終えず `idle` で残るので、委譲元が下記のとおり閉じる（**worktree も残る**ので、後片付けは §7 の `git-reap-gone`）。到達は `claude attach <short-id>`（`claude-worktree` が stdout に出す）か、claude-queue の picker（`C-q q`）から。承認待ちで止まった委譲先へ入る経路もこれ
-- `--tmux` を付けると従来どおり **detached tmux セッション（名前 = 上の正準規約 `<basename(メインリポジトリ toplevel)>_<name>`）を作り、その pane で interactive claude を起動**する。人間が同席して協同する委譲（HOW をその場で詰める等）に使う。permission mode はこの経路だけ `acceptEdits` のままで、同席する人間の判断こそがここで欲しいものであり、prompt が出ても答える人がいるので障害にならない。`gts <session>` でいつでも attach でき、REPL に留まる
-- `claude-worktree` が委譲元 session の name を解決し、プロンプト末尾へ `## 委譲元` 節（`報告先 name: <name>`）を自動付加する（`--tmux` 経路でも同じ。解決できないときは何も付かない）。委譲先はこれを受け取り、完了・不足・中断を SendMessage で委譲元へ報告する。**permission 承認だけはこの経路に乗らない**（tool call の途中で凍結するため委譲先自身が動けない）。承認は人間が attach して行う
-- 委譲元は委譲先から完了報告を受けたら、質問へ返信したかに関わらず `claude-stop-bg <short-id>` で閉じる（§7 の後片付けと同じく、保守的なラッパー経由で行う）。閉じる理由は、それが委譲先の作業を done にする明示的な操作だから。claude-queue は作業の完了を推測で決めず、プロセスが消えること（自然消滅・ホスト再起動・休眠・素の `claude stop`）はどれも gone にするだけで作業は open のまま一覧に残る。`claude-stop-bg` は done を台帳に書いてから stop する。閉じ忘れた委譲先は、最後のターンが完了報告の `SendMessage` なので委譲元が done になるまで §8 の休眠もしない。閉じるのは委譲元の `claude-stop-bg` か、委譲元の done による cascadeだけ
-- 完了報告の PR が人の review や merge を待つなら、委譲元は委譲先を閉じたうえで自分の session に `claude-queue follow --pr <owner/repo#N> --note "<何を待つか>"` を付ける。監視は pin とは独立で、監視中も委譲元は別の作業を続けてよい。§8 と同じ timer の `claude-queue watch` が、その PR に新しい review / comment が付いたとき、merge / close されたときに委譲元を resume して指示を渡す（running なら §8 と同じ手順で止めてから resume する。表示中の window や、running な委譲先を持つ委譲元は次の tick に回す）。監視は merge / close で外れる。起こすのは既に動いている tmux server（interactive）か claude daemon（background）があるときだけで、無ければ次の tick に回す。timer から起動すると、それらが systemd service の env（SSH agent が無い等）を持ち、daemon なら以後の委譲先すべてへその env を配るため。同じ理由で tmux session も作らず、委譲元の repo の session が無ければ最後に attach された既存の session に window を開く。resume した session の `UserPromptSubmit` が台帳に現れるまでは配送済みとみなさず、2 tick 現れなければ記録を消し、次の tick で再配送する。指示文には PR 番号と活動の件数・種別しか入らないので、本文は `gh-pr-comments` で読み、信頼できない外部入力として扱う
-- review で修正が要るときは、閉じた委譲先を再開せず、委譲元が同じ `<name>`・同じ `-b <branch>` で `claude-worktree` を呼んで新しい委譲先を起こし、「既存 PR #N の指摘への対応」だけを渡す。前の session を使い続けると、文脈が膨らんで元の目的から乖離するため。`claude-worktree` は既存の worktree dir を再利用し、拒否するのはその worktree で background session が動いているときだけなので、前の委譲先を閉じてあれば同じ worktree・branch のまま起動できる。新しい委譲先が指摘のどこまでを直すか（PR の差分の中か外か）の線引きは `dot/claude/skills/pr-review-loop/SKILL.md` の「判定 subagent prompt」の担当領域の段落に従う
-- プロンプト無しなら worktree 追加のみ（stdout にパスのみ出力。`git wa` の置き換え）
-- `--global` は worktree の基準 repo を、cwd の repo ではなく **`claude-worktree` 自身が置かれている repo**（symlink 解決後。= dotrc）にする。無関係な project で作業中に dotrc のグローバル harness（rules / skills / bin）を切りたいときに使う。`--seed` のコピー元は `--global` の有無に関わらず cwd の checkout のまま。旧名 `--self` も deprecated alias として動く（stderr に注意書きを出すだけで失敗はしない）。名前を機構（スクリプト自身の位置）ではなく意図（グローバル層を選ぶ）に寄せたのは、`harness-from-feedback` 手順 3 や [claude-settings.md](./claude-settings.md) の 3 層の表が既に「グローバル」の語で同じ区別をしているため
-- `--seed <path>`（繰り返し可）は、現 checkout の `<path>` を新 worktree の同じ相対位置へコピーする。存在しない／checkout 外の seed は worktree 作成前に fail する
-- 現 checkout の `.claude/worktree-seed`（1 行 1 パス、repo root からの相対。行頭 `#` はコメント）に挙げたパスは、`--seed` を渡さなくても**既定で seed される**。委譲先が無いと動けない gitignore 済み設定（token を供給する設定ファイル、ローカルの `.env` 等）を repo 側が名指しする場所で、script にファイル名を埋め込まない。明示 `--seed` と違い**挙げたパスが無いときは skip する**（fail しない）。一覧自体が無い repo も同様に何もしない。明示 `--seed` と重なっても二重コピー・二重ログにはならない。ただし絶対パスや checkout の外へ出る entry は fail する（commit されてレビューされる一覧なので、壊れた行は黙って通さない）
-- worktree はメイン checkout の内側 `<repo>/.worktrees/<name>` にあるので、mise が親方向へ辿って checkout 自身の mise config（`mise.local.toml` 等）を拾う（実測: `<repo>` だけを `mise trust` した状態で `<repo>/.worktrees/foo` から `mise env` を引くと親の値が出る）。したがって mise config の seed は要らない。ただし worktree が**自分の** config を持つ場合（tracked な `mise.toml` は各 worktree に checkout される）は、`<repo>` の `mise trust` では覆われず untrusted になる（実測）。dotrc では `bin/deploy.sh` が checkout を `trusted_config_paths`（path prefix で一致する）に登録して覆う。この repo の既定 seed に実エントリは無いが、機構自体は残置してある
-- 委譲先で token が無いときに `~/.config/gh/personal.env` 等の秘密ファイルを直接 source する回避策は使わない。`.claude/worktree-seed` 経由の供給が正規経路であり、それが効かないなら seed 側の不具合として直す。ただし **`mise activate` は非対話 shell では発火しない**ので、親 config の env は届かない（path レイアウトとは独立の gap。`rc/bashrc` に activate 自体はあるが、`~/.bashrc` は非対話 shell で早期 return するうえ、activate が仕込むのは prompt hook である）。実測でも、`claude-worktree` が委譲先を起こすときの `(cd "$wt_path" && claude ...)` 相当の subshell・`bash -c`・`bash -lc` のいずれでも親 config の env は載らず、`mise exec` を明示したときだけ載った。**shell の env に token が無いこと自体は、下記のとおり個人 PAT を `MISE_ENV=gh` のときだけ読む設計にした結果であり意図した状態**である（素の env を覗いて「token が無い」と早合点しない）。ここで言う既知 gap は、`gh-*` wrapper（`MISE_ENV=gh mise exec` 経由で個人 PAT を読むもの）を使ってもなお token が届かず失敗する場合に限る。その場合に限り、回避策を撃たずに委譲元へ報告する
-- background 委譲先の env は、依頼元（`claude-worktree` を叩いた session）のものではなく、**その config dir の daemon を on-demand 起動した `claude --bg` 呼び出し元のもの**である。依頼元の env は届かず cwd だけが渡り、daemon は最後の client が切れるまで生きる（実測: 依頼元で付けた probe 変数は委譲先に無く、`GH_TOKEN` は daemon と同じローテーション前の値だった）。env に token を載せると、それを起動した一回の呼び出しの値が以降の全委譲先へ配られ、mise config を持たない repo への委譲にも紛れ込む。したがって dotrc の個人 PAT は `MISE_ENV=gh` のときだけ読まれる `mise.gh.local.toml` に置いて shell の env には載せず、`gh-*` wrapper が呼び出し時にだけ `MISE_ENV=gh mise exec` で読む（`bin/lib/gh-mise.sh`）。wrapper を通らない素の `gh` は hosts.yml の token に落ちる
-- `mise activate` は非対話 shell で発火しない（上述）ので、`claude-worktree` は background・`--tmux` の両経路で `mise exec -C <worktree> -- claude ...` の形で起動する。`--tmux` では pane の claude にその env が載る。background では、前置の env が委譲先に届くのはその呼び出しが daemon を on-demand 起動したときだけで、既に動いている daemon の下では直前の bullet のとおり cwd しか渡らない
-- `--model <alias>` は起動する claude のモデルを固定する（friendly alias。`opus` / `sonnet` / `haiku`）。省略すると継承した既定モデルのまま。委譲先は長時間の agentic 実行を担うので、`delegate-to-worktree` / `harness-from-feedback` は `--model opus` を付けて呼ぶ
-- settings.json で allow 済み（`claude-worktree` / `claude-worktree *`、`claude-stop-bg` / `claude-stop-bg *`）なので承認なしで実行できる
-
-分岐先は自律的に編集を進める（既定の background 経路の permission mode は `auto`）。タスクが自然に独立した複数ラインへ割れるときに、現在 worktree を汚さず並行で進める選択肢として使う。**既に linked worktree にいるなら**乱用は避け、分岐の必要性が薄いときはその worktree 内で進める（隔離済みなので分岐で得るものが小さい）。この抑制は main working tree にいる場合には適用しない。そこでの既定は §5 のとおり委譲する。
-
-実例: dotrc/docs/incidents/delegate-session-reuse-drifts.md
-
-#### 担当範囲外のタスクは `claude-spinoff` で切り出す
-
-`claude-worktree` が起こすのは今の session の**子**（同じ担当範囲の実装を worktree で進め、
-委譲元へ報告する）である。担当範囲外のタスクに気づいたときはこれを使わず、`claude-spinoff`
-（`bin/`）で**独立 root** の interactive session を起こす。worktree も branch も作らず main
-working tree で動き、`## 委譲元` も親子 link も付かない（委譲元の done が cascade せず、元
-session が報告待ちで生き残らない）。置き場所は tmux session `<repo basename>` の新しい window。
-実装が要る段になれば、切り出し先が §5 に従って自分で委譲する。
-
-```
-claude-spinoff [--global] [--model <alias>] -- <prompt...>
-```
-
-どちらへ出すか（issue 起票を含む）の判断と handoff の組み方は `spin-off-session` skill が持つ。
-settings.json で allow 済み（`claude-spinoff` / `claude-spinoff *`）。
-
-#### 委譲プロンプトはファイルシステム的に自己完結させる
-
-委譲プロンプトが参照するファイルは、原則すべて新 worktree の中に在る状態にしてから起動する。worktree 外の絶対パスを委譲先に読ませない。
-
-主たる理由は**伝播しない**ことで、これは permission mode に関わらず無条件に成立する。新 worktree は指定 branch を checkout するだけなので、起動元 checkout の gitignore 済み・未 commit ファイルは持ち込まれない。絶対パスで指せば読めるが、それは起動元 checkout の外部ファイルを読ませているに過ぎず、参照させたかったものが worktree 内に在る状態にはならない。
-
-二次的に、**承認が要る形に落ちれば人間不在で止まる**。既定の background 経路は permission mode `auto` なので、worktree 外の絶対パス Read が必ず prompt になるとは限らない（allow/deny のどちらにも該当しない呼び出しは classifier が判断する）。ただし classifier の block が重なれば通常の prompt へ戻るため、承認待ちに落ちる経路自体は残る。fire-and-forget では誰も承認できないので、その形に落ちた時点で停止する。
-
-したがって参照ファイルの扱いは次で分かれる。
-
-| 参照したいファイル | どうするか |
-|---|---|
-| commit 済み（branch に載っている） | 何もしない。worktree に既に在る。相対パスで参照させる |
-| gitignore 済み・未 commit（spec / plan / メモ等） | `claude-worktree --seed <path>` で worktree 内へ入れ、相対パスで参照させる |
-| プロンプト本文へ畳める短い内容 | seed せずプロンプトに畳む（ファイル参照自体を消す） |
-
-seed したファイルは gitignore 済みなら worktree 内でも untracked のままなので、委譲先の commit には載らない。
-
-##### 戻り方向も同じ — 委譲先が返す成果物は `.delegate/` に置く
-
-上の 2 つの理由（伝播しない・承認で固まる）は、委譲先が**返す**ファイルにもそのまま当てはまる。委譲元が読めるのは worktree 内のファイルだけで、外に置かれたものは絶対パス Read の承認で固まるか、そもそも到達できない。
-
-したがって委譲先が中断・完了報告に添えるファイル（PR 本文ドラフト、調査結果、生成物）は、**worktree 内の `.delegate/` に置き、報告には相対パスで書く**。
-
-- `$CLAUDE_JOB_DIR` に置かない。job の削除で消えるので、報告を読む頃には無いことがある
-- `/tmp` に置かない。寿命が不定で、並行する別 job と名前が衝突しうる
-- `.delegate/` は `claude-worktree` が worktree 作成時に repo の exclude（`git rev-parse --git-path info/exclude` が返す `.git/info/exclude`）へ登録するので、置いたままでも `git status --porcelain` は空のままになる
-  - `info/` は worktree 間で共有される領域なので、git は linked worktree でも（`commondir` で解決した）common dir 側の `info/exclude` だけを読み、`.git/worktrees/<name>/info/exclude` へ書いても読まれない
-  - §7 の `git-reap-gone` は worktree が clean であることを reap の条件にしており、`git worktree remove` も `--force` 無しで通る。つまり成果物を残したまま後片付けできる
-
-`.delegate/` を untracked のまま worktree 内に置く（exclude に入れない）と、この clean 判定が塞がって reap が skip される。逆に worktree の外へ出すと委譲元が読めない。exclude 済みの worktree 内、というのがその両方を同時に満たす唯一の場所である。
-
-連携の全体像（git worktree を土台に、既定の background 起動（`claude --bg`）と `--tmux` の tmux セッションへ分岐し、どちらも claude-queue が追跡するという層構成と、`claude-worktree` の位置づけ）は `docs/design/claude-tmux-worktree.md` を参照。
-
-### 7. 委譲 worktree の後片付け（`git-reap-gone`）
-
-§6 で分岐・委譲した作業が merge され終わったら、その worktree とブランチの後始末を頼まれることがある。「後片付けして」「委譲先を片付けて」等で依頼されたら、手作業で `git worktree remove` / `git branch -d` を撃たず、`git-reap-gone`（`bin/`）を保守的 predicate で回す。
-
-```
-git-reap-gone [--no-fetch] [<branch>...]
-```
-
-- **トリガーは推論せず `[gone]` 状態**。リモートが merge 時にブランチを削除 → `git fetch --prune`（スクリプト冒頭で自動実行）で local が `[gone]` 化する、という権威ある外部イベントだけを完了の合図にする。`--no-fetch` で冒頭 fetch を抑制できる（呼び出し側／cron が fetch を制御する場合）。
-- **統合先のローカルブランチ（通常 `main`）を checkout した状態で実行する**。そうでなければブランチ・worktree・working tree のいずれも触らず exit 1 し（冒頭の `git fetch --prune` は既に走っている）、どのブランチへ switch すればよいかを案内する（既に別 worktree で checkout 済みならそちらの path を案内する）。`git branch -d` は「upstream があればそれ、無ければ HEAD」の 2 択でしか判定できず base を渡せない。`[gone]` は upstream が消えた状態なので必ず HEAD 基準に落ち、HEAD が統合先でないと下の gate と別の起点を測ることになるため。続けて `$base`（`origin/HEAD`）への `git merge --ff-only` を試み、古いローカル統合先を追随させる（`--no-fetch` の有無に依らず実行。失敗しても abort せず警告して続行する — gate の安全性は ff に依存せず、失敗の帰結は skip が増えるだけで誤削除方向には倒れない）。
-  - **linked worktree にいる場合は `git switch` できない**（統合先は main working tree が既に checkout 済みで、git が二重 checkout を拒否する）。この tool を呼ぶ agent 自身がまさに linked worktree 内にいることが多いので、統合先を checkout している main working tree 側で実行する。cwd がそこにズレているなら [working-directory.md](./working-directory.md) に従い `/cd` を頼んで止まる。
-- **reap してよい条件（全通過のみ削除）**: ①統合先（`origin/HEAD` = 通常 `origin/main`）に対し未統合コミットが無い、②HEAD から到達可能（`git branch -d` が実際に使う判定の先取り。**worktree を消す前**に確認するので「worktree だけ消えてブランチが残る」中途半端な状態が構造的に生じない）、③worktree が紐づくならそれが clean、④その worktree が今いる worktree でない。裸ブランチ（worktree 無し）は①②のみで判定。
-- **削除は安全形だけ**: `git worktree remove`（**`--force` 無し**）＋ `git branch -d`（**`-D` ではない**）。条件を欠くもの・git が拒否したものは **skip し、何が blocking か report** する。決して force にエスカレートしない。これにより dirty／別ブランチへ切替済み（→ `[gone]` ブランチに worktree が紐づかない）等で spawn 中の worktree は自動的に対象外になる。
-- 引数でブランチ名を指定するとその対象だけを（同じゲートを通して）reap する。無指定なら全 `[gone]` を sweep。
-- **manual 運用**。cron/janitor の常駐は当面作らない。ただし全 `[gone]` を sweep できる形なので、将来そのまま cron/loop に挿せる。
-- settings.json で allow 済み（`git-reap-gone` / `git-reap-gone *`）なので承認なしで実行できる。
-
-### 8. idle な session の休眠（`claude-queue watch`）
-
-§7 がブランチと worktree を扱うのに対し、こちらは session のプロセスを扱う。常駐する claude プロセスは 1 本あたり数百 MB を使い、閉じられずに残った session が数十本になると十数 GB を占める。`systemd-user` の timer（`claude-queue-watch.timer`）が数分おきに `claude-queue watch` を 1 回起動し、しばらく動いていない session のプロセスを止めてメモリを返す。止めても作業は open のまま gone として一覧に残り、resume すれば同じ session id で戻る。
-
-```
-claude-queue watch [--idle-minutes <n>] [--dry-run]
-```
-
-- **作業は done にしない**。interactive は claude プロセスに SIGTERM を送り、`claude agents` の一覧から消えたらその tmux pane を閉じる。background は `claude stop` で止める。どちらも `SessionEnd`（reason `other`）になり gone として記録される。done にするのは §6 の `claude-stop-bg` や picker の完了操作など、明示的な操作だけ。
-- **止めてよい条件（全通過のみ）**: ①最新 state が `idle_done` で、その event から `--idle-minutes`（既定 120）以上経っている、②`claude agents` の一覧で `status` が `idle`、③transcript の最後の assistant ターンに `SendMessage` の tool_use が無い。③が要るのは、委譲元へ質問して返信を待つ委譲先も外からは `idle` に見え、止めると返信の受け手が居なくなるため。`awaiting_approval` の session も①で外れる。ただし孤児（委譲元が done、または台帳に居ない session）は返信が来ないので③を省く。委譲元が gone なだけなら resume すれば返信できるので孤児にしない（詳細は `docs/design/claude-queue-session-tree.md`）。完了報告も `SendMessage` なので、閉じ忘れた委譲先は委譲元が done になるまで③で外れ続ける（§6）。④running かつ open な委譲先を持たない。委譲元は報告を待って `idle` に見えるが、止めると委譲先の報告の受け手が居なくなるため。確認そのものができないもの（一覧が読めない・transcript が読めない／parse できない）は止めずに skip する。
-- **人が見ている session は止めない**。interactive は、pane の window が attach 中の tmux client のどれかで表示中なら skip する。pane が見つからない（tmux 外で起動した等）ものも skip する。SIGTERM 後 10 秒で一覧から消えなければ pane は閉じずに失敗として report する（SIGKILL へは上げない）。
-- pin は休眠を妨げない。外部待ちの session こそ、待ちが解けるまでプロセスを持つ理由が無い。
-- 同じ timer の pass は、委譲先の branch から PR 番号を引いて記録もする（picker で PR 番号・branch 名から委譲 tree を引くため）。休眠とは独立で、gh が失敗してもその組を次の pass に回すだけ。
-- 止めたもの・skip とその理由を 1 行ずつ出し、exit は常に 0（DB を開けないときだけ 1）。動作確認は `--dry-run` で行う。dry run は reconcile・PR 監視・PR 番号の解決・停止をせず、pane の解決と表示中の判定までを行って対象を report する。ただし DB を開くことによる書き込みは止めないので、実データで確かめるときは [dotrc-deploy.md](./dotrc-deploy.md) §6 に従う。
-- 判定は推測を含むが、外れても失うのはプロセスだけで作業は残る。だから無人の timer で回してよい。逆に、作業を done にする判定は無人で回さない。
-- `systemd-user` の timer はもう 1 本、日次で観測 issue を束ねて委譲する `issue-crawl.timer` がある。こちらも claude の daemon を自分では起動せず、既に動いている daemon があるときだけ委譲する（詳細は `docs/design/agent-issue-workflow.md`）。
-
-実例: dotrc/docs/incidents/claude-queue-reboot-closes-wip.md
+- **秘密ファイルを直接 source して token 不足を回避しない**（`~/.config/gh/personal.env` 等）。
+  shell の env に token が無いのは、個人 PAT を `gh-*` wrapper の呼び出し時にだけ読む設計の結果で
+  あり意図した状態である。env に載せた token は以後の全委譲先へ配られる。`gh-*` wrapper を
+  使ってもなお token が届かず失敗するなら、回避策を撃たず委譲元へ報告する（仕組みは
+  `dotrc/docs/design/claude-tmux-worktree.md`「委譲先の env と token」節）。
+- **merge 済みの委譲 worktree とブランチの後片付けは、手作業の `git worktree remove` /
+  `git branch -d` ではなく `git-reap-gone` を、統合先（通常 `main`）を checkout した main working
+  tree で回す**。手作業では未統合 commit や dirty な worktree の確認が漏れるが、`git-reap-gone` は
+  保守的な条件を全部通ったものだけを force 無しで消す。linked worktree からは統合先を checkout
+  できないので、cwd がずれていれば `/cd` を頼む（条件の詳細は
+  `dotrc/docs/design/claude-tmux-worktree.md`「委譲 worktree の後片付け」節）。

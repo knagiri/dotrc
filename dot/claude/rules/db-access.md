@@ -61,7 +61,7 @@ config の `DATABASE_URL` だけは override 下でも読まれるので、そ�
 `DATABASE_URL` を `mise.local.toml` や shell の rc のような常時ロードされる場所に一般に置かない。
 Rails・Prisma・各種 migration ツールなどは `DATABASE_URL` を既定で読むので、env に載った時点で
 その repo の app・test・migration がエラー無しにその DB へ向く。`mise activate` 経由で載った値は
-background 委譲先にも配られる（[worktree-scope.md](./worktree-scope.md) §6）。`db-query` の override で
+background 委譲先にも配られる（`dotrc/docs/design/claude-tmux-worktree.md`「委譲先の env と token」）。`db-query` の override で
 絞れば、値が env に載るのは `db-query` の 1 回の呼び出しの中だけになる。
 
 ### 4. agent に渡す接続は read-only な DB user に限る

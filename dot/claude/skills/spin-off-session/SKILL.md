@@ -10,9 +10,13 @@ allowed-tools: Bash(claude-spinoff *), Read, Glob, Grep
 不要な文脈を抱えた長命 session が生まれる。範囲外のタスクは出し先へ渡し、元 session は
 元のタスクに閉じて短命に保つ。
 
-`claude-spinoff` が `claude-worktree` とどう違うか（独立 root・main working tree・
-親子 link なし）は `dot/claude/rules/worktree-scope.md` §6「担当範囲外のタスクは
-`claude-spinoff` で切り出す」を参照。
+`claude-worktree` が起こすのは今の session の**子**（同じ担当範囲の実装を worktree で進め、
+委譲元へ報告する）である。`claude-spinoff` はこれと違い、**独立 root** の interactive session を
+起こす。worktree も branch も作らず main working tree で動き、`## 委譲元` も親子 link も付かない
+（委譲元の done が cascade せず、元 session が報告待ちで生き残らない）。置き場所は tmux session
+`<repo basename>` の新しい window。実装が要る段になれば、切り出し先が
+`dot/claude/rules/worktree-scope.md` §5 に従って自分で委譲する。settings.json で allow 済み
+（`claude-spinoff` / `claude-spinoff *`）。
 
 ## 発火と同意
 

@@ -83,7 +83,7 @@ permission rule の置き場所は 3 つあり、伝播の経路がそれぞれ�
 
 `git worktree add` は branch を checkout するだけなので、git 管理外の `settings.local.json` は
 新しい worktree に一切載らない。そして UI の「don't ask again」が書き込む先はこの
-`settings.local.json` である。つまり対話中に溜めた許可は、[worktree-scope.md](./worktree-scope.md) §6 の
+`settings.local.json` である。つまり対話中に溜めた許可は、`delegate-to-worktree` skill で起こす
 委譲先にはまったく効かない。
 
 人間が同席していれば承認プロンプトはその場で捌けるが、background 委譲先は人間不在で走るので

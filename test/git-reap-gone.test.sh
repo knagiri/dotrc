@@ -188,7 +188,7 @@ else
 fi
 
 # --- G: HEAD off base AND base already checked out in another worktree -------
-# Simulates the primary caller of worktree-scope.md §7: an agent running the
+# Simulates the primary caller of docs/design/claude-tmux-worktree.md "委譲 worktree の後片付け": an agent running the
 # script from inside the very linked worktree it was delegated into. `git
 # switch main` there would fail with "already used by worktree", so the
 # message must point at the other checkout's path instead.
