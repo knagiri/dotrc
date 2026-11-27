@@ -10,7 +10,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
 プロンプト先頭の明示命令でこの skill に入る。
 
 作業スコープは起動された worktree ディレクトリ内に閉じる
-（`dot/claude/rules/worktree-scope.md` §2 参照）。
+（`dot/claude/rules/session-scope.md` §2 参照）。
 
 ## 入力
 

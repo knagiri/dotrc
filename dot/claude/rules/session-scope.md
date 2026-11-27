@@ -1,16 +1,29 @@
-## worktree 作業スコープのルール
+## session のスコープのルール
 
-git worktree（linked worktree）内で起動された Claude Code は、**明示的に指示されない限り、その worktree ディレクトリ内の作業に閉じる**。
-別 worktree・main チェックアウトへ作業を波及させない。
+session のスコープは、起動した cwd の repo（linked worktree ならその worktree ディレクトリ）である。
+**その外への書き込みは、明示的に指示されない限り行わない**。別 repo・別 worktree（repo 配下の
+`<repo>/.worktrees/<name>` を含む）・main チェックアウトへ作業を波及させない。
 
-スコープの単位は **worktree ディレクトリであって、単一ブランチではない**。1 つの worktree 内でブランチを切り替えたり、新規ブランチを起こして PR を積み上げたりする運用は通常想定であり、妨げない。
+- 作業用ディレクトリ（`/tmp`、scratchpad）と、system prompt が書き込みを指示する Claude Code の
+  管理領域（auto-memory 等）は例外。
+- read-only な参照は外を見てよい（§3）。
+- harness（`~/.claude/` のうち dotrc の `dot/claude/` から展開されるもの）の変更は dotrc の session で、
+  自 checkout の `dot/claude/` を編集して行う。`~/.claude/` のパス経由では main checkout への書き込みに
+  なる。他の repo の session では `~/.claude/` を編集せず、気づいた改善は `gh-issue-file` で観測として
+  起票する（[issue-workflow.md](./issue-workflow.md)）。ユーザーに頼まれたら `harness-from-feedback` で
+  dotrc へ委譲する。
+
+実例: dotrc/docs/incidents/out-of-scope-edit-workaround.md
+
+スコープの単位は **ディレクトリ（repo / worktree）であって、単一ブランチではない**。1 つの worktree 内でブランチを切り替えたり PR を積み上げたりするのは通常想定であり、妨げない。
 
 関連ルール: 許可設定の仕組みは [claude-settings.md](./claude-settings.md)、承認が要るコマンドの回避は [bash-command-constraints.md](./bash-command-constraints.md) を参照。作業対象の dir が cwd とズレて `cd`/`git -C` で渡り歩きたくなったら、[working-directory.md](./working-directory.md) に従い `/cd` で cwd 自体を移す（§3 の read-only 覗き見はその例外）。
 
 ### なぜ閉じるのか
 
-worktree は並行作業を**隔離**するために切られ、ユーザーがそこで Claude を起動した時点で、作業対象はこの worktree だと表明している。境界を越えると次の実害が出る。
+ユーザーがある repo・worktree で Claude を起動した時点で、作業対象はそこだと表明している（worktree は並行作業を**隔離**するために切られる）。境界を越えると次の実害が出る。
 
+- **レビューと履歴を経ない変更**：repo の外への変更は、その場所のレビューと履歴を通らない。`~/.claude/` の rule 等は main checkout への symlink なので、未 commit のまま全 session へ即時に効く。
 - **他作業ツリーへの巻き込み**：別 worktree は別ブランチを checkout しており、編集するとユーザーが並行作業中の場所に予期しない変更が混入する。
 - **意図の逸脱**：レビュー対象が他ツリーへ散らばって差分が追えなくなる。
 - **二重チェックアウトの破綻**：git は同一ブランチを 2 つの worktree で同時に checkout できないので、他 worktree が持つブランチへの `switch` は失敗する。
@@ -44,7 +57,7 @@ git rev-parse --git-path <name>        # 内部ファイルの実体パスが要
 main working tree と出たこと」ではない。submodule の working tree も §1 では一致を返すが、
 その `.git` はファイルである。`.git` の種別は `test -d .git` 等で別途確かめる。
 
-### 2. 原則：起動した worktree ディレクトリに閉じる
+### 2. linked worktree では起動した worktree ディレクトリに閉じる
 
 linked worktree で起動された場合、デフォルトは以下に従う。「permission」列は settings.json 上の扱い。
 
@@ -62,7 +75,7 @@ worktree のディレクトリ外（絶対パスで他 worktree や main checkou
 
 ### 3. read-only な参照は可
 
-スコープ制限は「書き込み」に限る。調査目的の read-only 操作は worktree 外を見てよい。下記はいずれも allow 済みで承認不要。
+スコープ制限は「書き込み」に限る。調査目的の read-only 操作はスコープ外を見てよい。別 repo・別 worktree のパスを Read / `rg` で見るのも可（`git -C` は承認が出る。[working-directory.md](./working-directory.md)）。git の次の 3 例は allow 済みで承認不要。
 
 - 他ブランチとの diff 確認（`git diff <other-branch>` … `git diff *`）
 - 履歴参照（`git log <other-branch>` … `git log *`）
@@ -70,12 +83,12 @@ worktree のディレクトリ外（絶対パスで他 worktree や main checkou
 
 ### 4. スコープを広げてよいケース
 
-以下のように **ユーザーが明示的に指示したときのみ**、対象を現在 worktree ディレクトリの外へ広げる。
+以下のように **ユーザーが明示的に指示したときのみ**、対象をスコープの外へ広げる。
 
-- 「main にも反映して」「別 worktree を直して」等、他ツリーを名指しした指示
+- 「main にも反映して」「別 worktree を直して」等、他ツリー・他 repo を名指しした指示
 - 「新しく worktree を切って」等、worktree 操作そのものの依頼
 
-曖昧な場合（どの worktree が対象か不明確）は、勝手に広げず確認する。
+曖昧な場合（どの worktree・repo が対象か不明確）は、勝手に広げず確認する。
 
 ### 5. main working tree にいるなら、実装作業は既定で委譲する
 

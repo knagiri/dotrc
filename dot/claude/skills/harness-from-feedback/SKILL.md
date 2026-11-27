@@ -11,7 +11,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
 畳み、`claude-worktree` を直接起動して委譲する。委譲先は実装 → `pr-review-loop` で review → `pr-automerge` で自律マージする。
 
 設計の全体像は `docs/superpowers/specs/2026-06-30-harness-from-feedback-design.md`、worktree 運用は
-`dot/claude/rules/worktree-scope.md`、rules の書き方は `dot/claude/rules/rule-authoring.md` を参照。
+`dot/claude/rules/session-scope.md`、rules の書き方は `dot/claude/rules/rule-authoring.md` を参照。
 
 ## Pre-fetched context
 

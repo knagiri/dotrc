@@ -217,7 +217,7 @@ expect() {  # expect <description> <want> <got>
 # --- the hook under test -----------------------------------------------------
 expect "main working tree on the integration branch under Claude Code is refused" refused "$(s_main real "$hook")"
 check "the refusal says to branch off with git switch -c, cites §5, and forbids --no-verify" \
-  "$(if grep -qF 'git switch -c <branch>' "$tmp/last.err" && grep -qF 'worktree-scope.md §5' "$tmp/last.err" \
+  "$(if grep -qF 'git switch -c <branch>' "$tmp/last.err" && grep -qF 'session-scope.md §5' "$tmp/last.err" \
        && grep -qF -- '--no-verify' "$tmp/last.err"; then echo 0; else echo 1; fi)"
 expect "without CLAUDECODE the commit lands" landed "$(s_human real "$hook")"
 expect "a feature branch in the main working tree lands" landed "$(s_feature real "$hook")"

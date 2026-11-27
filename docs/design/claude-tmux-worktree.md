@@ -15,7 +15,7 @@
 | 範囲外タスクの切り出し | `bin/claude-spinoff`（判断は `dot/claude/skills/spin-off-session/`） |
 | 委譲先の停止 | `bin/claude-stop-bg` |
 | idle な session の休眠 | `claude-queue watch`（`dot/systemd-user/claude-queue-watch.timer`） |
-| エージェント運用ルール | `dot/claude/rules/worktree-scope.md` |
+| エージェント運用ルール | `dot/claude/rules/session-scope.md` |
 
 ## レイヤ構成
 
@@ -330,7 +330,7 @@ checkout される）は、`<repo>` の `mise trust` では覆われず untruste
 
 委譲先が無いと動けない gitignore 済み設定は `.claude/worktree-seed` で供給するのが正規経路で、それが
 効かないなら seed 側の不具合として直す。秘密ファイルを直接 source する回避策は使わない
-（`dot/claude/rules/worktree-scope.md`「委譲まわりで常に守ること」）。
+（`dot/claude/rules/session-scope.md`「委譲まわりで常に守ること」）。
 
 ### 委譲 worktree の後片付け（`git-reap-gone`）
 
