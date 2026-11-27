@@ -86,6 +86,7 @@ jobs:
             test/dotrc-config.test.sh \
             test/gh-issue-file.test.sh \
             test/gh-issue-group.test.sh \
+            test/gh-mise.test.sh \
             test/gh-wrappers.test.sh \
             test/issue-crawl.test.sh \
             test/git-reap-gone.test.sh \
