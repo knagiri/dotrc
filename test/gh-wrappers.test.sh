@@ -73,15 +73,16 @@ PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 --admin >/dev/null 2>&1; [ $? -n
 # fall through to a direct merge.
 #
 # The grant gate (test/gh-automerge.test.sh) reads the PR before merging, so the
-# stub answers `pr view` with two commit ids and the compare diff (`api .../compare/...`)
+# stub answers `pr view` with a base branch and a head commit id, the base tip (`api .../git/ref/heads/...`) and the compare diff (`api .../compare/...`)
 # with a diff that has no grant change; only `pr merge` calls are logged.
 amdir="$stubdir/am"; mkdir -p "$amdir"
 cat >"$amdir/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
   "pr view")
-    echo "$(printf 'b%.0s' {1..40}) $(printf 'c%.0s' {1..40}) 1" | tr bc 0a
+    echo "main $(printf 'c%.0s' {1..40}) 1" | tr c a
     exit 0 ;;
+  "api repos/{owner}/{repo}/git/ref/heads/"*) printf '0%.0s' {1..40}; echo; exit 0 ;;
   "api repos/{owner}/{repo}/compare/"*) printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-a' '+b'; exit 0 ;;
 esac
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"

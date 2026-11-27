@@ -24,12 +24,16 @@ HEAD=2222222222222222222222222222222222222222
 # gh stub. The PR is described by files under $GH_FIX:
 #   diff            -- what `api repos/{owner}/{repo}/compare/<base>...<head>` prints with the diff
 #                      media type (GH_DIFF_FAIL=1: print it, exit 1). Any other range is a 404,
-#                      so a diff that is not taken between $GH_BASE and $GH_HEAD cannot be read;
+#                      so a diff that is not taken between the tip and $GH_HEAD cannot be read;
 #                      each compare endpoint is appended to $GH_API_LOG.
 #   files/<sha>/<path> -- what `api repos/{owner}/{repo}/contents/<path>?ref=<sha>`
 #                      returns; a missing file is a 404
-# `pr view` prints what the wrapper's --jq would produce: the "<base> <head> <changedFiles>" line
-# (GH_VIEW_FAIL=1: the call fails).
+# `pr view` prints what the wrapper's --jq would produce: the "<baseRefName> <head> <changedFiles>"
+# line (GH_BASEREF, default main; GH_VIEW_FAIL=1: the call fails).
+# `api repos/{owner}/{repo}/git/ref/heads/<baseRefName>` prints the tip sha, $GH_TIP (default
+# $GH_BASE, which is what every other fixture treats as the base side); only heads/$GH_BASEREF
+# exists, any other ref is a 404 (GH_REF_FAIL=1: it fails). Each ref endpoint is appended to
+# $GH_REF_LOG. The PR's baseRefOid is not printed at all: the wrapper must not use it.
 # `pr merge` appends its argv to $GH_MERGE_LOG and succeeds
 # (one `[arg]` per line, so each call starts with `[pr]`).
 cat >"$stub/gh" <<'STUB'
@@ -38,7 +42,7 @@ case "$1 $2" in
   "pr view")
     [ "${GH_VIEW_FAIL:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }
     # changedFiles: GH_CHANGED, else the number of file blocks in the fixture diff
-    echo "$GH_BASE $GH_HEAD ${GH_CHANGED-$(grep -c '^diff --git ' "$GH_FIX/diff")}"
+    echo "${GH_BASEREF-main} $GH_HEAD ${GH_CHANGED-$(grep -c '^diff --git ' "$GH_FIX/diff")}"
     exit 0 ;;
   "pr merge")
     printf '[%s]\n' "$@" >>"$GH_MERGE_LOG"
@@ -50,9 +54,15 @@ case "$1 $2" in
 esac
 if [ "$1" = api ]; then
   case "$2" in
+    repos/\{owner\}/\{repo\}/git/ref/*)
+      echo "$2" >>"$GH_REF_LOG"
+      [ "${GH_REF_FAIL:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }
+      [ "$2" = "repos/{owner}/{repo}/git/ref/heads/${GH_BASEREF-main}" ] \
+        || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+      echo "${GH_TIP-$GH_BASE}"; exit 0 ;;
     repos/\{owner\}/\{repo\}/compare/*)
       echo "$2" >>"$GH_API_LOG"
-      [ "$2" = "repos/{owner}/{repo}/compare/$GH_BASE...$GH_HEAD" ] \
+      [ "$2" = "repos/{owner}/{repo}/compare/${GH_TIP-$GH_BASE}...$GH_HEAD" ] \
         || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
       cat "$GH_FIX/diff"; [ "${GH_DIFF_FAIL:-0}" = 1 ] && { echo "HTTP 502" >&2; exit 1; }; exit 0 ;;
   esac
@@ -421,8 +431,8 @@ EOF
 # ---- runner -----------------------------------------------------------------
 run() {  # run <bindir> <fixture> -> sets rc, out (stderr), merge log in $work/merges
   # RUN_ENV (an array of VAR=value) adds to the stub's environment for one check.
-  : >"$work/merges"; : >"$work/api"
-  out="$(env GH_FIX="$fix/$2" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" \
+  : >"$work/merges"; : >"$work/api"; : >"$work/ref"
+  out="$(env GH_FIX="$fix/$2" GH_REF_LOG="$work/ref" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" \
     GH_API_LOG="$work/api" GH_DIFF_FAIL="$([ "$2" = diff_fail ] && echo 1 || echo 0)" "${RUN_ENV[@]}" \
     PATH="$stub:$PATH" "$1/gh-automerge" 42 2>&1 >/dev/null)"
   rc=$?
@@ -445,8 +455,8 @@ passed() {
 # The clean-status fallback (direct merge) must pin the head too: two merge
 # calls, the second without --auto, each with --match-head-commit <head>.
 check_fallback_pin() {
-  : >"$work/merges"; : >"$work/api"
-  out="$(env GH_FIX="$fix/unrelated" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" GH_API_LOG="$work/api" \
+  : >"$work/merges"; : >"$work/api"; : >"$work/ref"
+  out="$(env GH_FIX="$fix/unrelated" GH_REF_LOG="$work/ref" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" GH_API_LOG="$work/api" \
     GH_AUTO_CLEAN=1 PATH="$stub:$PATH" "$1/gh-automerge" 42 2>&1 >/dev/null)"
   rc=$?
   [ "$rc" -eq 0 ] && [ "$(grep -cxF '[pr]' "$work/merges")" -eq 2 ] \
@@ -492,11 +502,41 @@ check_weird_line()    { stopped "$1" weird_line "unparseable diff line"; }
 check_preamble()      { stopped "$1" preamble "text before the first file header"; }
 check_hunk_dash()     { passed "$1" hunk_dash; }
 check_view_fail() {
-  RUN_ENV=(GH_VIEW_FAIL=1); stopped "$1" unrelated "could not read the base/head commits"
+  RUN_ENV=(GH_VIEW_FAIL=1); stopped "$1" unrelated "could not read the base branch and head commit"
   local r=$?; RUN_ENV=(); return $r
 }
 check_view_null() {
-  RUN_ENV=(GH_BASE=null GH_HEAD=null); stopped "$1" unrelated "unexpected base/head commits"
+  RUN_ENV=(GH_HEAD=null); stopped "$1" unrelated "unexpected head commit"
+  local r=$?; RUN_ENV=(); return $r
+}
+# The base is the tip of the base branch, resolved by name. Here the base advanced past
+# the commit the other fixtures call BASE (GH_TIP differs); the frontmatter is read at
+# the tip, and the fixture has files only under the tip's sha for the base side.
+TIP=3333333333333333333333333333333333333333
+cp -r "$fix/allowed_tools" "$fix/moved_base"
+mv "$fix/moved_base/files/$BASE" "$fix/moved_base/files/$TIP"
+check_moved_base() {
+  RUN_ENV=(GH_TIP="$TIP"); stopped "$1" moved_base "$skill: frontmatter changed" \
+    && [ "$(cat "$work/api")" = "repos/{owner}/{repo}/compare/$TIP...$HEAD" ] \
+    && [ "$(cat "$work/ref")" = "repos/{owner}/{repo}/git/ref/heads/main" ]
+  local r=$?; RUN_ENV=(); return $r
+}
+# A branch name with a slash goes into the ref path as it is.
+check_slash_base() {
+  RUN_ENV=(GH_BASEREF=feature/foo); passed "$1" unrelated \
+    && [ "$(cat "$work/ref")" = "repos/{owner}/{repo}/git/ref/heads/feature/foo" ]
+  local r=$?; RUN_ENV=(); return $r
+}
+check_bad_branch() {
+  RUN_ENV=(GH_BASEREF='a;b'); stopped "$1" unrelated "unexpected base branch name"
+  local r=$?; RUN_ENV=(); return $r
+}
+check_ref_fail() {
+  RUN_ENV=(GH_REF_FAIL=1); stopped "$1" unrelated "could not read the tip of base branch"
+  local r=$?; RUN_ENV=(); return $r
+}
+check_tip_null() {
+  RUN_ENV=(GH_TIP=null); stopped "$1" unrelated "unexpected tip of base branch"
   local r=$?; RUN_ENV=(); return $r
 }
 # The diff lacks a file the PR changes (a truncated diff): the count must stop it.
@@ -526,7 +566,7 @@ else echo "FAIL: control: gh=$(PATH="$stub:$PATH" command -v gh) rc=$rc out=$out
 for c in settings allowed_tools new_skill body_only unrelated diff_fail agent empty fallback_pin \
   cmd_fm agent_sub blank_first symlink symlink_other multi rename_settings rename_skill copy_skill head_404 \
   settings_names big_body deleted_skill mode_settings mode_readme binary quoted weird_line \
-  preamble hunk_dash view_fail view_null compare_range truncated changed_nan changed_300; do
+  preamble hunk_dash view_fail view_null moved_base slash_base bad_branch ref_fail tip_null compare_range truncated changed_nan changed_300; do
   if "check_$c" "$bindir"; then echo "ok: gh-automerge gate: $c"
   else echo "FAIL: gh-automerge gate: $c rc=$rc out=$out merges=$(cat "$work/merges")"; fail=1; fi
 done
@@ -605,12 +645,20 @@ mutant noquoted check_quoted 's/^  case "\$old\$new" in .*/  :/'
 mutant nounparseable check_weird_line 's/^    "--- "\*|"+++ "\*) *reasons+=.*/    "--- "*|"+++ "*)     : ;;/'
 mutant nopreamble check_preamble 's/^  \[ -n "\$f_hdr" \] || { reasons+=.*/  :/'
 mutant nohunk check_hunk_dash 's/^  \[ "\$in_hunk" -eq 1 \] && continue/  :/'
-mutant noviewfail check_view_fail 's/|| gate_refuse "could not read the base\/head commits/|| true "could not read the base\/head commits/'
-mutant nooid check_view_null 's/^\[\[ "\${base_oid:-}" =~ .* \\$/true \\/'
+mutant noviewfail check_view_fail 's/|| gate_refuse "could not read the base branch and head commit/|| true "could not read the base branch and head commit/'
+mutant nooid check_view_null 's/^\[\[ "\${head_oid:-}" =~ .* \\$/true \\/'
 mutant nocount check_truncated 's/^\[ "\$nfiles" -eq "\$changed_files" \] *\\$/true \\/'
 mutant nocap300 check_changed_300 's/^\[ "\$changed_files" -lt 300 \] *\\$/true \\/'
 mutant nonumeric check_changed_nan 's/^\[\[ "\${changed_files:-}" =~ \^\[0-9\]+\$ \]\] *\\$/true \\/'
 mutant twodot_compare check_compare_range 's#compare/\$base_oid\.\.\.\$head_oid#compare/$base_oid..$head_oid#'
 mutant swapped_compare check_compare_range 's#compare/\$base_oid\.\.\.\$head_oid#compare/$head_oid...$base_oid#'
+
+# The base side is the base branch's tip: a base taken from anywhere else (here a fixed
+# sha, as a stale baseRefOid would be) is caught by the moved base.
+mutant stale_base check_moved_base 's#^base_oid="\$(gh_mise api .*#base_oid="1111111111111111111111111111111111111111" \\#'
+mutant wrong_ref check_slash_base 's#git/ref/heads/\$base_ref#git/ref/heads/main#'
+mutant noref_fail check_ref_fail 's/|| gate_refuse "could not read the tip of base branch/|| true "could not read the tip of base branch/'
+mutant notip_check check_tip_null 's/^\[\[ "\$base_oid" =~ .* \\$/true \\/'
+mutant nobranch_check check_bad_branch 's/^\[\[ "\${base_ref:-}" =~ .* \\$/true \\/'
 
 exit "$fail"

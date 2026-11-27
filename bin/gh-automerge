@@ -25,8 +25,8 @@ set -euo pipefail
 # if it has one nothing is issued and the exit code is 5 (no other path here
 # uses 5; gh itself documents 0/1/2/4). stderr names each offending file and
 # says the PR waits for a human approval. It is a grant change when the diff
-# (`gh api repos/{owner}/{repo}/compare/<base>...<head>` with the diff media type, the
-# same range as the PR's diff) touches
+# (`gh api repos/{owner}/{repo}/compare/<base>...<head>` with the diff media type; <base>
+# is the base branch's tip, so the range starts at its merge base with the head) touches
 #   - a file named settings.json / settings.local.json / managed-settings.json,
 #     anywhere (the whole file: hooks and env act on what runs, not only
 #     permissions);
@@ -45,9 +45,12 @@ set -euo pipefail
 # The gate fails closed: an unreadable PR, diff or file, an empty diff, a quoted
 # path, a ---/+++ line or file header it cannot parse and text before the first
 # file header all count as a grant change. Other lines it does not know (index,
-# similarity, ...) are skipped. The base side is the base branch's current tip,
-# not the merge base, so a frontmatter change landed on the base meanwhile is
-# over-detected, never missed.
+# similarity, ...) are skipped. The base side is the base branch's current tip
+# (read with `gh api .../git/ref/heads/<baseRefName>`), not the PR's baseRefOid: that
+# one is a snapshot GitHub does not move when the base advances, so a head that merged
+# the newer base and then reverted a frontmatter change from it would not show that
+# file in a compare from the snapshot. A frontmatter change landed on the base after the
+# tip was read is the one case left; it is over-detected or the count check stops it.
 #
 # What the gate does not see: it judges settings files and frontmatter only. A
 # change to the body of an allowlisted wrapper under bin/, to a --permission-mode
@@ -67,9 +70,9 @@ set -euo pipefail
 # only "The expected head OID of the pull request", not what a later push does.
 # Completeness of the diff: GitHub's docs give no guarantee for a large comparison, so
 # the file blocks judged must equal the PR's changedFiles (read in the same call as
-# the SHAs) and changedFiles must be below 300; otherwise the gate refuses.
-# The diff is taken between the two SHAs read together (`compare/<base>...<head>`;
-# three dots start at the merge base, like a PR diff), not from the moving head
+# the head SHA) and changedFiles must be below 300; otherwise the gate refuses.
+# The diff is taken between two SHAs (`compare/<tip>...<head>`; three dots start at the
+# merge base, which is the range the merge brings in), not from the moving head
 # (`gh pr diff` takes no SHA), so the diff judged and the head pinned are the same
 # commit. The auto path does not guarantee anything for a push after auto-merge is
 # enabled; --disable (below) turns an enabled auto-merge off.
@@ -209,15 +212,27 @@ fm_at() {
 }
 
 # The head read here is pinned with --match-head-commit below (see "Head
-# pinning" in the header).
-oids="$(gh_mise pr view "$pr" --json baseRefOid,headRefOid,changedFiles \
-  --jq '"\(.baseRefOid) \(.headRefOid) \(.changedFiles)"' 2>"$err")" \
-  || gate_refuse "could not read the base/head commits of #$pr: $(head -c 300 "$err")"
-read -r base_oid head_oid changed_files <<<"$oids"
-[[ "${base_oid:-}" =~ ^[0-9a-f]{40}$ && "${head_oid:-}" =~ ^[0-9a-f]{40}$ ]] \
-  || gate_refuse "unexpected base/head commits for #$pr: $oids"
+# pinning" in the header). The base is read as a branch name and resolved to the
+# branch's current tip below: the PR's baseRefOid is only a snapshot that GitHub
+# does not move when the base advances, so a range taken from it would not be
+# the range the merge brings in.
+view="$(gh_mise pr view "$pr" --json baseRefName,headRefOid,changedFiles \
+  --jq '"\(.baseRefName) \(.headRefOid) \(.changedFiles)"' 2>"$err")" \
+  || gate_refuse "could not read the base branch and head commit of #$pr: $(head -c 300 "$err")"
+read -r base_ref head_oid changed_files <<<"$view"
+[[ "${head_oid:-}" =~ ^[0-9a-f]{40}$ ]] \
+  || gate_refuse "unexpected head commit for #$pr: $view"
+# Narrow on purpose: a name outside it is refused instead of being put in a URL path.
+[[ "${base_ref:-}" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ && "$base_ref" != *..* ]] \
+  || gate_refuse "unexpected base branch name for #$pr: $view"
 [[ "${changed_files:-}" =~ ^[0-9]+$ ]] \
-  || gate_refuse "unexpected changed file count for #$pr: $oids"
+  || gate_refuse "unexpected changed file count for #$pr: $view"
+# GET /repos/{owner}/{repo}/git/ref/{ref} returns {"ref": ..., "object": {"sha": ...}};
+# ref is `heads/<branch>`, and a `/` inside the branch name stays a `/`.
+base_oid="$(gh_mise api "repos/{owner}/{repo}/git/ref/heads/$base_ref" --jq '.object.sha' 2>"$err")" \
+  || gate_refuse "could not read the tip of base branch $base_ref of #$pr: $(head -c 300 "$err")"
+[[ "$base_oid" =~ ^[0-9a-f]{40}$ ]] \
+  || gate_refuse "unexpected tip of base branch $base_ref of #$pr: $base_oid"
 # By SHA, so a push after the read above cannot change what is judged. A failure
 # fails closed.
 gh_mise api "repos/{owner}/{repo}/compare/$base_oid...$head_oid" \

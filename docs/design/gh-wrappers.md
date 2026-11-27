@@ -85,9 +85,12 @@ closed）。frontmatter を比べるファイルは、base と head のどちら
 symlink（mode 120000）は、パスによらず差分のどこかに現れたら止める。`skills/<new>` や
 `agents/<dir>` に skill・agent を含むディレクトリへの link を足すと、ファイル名が一致しないまま
 deploy 後の frontmatter（grant）が増える。repo に symlink は無いので、過検出のコストはほぼ無い。
-差分は `gh pr diff`（SHA を取れない）ではなく `compare/<base>...<head>` を diff media type で取る。
-three-dot は merge base 起点なので PR の差分と同じ範囲になり、判定した diff と固定する head が
-同じ commit にそろう。大きな差分の diff media type の挙動（打ち切り・件数上限・エラー）は公式 docs に
+差分は `gh pr diff`（SHA を取れない）ではなく `compare/<tip>...<head>` を diff media type で取る。
+`<tip>` は base branch の現在の tip で、`baseRefName` を読んで `git/ref/heads/<baseRefName>` で SHA に
+解決する。PR の `baseRefOid` は base が進んでも更新されない snapshot なので使わない（head が新しい base を
+merge したうえで base 側の frontmatter 変更を戻すと、snapshot 起点の compare ではその file が無変更に見えて
+漏れる）。three-dot は merge base 起点なので merge が持ち込む範囲と同じになり、判定した diff と固定する
+head が同じ commit にそろう。大きな差分の diff media type の挙動（打ち切り・件数上限・エラー）は公式 docs に
 記述が無く、200 でファイルが欠ける可能性を排除できない。そこで判定したファイル数を同じ呼び出しで読んだ
 `changedFiles` と照合し、不一致、`changedFiles` が数値でない、または 300 以上（compare の `files`
 配列の上限。完全性の保証が無い）のときは止める。
