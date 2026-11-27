@@ -53,6 +53,15 @@
 	defaultBranch = main
 [advice]
     detachedHead = false
+# Keep git-wt-stash entries (the reflog of refs/worktree/stash) from expiring
+# on `git gc` / `git reflog expire`. git exempts only refs/stash from reflog
+# expiry. The second pattern is the same ref as seen from the main working tree.
+[gc "refs/worktree/stash"]
+	reflogExpire = never
+	reflogExpireUnreachable = never
+[gc "worktrees/*/refs/worktree/stash"]
+	reflogExpire = never
+	reflogExpireUnreachable = never
 [pull]
 	rebase = false
 [gpg]

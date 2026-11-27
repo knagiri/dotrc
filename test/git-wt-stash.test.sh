@@ -211,14 +211,37 @@ check "push with a translated drop message exits 0" test "$rc" -eq 0
 check "push with a translated drop message empties the shared stash" test "$(n_shared "$d/r")" -eq 0
 
 # --- reflog expiry (git gc) must not eat entries -----------------------------
-d="$tmp/gc"; fixture "$d"
-echo old >>"$d/w1/f"
-old="$(date -d '40 days ago' +%s) +0000"
-(cd "$d/w1" && GIT_COMMITTER_DATE="$old" "$src" push -m old) >/dev/null 2>&1
-git -C "$d/r" reflog expire --all
-check "entry survives reflog expire from the main working tree" test "$(n_entries "$d/w1")" -eq 1
-git -C "$d/w1" reflog expire --all
-check "entry survives reflog expire from its own worktree" test "$(n_entries "$d/w1")" -eq 1
+# The wrapper writes no gc settings; dotrc's global git config (dot/git/config)
+# carries them. Its gc.* entries are copied into a global config file of the
+# sandbox (GIT_CONFIG_GLOBAL, per command), so the real one is never read. The
+# control runs with an empty global config: there the entry has to go, or the
+# "survives" checks prove nothing. refs/stash is the in-repo control: git
+# exempts it from expiry either way.
+gcfg="$tmp/gitconfig-gc"; : >"$gcfg"
+while read -r key val; do
+  git config -f "$gcfg" "$key" "$val"
+done < <(git config -f "$here/../dot/git/config" --get-regexp '^gc\.')
+check "dot/git/config carries the four gc settings" test "$(git config -f "$gcfg" --get-regexp '^gc\.' | grep -c ' never$')" -eq 4
+nocfg="$tmp/gitconfig-empty"; : >"$nocfg"
+old="$(date -d '100 days ago' +%s) +0000"
+for from in r w1; do
+  for cfg in none dotrc; do
+    d="$tmp/gc-$from-$cfg"; fixture "$d"
+    echo old >>"$d/w1/f"
+    (cd "$d/w1" && GIT_COMMITTER_DATE="$old" "$src" push -m old) >/dev/null 2>&1
+    check "push writes no gc settings to the repo config ($from/$cfg)" bash -c "[ -z \"\$(git -C '$d/r' config --local --get-regexp '^gc\.')\" ]"
+    echo shared >>"$d/r/f"; GIT_COMMITTER_DATE="$old" git -C "$d/r" stash push -q -m shared
+    g="$nocfg"; [ "$cfg" = dotrc ] && g="$gcfg"
+    GIT_CONFIG_GLOBAL="$g" git -C "$d/$from" reflog expire --all
+    GIT_CONFIG_GLOBAL="$g" git -C "$d/$from" gc -q
+    check "expire from $from ($cfg): refs/stash keeps its entry (control)" test "$(n_shared "$d/r")" -eq 1
+    if [ "$cfg" = dotrc ]; then
+      check "expire from $from with dotrc's gc settings: the entry survives" test "$(n_entries "$d/w1")" -eq 1
+    else
+      check "expire from $from without gc settings: the entry is gone (control)" test "$(n_entries "$d/w1")" -eq 0
+    fi
+  done
+done
 
 # --- pop whose apply fails keeps the entry -----------------------------------
 d="$tmp/popfail"; fixture "$d"

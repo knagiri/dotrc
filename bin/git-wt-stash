@@ -37,10 +37,13 @@
 # both places rather than in neither. `git stash store` (writes refs/stash only)
 # and `git stash create` (no -u) cannot do this job.
 #
-# Before pushing, the gc.*.reflogExpire(Unreachable)=never settings for this ref
-# are written to the repo config (see keep_reflog): refs/stash is exempt from
-# reflog expiry but refs/worktree/stash is not, and `git gc` would drop entries
-# after 30 days.
+# Entries are reflog entries, and git exempts only refs/stash from reflog
+# expiry: `git gc` / `git reflog expire` drop refs/worktree/stash entries after
+# gc.reflogExpire(Unreachable) (30 days by default) unless
+# gc.<pattern>.reflogExpire and gc.<pattern>.reflogExpireUnreachable are
+# `never` for both refs/worktree/stash and worktrees/*/refs/worktree/stash (the
+# same ref seen from the main working tree). This script does not write them;
+# they belong in the global git config.
 #
 # pop/apply/show resolve refs/worktree/stash@{N} to a commit once and hand that
 # commit to `git stash apply` / `show`. drop (and pop after a clean apply)
@@ -112,23 +115,6 @@ drop_entry() {
   fi
 }
 
-# keep_reflog: git expires reflogs older than gc.reflogExpire(Unreachable)
-# (30 days by default) on `git gc` / `git reflog expire`, and refs/stash is the
-# only ref exempt from that. Without this the worktree stash silently loses
-# entries. The same ref seen from the main working tree is named
-# worktrees/<id>/refs/worktree/stash, hence the wildcard pair. Written to the
-# repo config (not a global one) so it holds wherever the entry is pushed.
-keep_reflog() {
-  local pat var
-  for pat in refs/worktree/stash 'worktrees/*/refs/worktree/stash'; do
-    for var in reflogExpire reflogExpireUnreachable; do
-      if [ "$(git config --local --get "gc.$pat.$var")" != never ]; then
-        git config --local "gc.$pat.$var" never || exit
-      fi
-    done
-  done
-}
-
 # find_tagged <tag> -> "<index> <commit>" of the refs/stash entry whose message
 # carries the tag; prints nothing when there is none.
 find_tagged() {
@@ -160,7 +146,6 @@ do_push() {
 
   local tag found idx sha subject top
   tag="[git-wt-stash:$$.$(date +%s%N).$RANDOM]"
-  keep_reflog
   git stash push -q "${untracked[@]}" -m "$msg $tag" || exit
   found="$(find_tagged "$tag")"
   if [ -z "$found" ]; then
