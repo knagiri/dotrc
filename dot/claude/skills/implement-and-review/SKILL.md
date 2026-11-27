@@ -182,7 +182,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    委譲プロンプトに `## 禁止事項` 節があれば、同 skill の `<PROHIBITIONS>` に原文のまま渡す
    （差し込み先と規定は同 skill。理由は手順 2）。収束したら、merge を見送る理由が無ければ
    `pr-automerge` を呼び、収束時の `head_sha` / `last_seen` を渡して自律 merge する。merge を
-   見送る理由（委譲プロンプトの禁止事項、grant 変更を含む PR（`dot/claude/rules/gh-commands.md` §5）
+   見送る理由（委譲プロンプトの禁止事項、grant 変更を含む PR（`pr-automerge`「grant 変更を含む PR は auto-merge させない」）
    等）があれば `pr-automerge` は呼ばず、見送った理由を手順 6 で報告する。
 
    **委譲プロンプトが既存 PR への対応を指示しているとき**（「既存 PR #N の指摘への対応。新しい PR

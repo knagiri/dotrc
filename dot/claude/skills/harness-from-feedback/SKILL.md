@@ -31,7 +31,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
 - この skill が扱う artifact は rule / CLAUDE.md 追記 / lint / test / hook / allowlist（grant）。
   **grant を含む変更は委譲してよいが、委譲先に auto-merge させず人間の approve を待つ**。委譲
   プロンプトでは `pr-review-loop` までは回させ、`pr-automerge` は呼ばせない（上の「マージは委譲先の
-  `pr-automerge` が行う」の例外はここだけ）。条件と理由の正典は `gh-commands.md` §5
+  `pr-automerge` が行う」の例外はここだけ）。条件と理由の正典は `pr-automerge` skill
   「grant 変更を含む PR は auto-merge させない」。ここへ再掲せず参照に留めるのは、規約の出所を
   1 つに保つため。
 

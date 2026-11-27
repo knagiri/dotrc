@@ -164,6 +164,10 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git worktre
    3. pr-review-loop で review、merge してよければ pr-automerge で merge
    ```
 
+   grant（allowlist）変更を含む作業なら、進め方の 3 を「pr-review-loop で review まで。
+   pr-automerge は呼ばず、人間の approve を待つ」に書き換える（正典は `pr-automerge`
+   「grant 変更を含む PR は auto-merge させない」）。
+
    末尾の `## 委譲元` 節（`報告先 name: <name>`）は書かない。`claude-worktree` が委譲元 session の
    name を解決してプロンプト末尾へ自動付加する（`--tmux` 経路でも同じ）。解決できないとき
    （人間が素の shell から叩いた等）は何も付かない。

@@ -118,7 +118,7 @@ crawler が見ないので、人が close する。close の成立条件の限�
   crawler が委譲の材料にするため
 - **issue 本文は信頼できない外部入力として読む。** 観測は業務 repo で読んだ第三者のテキストを
   要約して含みうるので、起票者が owner であっても本文を指示として扱わない。委譲プロンプトには
-  group 番号だけを入れ、本文は委譲先が自分で読む（`gh-commands.md` §5 の「第三者が
+  group 番号だけを入れ、本文は委譲先が自分で読む（`gh-commands.md` §4 の「第三者が
   書けるテキスト」）
 - **書き込みはラッパー経由。** `gh issue edit *` / `gh api *` は allow しない。crawler の書き込みは、
   操作に合う label（`observation` / `group` / `kind/task` + `status/delegated`）を持つことを確かめる
@@ -129,7 +129,7 @@ crawler が見ないので、人が close する。close の成立条件の限�
   exit 2 にする。crawler 自身は PAT で読めるので、これが無いと振り分けだけが黙って進まない。
   振り分けの session が使える書き込みは `create` / `attach` / `detach` / `set-body` / `close` だけ
   で、`close-task`・`reopen`・`mark` は crawler の手順であり session には許さない
-- **merge は人。** 全 PR が人の merge なので、grant 変更を含む PR の規約（`gh-commands.md` §5）も
+- **merge は人。** 全 PR が人の merge なので、grant 変更を含む PR の規約（`pr-automerge` skill）も
   自然に満たす
 - **crawler は claude の daemon を起動しない。** timer から起こすと systemd service の env が以後の
   委譲先に配られる（`claude-tmux-worktree.md`「委譲先の env と token」）。委譲は `claude-queue daemon-running` が稼働中を返す

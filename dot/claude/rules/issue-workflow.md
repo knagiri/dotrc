@@ -44,9 +44,8 @@ issue は private な repo にあるので、title と本文が直ちに public 
 autolink されて誤誘導になる）。対象の条件は dotrc の `CLAUDE.md`「勤務先由来の具体名を書かない」が
 正典である。
 
-[gh-commands.md](./gh-commands.md) §1 の表は issue 操作全般に `gh issue *` を挙げるが、**起票だけ**はこの rule が
-`gh-issue-file` に狭める。閲覧（`gh issue view` / `gh issue list`）は表のとおり高位コマンドを
-直接使ってよい（`-R <repo>` を付ける。repo は上記の `--repo`）。
+閲覧（`gh issue view` / `gh issue list`）は高位コマンドを直接使ってよい（`-R <repo>` を付ける。
+repo は上記の `--repo`）。
 
 ### 2. exit code の読み方
 

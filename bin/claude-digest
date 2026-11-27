@@ -32,7 +32,7 @@ set -euo pipefail
 # Both `claude -p` calls run with --tools "" (no tool access at all): the
 # stdin they summarise is transcript text that can carry third-party content
 # quoted from web pages, PR comments, etc. (the same class of prompt-injection
-# surface dot/claude/rules/gh-commands.md Sec5 already calls out), and this
+# surface dot/claude/rules/gh-commands.md Sec4 already calls out), and this
 # runs unattended off a systemd timer with nobody watching to catch an
 # injected instruction turning into a tool call. Neither stage needs a tool --
 # both are pure text-in, text-out summarisation -- so removing the entire tool

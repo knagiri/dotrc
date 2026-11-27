@@ -31,7 +31,7 @@ doc の役割分担は `~/.claude/rules/repo-docs.md` が正典で、この skil
 | auto-merge | 有効 | `pr-automerge` が auto-merge を張るため |
 | merge 後の branch 自動削除 | 有効 | `git-reap-gone` が `[gone]` を完了の合図にするため |
 | 既定 branch の保護 | ruleset で PR 必須・CI を required check・force push と削除を禁止 | |
-| required approvals | 0（個人 repo） | 同じ identity では自分の PR を approve できず、1 以上だと merge できない。人間の review が要る PR は `pr-automerge` を呼ばないことで担保する（`gh-commands.md` §5） |
+| required approvals | 0（個人 repo） | 同じ identity では自分の PR を approve できず、1 以上だと merge できない。人間の review が要る PR は `pr-automerge` を呼ばないことで担保する（`pr-automerge`「grant 変更を含む PR は auto-merge させない」） |
 | bypass list | 空（個人 repo） | owner が bypass できると、同じ identity の agent も bypass できる |
 | CI | 言語に合わせた lint + test の GitHub Actions。テスト対象が無くても空に近い workflow を置く | |
 | CD | deploy 先があれば方針を design doc に書く（実装はしない）。無ければ「CD 無し」と書く | 決めた結果として残すため |

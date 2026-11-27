@@ -72,7 +72,7 @@ harness-from-feedback（入口＝ユーザーの指摘）に対し、本 skill �
 
 すぐに直したい学びは、ユーザーが `harness-from-feedback` を起動して即時に委譲できる。
 allowlist（grant）候補も渡してよい。ただし **grant を含む委譲は auto-merge させず、人間の
-approve を待つ**（条件と理由の正典は `gh-commands.md` §5「grant 変更を含む PR は auto-merge
+approve を待つ**（条件と理由の正典は `pr-automerge` skill「grant 変更を含む PR は auto-merge
 させない」）。この skill 自身が grant を書かないことは変わらない（下の不変条件）。
 
 ## 不変条件
