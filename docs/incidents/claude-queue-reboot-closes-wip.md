@@ -54,6 +54,6 @@ logout|1
 
 ## 反映した規約
 
-- `dot/claude/rules/worktree-scope.md` §6（委譲元が `claude-stop-bg` で閉じる理由を「作業を done に
-  する明示的な操作だから」にした）と §8（`claude-reap-bg` の節を休眠の節に置き換えた）
-- `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6
+- `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6（委譲元が `claude-stop-bg` で閉じる理由を
+  「作業を done にする明示的な操作だから」にした）
+- `docs/design/claude-queue-session-tree.md`「休眠の運用」（`claude-reap-bg` の節を休眠の節に置き換えた）
