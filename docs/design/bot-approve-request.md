@@ -17,10 +17,25 @@ auto-merge にも触れない。auto-merge は `pr-automerge` がほかの PR �
 先はこの通常の流れであり、ラッパーが失敗を取り繕う必要は無い。
 
 `gh-automerge` に渡す SHA は `--match-head-commit` になり、auto-merge の有効化時（と clean 拒否 fallback の
-直接 merge 時）に head がその SHA であることを確かめる。有効化の後に push された head を防ぐのは、修正を
-積む前の `gh-automerge --disable` の規約と、有効な repo では dismiss stale reviews である。approve 後の
-push で approve が消えるのは ruleset で dismiss_stale_reviews_on_push が有効なときだけで、無効な場合は
-ほかの approve が残っていると、App が確かめていない head でも merge されうる。
+直接 merge 時）に head がその SHA であることを確かめる。有効化の後に push された head はこの SHA では
+止まらない。
+
+## 前提条件: dismiss stale reviews が有効な repo
+
+approve 経路は、ruleset で dismiss_stale_reviews_on_push が有効な repo を前提とする。dotrc はこの値を
+読まず、コードでは強制しない。
+
+有効なら、push のたびに App と人の approve が外れる。したがって次の 2 つはどちらも成立しない。
+
+1. auto-merge を有効にした後に push された head が、push 前の approve で merge される
+2. 前の周回で App が旧 SHA に付けた approve が残り、判定役が `approve_gate=ng` を出した周回でも、
+   `gh-automerge` を張った時点でその approve を根拠に merge される
+
+無効な repo で設定ファイルを置くと、この 2 つの経路が開く。2 は App の旧 approve を根拠に、人の
+approve なしで merge されうる。1 は修正を積む前の `gh-automerge --disable` の規約でしか防げない。
+そのため、ある repo の設定ファイル（`workflow` と `paths`）を置く前に、その repo の ruleset で
+dismiss_stale_reviews_on_push が有効であることを確かめる。ruleset を変えて無効にしたときは、設定
+ファイルを外す。
 
 ## repo 側ワークフローとの契約
 

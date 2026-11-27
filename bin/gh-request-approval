@@ -49,7 +49,12 @@ set -euo pipefail
 #             (`src/` then `!src/x` still allows src/x); write `src/*` for the
 #             negation to take effect.
 # The repo counts as enabled only when both files exist. The workflow takes the
-# inputs `pr` and `head_sha` and is started on the default branch (`refs/heads/<default>`, not a bare name a tag could shadow).
+# inputs `pr` and `head_sha` and is started on the default branch
+# (`refs/heads/<default>`, not a bare name a tag could shadow).
+# Precondition (not checked here): the repo's ruleset dismisses stale reviews
+# on push. Without it an approval of an older commit keeps counting, so a PR
+# can be merged on an App approval of content the App never checked. Confirm
+# it before placing the two files.
 #
 # Gates, in this order (all before the workflow is started):
 #   1. the PR is OPEN, its author is the token's own login, it is not from a
