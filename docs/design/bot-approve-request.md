@@ -26,16 +26,21 @@ push で approve が消えるのは ruleset で dismiss_stale_reviews_on_push �
 
 ワークフローは inputs に `pr`（PR 番号）と `head_sha`（40 桁）を取り、default branch の ref
 （`refs/heads/<default>`。裸の名前だと同名の tag に解決されうる）から起動される。起動者の allowlist、
-起動者 = PR author、open / base が default branch / fork でない、head が `head_sha` と一致、`.github/`
-`.claude/` を含まない、を検査し、通れば `head_sha` に固定して APPROVE する。dotrc 側のゲートはこれと
+起動者 = PR author、open / base が default branch / fork でない、head が `head_sha` と一致、常に拒否するパス
+（下記）を含まない、を検査し、通れば `head_sha` に固定して APPROVE する。dotrc 側のゲートはこれと
 重なるが、ワークフロー側の検査は dotrc が手を出せない最後の砦なので、どちらか一方に寄せない。
 
 ## ゲートを機械と判断で分ける
 
 ラッパーが確かめるのは機械的に決まるものである。repo の設定があること、PR の author が token の本人で
 fork でなく base が default branch であること、人間が起こした未解決 thread と、author を問わない
-CHANGES_REQUESTED が無いこと、変更パスが許可リストに収まり `.github/` `.claude/`・root と `docs/` の
-CODEOWNERS に触れないこと、head が渡された SHA であること。
+CHANGES_REQUESTED が無いこと、変更パスが許可リストに収まり、常に拒否するパスに触れないこと、head が
+渡された SHA であること。常に拒否するパスは `paths` の内容に関わらずコードで固定し、repo 側の approve
+ワークフローが拒否する集合とそろえる。root の `.github/`・`.codex/`・`.githooks/`・`.mcp.json`、深さを
+問わない `.claude/`・`.agents/`（パスの 1 階層として一致するときだけ。`foo.claude/` は当たらない）、
+root と `docs/` の CODEOWNERS、`:` で始まるパスである。`.agents/` を含めるのは、`.claude/skills` が
+`.agents/skills` への symlink になっている repo があり、SKILL.md の `allowed-tools` が grant になるため。
+rename では元のパスも検査する。
 差分が担当領域に収まっているか、振る舞いの変更にテストがあるか、設計・契約を決める変更でないかは判断を
 要するので、`pr-review-loop` の判定役が収束時に `approve_gate=ok|ng:<理由>` として出し、`pr-automerge` が
 それを確かめてからラッパーを呼ぶ。満たさなければ依頼をしないだけで、auto-merge は通常どおり張られ、
