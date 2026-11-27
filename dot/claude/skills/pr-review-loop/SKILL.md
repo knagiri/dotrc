@@ -146,7 +146,7 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       （`$CLAUDE_JOB_DIR` が未定義なら、判定 subagent prompt の「一時ファイル」の段落と同じく
       `mktemp -d` で作った dir の下に `codex-review/` を置く）。観点の選び方は上の toolkit の選び方を
       そのまま使い、別に持たない。`<PROHIBITIONS>` が渡されていれば原文を一時ファイル（ラッパーは
-      `$CLAUDE_JOB_DIR` か `${TMPDIR:-/tmp}` の下しか受け付けない）に書いて第 3 引数に渡し、「なし」なら省く。それ以外（実装の意図・HOW・`<SCOPE>`）は渡さない（不変条件「author とは
+      `/tmp` か `~/.claude/jobs` の下しか受け付けない）に書いて第 3 引数に渡し、「なし」なら省く。それ以外（実装の意図・HOW・`<SCOPE>`）は渡さない（不変条件「author とは
       独立」。ラッパーは PR と観点の定義だけで prompt を組む）。
       toolkit agent と codex の全観点の終了を待ってから集約する。待たずに進むと遅い観点が恒常的に落ち、
       比較が偏るため。最大 5 並列になるが、プロセスはネットワーク待ちが支配的で CPU をほぼ使わないので

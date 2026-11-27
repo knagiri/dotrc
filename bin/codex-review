@@ -11,8 +11,8 @@ set -euo pipefail
 # for, so both reviews look for the same things. code-simplifier is refused:
 # that agent rewrites code rather than reporting on it.
 # <prohibitions-file>, if given, is copied verbatim into the prompt as
-# constraints the reviewer must keep. It must live under $CLAUDE_JOB_DIR or
-# ${TMPDIR:-/tmp} (see the check below).
+# constraints the reviewer must keep. It must live under /tmp or
+# ~/.claude/jobs (see the check below).
 #
 # Output (stdout, on success only):
 #   {"perspective": "<name>",
@@ -71,20 +71,18 @@ if [ -n "$prohib" ]; then
     || { echo "codex-review: cannot read prohibitions file: $prohib" >&2; exit 1; }
   # The file's content is sent to codex verbatim. Since the command is
   # allowlisted, accepting any path would let a caller ship an arbitrary local
-  # file (a token file, say) to a third party without approval. Only a file under
-  # a temp dir -- $CLAUDE_JOB_DIR or ${TMPDIR:-/tmp} -- is accepted.
-  # Both bases come from the environment, so a base that is / or $HOME (or an
-  # ancestor of it) is ignored rather than trusted.
+  # file (a token file, say) to a third party without approval. Only a file
+  # under one of two fixed temp roots is accepted: /tmp and ~/.claude/jobs (where
+  # background jobs keep their scratch files). The roots are fixed rather than
+  # read from TMPDIR / CLAUDE_JOB_DIR, which a caller could point at ~/.config.
   prohib_real="$(readlink -f "$prohib")"
-  home_real="$(readlink -f "$HOME")"
   in_temp=0
-  for base in "${TMPDIR:-/tmp}" ${CLAUDE_JOB_DIR:+"$CLAUDE_JOB_DIR"}; do
+  for base in /tmp "$HOME/.claude/jobs"; do
     base_real="$(readlink -f "$base" 2>/dev/null)" || continue
-    case "$home_real/" in "$base_real"/*) continue ;; esac
     case "$prohib_real" in "$base_real"/*) in_temp=1 ;; esac
   done
   [ "$in_temp" = 1 ] \
-    || { echo "codex-review: prohibitions file must be under \$CLAUDE_JOB_DIR or \${TMPDIR:-/tmp} (got: $prohib)" >&2; exit 1; }
+    || { echo "codex-review: prohibitions file must be under /tmp or ~/.claude/jobs (got: $prohib)" >&2; exit 1; }
 fi
 timeout_s="${CODEX_REVIEW_TIMEOUT:-900}"
 [[ "$timeout_s" =~ ^[1-9][0-9]*$ ]] \

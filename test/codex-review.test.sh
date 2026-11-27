@@ -102,15 +102,18 @@ run 42 code-reviewer "$work/missing-file"
 
 # A readable file outside the temp dirs (this test file itself, in the checkout)
 # must not be shipped to codex.
-TMPDIR="$work" CODEX_STUB_OUT="$good" run 42 code-reviewer "$here/codex-review.test.sh"
+CODEX_STUB_OUT="$good" run 42 code-reviewer "$here/codex-review.test.sh"
 [ "$rc" = 1 ] && ! codex_ran && ok "prohibitions file outside the temp dirs is rejected" || ng "outside temp dir"
-# TMPDIR pointed at $HOME (or above it) is not trusted as a temp dir.
-mkdir -p "$HOME/.config"; printf 'secret\n' >"$HOME/.config/token"
-TMPDIR="$HOME" CODEX_STUB_OUT="$good" run 42 code-reviewer "$HOME/.config/token"
-[ "$rc" = 1 ] && ! codex_ran && ok "TMPDIR=\$HOME does not widen the accepted dirs" || ng "TMPDIR=HOME"
+# TMPDIR / CLAUDE_JOB_DIR pointed at the file's dir do not widen the accepted roots.
+TMPDIR="$here" CLAUDE_JOB_DIR="$here" CODEX_STUB_OUT="$good" run 42 code-reviewer "$here/codex-review.test.sh"
+[ "$rc" = 1 ] && ! codex_ran && ok "TMPDIR / CLAUDE_JOB_DIR do not widen the accepted roots" || ng "env-widened roots"
+# A file under ~/.claude/jobs is accepted (checked with the sandbox HOME).
+mkdir -p "$HOME/.claude/jobs/j1/tmp"; printf 'JOB_PROHIBITION\n' >"$HOME/.claude/jobs/j1/tmp/p"
+CODEX_STUB_OUT="$good" run 42 code-reviewer "$HOME/.claude/jobs/j1/tmp/p"
+[ "$rc" = 0 ] && grep -qF JOB_PROHIBITION "$work/stdin" && ok "prohibitions under ~/.claude/jobs are accepted" || ng "job dir"
 # A symlink inside the temp dir pointing outside it is resolved first.
 ln -s "$here/codex-review.test.sh" "$work/link-out"
-TMPDIR="$work" CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/link-out"
+CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/link-out"
 [ "$rc" = 1 ] && ! codex_ran && ok "symlink escaping the temp dir is rejected" || ng "symlink escape"
 
 GH_FAIL=1 CODEX_STUB_OUT="$good" run 42 code-reviewer
@@ -165,7 +168,7 @@ else ng "prompt data"; fi
 
 # Prohibitions are passed verbatim.
 printf '%s\n' 'Never touch ~/.codex PROHIBITION_MARKER' >"$work/prohib"
-TMPDIR="$work" CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/prohib"
+CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/prohib"
 [ "$rc" = 0 ] && grep -qF 'Never touch ~/.codex PROHIBITION_MARKER' "$work/stdin" \
   && ok "prohibitions file reaches the prompt verbatim" || ng "prohibitions"
 
