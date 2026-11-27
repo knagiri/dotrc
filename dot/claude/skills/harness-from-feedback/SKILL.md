@@ -130,7 +130,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
      ただし allowlist（grant）を含む場合は pr-review-loop の終了（収束または停止）で止まるので、**人間の approve と merge が
      要る**旨を報告する）
    - マージ後の後始末（ガイダンス）: `git-reap-gone`（`[gone]` 化した委譲ブランチ／worktree を
-     保守的に reap。詳細は docs/design/claude-tmux-worktree.md「委譲 worktree の後片付け」）
+     保守的に reap。詳細は dotrc/docs/design/claude-tmux-worktree.md「委譲 worktree の後片付け」）
 
 7. **報告を受け取ったら**: 委譲先は `implement-and-review` 手順 6 に従い、完了・不足・中断を
    SendMessage で送ってくる。扱いは `delegate-to-worktree` 手順 6 と同じ（返信・完了報告を受けた

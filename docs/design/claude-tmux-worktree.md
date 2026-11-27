@@ -328,9 +328,9 @@ worktree は `<repo>/.worktrees/<name>` にあるので、mise が親方向へ�
 checkout される）は、`<repo>` の `mise trust` では覆われず untrusted になる（実測）。dotrc では
 `bin/deploy.sh` が checkout を `trusted_config_paths`（path prefix で一致する）に登録して覆う。
 
-委譲先が無いと動けない gitignore 済み設定は `.claude/worktree-seed` で供給するのが正規経路で、秘密
-ファイルを直接 source する回避策は使わない（`dot/claude/rules/worktree-scope.md`「委譲まわりで常に
-守ること」）。
+委譲先が無いと動けない gitignore 済み設定は `.claude/worktree-seed` で供給するのが正規経路で、それが
+効かないなら seed 側の不具合として直す。秘密ファイルを直接 source する回避策は使わない
+（`dot/claude/rules/worktree-scope.md`「委譲まわりで常に守ること」）。
 
 ### 委譲 worktree の後片付け（`git-reap-gone`）
 

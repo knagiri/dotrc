@@ -85,7 +85,7 @@ worktree のディレクトリ外（絶対パスで他 worktree や main checkou
 **既定の行動**: その場で `git switch -c` して編集を始めない。`delegate-to-worktree` skill 経由で
 `claude-worktree` に委譲し、実装は新しい worktree の中で走らせる。
 
-main checkout は「いつ来ても clean な main である」ことが期待される共有の起点だから。feature
+既定を委譲側に置くのは、main checkout が「いつ来ても clean な main である」ことを期待される共有の起点だから。feature
 branch で占有すると、次の調査や別依頼が無関係な branch を土台に始まり、「main に戻して」という
 後始末をユーザーに求めることになる。委譲先は実装から merge まで自律で進むが、インラインでは
 その仕組みに乗らず人間が逐一伴走する形になる。

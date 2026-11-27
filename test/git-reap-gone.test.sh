@@ -188,10 +188,10 @@ else
 fi
 
 # --- G: HEAD off base AND base already checked out in another worktree -------
-# Simulates the primary caller of docs/design/claude-tmux-worktree.md "委譲 worktree の後片付け": an agent running the
-# script from inside the very linked worktree it was delegated into. `git
-# switch main` there would fail with "already used by worktree", so the
-# message must point at the other checkout's path instead.
+# Simulates an agent running the script from inside the very linked
+# worktree it was delegated into. `git switch main` there would fail with
+# "already used by worktree", so the message must point at the other
+# checkout's path instead.
 read -r bare work < <(new_case caseG)
 git -C "$work" checkout -q -b side
 git -C "$work" checkout -q main   # main stays checked out in $work

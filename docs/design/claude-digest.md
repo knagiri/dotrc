@@ -383,7 +383,7 @@ OPEN   6 件  origin/main に未統合 → session の「残り」として出�
 uuid を得ているので実在は構造的に保証されるが、この性質のせいで「間違った resume 行」は
 静かに壊れる（起動して、しかし何も残っていない）ため、経路として明示しておく。
 `claude attach` は background 専用で、interactive に投げると `No job matching` で落ちる
-（`claude-tmux-worktree.md`「④の既定は `claude --bg`」）。
+。
 
 ラベルは `ai-title` entry（`{"type":"ai-title","aiTitle":"..."}`）の最後の値。実測で 30 session
 中 28 で取れる。取れないものは最初の人間プロンプトの先頭 60 文字で代用する。
