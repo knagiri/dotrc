@@ -119,7 +119,7 @@ allowed-tools: Bash(claude-worktree *), Bash(claude-stop-bg *), Bash(git rev-par
    名前も PR 本文・title・commit message・差分に書かず、PR の title に勤務先由来の具体名を入れないことを
    明記する（手順 4 の観測の起票は、issue 起点でも行う）。起票は `gh-issue-file` 経由で行い、生の `gh issue create` は使わない
    （`dot/claude/rules/issue-workflow.md`）。merge 後の close は crawler が行う。dotrc 以外の repo が
-   対象なら人が close する（同 §6.2）。
+   対象なら人が close する（同 §6）。
 
 6. **報告して終了**（fire-and-forget）: `claude-worktree` の出力（worktree / branch / session /
    model / report-to / attach コマンド）をそのまま伝え、加えて以下を簡潔に報告する:
