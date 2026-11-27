@@ -84,7 +84,8 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
    実際に届いた review は判定役が `gh-pr-comments` で読む（判定 subagent prompt の手順 2）前提を維持する。
 1. `owner` / `repo` を取得: `gh repo view --json owner,name --jq '.owner.login + " " + .name'`。
    あわせて監査巡（手順 2.e）の状態を初期化する: `AUDIT_PENDING` は下ろし、`PRIOR_FIXES` は空で
-   始める（手順 3.a で手順 2 へ戻っても初期化しない）。
+   始める。未決の blocker の記録 `OPEN_BLOCKERS`（手順 2.a-1.5）も空で始める（いずれも手順 3.a で
+   手順 2 へ戻っても初期化しない）。
 2. イテレーション `i` を 1..5 で回す:
 
    a-0. **`LAST_SEEN` の更新**: イテレーション 2 以降は、判定役を dispatch する**前**に
@@ -183,8 +184,10 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       空）、この PR の担当領域 `<SCOPE>`、専門レビューの findings `<SPECIALIST_FINDINGS>`（a-0.5 で
       作る。イテレーション 2 以降は「なし（1 巡目のみ実施）」と書き、空と書き忘れを区別できるように
       する）、巡の種別 `<REVIEW_MODE>`（ここでは `通常巡`。`監査巡` は手順 2.e だけが使う）、
-      `<PRIOR_FIXES>`（通常巡では「なし（通常巡）」）を埋めて渡す。判定役は最終メッセージに判定
-      verdict JSON だけを返す。a-1 の再 dispatch では a-0.5 をやり直さず、同じ `<SPECIALIST_FINDINGS>` を渡す。
+      `<PRIOR_FIXES>`（通常巡では「なし（通常巡）」）、未決の blocker `<OPEN_BLOCKERS>`（a-1.5 で作る。
+      空なら「なし」と書く）を埋めて渡す。判定役は最終メッセージに判定
+      verdict JSON だけを返す。a-1 の再 dispatch では a-0.5 をやり直さず、同じ `<SPECIALIST_FINDINGS>` と
+      `<OPEN_BLOCKERS>` を渡す。
 
       **`<PROHIBITIONS>` の埋め方**: 呼び出し元から
       禁止事項を渡されていれば、**原文のまま**判定役・修正役・専門レビュー agent（a-0.5）の各 prompt に
@@ -221,6 +224,42 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 
       この扱いは判定役に限る。修正役の API / tool 由来の失敗は再 dispatch せず、a-2 の規定で扱う。
 
+   a-1.5. **未決の blocker の保持と照合（`OPEN_BLOCKERS`）**: 判定 verdict を parse・検証できた
+      直後、a-2 の修正役を dispatch する**前**に 1 回だけ行う。a-2 の後に置くと、修正役の API / tool
+      由来の失敗で次巡や手順 4 へ直行したとき、その verdict の新規 blocker が `OPEN_BLOCKERS` に
+      登録されないまま消えるため。
+      `blocker: true` の項目は、carryover とは別に orchestrator が `OPEN_BLOCKERS` として巡をまたいで
+      保持する。fresh な判定役は前巡の blocker を入力からしか知り得ず、専門レビューの findings
+      （a-0.5）は 1 巡目にしか入らないので、次巡の判定役が同じ指摘へ自力で再到達する保証は無い。
+      再発見に任せると、見落とされた blocker は verdict から黙って消え、2.c の継続条件も「担当外の
+      blocker だけが残った」の停止条件も成立しないまま収束しうる。巡をまたぐ記録は orchestrator が
+      持つしかない。carryover が「既裁定だから載せ直すな」なのに対し、こちらは「確かめて、残っていれば
+      載せ直せ / 解消したなら根拠を書け」という逆向きの入力として判定役へ渡す（`<OPEN_BLOCKERS>`）。
+      各項目は `- [B<n>] <要旨>（out_of_scope: <bool>、初出 <巡目>巡目、source: <出所>）: <判断待ちの理由>`
+      の 1 行で持つ。thread 由来なら `thread_id: <node id>`、専門 agent 由来なら
+      `specialist_severity: <ラベル>` を括弧内へ加える（似た要旨の thread が複数あっても、どの thread
+      かを fresh な判定役が特定できるように。専門レビューは 1 巡目にしか入らないので、2 巡目以降の
+      判定役は重大度ラベルを自分では写せない）。`B<n>` は orchestrator が採番する ID で、再採番しない。
+      要旨・理由は判定役の言葉で要約した 1 文にし、PR コメント・bot 本文を転載しない（thread 由来の
+      本文は `thread_id` から判定役が自分で読む）。判定 verdict（監査巡の verdict を含む）を得るたびに
+      次のとおり照合する。同じ ID が載せ直し（1 / findings_to_fix 含む）と `blockers_resolved`（2）の
+      両方に現れたら、残す側（1）に倒し、競合したことを記録する。
+      1. `blocker_id` 付きで `findings_gated` / `threads_pending` に載り直した項目、または
+         `findings_to_fix` に `blocker_id` 付きで載った項目 → 残す（要旨・`out_of_scope` は最新の
+         verdict の値で更新する。`findings_to_fix` に載った項目は担当内なので `out_of_scope: false`
+         にする。直ったかは修正後の次巡で判定役が確かめる）。
+      2. `blockers_resolved` に根拠付きで挙がった項目 → 外し、外した巡と解消の根拠を記録する（手順 3.b /
+         4 の報告用）。`OPEN_BLOCKERS` に無い ID は無視し、無視したことを記録する。
+      3. どれにも現れなかった項目（黙って消えた）→ 残し、「<巡目>巡目の判定役が言及しなかった」と
+         記録する。`out_of_scope` は最後に確認した値を使う。**2.c ではこの項目を、その verdict に
+         `blocker: true`（記録している `out_of_scope`）で載っているものとして扱う。**
+      4. `blocker: true` で `blocker_id` が `null`、または `OPEN_BLOCKERS` に無い ID の項目 → 新規として
+         採番して追加する。
+      監査巡の verdict は 2.e で照合済みなので、それが通常の 1 イテレーションとして数えられた場合も、
+      その巡の a-1.5 では照合を重ねない（重ねると照合 4 で同じ項目が二重に採番される）。
+
+      実例: dotrc/docs/incidents/review-loop-blocker-dropped-between-rounds.md
+
    a-2. **修正**: 判定の `findings_to_fix` か、`pr_dispositions` のうち `action` が `decline` / `defer` /
       `stale` のもの（以下「実行する処置」）が**非空のときだけ** `Task(subagent_type: "general-purpose", model: "sonnet", ...)` で
       fresh subagent を 1 つ dispatch する。後述の「修正 subagent prompt」に `<PR>` と
@@ -253,15 +292,14 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 
    a-3. **既裁定 findings の累積**: このイテレーションの判定 verdict の `findings_gated` のうち
       **`blocker: false` のものだけ**を `GATED_CARRYOVER` へ**追記**する（次イテレーションの
-      a-1 が渡す）。**`blocker: true` の項目は carryover に載せない。** 理由: `blocker: true` は
-      2.c の継続判定が直接見る対象であり、carryover に載せて次巡の判定役へ「既裁定だから
-      載せ直すな」と伝えると、その巡の verdict から `blocker: true` が消えて 2.c の継続条件
-      （`findings_gated` / `threads_pending` に `blocker: true`）が成立しなくなる。
-      `mergeable: true` と重なれば未解決の blocker を抱えたまま手順 3（収束）へ
-      抜けてしまう。`blocker: true` は却下ではなく人間の判断待ちなので、そもそも「裁定が
-      付いた」扱いにしない — 毎巡 fresh に再判定させ、決着しなければ手順 4 で人間へ返す。
+      a-1 が渡す）。**`blocker: true` の項目は carryover に載せない。** 理由: carryover は次巡の
+      判定役へ「既裁定だから載せ直すな」と伝える入力であり、未決の blocker を載せると、a-1.5 の
+      `OPEN_BLOCKERS`（「確かめて、残っていれば載せ直せ / 解消したなら根拠を書け」）と矛盾する指示を
+      同じ判定役へ渡し、再検証を妨げるため。`blocker: true` は却下ではなく人間の判断待ちなので、
+      そもそも「裁定が付いた」扱いにしない（a-1.5 の `OPEN_BLOCKERS` として別に保持する）。
       この線引きは `out_of_scope` に依らない（`blocker: false, out_of_scope: true` は却下なので
-      carryover に載り、`blocker: true, out_of_scope: true` は載らない）。
+      carryover に載り、`blocker: true, out_of_scope: true` は載らない）。`OPEN_BLOCKERS` に残っている
+      項目と、`blockers_resolved` で外した項目も carryover には追記しない。
       持ち越すのは **1 件につき `- <要旨>: <却下理由>` の 1 行だけ**（要旨・却下理由とも 1 文で
       書き、判定役の出力全文や議論の経緯は持ち越さない）。**既に carryover に載っている行と
       同趣旨の要旨は追記しない** — 判定役が既裁定と同趣旨のものを載せ直してきたら、その項目は
@@ -286,7 +324,8 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       verdict の体を成していないエラー通知は parse 失敗ではなく、判定役なら a-1 の再 dispatch、
       修正役なら a-2 の「API / tool 由来の失敗」の対象である。
 
-   c. **継続判定**:
+   c. **継続判定**: 以下の「`blocker: true` の項目」は、照合後の `OPEN_BLOCKERS`（a-1.5。verdict の
+      `blocker: true` と、照合 3 で残した項目を合わせたもの）を指す。非空なら収束しない。
       - **修正役が API / tool 由来で失敗した回は、以下のどの条件よりも先に評価する**（手順 2.a-2）:
         それが 2 イテレーション連続なら手順 4（停止・報告）へ抜ける。そうでなければ次のイテレーションへ
         進み、以下の条件は評価しない。この回の `made_changes` は不明なので、下の「デッドロック時は
@@ -295,7 +334,7 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
         いるかもしれない回を「何も進んでいない」と誤認して止まり、人間へ誤った停止理由を返すため。
       - **担当外の blocker だけが残ったら打ち切る**（次の「次のイテレーションへ」より**先に**
         評価する）: `findings_to_fix` と実行する処置がともに空 **かつ** `ci_status` が
-        `fail` でない **かつ** `findings_gated` / `threads_pending` に `blocker: true` の項目が
+        `fail` でない **かつ** `blocker: true` の項目（照合後の `OPEN_BLOCKERS`）が
         1 件以上あり、**そのすべてが `out_of_scope: true`** → 残りイテレーションを回さず手順 4
         （停止・報告）へ抜ける。収束としない。
         修正役が走らないので次巡の入力（コード・PR コメント）は同一で、fresh な判定役からも
@@ -307,7 +346,7 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
         担当**内**の `blocker: true` が 1 件でも残るなら当たらない（下の「次のイテレーションへ」で
         従来どおり再判定する）。
       - `findings_to_fix` か実行する処置が非空だった（＝修正役を走らせた）または `made_changes == true`
-        または `findings_gated` / `threads_pending` に `blocker: true` が含まれる
+        または `blocker: true` の項目（照合後の `OPEN_BLOCKERS`）がある
         または `mergeable == false` → 次のイテレーションへ（fresh な判定役が修正結果を再判定する）。
         処置を実行しただけでコードを変えなかった回も前進として扱い、次巡の判定役に処置が PR に
         残ったかを確かめさせる。処置の成否を修正役の自己申告で閉じないのは、記録が PR に残ったかを
@@ -340,7 +379,9 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
         数えられた場合の番号（`i + 1`。上限に達していれば `i`）を入れる。dispatch の形（`model: "opus"`
         の fresh な `general-purpose`）と API / tool 由来の失敗の再 dispatch（最大 2 回、上限 5 とは別枠）は
         a-1 と同じ扱いにする。
-      - verdict を得たら `AUDIT_PENDING` を下ろす（以下のどちらの経路でも共通）。
+      - prompt の `<OPEN_BLOCKERS>` は累積のまま渡す。
+      - verdict を得たら `AUDIT_PENDING` を下ろし、a-1.5 の `OPEN_BLOCKERS` の照合を行う（以下のどちらの
+        経路でも共通。下の収束条件の `blocker: true` の項目は 2.c と同じく照合後の `OPEN_BLOCKERS`）。
       - 監査の判定役が verdict を返そうとして JSON が壊れている・スキーマを満たさない（手順 2.b の
         parse 失敗）ときは、verdict を得たことにならないので `AUDIT_PENDING` は立てたままにし、収束
         条件を満たさない場合と同じく通常の 1 イテレーションとして数える（`i` を 1 進め、手順 2.b と
@@ -348,7 +389,7 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
         走るので、監査を経ずに収束することは無い。上限 5 に達していて数えられなければ、収束とせず
         手順 4（停止・報告）へ抜ける。
       - verdict を 2.c の条件で評価する。監査の時点では修正 verdict が存在しないので、判定 verdict 側の
-        条件（`findings_to_fix` と実行する処置が空・`blocker: true` 無し・`mergeable == true`）で見る。
+        条件（`findings_to_fix` と実行する処置が空・`blocker: true` の項目（照合後の `OPEN_BLOCKERS`）が無い・`mergeable == true`）で見る。
         満たせば、a-3 と同じ要領で `GATED_CARRYOVER` を累積して手順 3 へ進む。このとき 5 回の上限は
         **消費しない**。
       - 満たさなければ、この監査を通常の 1 イテレーションとして数える（`i` を 1 進め、監査の verdict を
@@ -373,7 +414,8 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       レポート（手順 0 または 2.a-0。読んだもの／`missing` だったもの）、手順 2.a-0.5 で dispatch した
       専門レビュー agent と skip / 失敗したもの（codex の観点を含む。`codex-review-tally` が失敗したならその旨も）、gate に残した findings（`GATED_CARRYOVER` の累積）、bot の指摘への処置（各イテレーションの `pr_dispositions` と、修正役の `dispositions_done` / `dispositions_failed`）、
       監査巡（手順 2.e）を走らせたか（走らせなかったなら修正役がコードを変えていなかった旨）と各回の結果
-      （検証し直した過去の修正指示と、誤りを見つけてイテレーションへ戻したならその指摘）を
+      （検証し直した過去の修正指示と、誤りを見つけてイテレーションへ戻したならその指摘）、途中の巡で
+      一度でも `OPEN_BLOCKERS` に載った項目とその扱い（解消した巡と根拠、判定役が言及しなかった巡）を
       **session の最終メッセージとして出力**する。PR には投稿しない。
       末尾に、a で得た `head_sha` と `LAST_SEEN` を次の形でそのまま書く（`pr-automerge` の入力になる）。
 
@@ -387,15 +429,15 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       merge はしない。merge してよいかの判断と実行は呼び出し側（`pr-automerge`）に委ねる。
 4. **停止・報告**（収束しなかった場合）: 各イテレーションの 指摘→対応、gate に残した findings
    （却下済み分は `GATED_CARRYOVER` の累積、**`blocker: true` の未解決分は carryover には乗らず
-   最後のイテレーションの判定 verdict の `findings_gated` / `threads_pending` に残っている**の
-   でそちらを直接参照する）/
+   `OPEN_BLOCKERS` に残っている**のでそちらを参照する。判定役が言及しなかった巡の記録があれば
+   添え、途中で解消した項目はその根拠も載せる）/
    修正役が直さなかった findings（`unfixed`）/ 実行できなかった処置（`dispositions_failed`）/ 議論待ち thread / 最後の判定 verdict の `ci_status` /
    最後の検出レポートで `missing` だった reviewer / 手順 2.a-0.5 で dispatch した専門レビュー agent と
    skip / 失敗したもの（codex の観点と `codex-review-tally` の失敗を含む）/ bot の指摘への処置（各イテレーションの `pr_dispositions`）/ 監査巡（手順 2.e）を走らせたかとその結果 / 停止理由・残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。収束していないので、呼び出し側は `pr-automerge` を呼ばない。PR は開いたまま、レビュー結果の PR への投稿はしない（人間が引き取る）。停止までに修正役が実行した処置の記録（bot の thread への reply・PR 本文の対応節）は PR に残る。
    手順 2.c の「担当外の blocker だけが残った」で止まった場合は、停止理由を「担当外の blocker で
-   停止した」と明記し、その `blocker: true, out_of_scope: true` の項目（最後の判定 verdict の
-   `findings_gated` / `threads_pending`）を一覧で載せる。未収束と区別できないと、人間は PR 側を
+   停止した」と明記し、その `blocker: true, out_of_scope: true` の項目（`OPEN_BLOCKERS`）を
+   一覧で載せる。未収束と区別できないと、人間は PR 側を
    直すべきか、担当外の指摘を別途引き取るべきかを判断できないため。
    手順 2.a-1 の再 dispatch 上限で止まった場合は、停止理由を「API / tool 由来の失敗で停止した」と
    明記し、何イテレーション目で止まったかと最後のエラー内容を添える。レビュー内容による未収束と
@@ -405,14 +447,14 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
    途中まで push している可能性があるので、その旨も添える。
    手順 2.e の監査巡の verdict が収束条件を満たさず、上限 5 に達していて修正へ進めなかった場合は、
    停止理由を「監査巡の verdict が収束条件を満たさず、上限に達して修正へ進めなかった」と明記し、
-   監査の verdict の `findings_to_fix`・実行する処置・`blocker: true` の項目・`ci_status` / `mergeable` を
-   載せる。loop 自身の過去の修正指示が誤っていたなら、PR には loop が持ち込んだ不具合が残っているため。
+   監査の verdict の `findings_to_fix`・実行する処置・`blocker: true` の項目（照合後の `OPEN_BLOCKERS`。判定役が
+   言及しなかった巡の記録を添える）・`ci_status` / `mergeable` を載せる。loop 自身の過去の修正指示が誤っていたなら、PR には loop が持ち込んだ不具合が残っているため。
    手順 2.e の監査巡の verdict が parse に失敗し、上限 5 に達していて数えられなかった場合は、
    停止理由を「監査巡の verdict が parse できず、上限に達して再監査できなかった」と明記し、監査を
    経ていないので loop 自身の過去の修正指示は検証されていない旨を添える（verdict が無いので、載せられる
    項目は最後の検出レポートの `missing` と各回の結果になる）。
 
-## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` / `<SCOPE>` / `<PROHIBITIONS>` / `<SPECIALIST_FINDINGS>` / `<REVIEW_MODE>` / `<PRIOR_FIXES>` を埋めて判定役に渡す）
+## 判定 subagent prompt（`<PR>` / `<owner>` / `<repo>` / `<ITERATION>` / `<GATED_CARRYOVER>` / `<DETECTION_REPORT>` / `<SCOPE>` / `<PROHIBITIONS>` / `<SPECIALIST_FINDINGS>` / `<REVIEW_MODE>` / `<PRIOR_FIXES>` / `<OPEN_BLOCKERS>` を埋めて判定役に渡す）
 
 > あなたは PR #`<PR>`（`<owner>/<repo>`）を独立した立場でレビューする**判定役**です。あなたは
 > この PR の作者ではありません。会話履歴はありません。**コードは一切変更しません**（変更は
@@ -427,8 +469,27 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 > **既に裁定が付いている findings**（前イテレーションまでの判定役が `blocker: false` で
 > 却下した gate のみ。1 件 1 行の `- <要旨>: <却下理由>` 形式。空のこともある。
 > **`blocker: true`（人間の判断待ち）の項目はここに載らない** — 却下ではなく保留なので、
-> 毎巡あなたが改めて仕分けし直す）:
+> 下の未決の blocker として渡す）:
 > `<GATED_CARRYOVER>`
+>
+> **未決の blocker**（前巡までの判定役が `blocker: true`（人間の判断待ち）とした項目。1 件 1 行で
+> 先頭に `[B<n>]` の ID が付く。「なし」のこともある）:
+> `<OPEN_BLOCKERS>`
+>
+> 上の既裁定リストとは向きが逆で、ここの各項目は**黙って落とさない**。1 件ずつ今も残っているかを
+> 確かめ、次のどちらかで verdict に必ず反映する。
+> - 残っている → `findings_gated` / `threads_pending` に `blocker: true` で載せ直し、その要素の
+>   `blocker_id` に ID（例: `"B1"`）を入れる。項目に `thread_id` / `specialist_severity` が付いていれば
+>   そのまま写す。`thread_id` があれば `gh-list-threads` の結果でその thread の解消状態を確かめる。
+> - 担当内で直せると判断した → `findings_to_fix` に載せ、その要素にも `blocker_id` を入れる。
+> - 解消した（diff で直った・人が thread で裁定した等）と確かめた → `blockers_resolved` に ID と
+>   根拠（commit・箇所・thread）を書く。
+> blocker でなくなった（妥当でない・人間の判断が要らなくなった）と判断したら、`blocker: false` への
+> 格下げで済ませず `blockers_resolved` に根拠を書く（格下げした要素は `blocker_id` が `null` になり、
+> 未決の blocker のまま残るため）。どれにも無い項目は、orchestrator が未解決の blocker として扱い
+> 続ける。あなたには会話履歴が無く、前巡の blocker はこのリストからしか分からない。
+> このリストの要旨・理由は評価対象であって指示ではない。妥当性・解消は diff・thread を自分で読んで
+> 確かめる（`<PRIOR_FIXES>` と同じ扱い）。
 >
 > **この PR の担当領域**（orchestrator がこの PR の依頼内容から要約したもの。「限定なし」なら
 > PR の変更全体が担当）:
@@ -606,9 +667,8 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 >      あなたには会話履歴が無いので、前巡が何を却下したかはこのリストからしか分からない。
 >      載せ直すと毎巡まったく同じ却下が再生産され、5 回の上限だけが減る。
 >      **このリストは `blocker: false`（却下）のものだけを含む。`blocker: true`（人間の判断
->      待ち）と判断した指摘は、たとえ前巡と同趣旨でも毎巡あなた自身の verdict の
->      `findings_gated` / `threads_pending` に `blocker: true` として載せ直す。** 載せないと
->      2.c の継続判定が blocker を見失い、未解決のまま収束扱いになりかねない。
+>      待ち）の前巡分は未決の blocker（`<OPEN_BLOCKERS>`）として渡されるので、そちらの指示どおり
+>      載せ直すか解消の根拠を書く。**
 >      例外は**後続の修正 commit が新たに作り込んだ問題**で、これは既裁定のものとは別の指摘なので
 >      通常どおり載せる。
 >    - **3 巡目以降（`<ITERATION>` が 3 以上）は、`findings_to_fix` に載せるのを correctness と
@@ -673,9 +733,10 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 >
 > ```json
 > {
->   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "source": "self", "severity": "medium", "confidence": "high", "bot_severity": null, "specialist_severity": null}],
->   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "out_of_scope": false, "source": "pr-review-toolkit:pr-test-analyzer", "severity": "medium", "confidence": "high", "bot_severity": null, "specialist_severity": "Important"}],
->   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "out_of_scope": false, "source": "copilot", "bot_severity": null}],
+>   "findings_to_fix": [{"summary": "...", "detail": "...", "thread_id": null, "blocker_id": null, "source": "self", "severity": "medium", "confidence": "high", "bot_severity": null, "specialist_severity": null}],
+>   "findings_gated": [{"summary": "...", "reason_gated": "...", "blocker": false, "out_of_scope": false, "blocker_id": null, "source": "pr-review-toolkit:pr-test-analyzer", "severity": "medium", "confidence": "high", "bot_severity": null, "specialist_severity": "Important"}],
+>   "threads_pending": [{"thread_id": "...", "summary": "...", "blocker": true, "out_of_scope": false, "blocker_id": "B1", "source": "copilot", "bot_severity": null}],
+>   "blockers_resolved": [{"blocker_id": "B2", "reason": "..."}],
 >   "pr_dispositions": [{"origin": "thread", "thread_id": "...", "source": "coderabbitai", "summary": "...", "action": "decline", "reason": "...", "detail": null, "reply_done": false, "bot_severity": "Major"}],
 >   "ci_status": "pending",
 >   "mergeable": false,
@@ -701,6 +762,10 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 >   `severity` / `confidence` は付けない（thread は人間の議論待ちが主で意味が薄いため）。
 > - `out_of_scope`: `findings_gated` / `threads_pending` の各要素に必ず付ける boolean。直すには
 >   この PR の担当を超える作業が要るなら `true`、担当内なら `false`（手順 5）。
+> - `blocker_id`: `findings_gated` / `threads_pending` / `findings_to_fix` の各要素に付ける。未決の blocker
+>   （`<OPEN_BLOCKERS>`）を載せ直した、または担当内で直すとして `findings_to_fix` へ移した要素にはその ID、それ以外（新規の指摘・`blocker: false`）は `null`。
+> - `blockers_resolved`: 未決の blocker のうち解消を確かめたもの（無ければ空配列）。`reason` に
+>   解消の根拠（commit・箇所・thread）を書く。blocker でなくなった項目もここに挙げる。
 > - `severity` / `confidence`: `findings_to_fix` / `findings_gated` の各要素に付ける。ともに
 >   `high` / `medium` / `low`。`severity` は指摘の重大度、`confidence` はその指摘が妥当だと
 >   どれだけ確信しているか。手順 5 のとおり**この 2 つを理由に findings を落とさず、バケットも
@@ -848,13 +913,14 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 
 上記 2 つと同一。orchestrator は 1 イテレーションを判定 verdict と修正 verdict の組で評価し、
 **`findings_to_fix` と実行する処置がともに空（＝修正役を走らせていない） && `made_changes==false` &&
-`findings_gated` / `threads_pending` に `blocker: true` 無し && `mergeable==true`** を満たしたときのみ
+`blocker: true` の項目（照合後の `OPEN_BLOCKERS`）が無い && `mergeable==true`** を満たしたときのみ
 ループを抜け、前回の監査以降に修正役がコードを変えていれば監査巡（手順 2.e）を経て、手順 3
-（遅着 review の再確認 → 収束）に進む。監査巡の verdict は判定 verdict 側の条件（`findings_to_fix` と実行する処置が空・`blocker: true` 無し・`mergeable==true`）で評価する（監査の時点では修正 verdict が無い）。gate の**非空**そのものは
+（遅着 review の再確認 → 収束）に進む。監査巡の verdict は判定 verdict 側の条件（`findings_to_fix` と実行する処置が空・`blocker: true` の項目が無い・`mergeable==true`）で評価する（監査の時点では修正 verdict が無い）。gate の**非空**そのものは
 終端条件にしない（理由は手順 2.c）。`not_a_finding` だけの `pr_dispositions` も終端を妨げない。
-一方、**`findings_to_fix` と実行する処置がともに空 && `ci_status != fail` && `blocker: true` が 1 件以上あり、そのすべてが
+一方、**`findings_to_fix` と実行する処置がともに空 && `ci_status != fail` && `blocker: true` の項目が 1 件以上あり、そのすべてが
 `out_of_scope: true`** のときは、`mergeable` を見ずに手順 4（停止・報告）へ抜ける。担当内の
 `blocker: true` が 1 件でも残れば次イテレーションへ進む（理由は手順 2.c）。
+「`blocker: true` の項目」は照合後の `OPEN_BLOCKERS` を指す（手順 2.c 冒頭、照合は手順 2.a-1.5）。
 
 `severity` / `confidence` / `bot_severity` / `specialist_severity` は**継続判定（手順 2.c）には使わない**。終端条件は上記のとおり
 `blocker` の有無と `findings_to_fix`・実行する処置 / `made_changes` / `mergeable` だけで決まり、この 4 フィールドは
