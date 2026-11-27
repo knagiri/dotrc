@@ -46,7 +46,6 @@ jobs:
         run: |
           shellcheck -S warning \
             bin/claude-digest \
-            bin/claude-hook-git-guard \
             bin/claude-review \
             bin/claude-session \
             bin/claude-spinoff \
@@ -68,6 +67,7 @@ jobs:
             bin/gh-resolve-thread \
             bin/git-reap-gone \
             bin/git-set-commit-sign \
+            bin/git-wt-stash \
             bin/lib/claude-queue-db.sh \
             bin/lib/dotrc-config.sh \
             bin/lib/gh-mise.sh \
@@ -75,7 +75,6 @@ jobs:
             githooks/post-merge \
             githooks/pre-commit \
             test/claude-digest.test.sh \
-            test/claude-hook-git-guard.test.sh \
             test/claude-review.test.sh \
             test/claude-session.test.sh \
             test/claude-spinoff.test.sh \
@@ -90,6 +89,7 @@ jobs:
             test/gh-wrappers.test.sh \
             test/issue-crawl.test.sh \
             test/git-reap-gone.test.sh \
+            test/git-wt-stash.test.sh \
             test/post-merge-hook.test.sh \
             test/pre-commit-hook.test.sh \
             test/lib/sandbox.sh \
