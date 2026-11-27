@@ -53,11 +53,22 @@ session ごとに要るので採らない。
 
 `bin/db-query` は同じ二重ゲートを各 repo の DB 接続に当てる。値（usql の version、
 `DATABASE_URL`）はその repo の root に置く untracked な `mise.db.local.toml` に書き、`db-query` が
-`MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml` で呼ぶ mise の中でだけ読む。運用の規約は `dot/claude/rules/db-access.md`。
+`MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml` で呼ぶ mise の中でだけ読む。agent 側の規約は `dot/claude/rules/db-access.md`。
+
+```toml
+[tools]
+usql = "0.21.6"
+
+[env]
+DATABASE_URL = "postgres://readonly@localhost:5432/example"
+```
+
+置いたら repo root で後述の `mise trust` を実行する。ファイルを編集するたびに再 trust が要る。
 
 `DATABASE_URL` を絞る理由は `GH_TOKEN` より強い。`GH_TOKEN` が常時載っても読むのは gh だけだが、
 `DATABASE_URL` は app framework・ORM・migration ツールが既定で読むので、常時ロードすると
-その repo の app・test・migration がエラー無しにその DB へ向く。同じ理由で `db-query` は
+その repo の app・test・migration がエラー無しにその DB へ向く。`mise.local.toml` や shell の rc に置くと、
+`mise activate` 経由で background 委譲先の env にも配られる。同じ理由で `db-query` は
 呼び出し側の env にある `DATABASE_URL` を捨て、mise config の値だけを使う。
 
 業務 repo には dotrc の `.gitignore` が効かないので、`mise.local.toml` / `mise.*.local.toml` は
@@ -97,6 +108,12 @@ DB user の権限で決める。これは network 越しの server 型 DB でだ
 usql のプロセス内でローカル user の権限のまま動き、SQL だけで任意のファイルを読み書きできる（`ATTACH`、
 `COPY ... TO`）ので、DB user という境界が無い。`db-query` は scheme を server 型の許可リストと照合し、
 外れれば exit 5 で止める。拒否リストにしないのは、usql の scheme alias が多く、漏れが素通りになるため。
+したがって `mise.db.local.toml` に書く接続は、一般に read-only 権限の DB user にする。
+
+password は URL に直書きせず、usql の password file（権限 600）に置く。`db-query` は URL を usql の
+引数として渡すので、URL に書いた password はプロセス一覧に出る。`db-query` は `-w` で prompt を止めるが
+password file は読まれる（実測: `USQLPASS` で指した file の password が `-w` 付きでも送られた。HOME 配下の
+既定位置に置いた file は同じ環境で読まれなかったので、置き場所は環境ごとに確かめる）。
 
 接続先が複数（dev / stg 等）ある場合は扱わない。override するファイル名を接続ごとに分けるか、`db-query` に
 接続名の引数を持たせるかは、必要になった時点で決める。

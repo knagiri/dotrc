@@ -48,5 +48,5 @@ backslash の拒否・未対応引数の拒否・stdin を閉じること・空 
 ## 反映先
 
 - `bin/db-query`（header コメント）
-- `dot/claude/rules/db-access.md`「2. 無ければ `usql` を `db-query` 経由で使う」
+- `dot/claude/rules/db-access.md`「2. 無ければ `usql` を `db-query` 経由で使う」（meta-command の仕組みの詳細は `bin/db-query` のヘッダへ移した）
 - `docs/design/mise-config-layering.md`「他 repo の DB 接続（`mise.db.local.toml`）」
