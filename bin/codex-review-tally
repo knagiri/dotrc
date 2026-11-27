@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# codex-review-tally <PR#> <verdict-file> <toolkit-ok> <codex-out-dir>
+# codex-review-tally --summary
+#
+# Records, for one PR, which of the findings a review verdict adopted came from
+# the pr-review-toolkit agents, which from codex-review, and which from both.
+# Appends one JSON line per call to
+#   ${XDG_STATE_HOME:-$HOME/.local/state}/codex-review/compare.jsonl
+# and prints the same record on stdout. The log is local, outside any repo.
+#
+# Inputs:
+#   <verdict-file>  a review verdict JSON with findings_to_fix[] and
+#                   findings_gated[]; each item has `source` (origins joined
+#                   by ", ", e.g. "codex:code-reviewer, pr-review-toolkit:code-reviewer, self"),
+#                   `summary`, `severity`, and optionally `specialist_severity`
+#                   and (for gated items) `blocker`.
+#   <toolkit-ok>    the perspectives whose toolkit agent completed, joined by
+#                   "," (may be empty). Perspectives: code-reviewer,
+#                   pr-test-analyzer, comment-analyzer, silent-failure-hunter,
+#                   type-design-analyzer.
+#   <codex-out-dir> holds <perspective>.json, the stdout of codex-review for
+#                   each perspective. A perspective's codex review completed iff
+#                   its file is a valid codex-review output (perspective equal
+#                   to the file name, findings an array) for this PR and its
+#                   current head commit (`pr` and `head_sha` equal to <PR#> and
+#                   what gh reports now). An empty, missing, malformed, or
+#                   stale file (earlier run, other PR or commit) means it failed.
+#
+# Adopted = every findings_to_fix item plus findings_gated items with
+# blocker: true; the remaining findings_gated items are not adopted.
+# Only perspectives that completed on both sides form a pair. Origins are
+# separated by "," or "/" and read as `pr-review-toolkit:<p>` / `codex:<p>`
+# (blanks around the name are ignored). Only origins on a paired perspective
+# count, and "any" decides, not "all": an item is `both` when it has a paired
+# toolkit origin and a paired codex origin (not necessarily the same
+# perspective), `toolkit_only` / `codex_only` when only one side has a paired
+# origin (even if the other side's origin is on an unpaired perspective), and
+# `unpaired` when it has specialist origins but none on a paired perspective, so
+# a failure on one side never reads as the other side's miss. An item with no
+# specialist origin (self, bots) is not counted. An origin that starts with
+# `codex:` / `pr-review-toolkit:` but names no known perspective, or a bare
+# perspective name without a prefix, is malformed: it is ignored for the bucket,
+# reported on stderr, and listed in the record's `malformed`.
+#
+# Record: {ts, repo, pr, head_sha, pairs, codex_failed, toolkit_failed,
+#   malformed: {count, items: [summary]},
+#   adopted: {toolkit_only, codex_only, both, unpaired}, not_adopted: {same},
+#   toolkit_only_items: [{summary, severity, specialist_severity}],
+#   codex_only_items: [same], codex_usage: {input_tokens, cached_input_tokens,
+#   output_tokens}}
+# codex_failed: in <toolkit-ok> but without a codex output; toolkit_failed:
+# with a codex output but not in <toolkit-ok>. A perspective that failed on both
+# sides is in neither list. Only adopted items are listed.
+#
+# One record is appended per call, so the log holds one line per run of the
+# first-pass review; re-running a PR adds a line.
+#
+# --summary prints the totals over every record (records: line count, prs:
+# distinct (repo, PR) pairs, adopted / not_adopted per bucket, toolkit-only and
+# codex-only adopted items per severity, codex usage).
+#
+# Exit codes: 0 ok / 1 bad arguments or input / 2 gh failed (nothing appended) /
+# 3 unexpected failure (jq missing, a broken log line, the record could not be
+# built; nothing appended).
+# Requires gh and jq.
+
+perspectives=(code-reviewer pr-test-analyzer comment-analyzer silent-failure-hunter type-design-analyzer)
+log="${XDG_STATE_HOME:-$HOME/.local/state}/codex-review/compare.jsonl"
+
+usage() {
+  echo "usage: codex-review-tally <PR-number> <verdict-file> <toolkit-ok> <codex-out-dir>" >&2
+  echo "       codex-review-tally --summary" >&2
+  exit "${1:-1}"
+}
+
+case "${1:-}" in -h|--help) usage 0 ;; esac
+command -v jq >/dev/null 2>&1 || { echo "codex-review-tally: jq is not installed" >&2; exit 3; }
+
+if [ "${1:-}" = --summary ]; then
+  [ $# -eq 1 ] || usage 1
+  if ! { if [ -s "$log" ]; then cat "$log"; fi | jq -s '
+    def total($k): map(.[$k] // {}) | reduce .[] as $r ({}; reduce ($r | to_entries[]) as $e (.; .[$e.key] += $e.value));
+    def by_severity($k): [.[] | .[$k][]?] | group_by(.severity // "null")
+      | map({key: (.[0].severity // "null" | tostring), value: length}) | from_entries;
+    {records: length,
+     prs: ([.[] | [.repo, .pr]] | unique | length),
+     adopted: total("adopted"),
+     not_adopted: total("not_adopted"),
+     toolkit_only_by_severity: by_severity("toolkit_only_items"),
+     codex_only_by_severity: by_severity("codex_only_items"),
+     codex_usage: total("codex_usage")}'; }; then
+    echo "codex-review-tally: cannot summarise $log (a line is not a valid record)" >&2; exit 3
+  fi
+  exit 0
+fi
+
+[ $# -eq 4 ] || usage 1
+pr="$1"; verdict="$2"; toolkit_ok="$3"; codex_dir="$4"
+if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+  echo "codex-review-tally: PR number must be numeric (got: $pr)" >&2; exit 1
+fi
+pr=$((10#$pr))  # "042" is not valid JSON for --argjson below
+if ! jq -e '(.findings_to_fix | type) == "array" and (.findings_gated | type) == "array"' "$verdict" >/dev/null 2>&1; then
+  echo "codex-review-tally: not a verdict with findings_to_fix / findings_gated arrays: $verdict" >&2; exit 1
+fi
+[ -d "$codex_dir" ] || { echo "codex-review-tally: not a directory: $codex_dir" >&2; exit 1; }
+
+known() { local p; for p in "${perspectives[@]}"; do [ "$p" = "$1" ] && return 0; done; return 1; }
+toolkit=()
+if [ -n "$toolkit_ok" ]; then
+  IFS=, read -ra toolkit <<<"$toolkit_ok"
+  for p in "${toolkit[@]}"; do
+    known "$p" || { echo "codex-review-tally: unknown perspective in toolkit-ok: $p" >&2; exit 1; }
+  done
+fi
+
+# shellcheck source=bin/lib/gh-mise.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/gh-mise.sh"
+gh_mise_use "$(gh_mise_repo_root)"
+repo="$(gh_mise repo view --json nameWithOwner --jq .nameWithOwner)" \
+  || { echo "codex-review-tally: gh repo view failed" >&2; exit 2; }
+sha="$(gh_mise pr view "$pr" --json headRefOid --jq .headRefOid)" \
+  || { echo "codex-review-tally: gh pr view $pr failed" >&2; exit 2; }
+
+# A codex output counts only if it is what codex-review prints on success, for
+# this PR and the head commit gh reports now.
+codex_files=()
+codex=()
+for p in "${perspectives[@]}"; do
+  f="$codex_dir/$p.json"
+  if [ -s "$f" ] && jq -e --arg p "$p" --argjson pr "$pr" --arg sha "$sha" \
+    'type == "object" and .perspective == $p and .pr == $pr and .head_sha == $sha and (.findings | type) == "array"' "$f" >/dev/null 2>&1; then
+    codex+=("$p"); codex_files+=("$f")
+  fi
+done
+
+if [ ${#codex_files[@]} -gt 0 ]; then
+  usage_json="$(jq -s 'map((.usage | select(type == "object")) // {}) | {
+      input_tokens: (map(.input_tokens // 0) | add),
+      cached_input_tokens: (map(.cached_input_tokens // 0) | add),
+      output_tokens: (map(.output_tokens // 0) | add)}' "${codex_files[@]}")"
+else
+  usage_json='{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0}'
+fi
+
+record="$(jq -c \
+  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg repo "$repo" --argjson pr "$pr" --arg sha "$sha" \
+  --argjson toolkit "$(printf '%s\n' "${toolkit[@]}" | jq -R 'select(length > 0)' | jq -s .)" \
+  --argjson codex "$(printf '%s\n' "${codex[@]}" | jq -R 'select(length > 0)' | jq -s .)" \
+  --argjson usage "$usage_json" \
+  --argjson known "$(printf '%s\n' "${perspectives[@]}" | jq -R . | jq -s .)" '
+  def tokens: (.source // "") | split("[,/]"; null) | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0));
+  def named($prefix): tokens | map(select(startswith($prefix)) | ltrimstr($prefix) | gsub("^\\s+|\\s+$"; ""));
+  def origins($prefix): named($prefix) | map(select(IN($known[])));
+  def malformed_count: ((named("pr-review-toolkit:") + named("codex:")) | map(select(IN($known[]) | not)) | length)
+    + (tokens | map(select(IN($known[]))) | length);
+  def bucket($pairs):
+    origins("pr-review-toolkit:") as $t | origins("codex:") as $c
+    | if ($t | length) + ($c | length) == 0 then null
+      else (any($t[]; IN($pairs[]))) as $ht | (any($c[]; IN($pairs[]))) as $hc
+        | if $ht and $hc then "both" elif $ht then "toolkit_only" elif $hc then "codex_only" else "unpaired" end
+      end;
+  def counts($pairs): map(bucket($pairs)) as $b
+    | {toolkit_only: ($b | map(select(. == "toolkit_only")) | length),
+       codex_only: ($b | map(select(. == "codex_only")) | length),
+       both: ($b | map(select(. == "both")) | length),
+       unpaired: ($b | map(select(. == "unpaired")) | length)};
+  def items($pairs; $kind): map(select(bucket($pairs) == $kind)
+    | {summary, severity, specialist_severity: (.specialist_severity // null)});
+  [$toolkit[] | select(IN($codex[]))] as $pairs
+  | (.findings_to_fix + [.findings_gated[] | select(.blocker == true)]) as $adopted
+  | [.findings_gated[] | select(.blocker != true)] as $rest
+  | {ts: $ts, repo: $repo, pr: $pr, head_sha: $sha,
+     pairs: $pairs,
+     codex_failed: [$toolkit[] | select(IN($codex[]) | not)],
+     toolkit_failed: [$codex[] | select(IN($toolkit[]) | not)],
+     malformed: ([($adopted + $rest)[] | select(malformed_count > 0) | .summary] | {count: length, items: .}),
+     adopted: ($adopted | counts($pairs)),
+     not_adopted: ($rest | counts($pairs)),
+     toolkit_only_items: ($adopted | items($pairs; "toolkit_only")),
+     codex_only_items: ($adopted | items($pairs; "codex_only")),
+     codex_usage: $usage}' "$verdict")" \
+  || { echo "codex-review-tally: could not build the record (is the verdict well-formed?)" >&2; exit 3; }
+
+[ -n "$record" ] || { echo "codex-review-tally: could not build the record" >&2; exit 3; }
+if [ "$(jq -r '.malformed.count' <<<"$record")" != 0 ]; then
+  echo "codex-review-tally: warning: items with a malformed source (see record.malformed)" >&2
+fi
+
+mkdir -p "$(dirname "$log")"
+# A log that does not end in a newline would glue this record onto its last line.
+if [ -s "$log" ] && [ -n "$(tail -c 1 "$log")" ]; then printf '\n' >>"$log"; fi
+printf '%s\n' "$record" >>"$log"
+printf '%s\n' "$record"

@@ -84,6 +84,8 @@
       "Bash(gh-resolve-thread *)",
       "Bash(gh-reply-thread *)",
       "Bash(gh-pr-checks *)",
+      "Bash(codex-review *)",
+      "Bash(codex-review-tally *)",
       "Bash(gh-automerge *)",
       "Bash(gh-issue-file *)",
       "Bash(gh-pr-create *)",

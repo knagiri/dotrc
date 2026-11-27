@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "One-line summary of the finding." },
+          "detail": { "type": "string", "description": "What is wrong, why it matters and how to fix it." },
+          "severity_label": { "type": "string", "description": "The severity label in the perspective's own scale, copied verbatim (e.g. Critical, Important, HIGH, Critical Gap (8)); for a perspective without a scale, the priority with 1 as the highest." },
+          "file": { "type": "string", "description": "Repository-relative path of the file the finding is about." },
+          "line": { "type": ["integer", "null"], "description": "1-indexed line in the new version of the file, or null when the finding is not tied to one line." },
+          "confidence": { "type": "number", "description": "Confidence that the finding is valid, from 0 to 1." }
+        },
+        "required": ["title", "detail", "severity_label", "file", "line", "confidence"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["findings"],
+  "additionalProperties": false
+}

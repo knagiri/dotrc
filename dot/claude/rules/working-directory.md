@@ -1,97 +1,37 @@
 ## working directory がズレたら `/cd` を頼んで止まる
 
-作業対象のディレクトリが session の cwd と食い違っているとき、`cd <dir> && …` や
-`git -C <dir>` でディレクトリを渡り歩いて回避しない。cwd そのものを直すべきサインなので、
-ユーザーに `/cd <dir>` を一度実行してもらい、それまで止まる。
+作業対象の dir が cwd と食い違うとき、`cd <dir> && …` や `git -C <dir>` で渡り歩いて回避
+しない。cwd 自体を直すべきサインなので、ユーザーに `/cd <dir>` を頼んで止まる。作業の進め方
+そのものなので `paths` を付けず常時ロードする。
 
-これは領域固有でなく「作業の進め方」そのものなので `paths` を付けず常時ロードする
-（[evidence-over-guesswork.md](./evidence-over-guesswork.md) と同じ扱い）。
+### トリガー
 
-関連ルール: 承認が要るコマンドの回避一般は [bash-command-constraints.md](./bash-command-constraints.md)、
-別 worktree・別 repo を read-only で覗く許可は [session-scope.md](./session-scope.md) §3 を参照。
+- 編集・commit・実行したい先が cwd でない
+- 同じ外部 dir へ 2 回以上 `cd` / `git -C` した
+- repo 内のサブディレクトリを作業先にしたくて `cd` しようとしている。エラーも警告も出ずに
+  通り、以降の相対パスが黙ってそこを基準にする（主 working directory は変わらず、移動先の
+  CLAUDE.md もロードされない）
 
-### 大前提
+### アクション
 
-`cd <dir> && …` でディレクトリを渡り歩かない。編集・commit・実行したい先が cwd でないなら、
-その場しのぎで別ディレクトリへ潜るのではなく、cwd 自体を移す。
+止まって `/cd <dir>` を頼み、移動後は相対パスで進める。`/cd` はモデルから呼べないので、
+agent にできるのは頼んで待つことだけである。委譲先など人間不在の session でも同じにする。
+attach した人間が実行するまで遅れるだけで回収され、cryptic な承認プロンプトで止まるより
+何を求めているかが明確なため。
 
-### トリガー — cwd が不適切なサイン
-
-以下が出たら「cwd がそもそも作業対象からズレている」と判断する。
-
-- 編集・commit・コマンド実行したい先が cwd でない（例: cwd が repo root のネスト下位にいて、
-  root で作業したい）。
-- 同じ外部ディレクトリへ 2 回以上 `cd` または `git -C` した。1 回きりの回避で済まず反復して
-  いるなら、回避ではなく cwd を直す局面。
-
-### アクション — `/cd` を頼んで止まる
-
-トリガーが出たら、そこで止まってユーザーに `/cd <dir>` を一度実行するよう明示的に頼む。
-移動後は相対パスで進める。
-
-`/cd` はユーザー専用で、モデルからは呼べない（公式 docs:
-"Cd is not a model-invocable tool: Claude can't call it"）。だから agent にできるのは
-「頼んで待つ」だけで、代わりに `cd`/`git -C` で押し切らない。`/cd` は `/add-dir` の
-参照追加と違い session の主 working directory を置き換え、移動先の CLAUDE.md がロードされ、
-`--resume` もそこから引ける（Claude Code v2.1.169+）。
-
-#### session 種別で分岐しない
-
-fire-and-forget / 委譲先の session でも同じにする。人間が attach していなくても、
-`cd`/`git -C` で押し切らず `/cd` を頼んで止まる。attach した人間が `/cd` を実行するまで
-遅れるだけで、作業は必ず回収される。
-
-cryptic な permission prompt（後述の no-op-cd ガード等）で止まるより、「`/cd <dir>` を
-実行してください」と何を求めているか明示して止まるほうが、attach した人間がすぐ対応でき
-回収が速いという利点もある。
+上流では作業対象の dir から session を起動すればズレ自体が減る（`claude-worktree`）。
 
 ### 唯一の例外 — 別 repo の一度きりの read-only 覗き見
 
-cwd 移動が不要なのは、別 repo を一度だけ read-only で覗くときだけ。cwd を変えず、`cd` も
-せず、パスを引数で渡す。
+`cd` せずパスを引数で渡す（`rg <pattern> /abs/path`、[session-scope.md](./session-scope.md) §3）。
+同じ dir を 2 回以上覗くなら一度きりではないので `/cd` へ切り替える。
 
-```
-rg <pattern> /abs/path/to/other-repo      # cd しない。パスを引数で渡す
-git -C /abs/path/to/other-repo log         # 一度きりの read-only 参照
-```
+### なぜ回避が詰まるのか
 
-この read-only 覗き見は [session-scope.md](./session-scope.md) §3 が既に許可している。
-ただし §トリガーのとおり、同じ外部ディレクトリを 2 回以上覗くなら「一度きり」ではないので、
-`/cd` へ切り替える。
+- `cd` が別 dir へ移って `git` を続ける複合コマンドは、移動先の git hooks が走りうるので承認
+  プロンプトが出る（<https://code.claude.com/docs/en/permissions>）。コマンドの形への判定なので
+  allowlist で抑えにくい
+- working directory の外への `cd` は次のコマンドで巻き戻るので、毎回書き足して上の承認を
+  繰り返し踏む
 
-### 補完 — 上流で正しい dir から起動する
-
-そもそも作業対象の dir から session を起動すれば、この状況自体が減る（`claude-worktree` は
-worktree dir で claude を起動するので原則ズレない。`delegate-to-worktree` skill）。
-例外ではなく、発生頻度を下げる補完として。
-
-### なぜ `cd`/`git -C` 回避が詰まるのか
-
-`cd <dir> && …` を避ける理由は、それが承認プロンプトか cwd リセットのどちらかで詰まるため。
-
-- **git hooks 由来の承認プロンプト**: Claude Code は「`cd` が `git` の前でディレクトリを
-  変える複合コマンド」を承認対象にする。移動先の untrusted な git hooks が走りうるためで、
-  公式 docs も "Combining `cd` with `git` in one compound command prompts when the `cd`
-  changes into a different directory, since running `git` in a new directory can execute
-  that directory's hooks" と明記する。この no-op-cd ガード（同じ dir への no-op cd は
-  prompt が出ないが、別 dir へ移る cd は出る）は、コマンドの形に対する判定なので
-  allowlist エントリで抑えにくい。
-- **cwd の巻き戻し**: working directory の外へ `cd` しても、その cwd は次のコマンドへ
-  持ち越されず working directory にリセットされる（実測: 外部 dir へ `cd` した次の
-  コマンドで "Shell cwd was reset to …" と戻される）。だから `cd <dir>` を毎回書き足す
-  羽目になり、上の承認プロンプトを繰り返し踏む。
-
-`/cd` はこの両方を根本から消す。session の cwd 自体が移動先になるので、以降は相対パスで
-書け、`cd`/`git -C` の複合も要らなくなる。
-
-#### 詰まらない第 3 の形 — repo 内サブディレクトリへの `cd`
-
-上の 2 つはいずれも working directory の外へ出る `cd` の話で、**repo 内**のサブディレクトリへの
-`cd` はどちらにも当たらない。承認プロンプトも巻き戻しも起きずに通り、以降の Bash 呼び出しの
-cwd がそのまま移る（session の primary working directory 自体は変わらないので、移動先の
-CLAUDE.md はロードされない）。エラーも警告も出ないので、以降の相対パスが別の場所を基準に
-していることに気づけない。
-
-だから「詰まらないから安全」とは読まない。詰まる形では摩擦そのものが気づきの合図になるが、
-こちらはその合図が無く、静かに間違える。repo 内でも作業対象が cwd でないなら、§トリガーの
-とおり `/cd <dir>` を頼んで止まる。
+repo 内の `cd` はどちらも起きないが、摩擦という気づきの合図も無く静かに間違える（トリガー 3 つ目）。
