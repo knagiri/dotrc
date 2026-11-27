@@ -56,16 +56,6 @@ STUB
 }
 install_mise_stub "$stubdir"
 
-# gh-automerge: numeric PR issues `gh pr merge --auto --merge <PR>`, no --admin.
-GH_ARGS_FILE="$stubdir/args" PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] \
-  && grep -qxF '[pr]' "$stubdir/args" && grep -qxF '[merge]' "$stubdir/args" \
-  && grep -qxF '[--auto]' "$stubdir/args" && grep -qxF '[--merge]' "$stubdir/args" \
-  && grep -qxF '[42]' "$stubdir/args" \
-  && ! grep -qxF '[--admin]' "$stubdir/args"; then
-  echo "ok: gh-automerge issues gh pr merge --auto --merge <PR>, no --admin"
-else echo "FAIL: gh-automerge rc=$rc args=$(cat "$stubdir/args" 2>/dev/null)"; fail=1; fi
-
 # gh-automerge: missing / non-numeric arg fail.
 PATH="$stubdir:$PATH" "$bindir/gh-automerge" >/dev/null 2>&1; [ $? -ne 0 ] \
   && echo "ok: gh-automerge missing arg fails" || { echo "FAIL: gh-automerge missing arg"; fail=1; }
@@ -81,9 +71,17 @@ PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 --admin >/dev/null 2>&1; [ $? -n
 # CLEAN pull request ("Pull request is in clean status"), which a repo with no
 # CI workflows hits almost immediately -- so that one refusal, and only it, must
 # fall through to a direct merge.
+#
+# The grant gate (test/gh-automerge.test.sh) reads the PR before merging, so the
+# stub answers `pr view` with two commit ids and `pr diff` with a diff that has
+# no grant change; only `pr merge` calls are logged.
 amdir="$stubdir/am"; mkdir -p "$amdir"
 cat >"$amdir/gh" <<'STUB'
 #!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") echo "$(printf 'b%.0s' {1..40}) $(printf 'c%.0s' {1..40})" | tr bc 0a; exit 0 ;;
+  "pr diff") printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-a' '+b'; exit 0 ;;
+esac
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
 case "$*" in
   *--auto*)
@@ -102,6 +100,16 @@ amrun() {  # $1 = --auto failure message ("" = succeed), $2 = its exit code
     PATH="$amdir:$PATH" "$bindir/gh-automerge" 42
 }
 amcount() { grep -cxF "$1" "$amdir/args"; }  # occurrences of one argv element
+
+# gh-automerge: numeric PR issues `gh pr merge --auto --merge <PR>`, no --admin.
+amrun '' >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] \
+  && grep -qxF '[pr]' "$amdir/args" && grep -qxF '[merge]' "$amdir/args" \
+  && grep -qxF '[--auto]' "$amdir/args" && grep -qxF '[--merge]' "$amdir/args" \
+  && grep -qxF '[42]' "$amdir/args" \
+  && ! grep -qxF '[--admin]' "$amdir/args"; then
+  echo "ok: gh-automerge issues gh pr merge --auto --merge <PR>, no --admin"
+else echo "FAIL: gh-automerge rc=$rc args=$(cat "$amdir/args" 2>/dev/null)"; fail=1; fi
 
 # Case A: the clean refusal falls back to a plain `gh pr merge --merge <PR>`
 # (two --merge, one --auto), still without --admin.
