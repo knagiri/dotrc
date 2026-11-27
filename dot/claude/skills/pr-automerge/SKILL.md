@@ -38,6 +38,9 @@ review の独立性（author とは別文脈の判定役）は grant 変更を�
 入る。approve を人間に残せば、grant の広さは merge 前に必ず一度は人目を通る。だから条件を
 「誰が書くか」ではなく merge ゲート側へ置く。
 
+この規約を読み落としてこの skill を呼んでも止まるよう、`gh-automerge` 自身が PR の差分を見て
+grant 変更があれば merge を撃たずに exit 5 で返す（判定条件はラッパーのヘッダ）。
+
 実例: dotrc/docs/incidents/review-skipped-with-merge.md
 
 ## `gh-automerge` の契約
@@ -50,6 +53,9 @@ review の独立性（author とは別文脈の判定役）は grant 変更を�
   `gh pr merge --merge <PR>` へ fallback する。それ以外の失敗（required check 未達、conflict、repo で
   auto-merge が無効、など）は fallback せず終了コードごと返す。auto-merge が無効な repo では merge
   ステップが完了しないので、手順 5 で停止・報告する
+- exit 5: PR が grant 変更を含む（または差分を判定できなかった）ので merge を撃たなかった。
+  stderr が理由のファイルを挙げる。merge を見送り、PR と stderr の理由を手順 5 で報告して止まる。
+  再試行しない（差分が変わらない限り結果は同じで、merge は人間が approve してから行う）
 - `--admin` 等のフラグは付けられず、branch protection は fallback 後も GitHub 側で
   そのまま効く。ラッパーは特定 PR に固定されない（`gh-automerge <別PR>` も allowlist 上は通る）
 
@@ -157,5 +163,5 @@ review の独立性（author とは別文脈の判定役）は grant 変更を�
    （`MERGED`。`--auto` の即時成立でも手順 2 の fallback でも同じ値になる）か。「有効化済み」と
    決め打ちで書くと、後者に達した場合に報告文が実際の結果を表せない。
 5. **停止・報告**（auto-merge を有効化しなかった場合）: 停止理由（手順 0 のゲート、手順 1 の CI の
-   fail とその cancelled のみ切り分け、手順 3 の `NOT_TERMINAL`）と残課題を箇条書きで要約し、
+   fail とその cancelled のみ切り分け、手順 2 の `gh-automerge` の exit 5（grant 変更）、手順 3 の `NOT_TERMINAL`）と残課題を箇条書きで要約し、
    **session の最終メッセージとして出力**する。PR は開いたまま、PR への投稿はしない（人間が引き取る）。

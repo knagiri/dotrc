@@ -64,6 +64,25 @@ fallback が無いと auto-merge が構造的に届かない。そこでこの�
 auto-merge が無効、など）は fallback せず終了コードごと返す。auto-merge が無効な repo では
 fallback は効かず、merge ステップは完了しない。
 
+## `gh-automerge` の grant 変更ゲート
+
+grant 変更を含む PR を auto-merge させない規約の正典は `pr-automerge` skill にある。しかし
+その規約を守る場面は `pr-automerge` を呼ばない場面なので、正典の本文が読まれる経路が無い。
+読み落としたまま呼ばれても止まるよう、merge を撃つ唯一の経路である `gh-automerge` が merge の
+前に PR の差分を見て、grant 変更があれば merge を撃たずに exit 5 で返す。判定条件はラッパーの
+ヘッダが正典である。
+
+判定は取りこぼしを許さず過検出を許す側に倒す。過検出のコストは人間の approve を 1 回挟む
+ことだけだが、取りこぼすと広い grant が人目を通らず main へ入る。settings ファイルはファイル
+単位で拾う（permissions 以外の hooks・env も実行されるものを変える）。SKILL.md / agent 定義は
+frontmatter だけが grant に効くので、base と head の frontmatter を比べ、本文だけの変更は通す。
+hunk の位置で判定しないのは、frontmatter の長さが差分からは分からず、frontmatter をまたぐ
+hunk を取りこぼしうるため。差分や内容が読めないときは grant 変更とみなして止める（fail
+closed）。判定した head は `--match-head-commit` で固定し、判定後の push で未判定の差分が
+merge されないようにする。
+
+実例: dotrc/docs/incidents/convention-in-skill-not-invoked.md
+
 `--disable` 形は、既存 PR へ修正を積む間に前周回の auto-merge が発火するのを止めるためにある
 （`implement-and-review` 手順 4）。
 
