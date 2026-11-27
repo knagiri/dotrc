@@ -83,6 +83,7 @@ jobs:
             test/db-query.test.sh \
             test/deploy.test.sh \
             test/dotrc-config.test.sh \
+            test/gh-automerge.test.sh \
             test/gh-issue-file.test.sh \
             test/gh-issue-group.test.sh \
             test/gh-mise.test.sh \
