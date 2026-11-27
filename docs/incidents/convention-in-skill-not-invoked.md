@@ -5,8 +5,7 @@
 規約「grant（allowlist）変更を含む PR は auto-merge させず、人間の approve を待つ」の正典を、
 `dot/claude/rules/gh-commands.md` から `dot/claude/skills/pr-automerge/SKILL.md` へ移した。
 その PR の review で、規約を守る場面は `pr-automerge` を呼ばない場面なので、正典の本文が
-ロードされる経路が無いと指摘された（指摘の内容は委譲プロンプト経由で受け取ったもので、この
-doc を書いた委譲では review の原文を読んでいない）。
+ロードされる経路が無いと指摘された。
 
 skill の本文は skill を呼んだときにしか読まれない。「ある作業をしないこと」を求める規約を
 その作業の skill に置くと、守るべき場面（作業をしない場面）では読まれず、読まれるのは既に
@@ -40,10 +39,11 @@ here-string に変えて直した。
 
 ## 直し方
 
-merge を撃つ唯一の経路である `bin/gh-automerge` に、merge の前に grant 変更を判定するゲートを
-入れた。settings ファイルの変更、SKILL.md / agent 定義 / command 定義の frontmatter の変更
-（新規・削除・改名を含む）、差分や内容が読めない場合に exit 5 で止まり、理由のファイルを stderr に
-出す。判定した head は `--match-head-commit` で固定する。
+allowlist で許可された唯一の merge 経路である `bin/gh-automerge` に、merge の前に grant 変更を
+判定するゲートを入れた。settings ファイルの変更、SKILL.md / agent 定義 / command 定義
+（`.claude/commands/` と、この repo の配置の `dot/claude/commands/`）の frontmatter の変更
+（新規・削除・改名・コピーを含む）、frontmatter を比べられない場合、差分や内容が読めない場合に
+exit 5 で止まり、理由のファイルを stderr に出す。判定した head は `--match-head-commit` で固定する。
 
 ## 反映先
 
