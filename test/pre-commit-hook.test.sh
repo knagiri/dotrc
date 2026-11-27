@@ -21,8 +21,8 @@ trap 'sandbox_cleanup; rm -rf "$tmp"' EXIT
 
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
        GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-# The suite itself may run under Claude Code; each case sets CLAUDECODE itself.
-unset CLAUDECODE
+# A tool shell may inherit either marker from the caller.
+unset CLAUDECODE CODEX_THREAD_ID
 
 check() {  # check <description> <0-or-1>
   if [ "$2" = 0 ]; then echo "ok: $1"; else echo "FAIL: $1"; fail=1; fi
@@ -34,7 +34,7 @@ check() {  # check <description> <0-or-1>
 # removing one changes nothing there); nofallback replaces the main fallback
 # with a no-op instead of deleting it.
 mut="$tmp/mutants"; mkdir -p "$mut"
-grep -v '^\[ -n "\${CLAUDECODE:-}" \] || exit 0$' "$hook" >"$mut/noenv"
+grep -v 'agent-env@dotrc' "$hook" >"$mut/noenv"
 grep -v '^\[ "\$common" = "\$gitdir" \] || exit 0$' "$hook" >"$mut/nocommon"
 grep -v '^\[ -d "\$top/.git" \] || exit 0$' "$hook" >"$mut/nodotgit"
 grep -v '^\[ -d "\$top/.git" \] || exit 0$' "$mut/nocommon" >"$mut/nolinked"
@@ -107,7 +107,13 @@ s_main() {
   try_commit "$tmp/main-$1/work" 1
 }
 
-# Same repo, no CLAUDECODE (a human's commit).
+s_codex() {
+  clone_with_remote "$tmp/codex-$1" main
+  link_hook "$tmp/codex-$1/work" "$2"
+  CODEX_THREAD_ID=test-thread try_commit "$tmp/codex-$1/work" ""
+}
+
+# Same repo, no agent marker (a human's commit).
 s_human() {
   clone_with_remote "$tmp/human-$1" main
   link_hook "$tmp/human-$1/work" "$2"
@@ -219,7 +225,8 @@ expect "main working tree on the integration branch under Claude Code is refused
 check "the refusal says to branch off with git switch -c, cites §5, and forbids --no-verify" \
   "$(if grep -qF 'git switch -c <branch>' "$tmp/last.err" && grep -qF 'session-scope.md §5' "$tmp/last.err" \
        && grep -qF -- '--no-verify' "$tmp/last.err"; then echo 0; else echo 1; fi)"
-expect "without CLAUDECODE the commit lands" landed "$(s_human real "$hook")"
+expect "main working tree on the integration branch under Codex is refused" refused "$(s_codex real "$hook")"
+expect "without either agent marker the commit lands" landed "$(s_human real "$hook")"
 expect "a feature branch in the main working tree lands" landed "$(s_feature real "$hook")"
 expect "a linked worktree on a feature branch lands" landed "$(s_linked_feature real "$hook")"
 expect "a linked worktree on the integration branch lands" landed "$(s_linked_main real "$hook")"
@@ -233,7 +240,7 @@ expect "on main while origin/HEAD is trunk lands" landed "$(s_main_while_trunk r
 expect "origin/HEAD unset, on main is refused" refused "$(s_no_origin_head real "$hook")"
 
 # --- discrimination: each mutant must fail the scenario its condition covers -
-expect "control: without the CLAUDECODE check, a human's commit is refused" refused "$(s_human noenv "$mut/noenv")"
+expect "control: without the agent check, a human's commit is refused" refused "$(s_human noenv "$mut/noenv")"
 expect "control: without either half of a, a linked worktree on main is refused" refused "$(s_linked_main nolinked "$mut/nolinked")"
 expect "control: without the .git directory check, a submodule on main is refused" refused "$(s_submodule nodotgit "$mut/nodotgit")"
 expect "control: without the branch check, a feature branch is refused" refused "$(s_feature nobranch "$mut/nobranch")"
