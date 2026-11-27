@@ -52,10 +52,7 @@ set -euo pipefail
 #        / 5 the issue repo is not private, or that could not be verified (gh
 #          was called once to ask): nothing was read or filed
 #        / 4 the issue WAS created but the --resolved-by follow-up (reading the
-#          number, closing) failed: do not run again, it would file a duplicate. gh's own exit
-#          code can also be 4 (an unauthenticated gh exits 4 before any issue
-#          exists); only 4 with the created issue's URL on stderr means the
-#          issue exists
+#          number, closing) failed: do not run again, it would file a duplicate.
 #        / anything else: gh's own exit code from before the issue exists,
 #          passed through unchanged by `set -e` (not rounded to 1). gh runs through gh_mise
 #          (bin/lib/gh-mise.sh); `mise exec` propagates its child's status

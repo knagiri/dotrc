@@ -26,7 +26,7 @@ title・本文に勤務先由来の具体名を一般に書かず、機構で書
 
 ### 2. exit code で取り違えると害が出るもの
 
-- **4**: 起票は済んでいる（`--resolved-by` の後処理だけ失敗）。再実行すると二重起票になるので、stderr の URL を報告して close は人に任せる。ただし未認証の gh も 4 を返す（起票前の失敗）ので、stderr に起票済みの issue URL が無ければ gh 自身の 4 と読み、下の「それ以外の非 0」として原因を潰す
+- **4**: 起票は済んでいる（`--resolved-by` の後処理だけ失敗）。再実行すると二重起票になるので、stderr の URL を報告して close は人に任せる
 - **3 / 5**: issue repo の設定の問題（未設定・不正・private でない／確かめられない）。何も起票されていない。再実行せず stderr を報告し、設定は人に任せる
 - **1**: 引数・本文の不備。stderr が欠落見出しや引数を名指ししていれば直して再実行する。template が無い場合も 1 だが、本文を直しても通らないので再実行せず報告する
 - **それ以外の非 0**: gh 自身の終了コードがそのまま返る（起票前の失敗）。body を直さず原因（認証・label・ネットワーク。委譲先なら token 未供給）を潰す
@@ -45,7 +45,7 @@ task は必ず triage で入る。**`triage → ready` は人間が押す**（`d
 いるか」の label 表現）。**`ready → delegated` は着手した側**（委譲を起こした、またはインラインで実装に
 入った session）が `gh-issue-mark-delegated <N>` で行う。`gh issue edit` を直接使わないのは、現在の label を
 確かめず triage にも撃てて人間ゲートを飛ばしうるため（例外は §6 の同一ターン経路）。人間不在の委譲先は
-付け替えない（担い手を「委譲」に限ると、インライン経路で付け替える役が居なくなるため、「着手した側」に置く）。
+付け替えない。
 
 ### 4. issue へのコメント投稿はしない
 
@@ -81,8 +81,7 @@ issue を完了報告や残タスクに「#N（issue 化済み）」と載せな
 - issue と PR の対応は branch 名 `task-<N>-<slug>` だけが担う。PR 本文・commit に `Closes #<N>` や番号を
   書かない。close は dotrc 対象なら crawler、それ以外の repo は人。PR を分けた task の最後より前の PR は
   `task-<N>-` で始めない（最初の merge で閉じるため）。reopen した task の再着手の PR も同じ形にし、
-  `status/delegated` にも戻さない（過去の merged PR が残っているので、戻すと次の pass で即 close される）。
-  根拠は `dotrc/docs/design/agent-issue-workflow.md`「既知の限界」
+  `status/delegated` にも戻さない。根拠は `dotrc/docs/design/agent-issue-workflow.md`「既知の限界」
 - **消化側を状況から推測しない。** 緊急そう・文脈がある・今なら安い、を理由に引き取らない。割り当ては
   人間（観測は crawler）が明示的に行う
 
