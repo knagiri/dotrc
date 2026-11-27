@@ -778,7 +778,7 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
 >      見出しに沿って書き、`detail` の内容を入れる。起票してよい粒度は `issue-workflow.md` §5 に従い、
 >      その PR 限り・一過性で §5 を満たさないと見えたら起票せず `dispositions_failed` に理由を残す）。exit code の扱いは `dot/claude/rules/issue-workflow.md`
 >      §2 に従う。起票したらそれで完了で、issue の
->      消化はしない（同 §6.1）。template が無ければ、`detail` が示す箇所に TODO コメント（何を・なぜ後回しにしたか）を
+>      消化はしない（同 §6）。template が無ければ、`detail` が示す箇所に TODO コメント（何を・なぜ後回しにしたか）を
 >      置き、手順 2 と同じ要領で commit / push する。記録先は issue の URL か `<ファイル>:<行>` になる。
 >    - **thread 由来**（`origin` が `thread`）: reply の本文を一時ファイルに書き、`gh-reply-thread <thread_id> <file>` →
 >      exit 0 なら `gh-resolve-thread <thread_id>`。本文は処置名と理由（`defer` なら記録先、`stale` なら

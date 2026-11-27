@@ -8,7 +8,7 @@ allowed-tools: Read, Glob, Grep, Bash(gh-issue-file --repo), Bash(gh issue view 
 
 グループにぶら下がる観測を全部読み、個々の症状への対症ではなく、複数の観測に効く構造的な
 改善策を設計して、`implement-and-review` に HOW 確定済みとして渡す。観測の扱い全体は
-`dot/claude/rules/issue-workflow.md` を参照。
+`docs/design/agent-issue-workflow.md` を参照。
 
 ## 入力
 
