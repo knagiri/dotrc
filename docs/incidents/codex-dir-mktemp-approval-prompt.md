@@ -15,10 +15,20 @@ allow 済みでも承認待ちで止まりうるという内容だった。
 ## 直し方
 
 - `Bash(mktemp *)` を allow に足す
-- `<CODEX_DIR>` を `mktemp -d -p /tmp codex-review.XXXXXX` で作り、パスはリテラルで書く
-  （変数展開を避けるため置き場所は `/tmp` 直下になる）
-- 一時ファイルの一般方針（`$CLAUDE_JOB_DIR/tmp`）の例外になるので、理由と後始末（tally の実行後、
-  並走を中断した場合も `rm -rf`）を手順に明記する
+- `<CODEX_DIR>` を job dir の下に作る。`printenv CLAUDE_JOB_DIR` で値を取り、展開済みのリテラル
+  パスで `mkdir -p <値>/tmp` と `mktemp -d -p <値>/tmp codex-review.XXXXXX` を撃つ（変数展開を
+  コマンドに含めない）。job が消えるときに一緒に消えるので、後始末の `rm` は手順に置かない
+- `CLAUDE_JOB_DIR` が未定義（`printenv` が何も返さない。interactive session 等）のときだけ
+  `mktemp -d -p /tmp codex-review.XXXXXX` にし、後始末は best-effort で `/tmp` に残りうると明記する
+- `rm` の allow は足さない
+
+## /tmp 案を取り下げた理由
+
+最初の直しは `<CODEX_DIR>` を `/tmp` 直下に作り、後始末に `rm -rf` を指示する形だった。この PR の
+review を回した auto mode の session で、その後始末の `rm -rf /tmp/codex-review.<...>` を実行したところ
+permission で拒否された（`rm` は allowlist に無い）。承認待ち・拒否で止まる問題が後始末の段で
+再発するので、置き場所を job dir に戻し、後始末そのものを無くした。mktemp の承認待ちは上のとおり
+観測していないが、`rm` の拒否は観測した。
 
 ## 反映先
 

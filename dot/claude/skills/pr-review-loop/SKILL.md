@@ -143,16 +143,18 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       **codex の並走**: 選んだ各 agent の観点（agent 名から `pr-review-toolkit:` を外したもの）ごとに、
       toolkit agent の dispatch と並べて `codex-review <PR> <観点> [<prohibitions-file>]` を Bash の
       `run_in_background` で起動し、stdout を `<CODEX_DIR>/<観点>.json` へ保存する。`<CODEX_DIR>` は
-      **実行ごとに新しく作る**（`mktemp -d -p /tmp codex-review.XXXXXX`。変数展開を含めると
-      allow 済みでも承認待ちで止まるので、パスはリテラルで書く。この dir だけ一時ファイルの一般方針
-      （`$CLAUDE_JOB_DIR/tmp`）でなく `/tmp` 直下を使うのはそのためで、代わりに後始末を明示する）。
+      **実行ごとに新しく作る**。先に `printenv CLAUDE_JOB_DIR` で値を取り、展開済みのリテラルパスで
+      `mkdir -p <値>/tmp` と `mktemp -d -p <値>/tmp codex-review.XXXXXX` を撃つ（コマンドに `$VAR` の展開を
+      含めると allow 済みでも承認待ちで止まる）。job の dir は job が消えるときに一緒に消えるので、
+      後始末の `rm` は要らない（`rm` は allowlist に無く、auto mode では拒否される）。`printenv` が
+      何も返さない（`CLAUDE_JOB_DIR` 未定義。interactive session 等）ときだけ
+      `mktemp -d -p /tmp codex-review.XXXXXX` にする。この場合は後始末の手段が無く `/tmp` に残りうる（best-effort）。
       固定パスを使い回すと、今回走らせなかった観点や起動できなかった観点に前回の出力が残る。
       観点の選び方は上の toolkit の選び方をそのまま使い、別に持たない。`<PROHIBITIONS>` が渡されていれば原文を一時ファイルに書いて第 3 引数に
       渡し、「なし」なら省く。ラッパーは `/tmp` か `~/.claude/jobs` の下しか受け付けないので、
       ファイルは必ず `mktemp -p /tmp` で `/tmp` 直下に作る（`$CLAUDE_JOB_DIR` や TMPDIR 任せの `mktemp` は
       置き場所が外れうる）。集約が済んだら消す。それ以外（実装の意図・HOW・`<SCOPE>`）は渡さない（不変条件「author とは
       独立」。ラッパーは PR と観点の定義だけで prompt を組む）。
-      `<CODEX_DIR>` は `codex-review-tally` の実行後（並走を中断した場合も）に `rm -rf` で消す。
       toolkit agent と codex の全観点の終了を待ってから集約する。待たずに進むと遅い観点が恒常的に落ち、
       比較が偏るため。最大 5 並列になるが、プロセスはネットワーク待ちが支配的で CPU をほぼ使わないので
       `shared-machine-load.md` §1 の理由付きの例外に当たる。この並走は toolkit agent を codex へ置き換えて
