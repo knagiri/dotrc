@@ -70,9 +70,10 @@ gra_check_human_reviews() {  # <owner> <name> <pr>
 # gra_check_paths <nwo> <base branch> <sha> <paths file> <scratch dir> --
 # at least one and fewer than 100 files changed from the merge base of the base
 # branch and <sha> to <sha> (three-dot compare; both sides of a rename), all
-# allowed by <paths file> (.gitignore format), and none is under .github/ or
-# .claude/, a root or docs/ CODEOWNERS, or starts with ':' (git would read it as
-# pathspec magic). Dies with 4 on a refusal.
+# allowed by <paths file> (.gitignore format), and none is under the root
+# .github/, .codex/ or .githooks/, under a .claude/ or .agents/ at any depth, is
+# the root .mcp.json or a root or docs/ CODEOWNERS, or starts with ':' (git would
+# read it as pathspec magic). Dies with 4 on a refusal.
 # <paths file> has gitignore semantics: a negation cannot re-include a file
 # under an excluded parent directory (`src/` then `!src/x` still allows src/x);
 # write `src/*` for the negation to take effect.
@@ -111,10 +112,17 @@ gra_check_paths() {
     case "${p,,}" in
       :*) gra_die 4 "$p starts with ':', which git would read as pathspec magic" ;;
       codeowners|docs/codeowners) gra_die 4 "$p is a CODEOWNERS file, which is never approved this way" ;;
+      .mcp.json) gra_die 4 "$p is the root .mcp.json, which is never approved this way" ;;
     esac
+    # The leading and trailing '/' make a directory match only at a path
+    # component boundary: */.claude/* catches a/b/.claude/x but not foo.claude/x.
     case "/${p,,}/" in
       /.github/*) gra_die 4 "$p is under .github/, which is never approved this way" ;;
+      /.codex/*) gra_die 4 "$p is under .codex/, which is never approved this way" ;;
+      /.githooks/*) gra_die 4 "$p is under .githooks/, which is never approved this way" ;;
       */.claude/*) gra_die 4 "$p is under .claude/, which is never approved this way" ;;
+      # .claude/ may be a symlink into .agents/ (e.g. .claude/skills -> .agents/skills).
+      */.agents/*) gra_die 4 "$p is under .agents/, which is never approved this way" ;;
     esac
   done <"$scratch/paths"
 

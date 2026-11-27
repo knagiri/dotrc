@@ -61,9 +61,11 @@ set -euo pipefail
 #      <SHA> (REST three-dot compare, pinned to <SHA>; both sides of a rename;
 #      at least one and fewer than 100) are all allowed by `paths` -- git
 #      evaluates it with `git check-ignore --no-index` in an empty scratch repo,
-#      "ignored" reading as "allowed" -- and none is under the root `.github/`
-#      or a `.claude/` at any depth, is a root or `docs/` CODEOWNERS, or starts
-#      with ':' (all case-insensitive), whatever `paths` says
+#      "ignored" reading as "allowed" -- and none is under the root `.github/`,
+#      `.codex/` or `.githooks/`, under a `.claude/` or `.agents/` at any depth
+#      (a whole path component: `foo.claude/` does not count), is the root
+#      `.mcp.json` or a root or `docs/` CODEOWNERS, or starts with ':' (all
+#      case-insensitive), whatever `paths` says
 #   4. the PR head is <SHA>
 # Then: `gh workflow run <workflow> -R <nwo> --ref refs/heads/<default> -f pr=<PR>
 # -f head_sha=<SHA>`, and exit 0 once gh reports the run as started.

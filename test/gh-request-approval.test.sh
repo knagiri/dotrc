@@ -205,10 +205,12 @@ ck_human() {  # human threads / CHANGES_REQUESTED -> 4; bot ones and resolved on
     [ "$rc" -eq 0 ] || return 1
   done
 }
-ck_paths() {  # changed files outside the list, or under .github/ .claude/ -> 4
+ck_paths() {  # changed files outside the list, or under a fixed refusal -> 4
   local p
   for p in src/a.sh .github/workflows/ci.yml .GitHub/x docs/.claude/settings.json .claude/settings.json \
-           CODEOWNERS docs/CODEOWNERS docs/codeowners; do
+           a/b/.claude/x CODEOWNERS docs/CODEOWNERS docs/codeowners \
+           .codex/config.toml .githooks/pre-commit .mcp.json .MCP.json \
+           .agents/skills/x/SKILL.md a/b/.agents/x; do
     reset_state; printf 'docs/\n.github/\n*\n' >"$conf/paths"
     [ "$p" = src/a.sh ] && printf 'docs/\n' >"$conf/paths"
     files_of docs/a.md "$p"; gra "$1" -- 42 "$sha"
@@ -217,6 +219,17 @@ ck_paths() {  # changed files outside the list, or under .github/ .claude/ -> 4
   reset_state; jq -c '. + [{filename: "docs/b.md", previous_filename: "src/b.md", status: "renamed"}]' \
     "$state/files.json" >"$state/f" && mv "$state/f" "$state/files.json"
   gra "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! started || return 1
+  # a rename out of a fixed refusal is refused even when the list allows everything
+  for p in .claude/x .agents/x .codex/x .githooks/x .mcp.json; do
+    reset_state; printf '*\n' >"$conf/paths"
+    jq -n --arg o "$p" '[{filename: "docs/b.md", previous_filename: $o, status: "renamed"}]' >"$state/files.json"
+    gra "$1" -- 42 "$sha"; [ "$rc" -eq 4 ] && ! started || return 1
+  done
+  # look-alikes are not refused: the directories match only at a component
+  # boundary, and .codex/ .githooks/ .mcp.json only at the root
+  reset_state; printf '*\n' >"$conf/paths"
+  files_of foo.claude/x a/foo.claude/y foo.agents/x a/foo.agents/y docs/.codex/x docs/.githooks/x docs/.mcp.json .codexrc
+  gra "$1" -- 42 "$sha"; [ "$rc" -eq 0 ] || return 1
   for p in ':/docs/x' ':(top)docs/y'; do
     reset_state; printf '/docs/\n' >"$conf/paths"; files_of "$p"; gra "$1" -- 42 "$sha"
     [ "$rc" -eq 4 ] && ! started || return 1
@@ -326,6 +339,14 @@ expect_broken nocap 's|\[ "\$nfiles" -lt 100 \]|true|' ck_paths
 expect_broken nohead 's|\[ "\$head" = "\$sha" \] \|\| gra_die 5 "#\$pr head is|true \|\| gra_die 5 "#$pr head is|' ck_head
 expect_broken noworkflowrc 's|\|\| gra_die 6|\|\| true|' ck_workflow_fail
 expect_broken nocolon 's|^      :\*) gra_die 4|      :nothing*) gra_die 4|' ck_paths
+expect_broken nodotcodex 's|/.codex/\*) gra_die 4|/.nothing/*) gra_die 4|' ck_paths
+expect_broken nodotgithooks 's|/.githooks/\*) gra_die 4|/.nothing/*) gra_die 4|' ck_paths
+expect_broken nomcpjson 's|^      .mcp.json) gra_die 4|      .nothing) gra_die 4|' ck_paths
+expect_broken nodotagents 's|\*/.agents/\*) gra_die 4|*/.nothing/*) gra_die 4|' ck_paths
+expect_broken agentssuffix 's|\*/.agents/\*) gra_die 4|*.agents/*) gra_die 4|' ck_paths
+expect_broken claudesuffix 's|\*/.claude/\*) gra_die 4|*.claude/*) gra_die 4|' ck_paths
+expect_broken codexanydepth 's|/.codex/\*) gra_die 4|*/.codex/*) gra_die 4|' ck_paths
+expect_broken mcpanydepth 's|^      .mcp.json) gra_die 4|      .mcp.json\|*/.mcp.json) gra_die 4|' ck_paths
 expect_broken nocodeowners 's/^      codeowners|docs\/codeowners) gra_die 4/      codeowners-nothing) gra_die 4/' ck_paths
 expect_broken nodocscodeowners 's/codeowners|docs\/codeowners) gra_die 4/codeowners) gra_die 4/' ck_paths
 expect_broken nozerofiles 's|\[ "\$nfiles" -gt 0 \]|true|' ck_paths
