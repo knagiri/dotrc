@@ -11,7 +11,8 @@ set -euo pipefail
 # for, so both reviews look for the same things. code-simplifier is refused:
 # that agent rewrites code rather than reporting on it.
 # <prohibitions-file>, if given, is copied verbatim into the prompt as
-# constraints the reviewer must keep.
+# constraints the reviewer must keep. It must live under $CLAUDE_JOB_DIR or
+# ${TMPDIR:-/tmp} (see the check below).
 #
 # Output (stdout, on success only):
 #   {"perspective": "<name>",
@@ -68,6 +69,18 @@ if [ -n "$prohib" ]; then
   case "$prohib" in -*) echo "codex-review: flags are not accepted (got: $prohib)" >&2; exit 1 ;; esac
   [ -f "$prohib" ] && [ -r "$prohib" ] \
     || { echo "codex-review: cannot read prohibitions file: $prohib" >&2; exit 1; }
+  # The file's content is sent to codex verbatim. Since the command is
+  # allowlisted, accepting any path would let a caller ship an arbitrary local
+  # file (a token file, say) to a third party without approval. Only a file under
+  # a temp dir -- $CLAUDE_JOB_DIR or ${TMPDIR:-/tmp} -- is accepted.
+  prohib_real="$(readlink -f "$prohib")"
+  in_temp=0
+  for base in "${TMPDIR:-/tmp}" ${CLAUDE_JOB_DIR:+"$CLAUDE_JOB_DIR"}; do
+    base_real="$(readlink -f "$base" 2>/dev/null)" || continue
+    case "$prohib_real" in "$base_real"/*) in_temp=1 ;; esac
+  done
+  [ "$in_temp" = 1 ] \
+    || { echo "codex-review: prohibitions file must be under \$CLAUDE_JOB_DIR or \${TMPDIR:-/tmp} (got: $prohib)" >&2; exit 1; }
 fi
 timeout_s="${CODEX_REVIEW_TIMEOUT:-900}"
 [[ "$timeout_s" =~ ^[1-9][0-9]*$ ]] \

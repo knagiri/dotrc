@@ -100,6 +100,15 @@ run 42 code-reviewer --sandbox
 run 42 code-reviewer "$work/missing-file"
 [ "$rc" = 1 ] && ! codex_ran && ok "unreadable prohibitions file is rejected" || ng "missing prohibitions file"
 
+# A readable file outside the temp dirs (this test file itself, in the checkout)
+# must not be shipped to codex.
+TMPDIR="$work" CODEX_STUB_OUT="$good" run 42 code-reviewer "$here/codex-review.test.sh"
+[ "$rc" = 1 ] && ! codex_ran && ok "prohibitions file outside the temp dirs is rejected" || ng "outside temp dir"
+# A symlink inside the temp dir pointing outside it is resolved first.
+ln -s "$here/codex-review.test.sh" "$work/link-out"
+TMPDIR="$work" CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/link-out"
+[ "$rc" = 1 ] && ! codex_ran && ok "symlink escaping the temp dir is rejected" || ng "symlink escape"
+
 GH_FAIL=1 CODEX_STUB_OUT="$good" run 42 code-reviewer
 [ "$rc" = 2 ] && ! codex_ran && [ ! -s "$out" ] && ok "gh failure exits 2 without running codex" || ng "gh failure"
 
@@ -152,7 +161,7 @@ else ng "prompt data"; fi
 
 # Prohibitions are passed verbatim.
 printf '%s\n' 'Never touch ~/.codex PROHIBITION_MARKER' >"$work/prohib"
-CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/prohib"
+TMPDIR="$work" CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/prohib"
 [ "$rc" = 0 ] && grep -qF 'Never touch ~/.codex PROHIBITION_MARKER' "$work/stdin" \
   && ok "prohibitions file reaches the prompt verbatim" || ng "prohibitions"
 
