@@ -73,13 +73,20 @@ PATH="$stubdir:$PATH" "$bindir/gh-automerge" 42 --admin >/dev/null 2>&1; [ $? -n
 # fall through to a direct merge.
 #
 # The grant gate (test/gh-automerge.test.sh) reads the PR before merging, so the
-# stub answers `pr view` with two commit ids and `pr diff` with a diff that has
-# no grant change; only `pr merge` calls are logged.
+# stub answers `pr view` with two commit ids (and the head alone for the re-read
+# after the diff) and `pr diff` with a diff that has no grant change; only
+# `pr merge` calls are logged.
 amdir="$stubdir/am"; mkdir -p "$amdir"
 cat >"$amdir/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
-  "pr view") echo "$(printf 'b%.0s' {1..40}) $(printf 'c%.0s' {1..40})" | tr bc 0a; exit 0 ;;
+  "pr view")
+    # the first read asks for base and head, the re-read after the diff for the head only
+    case "$*" in
+      *baseRefOid*) echo "$(printf 'b%.0s' {1..40}) $(printf 'c%.0s' {1..40})" | tr bc 0a ;;
+      *) printf 'c%.0s' {1..40} | tr c a; echo ;;
+    esac
+    exit 0 ;;
   "pr diff") printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-a' '+b'; exit 0 ;;
 esac
 printf '[%s]\n' "$@" >>"$GH_ARGS_FILE"
@@ -101,22 +108,23 @@ amrun() {  # $1 = --auto failure message ("" = succeed), $2 = its exit code
 }
 amcount() { grep -cxF "$1" "$amdir/args"; }  # occurrences of one argv element
 
-# gh-automerge: numeric PR issues `gh pr merge --auto --merge <PR>`, no --admin.
+# gh-automerge: numeric PR issues `gh pr merge --auto --merge --match-head-commit <head> <PR>`,
+# no --admin.
 amrun '' >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ] \
   && grep -qxF '[pr]' "$amdir/args" && grep -qxF '[merge]' "$amdir/args" \
   && grep -qxF '[--auto]' "$amdir/args" && grep -qxF '[--merge]' "$amdir/args" \
-  && grep -qxF '[42]' "$amdir/args" \
+  && grep -qxF '[42]' "$amdir/args" && grep -qxF '[--match-head-commit]' "$amdir/args" \
   && ! grep -qxF '[--admin]' "$amdir/args"; then
-  echo "ok: gh-automerge issues gh pr merge --auto --merge <PR>, no --admin"
+  echo "ok: gh-automerge issues gh pr merge --auto --merge --match-head-commit <head> <PR>, no --admin"
 else echo "FAIL: gh-automerge rc=$rc args=$(cat "$amdir/args" 2>/dev/null)"; fail=1; fi
 
-# Case A: the clean refusal falls back to a plain `gh pr merge --merge <PR>`
+# Case A: the clean refusal falls back to `gh pr merge --merge --match-head-commit <head> <PR>`
 # (two --merge, one --auto), still without --admin.
 amrun 'X GraphQL: Pull request is in clean status (enablePullRequestAutoMerge)' 1 >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ] \
   && [ "$(amcount '[--auto]')" -eq 1 ] && [ "$(amcount '[--merge]')" -eq 2 ] \
-  && [ "$(amcount '[42]')" -eq 2 ] \
+  && [ "$(amcount '[42]')" -eq 2 ] && [ "$(amcount '[--match-head-commit]')" -eq 2 ] \
   && ! grep -qxF '[--admin]' "$amdir/args"; then
   echo "ok: gh-automerge falls back to a direct merge when auto-merge is refused for clean status"
 else echo "FAIL: gh-automerge clean fallback rc=$rc args=$(cat "$amdir/args" 2>/dev/null)"; fail=1; fi

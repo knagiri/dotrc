@@ -4,21 +4,22 @@ set -euo pipefail
 # gh-automerge <PR#> -- merge a pull request, preferring auto-merge.
 # gh-automerge --disable <PR#> -- turn its auto-merge off again (see below).
 #
-# Runs EXACTLY `gh pr merge --auto --merge --match-head-commit <head> <PR>` with
-# no flag passthrough, so a
-# caller (incl. a prompt-injected reviewer agent) cannot append --admin or other
-# protection-bypassing flags. This lets the merge grant be allowlisted narrowly
-# as `Bash(gh-automerge *)` instead of the broad `gh pr merge *`.
+# The merge call is always `gh pr merge --auto --merge --match-head-commit <head> <PR>`
+# with no flag passthrough, so a caller (incl. a prompt-injected reviewer agent) cannot
+# append --admin or other protection-bypassing flags. This lets the merge grant be
+# allowlisted narrowly as `Bash(gh-automerge *)` instead of the broad `gh pr merge *`.
+# Before that call the grant gate below reads the PR (`gh pr view`, `gh pr diff` and
+# `gh api .../contents`, all read-only).
 #
 # Clean-status fallback: GitHub's enablePullRequestAutoMerge refuses a PR whose
 # mergeStateStatus is CLEAN with "Pull request is in clean status" -- there is
 # nothing left to wait for, so there is no auto-merge to enable. A repo without
 # CI workflows lands in that state almost immediately, which makes auto-merge
 # structurally unreachable. On exactly that refusal we fall back to
-# `gh pr merge --merge --match-head-commit <head> <PR>`, a direct merge that GitHub still gates on branch
-# protection (required checks / approvals); this wrapper bypasses nothing, and
-# --admin remains unreachable. Any other failure (unmet required check,
-# conflict, ...) is passed back to the caller untouched.
+# `gh pr merge --merge --match-head-commit <head> <PR>`, a direct merge that GitHub
+# still gates on branch protection (required checks / approvals); this wrapper
+# bypasses nothing, and --admin remains unreachable. Any other failure (unmet
+# required check, conflict, ...) is passed back to the caller untouched.
 #
 # Grant gate: before any merge call, the PR is checked for a grant change, and
 # if it has one nothing is issued and the exit code is 5 (no other path here
@@ -28,15 +29,27 @@ set -euo pipefail
 #   - a file named settings.json / settings.local.json / managed-settings.json,
 #     anywhere (the whole file: hooks and env act on what runs, not only
 #     permissions);
-#   - the frontmatter of a SKILL.md, an `agents/*.md` or a `.claude/commands/`
-#     *.md: added, deleted or renamed such a file always counts; one modified in
-#     place counts when its frontmatter at the PR's base commit differs from the
-#     one at its head commit (read with `gh api .../contents`). Body-only edits
-#     pass.
-# The gate fails closed: an unreadable PR, diff or file, an empty diff, a
-# quoted path or a line it cannot parse all count as a grant change. The base
-# side is the base branch's current tip, not the merge base, so a frontmatter
-# change landed on the base meanwhile is over-detected, never missed.
+#   - the frontmatter of a SKILL.md, an `agents/**/*.md` or a `claude/commands/**/*.md`
+#     (also `.claude/commands/`): added, deleted, renamed or copied such a file
+#     always counts, and so does one whose mode is 120000 (symlink) on either side;
+#     one modified in place counts when its frontmatter at the PR's base commit
+#     differs from the one at its head commit (read with `gh api .../contents`), or
+#     when either side has no frontmatter that opens on line 1 and closes, because
+#     then the two cannot be compared. Body-only edits of a file that has
+#     frontmatter pass.
+# The gate fails closed: an unreadable PR, diff or file, an empty diff, a quoted
+# path, a ---/+++ line or file header it cannot parse and text before the first
+# file header all count as a grant change. Other lines it does not know (index,
+# similarity, ...) are skipped. The base side is the base branch's current tip,
+# not the merge base, so a frontmatter change landed on the base meanwhile is
+# over-detected, never missed.
+#
+# What the gate does not see: it judges settings files and frontmatter only. A
+# change to the body of an allowlisted wrapper under bin/, to a --permission-mode
+# or --allowedTools written inside a script, to a hook's implementation or to the
+# deploy link map passes. Those are covered by a convention on the human side (a PR
+# that changes grants is merged only after a human approves it), not by this
+# wrapper, and the range of the gate is not widened here.
 #
 # Head pinning: the gate judges the diff of the head it read, but auto-merge
 # merges whatever the head is when it fires, and GitHub keeps auto-merge enabled
@@ -47,25 +60,27 @@ set -euo pipefail
 # mergePullRequest GitHub documents the check ("OID that the pull request head
 # ref must match to allow merge"); for enablePullRequestAutoMerge it documents
 # only "The expected head OID of the pull request", not what a later push does.
-# So the pin is the best this wrapper can do on the auto path, not a guarantee;
-# callers that push onto a PR with auto-merge enabled disable it first
-# (--disable below).
+# `gh pr diff` takes no SHA, so the head is read again after the diff and the gate
+# refuses (exit 5) when it moved in between. The auto path therefore does not
+# guarantee anything for a push after auto-merge is enabled; --disable (below)
+# turns an enabled auto-merge off.
 #
 # --disable: `gh-automerge --disable <PR#>` turns an already enabled auto-merge
 # off again, for the window in which more fix commits are pushed onto an open PR
 # (implement-and-review, "既存 PR への対応"). Without it, auto-merge enabled in an
 # earlier round fires as soon as the required conditions (approval, CI, ...)
 # are met by one of those pushes, before the new review round has finished.
-# Re-enabling is the normal `gh-automerge <PR#>` call that pr-automerge makes once the review converges.
+# Re-enabling is the normal `gh-automerge <PR#>` call.
 #   - state MERGED / CLOSED -> exit 3, nothing issued (also when the re-read
-#     after --disable-auto shows it, i.e. auto-merge fired in between). Pushing more commits to
-#     that branch would land nowhere, so the caller must stop rather than push;
-#     3 keeps this apart from 1 (bad arguments).
+#     after --disable-auto shows it, i.e. auto-merge fired in between). Pushing
+#     more commits to that branch would land nowhere, so the caller must stop
+#     rather than push; 3 keeps this apart from 1 (bad arguments).
 #   - autoMergeRequest null -> exit 0, nothing issued (idempotent). We decide
 #     this from the PR state ourselves instead of relying on how
 #     `gh pr merge --disable-auto` treats a PR with nothing to disable.
-#   - otherwise -> `gh pr merge --disable-auto <PR#>`, then read the PR again: OPEN with
-#     autoMergeRequest null -> exit 0, MERGED / CLOSED -> exit 3, else exit 1.
+#   - otherwise -> `gh pr merge --disable-auto <PR#>`, then read the PR again:
+#     OPEN with autoMergeRequest null -> exit 0, MERGED / CLOSED -> exit 3, else
+#     exit 1.
 # The accepted forms are exactly the two below; no other option is parsed or
 # passed through, so --admin stays unreachable in both.
 #
@@ -127,7 +142,8 @@ if [ "$disable" -eq 1 ]; then
       echo "gh-automerge: #$pr became ${view%% *} while disabling; do not push to its branch" >&2
       exit 3 ;;
     *)
-      echo "gh-automerge: auto-merge is still enabled or the state is unexpected on #$pr after --disable-auto ($view)" >&2
+      echo "gh-automerge: auto-merge is still enabled or the state is unexpected on #$pr" \
+           "after --disable-auto ($view)" >&2
       exit 1 ;;
   esac
 fi
@@ -148,20 +164,22 @@ gate_refuse() {  # gate_refuse <reason line>... -> exit 5, nothing issued
 # basename settings.json / settings.local.json / managed-settings.json.
 is_settings() { [[ "${1##*/}" =~ ^(managed-)?settings(\.local)?\.json$ ]]; }
 # Files whose frontmatter grants tools: SKILL.md, agent and command definitions.
+# `.?claude/` covers both ~/.claude/commands and this repo's dot/claude/commands.
 is_fm_file() {
   local p="$1" b="${1##*/}"
   [[ "${b,,}" == skill.md ]] && return 0
-  [[ "$p" =~ (^|/)agents/[^/]+\.md$ ]] && return 0
-  [[ "$p" =~ (^|/)\.claude/commands/.+\.md$ ]]
+  [[ "$p" =~ (^|/)agents/.+\.md$ ]] && return 0
+  [[ "$p" =~ (^|/)\.?claude/commands/.+\.md$ ]]
 }
-# Frontmatter of the file on stdin: line 1 ending in `---` (so a BOM or stray
-# prefix still opens it) through the next line that is exactly `---`. No
-# frontmatter prints nothing; an unclosed one returns 2.
+# Frontmatter of the file on stdin: a line 1 that ends in `---` (so a BOM or stray
+# prefix still opens it; only spaces, tabs and CR may follow) through the next line
+# that is `---` followed by nothing but spaces, tabs and CR. Fails closed: no
+# frontmatter on line 1 (including an empty file) returns 3, an unclosed one returns 2.
 frontmatter() {
   awk '
-    NR == 1 { l = $0; sub(/[ \t\r]+$/, "", l); if (l !~ /---$/) exit 0; open = 1; print; next }
-    open { print; l = $0; sub(/[ \t\r]+$/, "", l); if (l == "---") { closed = 1; exit 0 } }
-    END { if (open && !closed) exit 2 }'
+    NR == 1 { l = $0; sub(/[ \t\r]+$/, "", l); if (l !~ /---$/) exit; open = 1; print; next }
+    open { print; l = $0; sub(/[ \t\r]+$/, "", l); if (l == "---") { closed = 1; exit } }
+    END { if (!open) exit 3; if (!closed) exit 2 }'
 }
 # Raw content of <path> at <sha>. Each path segment is percent-encoded.
 fetch_file() {  # fetch_file <path> <sha>
@@ -170,26 +188,38 @@ fetch_file() {  # fetch_file <path> <sha>
   gh_mise api "repos/{owner}/{repo}/contents/$enc?ref=$2" -H 'Accept: application/vnd.github.raw'
 }
 
-fm_at() {  # fm_at <path> <sha> -> frontmatter of <path> at <sha>; non-0 on failure
+# fm_at <path> <sha> -> frontmatter of <path> at <sha>; non-0 on failure, with the
+# cause (the start of gh's stderr, or what the content lacked) left in "$tmp/ferr".
+fm_at() {
   local c
-  c="$(fetch_file "$1" "$2" 2>/dev/null)" || return 1
-  frontmatter <<<"$c"  # not a pipe: awk stops reading at the closer (SIGPIPE + pipefail)
+  c="$(fetch_file "$1" "$2" 2>"$tmp/ferr")" || return 1
+  # a here-string, not a pipe: awk stops reading at the closer (SIGPIPE + pipefail)
+  frontmatter <<<"$c" || {
+    echo "no closed frontmatter on line 1 of $1 at $2" >"$tmp/ferr"; return 1
+  }
 }
 
 # The head read here is pinned with --match-head-commit below (see "Head
 # pinning" in the header).
-oids="$(gh_mise pr view "$pr" --json baseRefOid,headRefOid --jq '"\(.baseRefOid) \(.headRefOid)"' 2>"$err")" \
+oids="$(gh_mise pr view "$pr" --json baseRefOid,headRefOid \
+  --jq '"\(.baseRefOid) \(.headRefOid)"' 2>"$err")" \
   || gate_refuse "could not read the base/head commits of #$pr: $(head -c 300 "$err")"
 read -r base_oid head_oid <<<"$oids"
 [[ "${base_oid:-}" =~ ^[0-9a-f]{40}$ && "${head_oid:-}" =~ ^[0-9a-f]{40}$ ]] \
   || gate_refuse "unexpected base/head commits for #$pr: $oids"
 gh_mise pr diff "$pr" --color never >"$tmp/diff" 2>"$err" \
   || gate_refuse "could not read the diff of #$pr: $(head -c 300 "$err")"
+# `pr diff` takes no SHA: a push between the two reads would leave the diff
+# describing another head than the one that gets pinned.
+head_now="$(gh_mise pr view "$pr" --json headRefOid --jq .headRefOid 2>"$err")" \
+  || gate_refuse "could not re-read the head commit of #$pr: $(head -c 300 "$err")"
+[ "$head_now" = "$head_oid" ] \
+  || gate_refuse "the head of #$pr moved while it was being judged ($head_oid -> $head_now)"
 
 reasons=()
 nfiles=0
 # One file block of the diff, collected by the loop below.
-f_hdr="" f_old="" f_new="" f_created=0 f_deleted=0 f_renamed=0
+f_hdr="" f_old="" f_new="" f_created=0 f_deleted=0 f_renamed=0 f_symlink=0
 flush_file() {
   [ -n "$f_hdr" ] || return 0
   nfiles=$((nfiles + 1))
@@ -209,15 +239,26 @@ flush_file() {
   for p in "$old" "$new"; do
     [ -n "$p" ] && is_settings "$p" && { reasons+=("$p: settings file"); return 0; }
   done
-  { { [ -n "$old" ] && is_fm_file "$old"; } || { [ -n "$new" ] && is_fm_file "$new"; }; } || return 0
-  if [ "$f_created" -eq 1 ] || [ -z "$old" ]; then reasons+=("$new: new file with frontmatter"); return 0; fi
-  if [ "$f_deleted" -eq 1 ] || [ -z "$new" ]; then reasons+=("$old: deleted file with frontmatter"); return 0; fi
-  if [ "$f_renamed" -eq 1 ] || [ "$old" != "$new" ]; then reasons+=("$old -> $new: renamed / copied file with frontmatter"); return 0; fi
+  { { [ -n "$old" ] && is_fm_file "$old"; } ||
+    { [ -n "$new" ] && is_fm_file "$new"; }; } || return 0
+  if [ "$f_created" -eq 1 ] || [ -z "$old" ]; then
+    reasons+=("$new: new file with frontmatter"); return 0
+  fi
+  if [ "$f_deleted" -eq 1 ] || [ -z "$new" ]; then
+    reasons+=("$old: deleted file with frontmatter"); return 0
+  fi
+  if [ "$f_renamed" -eq 1 ] || [ "$old" != "$new" ]; then
+    reasons+=("$old -> $new: renamed / copied file with frontmatter"); return 0
+  fi
+  if [ "$f_symlink" -eq 1 ]; then
+    reasons+=("$new: symlink (mode 120000), frontmatter cannot be compared"); return 0
+  fi
   local fb fh
   if fb="$(fm_at "$old" "$base_oid")" && fh="$(fm_at "$new" "$head_oid")"; then
     [ "$fb" = "$fh" ] || reasons+=("$new: frontmatter changed")
   else
-    reasons+=("$new: frontmatter could not be compared (fetch failed or unclosed)")
+    reasons+=("$new: frontmatter could not be compared (fetch failed or no closed frontmatter)"
+      "  $(head -c 200 "$tmp/ferr")")
   fi
 }
 
@@ -225,11 +266,16 @@ in_hunk=0
 while IFS= read -r line || [ -n "$line" ]; do
   if [[ "$line" == "diff --git "* ]]; then
     flush_file
-    f_hdr="$line" f_old="" f_new="" f_created=0 f_deleted=0 f_renamed=0 in_hunk=0
+    f_hdr="$line" f_old="" f_new="" f_created=0 f_deleted=0 f_renamed=0 f_symlink=0 in_hunk=0
     continue
   fi
   [ -n "$f_hdr" ] || { reasons+=("unparseable diff: text before the first file header"); break; }
   [ "$in_hunk" -eq 1 ] && continue
+  case "$line" in
+    "old mode 120000"|"new mode 120000"|"new file mode 120000"|"deleted file mode 120000"|\
+    "index "*" 120000")
+      f_symlink=1 ;;
+  esac
   case "$line" in
     "@@ "*)              in_hunk=1 ;;
     "new file mode "*)   f_created=1 ;;

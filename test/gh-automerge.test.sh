@@ -12,6 +12,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 sandbox_assert
 bindir="$here/../bin"
 fail=0
+RUN_ENV=()
 
 work="$(mktemp -d)"
 trap 'sandbox_cleanup; rm -rf "$work"' EXIT
@@ -24,13 +25,22 @@ HEAD=2222222222222222222222222222222222222222
 #   diff            -- what `pr diff` prints (GH_DIFF_FAIL=1: print it, exit 1)
 #   files/<sha>/<path> -- what `api repos/{owner}/{repo}/contents/<path>?ref=<sha>`
 #                      returns; a missing file is a 404
-# `pr view` prints the "<base> <head>" line the wrapper's --jq would produce.
+# `pr view` prints what the wrapper's --jq would produce: the "<base> <head>" line, or
+# for the re-read after the diff the head alone (GH_HEAD2 overrides it: a push in
+# between; GH_VIEW_FAIL=1: the call fails).
 # `pr merge` appends its argv to $GH_MERGE_LOG and succeeds
 # (one `[arg]` per line, so each call starts with `[pr]`).
 cat >"$stub/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
-  "pr view") echo "$GH_BASE $GH_HEAD"; exit 0 ;;
+  "pr view")
+    [ "${GH_VIEW_FAIL:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }
+    # the first read asks for base and head; the re-read after the diff asks for the head only
+    case "$*" in
+      *baseRefOid*) echo "$GH_BASE $GH_HEAD" ;;
+      *) echo "${GH_HEAD2:-$GH_HEAD}" ;;
+    esac
+    exit 0 ;;
   "pr diff") cat "$GH_FIX/diff"; [ "${GH_DIFF_FAIL:-0}" = 1 ] && { echo "HTTP 502" >&2; exit 1; }; exit 0 ;;
   "pr merge")
     printf '[%s]\n' "$@" >>"$GH_MERGE_LOG"
@@ -115,8 +125,9 @@ index 0000000..2222222
 EOF
 printf -- '---\nname: foo\nallowed-tools: Bash\n---\n# foo\n' | put new_skill "$HEAD" "$skill"
 
-# The hunk starts at line 1 and its context includes the frontmatter: only the
-# position of the changed line decides, which is what the gate must get right.
+# The hunk starts at line 1 and its context includes the frontmatter, but the base and
+# head frontmatter are equal, so it passes: the gate compares frontmatter, it does not
+# go by where the hunk lies.
 mkfix body_only <<EOF
 diff --git a/$skill b/$skill
 index 1111111..2222222 100644
@@ -165,11 +176,227 @@ printf -- '---\nname: impl\ntools: Read, Bash\n---\nbody\n' | put agent "$HEAD" 
 
 mkfix empty </dev/null
 
+# ---- fixtures for the cases a review round added ----------------------------
+cmd=dot/claude/commands/x.md
+mkfix cmd_fm <<EOF
+diff --git a/$cmd b/$cmd
+index 1111111..2222222 100644
+--- a/$cmd
++++ b/$cmd
+@@ -2,3 +2,3 @@
+ description: x
+-allowed-tools: Read
++allowed-tools: Read, Bash
+ ---
+EOF
+printf -- '---\ndescription: x\nallowed-tools: Read\n---\nbody\n' | put cmd_fm "$BASE" "$cmd"
+printf -- '---\ndescription: x\nallowed-tools: Read, Bash\n---\nbody\n' | put cmd_fm "$HEAD" "$cmd"
+
+sub=dot/claude/agents/sub/x.md
+mkfix agent_sub <<EOF
+diff --git a/$sub b/$sub
+index 1111111..2222222 100644
+--- a/$sub
++++ b/$sub
+@@ -2,3 +2,3 @@
+ name: x
+-tools: Read
++tools: Read, Bash
+ ---
+EOF
+printf -- '---\nname: x\ntools: Read\n---\nbody\n' | put agent_sub "$BASE" "$sub"
+printf -- '---\nname: x\ntools: Read, Bash\n---\nbody\n' | put agent_sub "$HEAD" "$sub"
+
+# Frontmatter that does not open on line 1 cannot be read, so an in-place change
+# cannot be compared: two empty extractions must not count as equal.
+mkfix blank_first <<EOF
+diff --git a/$skill b/$skill
+index 1111111..2222222 100644
+--- a/$skill
++++ b/$skill
+@@ -3,1 +3,1 @@
+-allowed-tools: Read
++allowed-tools: Read, Bash
+EOF
+printf -- '\n---\nallowed-tools: Read\n---\nbody\n' | put blank_first "$BASE" "$skill"
+printf -- '\n---\nallowed-tools: Read, Bash\n---\nbody\n' | put blank_first "$HEAD" "$skill"
+
+# A symlink swapped in for a SKILL.md: both sides read as the same frontmatter, so only
+# the mode (120000) can stop it.
+mkfix symlink_mode <<EOF
+diff --git a/$skill b/$skill
+old mode 100644
+new mode 120000
+EOF
+mkfix symlink_index <<EOF
+diff --git a/$skill b/$skill
+index 1111111..2222222 120000
+--- a/$skill
++++ b/$skill
+@@ -1,1 +1,1 @@
+-a
++b
+EOF
+for n in symlink_mode symlink_index; do
+  printf -- '---\nname: foo\n---\nbody\n' | put $n "$BASE" "$skill"
+  printf -- '---\nname: foo\n---\nbody\n' | put $n "$HEAD" "$skill"
+done
+
+# A grant change first and a harmless file last: the first block must be flushed when the
+# second header starts.
+mkfix multi <<'EOF'
+diff --git a/dot/claude/settings.json b/dot/claude/settings.json
+index 1111111..2222222 100644
+--- a/dot/claude/settings.json
++++ b/dot/claude/settings.json
+@@ -3,1 +3,2 @@
+     "allow": [
++      "Bash(curl *)",
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-a
++b
+EOF
+
+# 100% similarity renames and a copy have no ---/+++ lines: only rename/copy from/to.
+mkfix rename_settings <<'EOF'
+diff --git a/old.md b/dot/claude/settings.json
+similarity index 100%
+rename from old.md
+rename to dot/claude/settings.json
+EOF
+mkfix rename_skill <<EOF
+diff --git a/old.md b/$skill
+similarity index 100%
+rename from old.md
+rename to $skill
+EOF
+mkfix copy_skill <<EOF
+diff --git a/dot/claude/skills/bar/SKILL.md b/$skill
+similarity index 100%
+copy from dot/claude/skills/bar/SKILL.md
+copy to $skill
+EOF
+
+# In place, but the head side of the file cannot be fetched.
+mkfix head_404 <<EOF
+diff --git a/$skill b/$skill
+index 1111111..2222222 100644
+--- a/$skill
++++ b/$skill
+@@ -5,1 +5,1 @@
+-old body
++new body
+EOF
+printf -- '---\nname: foo\n---\nold body\n' | put head_404 "$BASE" "$skill"
+
+mkdiff_for() {  # mkdiff_for <fixture> <path>: a one-line change of <path>
+  mkfix "$1" <<EOF
+diff --git a/$2 b/$2
+index 1111111..2222222 100644
+--- a/$2
++++ b/$2
+@@ -1 +1 @@
+-a
++b
+EOF
+}
+mkdiff_for settings_local dot/claude/settings.local.json
+mkdiff_for settings_managed etc/managed-settings.json
+mkdiff_for mysettings dot/mysettings.json
+
+# A body of about 200KB: awk stops at the closing `---`, so a pipe into it would be hit by
+# SIGPIPE.
+mkfix big_body <<EOF
+diff --git a/$skill b/$skill
+index 1111111..2222222 100644
+--- a/$skill
++++ b/$skill
+@@ -9999,1 +9999,1 @@
+-old
++new
+EOF
+for s in "$BASE:old" "$HEAD:new"; do
+  { printf -- '---\nname: foo\nallowed-tools: Read\n---\n'
+    yes 'body line xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' | head -n 6000
+    echo "${s#*:}"; } | put big_body "${s%%:*}" "$skill"
+done
+[ "$(wc -c <"$fix/big_body/files/$BASE/$skill")" -gt 200000 ] || echo "FAIL: big_body fixture is too small"
+
+mkfix deleted_skill <<EOF
+diff --git a/$skill b/$skill
+deleted file mode 100644
+index 1111111..0000000
+--- a/$skill
++++ /dev/null
+@@ -1,4 +0,0 @@
+----
+-name: foo
+----
+-body
+EOF
+printf -- '---\nname: foo\n---\nbody\n' | put deleted_skill "$BASE" "$skill"
+
+mkfix mode_settings <<'EOF'
+diff --git a/dot/claude/settings.json b/dot/claude/settings.json
+old mode 100644
+new mode 100755
+EOF
+mkfix mode_readme <<'EOF'
+diff --git a/README.md b/README.md
+old mode 100644
+new mode 100755
+EOF
+mkfix binary <<'EOF'
+diff --git a/img.png b/img.png
+index 1111111..2222222 100644
+Binary files a/img.png and b/img.png differ
+EOF
+mkfix quoted <<'EOF'
+diff --git a/a.md "b/sub/q\303\266.md"
+similarity index 100%
+rename from a.md
+rename to "sub/q\303\266.md"
+EOF
+mkfix weird_line <<'EOF'
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- weird/README.md
++++ b/README.md
+@@ -1 +1 @@
+-a
++b
+EOF
+mkfix preamble <<'EOF'
+some text before the first header
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-a
++b
+EOF
+# Removing a line `-- a/...` shows up in the diff as `--- a/...`, inside a hunk.
+mkfix hunk_dash <<'EOF'
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,1 @@
+-keep
+--- a/dot/claude/settings.json
+EOF
+
 # ---- runner -----------------------------------------------------------------
 run() {  # run <bindir> <fixture> -> sets rc, out (stderr), merge log in $work/merges
+  # RUN_ENV (an array of VAR=value) adds to the stub's environment for one check.
   : >"$work/merges"
   out="$(env GH_FIX="$fix/$2" GH_BASE="$BASE" GH_HEAD="$HEAD" GH_MERGE_LOG="$work/merges" \
-    GH_DIFF_FAIL="$([ "$2" = diff_fail ] && echo 1 || echo 0)" \
+    GH_DIFF_FAIL="$([ "$2" = diff_fail ] && echo 1 || echo 0)" "${RUN_ENV[@]}" \
     PATH="$stub:$PATH" "$1/gh-automerge" 42 2>&1 >/dev/null)"
   rc=$?
 }
@@ -208,6 +435,45 @@ check_unrelated()     { passed "$1" unrelated; }
 check_diff_fail()     { stopped "$1" diff_fail "could not read the diff"; }
 check_agent()         { stopped "$1" agent "dot/claude/agents/impl.md: frontmatter changed"; }
 check_empty()         { stopped "$1" empty "has no file"; }
+check_cmd_fm()        { stopped "$1" cmd_fm "$cmd: frontmatter changed"; }
+check_agent_sub()     { stopped "$1" agent_sub "$sub: frontmatter changed"; }
+check_blank_first()   { stopped "$1" blank_first "frontmatter could not be compared"; }
+check_symlink() {
+  stopped "$1" symlink_mode "symlink (mode 120000)" && stopped "$1" symlink_index "symlink (mode 120000)"
+}
+check_multi()         { stopped "$1" multi dot/claude/settings.json; }
+check_rename_settings() { stopped "$1" rename_settings "dot/claude/settings.json: settings file"; }
+check_rename_skill()  { stopped "$1" rename_skill "renamed / copied file with frontmatter"; }
+check_copy_skill()    { stopped "$1" copy_skill "renamed / copied file with frontmatter"; }
+check_head_404()      { stopped "$1" head_404 "frontmatter could not be compared"; }
+check_settings_names() {
+  stopped "$1" settings_local settings.local.json && stopped "$1" settings_managed managed-settings.json \
+    && passed "$1" mysettings
+}
+check_big_body()      { passed "$1" big_body; }
+check_deleted_skill() { stopped "$1" deleted_skill "$skill: deleted file with frontmatter"; }
+# Stops, whatever the reason: for the mutants that remove every guard of one case.
+check_deleted_skill_stops() { run "$1" deleted_skill; [ "$rc" -eq 5 ] && ! merged; }
+check_mode_settings() { stopped "$1" mode_settings "dot/claude/settings.json: settings file"; }
+check_mode_readme()   { passed "$1" mode_readme; }
+check_binary()        { passed "$1" binary; }
+check_quoted()        { stopped "$1" quoted "quoted path"; }
+check_weird_line()    { stopped "$1" weird_line "unparseable diff line"; }
+check_preamble()      { stopped "$1" preamble "text before the first file header"; }
+check_hunk_dash()     { passed "$1" hunk_dash; }
+check_view_fail() {
+  RUN_ENV=(GH_VIEW_FAIL=1); stopped "$1" unrelated "could not read the base/head commits"
+  local r=$?; RUN_ENV=(); return $r
+}
+check_view_null() {
+  RUN_ENV=(GH_BASE=null GH_HEAD=null); stopped "$1" unrelated "unexpected base/head commits"
+  local r=$?; RUN_ENV=(); return $r
+}
+check_head_moved() {
+  RUN_ENV=(GH_HEAD2=3333333333333333333333333333333333333333)
+  stopped "$1" unrelated "moved while it was being judged"
+  local r=$?; RUN_ENV=(); return $r
+}
 
 # Control: the gh the wrapper reaches is the stub, and the merge call lands in
 # its log (so the mutants below cannot reach a real merge).
@@ -215,7 +481,10 @@ if [ "$(PATH="$stub:$PATH" command -v gh)" = "$stub/gh" ] && check_unrelated "$b
   echo "ok: control: gh resolves to the stub and the merge call is captured by it"
 else echo "FAIL: control: gh=$(PATH="$stub:$PATH" command -v gh) rc=$rc out=$out"; fail=1; fi
 
-for c in settings allowed_tools new_skill body_only unrelated diff_fail agent empty fallback_pin; do
+for c in settings allowed_tools new_skill body_only unrelated diff_fail agent empty fallback_pin \
+  cmd_fm agent_sub blank_first symlink multi rename_settings rename_skill copy_skill head_404 \
+  settings_names big_body deleted_skill mode_settings mode_readme binary quoted weird_line \
+  preamble hunk_dash view_fail view_null head_moved; do
   if "check_$c" "$bindir"; then echo "ok: gh-automerge gate: $c"
   else echo "FAIL: gh-automerge gate: $c rc=$rc out=$out merges=$(cat "$work/merges")"; fail=1; fi
 done
@@ -231,14 +500,19 @@ mutant() {  # mutant <name> <check fn> <sed expression>...
   sed "${args[@]}" "$bindir/gh-automerge" >"$d/gh-automerge"; chmod +x "$d/gh-automerge"
   if cmp -s "$bindir/gh-automerge" "$d/gh-automerge"; then
     echo "FAIL: mutant '$name' is identical; the check is a no-op"; fail=1
+  elif ! bash -n "$d/gh-automerge" 2>/dev/null; then
+    echo "FAIL: mutant '$name' does not parse; it would be caught for the wrong reason"; fail=1
   elif ! "$check" "$d"; then echo "ok: mutant '$name' is caught by $check"
   else echo "FAIL: mutant '$name' still passes $check"; fail=1; fi
 }
 mutant nosettings check_settings 's/^is_settings() { .*/is_settings() { false; }/'
 mutant nofmfile check_allowed_tools 's/^  \[\[ "\${b,,}" == skill.md \]\] && return 0/  false/'
-mutant nofmfile_agent check_agent 's/^  \[\[ "\$p" =~ (^|\/)agents\/\[^\/\]+\\.md\$ \]\] && return 0/  :/'
+mutant nofmfile_agent check_agent 's#^  \[\[ "\$p" =~ (^|/)agents/\.+\\\.md\$ \]\] && return 0#  :#'
 mutant nocompare check_allowed_tools 's/\[ "\$fb" = "\$fh" \] ||/true ||/'
-mutant nofmextract check_allowed_tools 's/^    NR == 1 { l = \$0;/    NR == 1 { exit 0; l = $0;/'
+# Extraction that finds nothing and still succeeds (two edits: awk's exit 3 on a file
+# without frontmatter would otherwise stop it for another reason).
+mutant nofmextract check_allowed_tools 's/^    NR == 1 { l = \$0;/    NR == 1 { exit 0; l = $0;/' \
+  's/END { if (!open) exit 3; if (!closed) exit 2 }/END { }/'
 mutant nodifffail check_diff_fail 's/|| gate_refuse "could not read the diff/|| true "could not read the diff/'
 mutant noempty check_empty 's/^\[ "\$nfiles" -gt 0 \] ||/true ||/'
 mutant exit1 check_settings 's/^  exit 5$/  exit 1/'
@@ -255,5 +529,41 @@ mutant nonewfile check_new_skill_stops \
   's/^  if \[ "\$f_created" -eq 1 \] || \[ -z "\$old" \]; then/  if false; then/' \
   's/^  if \[ "\$f_renamed" -eq 1 \] || \[ "\$old" != "\$new" \]; then/  if false; then/' \
   's/^    reasons+=("\$new: frontmatter could not be compared/    true || reasons+=("$new: frontmatter could not be compared/'
+
+# ---- mutants for the cases a review round added -----------------------------
+# `claude/commands` without the dot (this repo's dot/claude/ layout) and agents in a subdirectory.
+mutant nocmd_nodot check_cmd_fm 's#\.?claude/commands#.claude/commands#'
+mutant noagent_subdir check_agent_sub 's#agents/\.+\\\.md#agents/[^/]+\\.md#'
+# Frontmatter not found must not read as "equal". Not-found is stopped twice in awk (no
+# line 1 opener, then never closed), so both go.
+mutant nofm_failclosed check_blank_first 's/END { if (!open) exit 3; if (!closed) exit 2 }/END { }/'
+mutant nosymlink check_symlink 's/f_symlink=1 ;;/: ;;/'
+mutant noflush_on_header check_multi 's/^    flush_file$/    :/'
+mutant norename_to check_rename_settings 's/^    "rename to "\*) .*/    "rename to "*)       : ;;/'
+mutant norename_to_skill check_rename_skill 's/^    "rename to "\*) .*/    "rename to "*)       : ;;/'
+mutant nocopy_to check_copy_skill 's/^    "copy to "\*) .*/    "copy to "*)         : ;;/'
+mutant nocompare_reason check_head_404 \
+  's/^    reasons+=("\$new: frontmatter could not be compared/    true || reasons+=("$new: frontmatter could not be compared/'
+mutant narrow_settings check_settings_names \
+  's/^is_settings() { .*/is_settings() { [[ "${1##*\/}" =~ ^settings\\.json$ ]]; }/'
+# The old shape, a pipe into awk, is hit by SIGPIPE once the body is larger than the pipe buffer.
+mutant pipe_into_awk check_big_body "s/frontmatter <<<\"\\\$c\"/printf '%s' \"\\\$c\" | frontmatter/"
+mutant nodeleted check_deleted_skill \
+  's/^  if \[ "\$f_deleted" -eq 1 \] || \[ -z "\$new" \]; then/  if false; then/'
+# A deleted file is stopped by the deleted branch, the path mismatch and the failing
+# head-side fetch; only removing all three lets it merge.
+mutant nodeleted_all check_deleted_skill_stops \
+  's/^  if \[ "\$f_deleted" -eq 1 \] || \[ -z "\$new" \]; then/  if false; then/' \
+  's/^  if \[ "\$f_renamed" -eq 1 \] || \[ "\$old" != "\$new" \]; then/  if false; then/' \
+  's/^    reasons+=("\$new: frontmatter could not be compared/    true || reasons+=("$new: frontmatter could not be compared/'
+mutant nohdr_recover check_mode_settings \
+  's/^      \[ "\${rest:0:n} b\/\${rest:0:n}" = "\$rest" \] && old=/      false \&\& old=/'
+mutant noquoted check_quoted 's/^  case "\$old\$new" in .*/  :/'
+mutant nounparseable check_weird_line 's/^    "--- "\*|"+++ "\*) *reasons+=.*/    "--- "*|"+++ "*)     : ;;/'
+mutant nopreamble check_preamble 's/^  \[ -n "\$f_hdr" \] || { reasons+=.*/  :/'
+mutant nohunk check_hunk_dash 's/^  \[ "\$in_hunk" -eq 1 \] && continue/  :/'
+mutant noviewfail check_view_fail 's/|| gate_refuse "could not read the base\/head commits/|| true "could not read the base\/head commits/'
+mutant nooid check_view_null 's/^\[\[ "\${base_oid:-}" =~ .* \\$/true \\/'
+mutant nomoved check_head_moved 's/^\[ "\$head_now" = "\$head_oid" \] \\$/true \\/'
 
 exit "$fail"
