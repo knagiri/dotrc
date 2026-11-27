@@ -16,7 +16,7 @@ codex レビューを並走させ、判定役がどちらの指摘を採用し�
 ## 作り方
 
 観点ごとに `codex exec` を 1 回ずつ並列に走らせる。観点の選び方は toolkit agent と同じ基準を共有し、
-観点の定義も toolkit の agent 定義（plugin cache の最新版の本文）をそのまま codex に渡す。観点単位で
+観点の定義も toolkit の agent 定義（インストール済みの版の本文）をそのまま codex に渡す。観点単位で
 toolkit と突き合わせられ、1 回の codex が 1 観点に集中するので指摘が薄まらない。代償として PR あたり
 最大 5 回 codex を呼ぶ。
 

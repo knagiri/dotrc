@@ -199,6 +199,13 @@ CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/prohib"
 [ "$rc" = 0 ] && grep -qF 'Never touch ~/.codex PROHIBITION_MARKER' "$work/stdin" \
   && ok "prohibitions file reaches the prompt verbatim" || ng "prohibitions"
 
+# A symlink under /tmp to a file inside the roots is read through (the content
+# comes from the opened file). The swap between check and copy is timing-dependent
+# and not tested here.
+ln -s "$work/prohib" "$work/link-in"
+CODEX_STUB_OUT="$good" run 42 code-reviewer "$work/link-in"
+[ "$rc" = 0 ] && grep -qF 'PROHIBITION_MARKER' "$work/stdin" && ok "symlink to a file inside the roots is read through" || ng "symlink in"
+
 # Failures must never read as "no findings".
 CODEX_STUB_OUT='' run 42 code-reviewer
 [ "$rc" = 5 ] && [ ! -s "$out" ] && ok "empty -o output exits 5 with empty stdout" || ng "empty output"

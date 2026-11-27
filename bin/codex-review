@@ -92,7 +92,13 @@ if [ -n "$prohib" ]; then
   # default scratch location of background jobs when CLAUDE_CONFIG_DIR is unset;
   # with it set, jobs live elsewhere and use /tmp). The roots are fixed rather than
   # read from TMPDIR / CLAUDE_JOB_DIR, which a caller could point at ~/.config.
-  prohib_real="$(readlink -f "$prohib")"
+  #
+  # The file is opened once (fd 3) and both the check and the copy use that
+  # descriptor, so replacing the path with a symlink after the check cannot change
+  # what is sent. /proc/self/fd is Linux-specific; where it is missing the check
+  # fails closed.
+  exec 3<"$prohib" || { echo "codex-review: cannot read prohibitions file: $prohib" >&2; exit 1; }
+  prohib_real="$(readlink -f /proc/self/fd/3 2>/dev/null)" || prohib_real=""
   in_temp=0
   for base in /tmp "$HOME/.claude/jobs"; do
     base_real="$(readlink -f "$base" 2>/dev/null)" || continue
@@ -115,10 +121,11 @@ gh_mise_use "$root"
 
 tmp="$(mktemp -d)" || { echo "codex-review: cannot create a scratch dir" >&2; exit 6; }
 trap 'rm -rf "$tmp"' EXIT
-# Read the prohibitions once, from the path that was checked, so swapping the
-# file after the check cannot change what is sent.
+# Copy the prohibitions from the descriptor that was checked (not by path), so
+# swapping the path after the check cannot change what is sent.
 if [ -n "$prohib" ]; then
-  cp -- "$prohib_real" "$tmp/prohib"
+  cat <&3 >"$tmp/prohib"
+  exec 3<&-
 fi
 
 # 1. Fetch the PR on the host. A gh failure must stop here rather than reach
