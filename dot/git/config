@@ -55,12 +55,12 @@
     detachedHead = false
 # Keep git-wt-stash entries (the reflog of refs/worktree/stash) from expiring
 # on `git gc` / `git reflog expire`. By default git expires reflogs after 90
-# days (gc.reflogExpire) or 30 days when unreachable (gc.reflogExpireUnreachable)
-# and exempts only refs/stash (by default: an explicit --expire expires that
-# too). The
-# same per-worktree ref has three names depending on who looks: its own worktree
-# sees refs/worktree/stash, the main working tree sees worktrees/<id>/..., and a
-# linked worktree sees the main working tree's as main-worktree/....
+# days (gc.reflogExpire), or 30 days when unreachable
+# (gc.reflogExpireUnreachable), and exempts only refs/stash; an explicit
+# --expire expires refs/stash too. The same per-worktree ref has three names
+# depending on who looks: its own worktree sees refs/worktree/stash, the main
+# working tree sees worktrees/<id>/..., and a linked worktree sees the main
+# working tree's as main-worktree/....
 [gc "refs/worktree/stash"]
 	reflogExpire = never
 	reflogExpireUnreachable = never
