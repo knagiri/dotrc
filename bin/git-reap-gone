@@ -41,8 +41,10 @@ set -euo pipefail
 #     branch that would be refused never leaves a half-reaped state behind
 #     (worktree gone, branch still there).
 #   * if a worktree is checked out on the branch: it must be clean
-#     (`git status --porcelain` empty), and it must not be the worktree this
-#     script runs in. Then `git worktree remove` (NO --force) + `git branch -d`.
+#     (`git status --porcelain` empty), it must have no refs/worktree/stash
+#     (the per-worktree stash of git-wt-stash, which `git worktree remove` would
+#     drop with it), and it must not be the worktree this script runs in. Then
+#     `git worktree remove` (NO --force) + `git branch -d`.
 #   * if no worktree is attached (bare branch): just `git branch -d` after the
 #     guard.
 #
@@ -243,6 +245,13 @@ for branch in "${gone[@]}"; do
     fi
     if [ -n "$(git -C "$wt" status --porcelain)" ]; then
       reap_skip "$branch" "worktree not clean ($wt)"
+      continue
+    fi
+    # The per-worktree ref refs/worktree/stash (git-wt-stash) lives in the
+    # worktree's own git dir, so `git worktree remove` deletes it with no
+    # warning. Asked from inside the worktree, the name resolves to its own ref.
+    if git -C "$wt" rev-parse -q --verify refs/worktree/stash >/dev/null; then
+      reap_skip "$branch" "worktree stash has entries ($wt); check them with \`git-wt-stash list\` there"
       continue
     fi
     if ! git worktree remove "$wt"; then

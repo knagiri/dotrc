@@ -224,4 +224,24 @@ else
   bad "H: rc=$rc branch_left=$branch_left"; sed 's/^/  out| /' <<<"$out"
 fi
 
+# --- I: worktree stash holds an entry -> skipped, entry kept ------------------
+# refs/worktree/stash (git-wt-stash) lives in the worktree's own git dir, so
+# `git worktree remove` would take it along. The worktree is otherwise
+# reapable (case A is the same setup without the entry).
+read -r bare work < <(new_case caseI)
+merged_gone "$work"
+git -C "$work" worktree add -q "$tmp/caseI/wt" feat
+git -C "$tmp/caseI/wt" update-ref --create-reflog -m kept refs/worktree/stash HEAD
+out="$(cd "$work" && "$src" 2>&1)"; rc=$?
+branch_left=$(git -C "$work" rev-parse --verify -q refs/heads/feat >/dev/null && echo yes || echo no)
+stash_left=$(git -C "$tmp/caseI/wt" rev-parse -q --verify refs/worktree/stash >/dev/null 2>&1 && echo yes || echo no)
+if [ "$rc" -eq 0 ] && [ "$branch_left" = yes ] && [ -d "$tmp/caseI/wt" ] && [ "$stash_left" = yes ] \
+   && grep -q 'worktree stash has entries' <<<"$out" \
+   && grep -q 'git-wt-stash list' <<<"$out"; then
+  ok "I: a worktree with a worktree stash entry is skipped, entry intact"
+else
+  bad "I: rc=$rc branch_left=$branch_left stash_left=$stash_left worktree=$([ -d "$tmp/caseI/wt" ] && echo kept || echo gone)"
+  sed 's/^/  out| /' <<<"$out"
+fi
+
 exit "$fail"
