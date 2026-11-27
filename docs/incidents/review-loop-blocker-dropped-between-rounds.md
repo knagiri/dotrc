@@ -10,16 +10,16 @@
   verdict に載せず（空の verdict を返した回もある）、loop は blocker 無しとして収束し、auto-merge
   まで進んだ回がある
 - 2 巡目以降に判定役自身が挙げた担当外の blocker も、次巡と監査巡の判定役が載せ直さず、収束した
-- 監査巡の判定役が載せ直したので止まった回もあった。修正役がコードを変えていない巡で同じことが
-  起きると監査巡は走らないので、止まる機会が無い
+- 監査巡の判定役が載せ直したので止まった回もあった。前回の監査以降に修正役がコードを変えて
+  いない（`AUDIT_PENDING` が下りている）ときに同じことが起きると、監査巡は走らないので止まる機会が無い
 - orchestrator が別途気づいて報告に載せた回もあったが、停止報告の手順は「最後の判定 verdict」を
   参照していたので、気づかなければ報告からも落ちる
 
 ## 何を誤ったか
 
 `blocker: true` は carryover（却下済み・「載せ直すな」）に載せず、毎巡 fresh な判定役に再判定
-させる設計だった。判定 prompt は「`blocker: true` は毎巡あなた自身の verdict に載せ直す」と
-書いていたが、fresh な判定役は会話履歴を持たず、入力にも前巡の blocker が無い。専門レビューの
+させる設計だった。判定 prompt は、`blocker: true` と判断した指摘は前巡と同趣旨でも毎巡自分の verdict に
+載せ直すよう求めていたが、fresh な判定役は会話履歴を持たず、入力にも前巡の blocker が無い。専門レビューの
 findings は 1 巡目にしか入らないので、2 巡目以降の入力は 1 巡目より狭い。載せ直すかどうかは
 判定役が同じ指摘へ自力で再到達するかに依存しており、散文の指示では守りようがなかった。
 
@@ -38,6 +38,6 @@ orchestrator が `blocker: true` の項目を `OPEN_BLOCKERS` として ID 付�
 
 ## 反映した規約
 
-- `dot/claude/skills/pr-review-loop/SKILL.md` の手順 2.a-3「未決の blocker の保持（`OPEN_BLOCKERS`）」、
-  手順 2.c 冒頭、手順 2.e、手順 3.b / 4、判定 subagent prompt の未決の blocker と verdict スキーマ、
+- `dot/claude/skills/pr-review-loop/SKILL.md` の手順 2.a-1.5「未決の blocker の保持と照合（`OPEN_BLOCKERS`）」
+  （判定 verdict を得た直後、修正役の dispatch より前に照合する）、手順 2.a-3、手順 2.c 冒頭、手順 2.e、手順 3.b / 4、判定 subagent prompt の未決の blocker と verdict スキーマ、
   verdict スキーマ（orchestrator 側の判定基準）節
