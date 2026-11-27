@@ -149,6 +149,14 @@ run 42 "$verdict" code-reviewer "$stale"
 rec="$(tail -n 1 "$log")"
 check '.pairs == [] and .codex_failed == ["code-reviewer"]' \
   && ok "codex output with non-array findings is codex_failed" || ng "non-array findings: $rec"
+# A file with several JSON values is not a codex-review output, even if its last value is valid.
+multi="$work/multi"; mkdir -p "$multi"
+cx_out "$multi" code-reviewer 42 "$sha" 1 1 1
+{ printf '%s\n' '{"x":1}'; cat "$multi/code-reviewer.json"; } >"$multi/x" && mv "$multi/x" "$multi/code-reviewer.json"
+run 42 "$verdict" code-reviewer "$multi"
+rec="$(tail -n 1 "$log")"
+[ "$rc" = 0 ] && check '.pairs == [] and .codex_failed == ["code-reviewer"]' \
+  && ok "codex output with several JSON values is codex_failed" || ng "multiple values: $rec"
 
 # Classification of mixed origins (any, not all; paired origins only). code-reviewer
 # and silent-failure-hunter are paired; comment-analyzer's codex side failed.

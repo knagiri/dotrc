@@ -14,6 +14,7 @@
       "Bash(head *)",
       "Bash(touch *)",
       "Bash(mkdir *)",
+      "Bash(mktemp *)",
       "Bash(cp *)",
       "Bash(echo *)",
       "Bash(sed *)",

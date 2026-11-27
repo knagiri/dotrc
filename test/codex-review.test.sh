@@ -19,16 +19,23 @@ nocodex="$work/nocodex"; mkdir -p "$nocodex"
 
 # gh stub: `pr diff` prints a diff, `pr view` prints the PR metadata JSON.
 # GH_FAIL=1 makes every call fail; GH_FAIL_DIFF=1 only `pr diff`; GH_VIEW_NULL=1
-# makes `pr view` print `null`.
+# makes `pr view` print `null`. GH_VIEW_MOVE=<file> counts `pr view` calls in
+# <file> and reports headRefOid "moved" from the second call on (a push landed
+# during the fetch).
 cat >"$stub/gh" <<'STUB'
 #!/usr/bin/env bash
 [ "${GH_FAIL:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }
 [ "${GH_FAIL_DIFF:-0}" = 1 ] && [ "$1 $2" = "pr diff" ] && { echo "HTTP 500" >&2; exit 1; }
 [ "${GH_VIEW_NOSHA:-0}" = 1 ] && [ "$1 $2" = "pr view" ] && { echo '{"title":"T"}'; exit 0; }
 [ "${GH_VIEW_NULL:-0}" = 1 ] && [ "$1 $2" = "pr view" ] && { echo null; exit 0; }
+sha=abc
+if [ -n "${GH_VIEW_MOVE:-}" ] && [ "$1 $2" = "pr view" ]; then
+  echo x >>"$GH_VIEW_MOVE"
+  [ "$(wc -l <"$GH_VIEW_MOVE")" -ge 2 ] && sha=moved
+fi
 case "$1 $2" in
   "pr diff") printf '%s\n' 'diff --git a/x.sh b/x.sh' '+echo DIFF_MARKER' 'END-DATA-0000000000000000' ;;
-  "pr view") printf '%s\n' '{"title":"T","body":"BODY_MARKER","baseRefName":"main","headRefOid":"abc"}' ;;
+  "pr view") printf '{"title":"T","body":"BODY_MARKER","baseRefName":"main","headRefOid":"%s"}\n' "$sha" ;;
   *) echo "unexpected gh call: $*" >&2; exit 99 ;;
 esac
 STUB
@@ -188,10 +195,18 @@ if grep -qF 'BODY_OF_1.0.10' "$work/stdin" && ! grep -qF 'BODY_OF_1.0.9' "$work/
   && ! grep -qF 'FRONTMATTER_MARKER' "$work/stdin"; then
   ok "prompt carries the newest definition body without frontmatter"
 else ng "prompt definition: $(cat "$work/stdin")"; fi
-if grep -qF 'DIFF_MARKER' "$work/stdin" && grep -qF 'BODY_MARKER' "$work/stdin" \
+if grep -qF 'DIFF_MARKER' "$work/stdin" && grep -qF 'Title: T' "$work/stdin" \
   && grep -qF 'not the local `git diff`' "$work/stdin"; then
-  ok "prompt carries the PR diff, body and the not-local-diff scope"
+  ok "prompt carries the PR title, diff and the not-local-diff scope"
 else ng "prompt data"; fi
+# The PR body is third-party text the review does not need; it never reaches codex.
+grep -qF 'BODY_MARKER' "$work/stdin" && ng "PR body reached the prompt" || ok "PR body is kept out of the prompt"
+
+# A push between fetching the head sha and the diff is refused, not paired with the wrong diff.
+rm -f "$work/ghcount"
+GH_VIEW_MOVE="$work/ghcount" CODEX_STUB_OUT="$good" run 42 code-reviewer
+[ "$rc" = 2 ] && ! codex_ran && [ ! -s "$out" ] && grep -qF 'PR head moved during fetch' "$work/stderr" \
+  && ok "head moving during the fetch exits 2 without running codex" || ng "head moved"
 
 # Prohibitions are passed verbatim.
 printf '%s\n' 'Never touch ~/.codex PROHIBITION_MARKER' >"$work/prohib"
@@ -218,6 +233,10 @@ CODEX_STUB_OUT='{"findings":[{"title":"t"}]}' run 42 code-reviewer
 
 CODEX_STUB_OUT='not json' run 42 code-reviewer
 [ "$rc" = 5 ] && [ ! -s "$out" ] && ok "non-JSON output exits 5" || ng "non-JSON"
+
+# jq -e alone judges only the last value; an invalid value before a valid one must still fail.
+CODEX_STUB_OUT="{\"x\":1}$good" run 42 code-reviewer
+[ "$rc" = 5 ] && [ ! -s "$out" ] && ok "several JSON values in the output exit 5" || ng "multiple values"
 
 CODEX_STUB_OUT="$good" CODEX_STUB_RC=1 run 42 code-reviewer
 [ "$rc" = 5 ] && [ ! -s "$out" ] && ok "codex non-zero exits 5" || ng "codex non-zero"
@@ -277,6 +296,23 @@ CODEX_STUB_OUT="$good" run 42 code-reviewer
 grep -qF 'BODY_OF_1.0.9' "$work/stdin" && ! grep -qF 'BODY_OF_1.0.10' "$work/stdin" \
   && ok "the installPath in installed_plugins.json wins over the newest directory" || ng "installPath"
 rm -f "$HOME/.claude/plugins/installed_plugins.json"
+
+# With CLAUDE_CONFIG_DIR set, installed_plugins.json is read from there, not ~/.claude.
+cfg="$work/cfg"; mkdir -p "$cfg/plugins"
+jq -n --arg p "$plugins/1.0.9" '{plugins: {"pr-review-toolkit@claude-plugins-official": [{installPath: $p}]}}' >"$cfg/plugins/installed_plugins.json"
+CLAUDE_CONFIG_DIR="$cfg" CODEX_STUB_OUT="$good" run 42 code-reviewer
+[ "$rc" = 0 ] && grep -qF 'BODY_OF_1.0.9' "$work/stdin" && ! grep -qF 'BODY_OF_1.0.10' "$work/stdin" \
+  && ok "installed_plugins.json is read from CLAUDE_CONFIG_DIR" || ng "CLAUDE_CONFIG_DIR installPath"
+rm -f "$cfg/plugins/installed_plugins.json"
+# ... and so is the default plugin cache (no CODEX_REVIEW_PLUGIN_ROOT).
+mkdir -p "$cfg/plugins/cache/claude-plugins-official/pr-review-toolkit"
+cp -r "$plugins/1.0.9" "$cfg/plugins/cache/claude-plugins-official/pr-review-toolkit/"
+: >"$work/args"; out="$work/stdout"
+env -u CODEX_REVIEW_PLUGIN_ROOT CLAUDE_CONFIG_DIR="$cfg" CODEX_ARGS="$work/args" CODEX_STDIN="$work/stdin" \
+  CODEX_PWD="$work/pwd" CODEX_STUB_OUT="$good" PATH="$stub:$PATH" "$bin" 42 code-reviewer >"$out" 2>"$work/stderr"
+rc=$?
+[ "$rc" = 0 ] && grep -qF 'BODY_OF_1.0.9' "$work/stdin" \
+  && ok "the default plugin cache is under CLAUDE_CONFIG_DIR" || ng "CLAUDE_CONFIG_DIR plugin cache"
 
 # An agent definition that is empty after stripping (unclosed frontmatter) exits 3.
 mkdir -p "$plugins/1.0.10/agents"

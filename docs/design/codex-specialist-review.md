@@ -33,7 +33,12 @@ Claude 側の Bash 呼び出し数本の削減だけなので採らない。
   「PR の diff を read-only の codex に読ませる」に留めるため。素の `codex` / `codex exec` は allow
   しない
 - **PR はホスト側で取得してデータとして渡す。** read-only sandbox にはネットワークが無く、codex から
-  gh を叩けないため。gh の失敗は空の diff と取り違えないよう非 0 で止める
+  gh を叩けないため。gh の失敗は空の diff と取り違えないよう非 0 で止める。渡すのは title・base
+  branch・head commit・diff だけで、PR 本文は渡さない。本文は第三者が書けるテキストで、レビューには
+  要らず、仕込まれた指示に codex が従う入口を 1 つ減らせるため
+- **diff と head commit の版を揃える。** head commit を diff の取得の前後で読み、食い違えば（取得中に
+  push が入れば）止める。どちらの版の diff か決められないまま head commit を付けると、
+  `codex-review-tally` が別の版同士を比べうるため。リトライはせず、呼び出し側の再実行に任せる
 - **失敗を「指摘なし」として出さない。** codex の非 0・timeout・空出力・スキーマ不一致では stdout に
   何も出さず非 0 で終わる。空の findings 配列は、レビューが最後まで走ったときだけ意味を持つ
 - **規約は codex 自身に読ませる。** cwd の repo の `CLAUDE.md` / `.claude/rules/` と global の
@@ -45,7 +50,7 @@ Claude 側の Bash 呼び出し数本の削減だけなので採らない。
   `~/.claude/jobs`）の下のファイルに限る。`TMPDIR` 等の env から基準を取らないのは、呼び出し側が
   `~/.config` のような場所へ向けられるため
 
-既知の限界: read-only sandbox は書き込みを塞ぐが読み取りは塞がない。PR の本文や diff に仕込まれた
+既知の限界: read-only sandbox は書き込みを塞ぐが読み取りは塞がない。PR の title や diff に仕込まれた
 指示で codex がホストのファイル（認証情報を含む）を読み、その内容を findings に書く経路は残る。
 findings は判定役を経て PR 上の記録へ写りうる。同じ読み取り範囲は toolkit agent も持っているので
 並走で新たに開く経路ではないが、規約を読ませる設計上 home を隔離できず、塞いでもいない。
@@ -57,9 +62,12 @@ findings は判定役を経て PR 上の記録へ写りうる。同じ読み取�
 `<dir>/<version>/agents/<観点>.md` の形のファイルなら codex へ送られうるので、環境を制御できる
 呼び出し側には任意のファイルを送る経路が残る。禁止事項の基準だけを固定しても、この入力は塞がっていない。
 
-観点の定義の版は、`~/.claude/plugins/installed_plugins.json` が記録する pr-review-toolkit の
-`installPath` を使う。それが無ければ plugin cache で `sort -V` の最大のディレクトリに落ちるが、cache には
-旧版が残りうるので installed の版と一致する保証は無い。
+観点の定義の版は、`${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/installed_plugins.json` が記録する
+pr-review-toolkit の `installPath` を使う。それが無ければ同じ設定ディレクトリの plugin cache で `sort -V`
+の最大のディレクトリに落ちるが、cache には旧版が残りうるので installed の版と一致する保証は無い。
+設定ディレクトリを実行中のものに合わせるのは、toolkit agent がそこから plugin を読むので、比較の両側で
+同じ定義を使うため。禁止事項の基準 `~/.claude/jobs` は `CLAUDE_CONFIG_DIR` に追従させない。env で
+動かせないことがその基準の根拠なので、固定パスのままにする。
 
 ## 比較の数え方
 

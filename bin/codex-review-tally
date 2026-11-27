@@ -22,7 +22,7 @@ set -euo pipefail
 #                   type-design-analyzer.
 #   <codex-out-dir> holds <perspective>.json, the stdout of codex-review for
 #                   each perspective. A perspective's codex review completed iff
-#                   its file is a valid codex-review output (perspective equal
+#                   its file is a single valid codex-review output (perspective equal
 #                   to the file name, findings an array) for this PR and its
 #                   current head commit (`pr` and `head_sha` equal to <PR#> and
 #                   what gh reports now). An empty, missing, malformed, or
@@ -125,13 +125,15 @@ sha="$(gh_mise pr view "$pr" --json headRefOid --jq .headRefOid)" \
   || { echo "codex-review-tally: gh pr view $pr failed" >&2; exit 2; }
 
 # A codex output counts only if it is what codex-review prints on success, for
-# this PR and the head commit gh reports now.
+# this PR and the head commit gh reports now. The file must hold exactly one
+# JSON value: jq -e judges only the last one, so a valid value after an invalid
+# one would otherwise pass.
 codex_files=()
 codex=()
 for p in "${perspectives[@]}"; do
   f="$codex_dir/$p.json"
-  if [ -s "$f" ] && jq -e --arg p "$p" --argjson pr "$pr" --arg sha "$sha" \
-    'type == "object" and .perspective == $p and .pr == $pr and .head_sha == $sha and (.findings | type) == "array"' "$f" >/dev/null 2>&1; then
+  if [ -s "$f" ] && jq -e -s --arg p "$p" --argjson pr "$pr" --arg sha "$sha" \
+    'length == 1 and (.[0] | type == "object" and .perspective == $p and .pr == $pr and .head_sha == $sha and (.findings | type) == "array")' "$f" >/dev/null 2>&1; then
     codex+=("$p"); codex_files+=("$f")
   fi
 done

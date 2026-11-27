@@ -143,9 +143,9 @@ thread の resolve は reply コメントの投稿とは別物で、`gh-commands
       **codex の並走**: 選んだ各 agent の観点（agent 名から `pr-review-toolkit:` を外したもの）ごとに、
       toolkit agent の dispatch と並べて `codex-review <PR> <観点> [<prohibitions-file>]` を Bash の
       `run_in_background` で起動し、stdout を `<CODEX_DIR>/<観点>.json` へ保存する。`<CODEX_DIR>` は
-      **実行ごとに新しく作る**（`mkdir -p "$CLAUDE_JOB_DIR/tmp" && mktemp -d -p "$CLAUDE_JOB_DIR/tmp" codex-review.XXXXXX`。
-      `$CLAUDE_JOB_DIR` が未定義なら `mktemp -d`）。固定パスを使い回すと、今回走らせなかった観点や
-      起動できなかった観点に前回の出力が残る。観点の選び方は上の toolkit の選び方を
+      **実行ごとに新しく作る**（`mktemp -d -p /tmp codex-review.XXXXXX`。変数展開を含めると
+      allow 済みでも承認待ちで止まるので、パスはリテラルで書く）。固定パスを使い回すと、今回走らせ
+      なかった観点や起動できなかった観点に前回の出力が残る。観点の選び方は上の toolkit の選び方を
       そのまま使い、別に持たない。`<PROHIBITIONS>` が渡されていれば原文を一時ファイルに書いて第 3 引数に
       渡し、「なし」なら省く。ラッパーは `/tmp` か `~/.claude/jobs` の下しか受け付けないので、
       ファイルは必ず `mktemp -p /tmp` で `/tmp` 直下に作る（`$CLAUDE_JOB_DIR` や TMPDIR 任せの `mktemp` は
