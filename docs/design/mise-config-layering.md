@@ -67,9 +67,12 @@ DATABASE_URL = "postgres://readonly@localhost:5432/example"
 
 `DATABASE_URL` を絞る理由は `GH_TOKEN` より強い。`GH_TOKEN` が常時載っても読むのは gh だけだが、
 `DATABASE_URL` は app framework・ORM・migration ツールが既定で読むので、常時ロードすると
-その repo の app・test・migration がエラー無しにその DB へ向く。`mise.local.toml` や shell の rc に置くと、
-`mise activate` 経由で background 委譲先の env にも配られる。同じ理由で `db-query` は
-呼び出し側の env にある `DATABASE_URL` を捨て、mise config の値だけを使う。
+その repo の app・test・migration がエラー無しにその DB へ向く。同じ理由で `db-query` は
+呼び出し側の env にある `DATABASE_URL` を捨て、mise config の値だけを使う。常時ロードされる
+`mise.local.toml` に置くと、`claude-worktree` が `mise exec -C <worktree>` で委譲先を起こすので
+その env に載る。shell の rc に置くと、daemon を起動した呼び出し元の env 経由で background 委譲先へ
+配られうる（`mise activate` は非対話 shell では発火しないので、経路はそれではない。
+`docs/design/claude-tmux-worktree.md`「委譲先の env と token」）。
 
 業務 repo には dotrc の `.gitignore` が効かないので、`mise.local.toml` / `mise.*.local.toml` は
 global な git ignore（`dot/git/ignore`）で無視する（先頭に `.` の付く形も mise は読むので含める）。
@@ -92,7 +95,7 @@ agent がこのファイルを書き換えると、allow 済みの `db-query` �
 hash に結びつき、trust 後の書き換えは `Config files in .../mise.db.local.toml are not trusted.` で
 失敗する（実測）。`mise trust` は allowlist に無いので再 trust は人の承認になる。trust は repo root で
 `MISE_TRUSTED_CONFIG_PATHS= MISE_PARANOID=1 MISE_OVERRIDE_CONFIG_FILENAMES=mise.db.local.toml mise trust`
-を実行して与える。`MISE_PARANOID=1` が無いと path 単位の trust になり、paranoid の呼び出しでは通らない
+を実行して与える。環境変数なしの `mise trust` は `mise.db.local.toml` を対象にしない。`MISE_PARANOID=1` が無いと path 単位の trust になり、paranoid の呼び出しでは通らない
 （実測）。`MISE_TRUSTED_CONFIG_PATHS` を空にするのは、信頼済み path の prefix が paranoid 下でも効いて
 hash を迂回するため（実測: env でも `trusted_config_paths` setting でも）。prefix が覆っていると
 `mise trust` は hash を書かず "No untrusted config files found" で終わる。`db-query` も同じ変数を空にして
@@ -104,11 +107,10 @@ stdin は `/dev/null` にして読まない。usql の meta-command は shell �
 `\w`）ができ、`-c`・`-f`・stdin のどれからでも、SQL の後ろに続けても実行される（実測: `-c 'select 1;
 \! echo X'` で `X` が出る）。素通しすると `Bash(db-query *)` の allow が承認なしの任意コマンド実行に
 なる。一方 SQL の中身は wrapper では縛らず、DB に対して agent に何を許すかは `DATABASE_URL` の
-DB user の権限で決める。これは network 越しの server 型 DB でだけ成り立つ。sqlite・duckdb 等の埋め込み型は
+DB user の権限で決める。したがって `mise.db.local.toml` に書く接続は、一般に read-only 権限の DB user にする。この境界は network 越しの server 型 DB でだけ成り立つ。sqlite・duckdb 等の埋め込み型は
 usql のプロセス内でローカル user の権限のまま動き、SQL だけで任意のファイルを読み書きできる（`ATTACH`、
 `COPY ... TO`）ので、DB user という境界が無い。`db-query` は scheme を server 型の許可リストと照合し、
 外れれば exit 5 で止める。拒否リストにしないのは、usql の scheme alias が多く、漏れが素通りになるため。
-したがって `mise.db.local.toml` に書く接続は、一般に read-only 権限の DB user にする。
 
 password は URL に直書きせず、usql の password file（権限 600）に置く。`db-query` は URL を usql の
 引数として渡すので、URL に書いた password はプロセス一覧に出る。`db-query` は `-w` で prompt を止めるが
