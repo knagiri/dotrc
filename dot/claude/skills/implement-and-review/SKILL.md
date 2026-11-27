@@ -181,7 +181,7 @@ description: worktree に委譲されたタスクを実装→merge で完遂す�
    PR を出したら `pr-review-loop` を呼び、author とは独立した立場でレビューして収束させる。
    委譲プロンプトに `## 禁止事項` 節があれば、同 skill の `<PROHIBITIONS>` に原文のまま渡す
    （差し込み先と規定は同 skill。理由は手順 2）。収束したら、merge を見送る理由が無ければ
-   `pr-automerge` を呼び、収束時の `head_sha` / `last_seen` を渡して自律 merge する。merge を
+   `pr-automerge` を呼び、収束行のキー（`head_sha` / `last_seen` と、あれば `approve_gate`）をそのまま渡して自律 merge する。merge を
    見送る理由（委譲プロンプトの禁止事項、grant 変更を含む PR（`pr-automerge`「grant 変更を含む PR は auto-merge させない」）
    等）があれば `pr-automerge` は呼ばず、見送った理由を手順 6 で報告する。
 
