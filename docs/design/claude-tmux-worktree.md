@@ -360,6 +360,8 @@ merge 済みの委譲 worktree とブランチは、手作業の `git worktree r
   `refs/worktree/stash`（`git-wt-stash` の entry。main working tree から見た名前は
   `worktrees/<id>/refs/worktree/stash`）が無い。⑤は per-worktree ref が worktree の git dir に置かれ、
   `git worktree remove` が警告無しに一緒に消すため。skip 時は `git-wt-stash list` で確かめるよう案内する。
+  ⑤は確認した時点の状態で、確認と `git worktree remove` の間に完了した push は守らない。後片付けと
+  stash 操作を並行させない前提である（`docs/design/git-wt-stash.md`）。
   裸ブランチ（worktree 無し）は①②のみで判定する。
 - **削除は安全形だけ**: `git worktree remove`（`--force` 無し）＋ `git branch -d`（`-D` ではない）。条件を
   欠くもの・git が拒否したものは skip し、何が blocking か report する。force にはエスカレートしない。

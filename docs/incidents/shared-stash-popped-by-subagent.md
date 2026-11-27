@@ -35,46 +35,40 @@ git -C r stash list | wc -l
 
 entry の message には積んだときの branch が `On <branch>: …` / `WIP on <branch>: …` の形で残る。
 
+## 当時の直し方（PreToolUse hook）
+
+PreToolUse hook（matcher `Bash`、`bin/claude-hook-git-guard`）で、Bash tool のコマンド中の
+`git stash pop|apply|drop|branch|clear` を見て、対象 entry の branch が対象 dir の現在 branch と
+違えば deny した。git は同一 branch を 2 つの worktree で同時に checkout させないので、branch が
+worktree の識別子になる。持ち主が判定できない（detached HEAD、または entry の message から branch
+を読めない）ときや、対象 dir を判定できない（`-C` の引数が変数・`$(...)`・バッククォート・存在しない
+パス）ときも deny に倒した。積む操作と閲覧は通した。コマンド文字列の検出は `;` `&&` `||` `|` 改行で
+素朴に分割して各部分の先頭の git を見るだけで、quote や `cd` は解釈しなかった。
+
+hooks docs（https://code.claude.com/docs/en/hooks）には、settings 由来の hook は subagent の中でも
+動くとあった。実機での確認は未了のままだった。
+
+## git-wt-stash への置き換え
+
+hook は持ち主を共有スタック上の entry の message から推測する。branch を読めない entry を
+deny に倒すのは過剰拒否（正当な操作を止める）であり、漏れではない。漏れは、コマンド文字列の素朴な
+解析が `sh -c 'git stash …'` や git alias 経由の呼び出しを見落とす側にある。
+
+そこで、entry の置き場所を worktree ごとの ref に分ける `bin/git-wt-stash` に置き換え、hook は撤去
+した。保存先を隔離すれば他 worktree の entry はそもそも見えず、持ち主の判定もコマンドの解析も
+要らない。生の `git stash` は permission で deny する。現行の設計と既知の限界は
+`docs/design/git-wt-stash.md`。
+
+## 置き換え時の観測
+
 reflog の期限切れは linked worktree で再現した（git 2.56.1）。`GIT_COMMITTER_DATE=2026-01-01T00:00:00`
 で `refs/stash` に `git stash push` で 2 件、`refs/worktree/stash` に `update-ref --create-reflog` で
 2 件積み、`git reflog expire --all` と `git gc` を実行すると `refs/stash` は 2 件のまま、
 `refs/worktree/stash` は 0 件になった。
 
-## 直し方
-
-entry の置き場所を worktree ごとに分け、共有スタックを直接触る経路を塞ぐ。
-
-- `bin/git-wt-stash`（`push [-u] [-m msg]` / `list` / `show|pop|apply|drop [N]`）は entry を
-  per-worktree ref の `refs/worktree/stash` とその reflog に置く。`refs/worktree/*` は worktree
-  ごとに別の ref で、`refs/worktree/stash` という名前は各 worktree で自分の ref に解決される。
-  そのため `git-wt-stash` からは他 worktree の entry は見えず、`pop` でも取れない（明示的に
-  指せば触れる。「既知の限界」）。受け付けるフラグを限定し、git へ引数を素通ししない
-- 積むときだけ共有の `refs/stash` を一瞬経由する。`git stash store` は保存先が `refs/stash` 固定で、
-  `git stash create` は `-u` を持たないため。message に一意な印を付けて `git stash push` し、
-  `refs/stash` の reflog から印の entry を探す。無ければ積むものが無かったので何もしない。先頭に
-  無ければ別 session が間に積んだので、drop せずに失敗する。先頭なら per-worktree ref へ写し、
-  `refs/stash` がまだその commit を指すときだけ `git stash drop` する（別の push が割り込んで
-  いたら drop せず失敗する）。drop の出力は parse しない。翻訳されるメッセージを読むと locale
-  次第で誤判定するため。失敗時は印と commit を stderr に出す
-- pop / drop は index を commit に解決してから apply し、消す直前に再度解決して同じ commit で
-  あることを確かめる。間に同じ worktree への push が入って index がずれていたら消さずに失敗する
-- reflog の期限切れ対策として、dotrc 管理の global git config（`dot/git/config`）に
-  `gc.refs/worktree/stash.reflogExpire(Unreachable)=never` と
-  `gc.worktrees/*/refs/worktree/stash.…=never`（main working tree から見た名前）を置く。
-  `refs/stash` だけは git が expire の対象から外すが、`refs/worktree/stash` は既定の期限で
-  `git gc` / `git reflog expire` に消される（git 2.56.1 で再現。「観測」節）。wrapper が
-  push のたびに repo の local config へ書く形は、stash を使っただけで任意の repo の config が黙って
-  書き換わる副作用になるので採らない
-- `bin/git-reap-gone` は `refs/worktree/stash` が残る worktree を消さずに skip する。
-  `git worktree remove` は per-worktree ref ごと entry を警告無しに消すため
-- `dot/claude/settings.json` で生の `git stash` を deny し、`git-wt-stash` を allow する
-
-以前は PreToolUse hook（`bin/claude-hook-git-guard`）が Bash のコマンド文字列から
-`git stash pop|apply|drop|branch|clear` を探し、対象 entry の message にある branch が現在 branch と
-違えば deny していた。これには穴が 2 つあった。持ち主を共有スタック上の entry の message から
-推測するので、branch を読めない entry（detached HEAD、`git stash store -m`）は判定できず、
-コマンド文字列の素朴な解析は `sh -c` や git alias 経由の呼び出しを見落とす。保存先を隔離すれば、他 worktree の
-entry はそもそも見えないので、持ち主の判定もコマンドの解析も要らない。hook は撤去した。
+2 つの ref 名だけを `never` にした構成では、linked worktree から `git reflog expire --all` と
+`git gc` を回すと main working tree の entry（linked worktree からは `main-worktree/refs/worktree/stash`
+の名前）が消え、ref だけが残った。3 つ目の名前を足して残ることを確かめた。
 
 per-worktree ref の挙動は使い捨て repo で確かめた（git 2.56.1。main repo `r`、branch `feat` の
 linked worktree `wt`）。
@@ -99,36 +93,11 @@ git rev-parse refs/worktree/stash          # sha を返す（最後の 1 件を�
 最後の 1 件を消すと reflog は空になるが ref は残り、`refs/worktree/stash@{0}` も ref の値に解決される。
 そのため `git-wt-stash` は reflog の件数で空を判定し、空になったら `git update-ref -d` で ref を消す。
 
-## 既知の限界
-
-識別子になるのは worktree であって session ではない。同じ worktree を共有する複数の session
-（main working tree の interactive session と spin-off した session、親と Agent tool の subagent）
-は互いの entry を区別しない。
-
-`refs/worktree/stash` は worktree ごとに解決されるだけで、アクセス制御ではない。main working
-tree からは `git reflog show worktrees/<id>/refs/worktree/stash`、`git stash apply
-worktrees/<id>/refs/worktree/stash@{0}`、`git reflog delete worktrees/<id>/…` で他 worktree の
-entry を読み・取り・消せ（linked worktree からは `main-worktree/refs/worktree/stash`）、どれも
-deny の pattern に当たらない。`git-wt-stash` が他 worktree の entry を見せない、というだけである。
-
-deny の pattern `Bash(git stash *)` は先頭が `git stash` のコマンドに一致する。`git -C <dir> stash`
-のように git の global option が挟まる形はこの pattern の形からは一致しない（実機では未確認）。
-`git -C` は allow に無いので承認の対象になるが、`defaultMode` が auto のときは承認ではなく
-classifier の判定になる。`sh -c 'git stash …'` や git alias も pattern に一致しない。ただし
-共有スタックには常駐する entry が無く（積む窓の間だけ）、これらで害を受けうるのはその窓に限られる。
-
-`git worktree remove` は `refs/worktree/stash` ごと、警告無しに（exit 0）entry を消す。
-`git-reap-gone` は skip するが、手で worktree を消すときは先に `git-wt-stash list` で残りを確認する。
-
-reflog の期限切れ対策は global git config に依る。`dot/git/config` が展開されていない環境（別マシン・
-CI・HOME の違う実行環境）では効かず、期限を過ぎた entry は `git gc` で黙って消える。
-`git reflog expire --expire=<time>` のように期限を明示すると config は上書きされ、entry は消える。
-
 ## 反映先
 
-- `bin/git-wt-stash`、`test/git-wt-stash.test.sh`
+- `bin/git-wt-stash`、`test/git-wt-stash.test.sh`、`docs/design/git-wt-stash.md`
 - `dot/git/config` の `gc.<pattern>.reflogExpire(Unreachable)`
 - `bin/git-reap-gone`、`test/git-reap-gone.test.sh`、`docs/design/claude-tmux-worktree.md`「委譲 worktree の後片付け」
 - `dot/claude/settings.json` の `permissions.deny`（`git stash`）と `permissions.allow`（`git-wt-stash`）。
-  `hooks.PreToolUse` の `claude-hook-git-guard` は削除
-- `dot/claude/rules/session-scope.md` §2（stash は `git-wt-stash` を使う）
+  `hooks.PreToolUse` の `claude-hook-git-guard`、`test/claude-hook-git-guard.test.sh` は削除
+- `dot/claude/rules/session-scope.md` §6（stash は `git-wt-stash` を使う）

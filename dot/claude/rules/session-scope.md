@@ -73,16 +73,6 @@ linked worktree で起動された場合、デフォルトは以下に従う。�
 
 worktree のディレクトリ外（絶対パスで他 worktree や main checkout を指すパス）への**書き込み**は、原則スコープ外とみなす。
 
-stash は `git-wt-stash`（`push [-u] [-m msg]` / `list` / `show|pop|apply|drop [N]`）を使う。生の
-`git stash` は permission で deny している。`git stash` のスタックは main checkout と全 linked
-worktree で共有され、ある session の `pop` が別 worktree の entry を持っていくためで、
-`git-wt-stash` は entry を worktree ごとの ref に置き、`refs/worktree/stash` という名前は各
-worktree で自分の ref に解決されるので、`git-wt-stash` からは他 worktree の entry は見えない。同じ
-worktree を共有する session（親と subagent 等）同士は区別しない。worktree を消す前に
-`git-wt-stash list` を確認する（`git worktree remove` は entry を警告無しに消す）。
-
-実例: dotrc/docs/incidents/shared-stash-popped-by-subagent.md
-
 ### 3. read-only な参照は可
 
 スコープ制限は「書き込み」に限る。調査目的の read-only 操作はスコープ外を見てよい。別 repo・別 worktree のパスを Read / `rg` で見るのも可（`git -C` は承認が出る。[working-directory.md](./working-directory.md)）。git の次の 3 例は allow 済みで承認不要。
@@ -123,6 +113,19 @@ branch で占有すると、次の調査や別依頼が無関係な branch を�
 linked worktree にいる場合はこの節のトリガーに当たらず、その worktree 内で進める。そこから
 さらに別 worktree へ分岐するのも、独立した別ラインに割れるとき以外は避ける（隔離済みなので
 分岐で得るものが小さい）。
+
+### 6. stash は `git-wt-stash` で扱う
+
+stash は `git-wt-stash`（`push [-u] [-m msg]` / `list` / `show|pop|apply|drop [N]`）で扱い、生の
+`git stash` は permission で deny している。`git stash` のスタックは main checkout と全 linked
+worktree で共有され、ある session の `pop` が別 worktree の entry を持っていくためである。
+`git-wt-stash` は entry を worktree ごとの ref に置く。同じ worktree を共有する session（親と
+subagent 等）同士は区別しない。
+
+worktree を消す前に `git-wt-stash list` で残りを確認する（`git worktree remove` は entry を警告無しに
+消す）。仕組みと限界は `dotrc/docs/design/git-wt-stash.md`。
+
+実例: dotrc/docs/incidents/shared-stash-popped-by-subagent.md
 
 ### 委譲まわりで常に守ること
 
