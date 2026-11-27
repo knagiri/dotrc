@@ -37,4 +37,4 @@ commit もこの diff に含まれるという点で、担当領域が一部の�
 ## 反映先
 
 - `dot/claude/skills/pr-review-loop/SKILL.md` 判定 subagent prompt（担当領域の段落）
-- `dot/claude/rules/worktree-scope.md` §6（review で修正が要るときの箇条から参照）
+- `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6「PR 監視に起こされ、修正が要ると判断したら」（`pr-review-loop` の担当領域の段落を参照している）

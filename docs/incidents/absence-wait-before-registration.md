@@ -35,4 +35,4 @@ until ! claude agents --json | jq -e '<session が居る>'; do sleep 2; done
 
 - `dot/claude/rules/evidence-over-guesswork.md`「5. 確認が空振りしていないか確かめる」
 - `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 1「spec / plan に実測を書くときは…」
-- `dot/claude/rules/worktree-scope.md`「6. 作業を別 worktree へ分岐する」（委譲元が閉じる）
+- `dot/claude/skills/delegate-to-worktree/SKILL.md` 手順 6（委譲元が閉じる）
